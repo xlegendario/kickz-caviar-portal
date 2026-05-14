@@ -936,3 +936,76 @@ body {
   }
 }
 
+.table-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.table-head,
+.table-row {
+  display: grid;
+  grid-template-columns:
+    82px
+    2fr
+    1.2fr
+    90px
+    140px
+    150px
+    150px
+    120px
+    120px;
+
+  align-items: center;
+  gap: 18px;
+}
+
+.table-head {
+  padding: 0 18px;
+  color: rgba(255,255,255,0.46);
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.table-row {
+  min-height: 92px;
+  padding: 14px 18px;
+  border-radius: 22px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+.table-image {
+  width: 62px;
+  height: 62px;
+  object-fit: contain;
+  background: white;
+  border-radius: 14px;
+  padding: 6px;
+}
+
+.table-product {
+  font-weight: 800;
+}
+
+.table-btn {
+  height: 42px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffd84d, #d7ab16);
+  color: black;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.table-btn.offer-btn {
+  background: linear-gradient(180deg, #58d86a, #2ca43c);
+  color: white;
+}
+
+.table-btn.disabled-btn {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
