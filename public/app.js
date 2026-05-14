@@ -93,7 +93,15 @@ function renderDealCard(deal) {
             `
             : `
               <div class="image-placeholder">
-                ${deal.product || "No Image"}
+
+                <div class="placeholder-icon">
+                  🖼️
+                </div>
+              
+                <div class="placeholder-text">
+                  Image Not Available
+                </div>
+              
               </div>
             `
         }
