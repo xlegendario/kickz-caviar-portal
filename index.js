@@ -332,11 +332,41 @@ app.post("/api/place-offer", async (req, res) => {
   }
 });
 
-app.get("/api/brands", async (_req, res) => {
+app.get("/api/brands", async (req, res) => {
   try {
+    const type = asText(req.query.type) || "quick";
+
+    let formula;
+
+    if (type === "quick") {
+      formula = `AND(
+        OR(
+          {Fulfillment Status} = 'Outsource',
+          {Fulfillment Status} = 'Claim Processing'
+        ),
+        {Auto Offer Accept?} = 'Yes',
+        {Brand} != ''
+      )`;
+    } else if (type === "wtb") {
+      formula = `AND(
+        {Fulfillment Status} = 'Outsource',
+        {Brand} != '',
+        OR(
+          {Auto Offer Accept?} = 'No',
+          AND(
+            {Auto Offer Accept?} = 'Yes',
+            DATETIME_DIFF(NOW(), {Outsource Start Time}, 'hours') >= 48
+          )
+        )
+      )`;
+    } else {
+      return res.status(400).json({ error: "Invalid deal type" });
+    }
+
     const records = await airtable(ORDERS_TABLE)
       .select({
-        fields: ["Brand"]
+        fields: ["Brand"],
+        filterByFormula: formula
       })
       .all();
 
@@ -346,7 +376,7 @@ app.get("/api/brands", async (_req, res) => {
         .filter(Boolean)
     )].sort((a, b) => a.localeCompare(b));
 
-    res.json({ brands });
+    res.json({ type, brands });
   } catch (err) {
     console.error("Failed to load brands:", err);
 
