@@ -483,6 +483,7 @@ function openOfferFlow(dealId) {
   selectedOfferVatType = priceView === "vat0" ? "VAT0" : "Margin";
   offerAmountInput.value = "";
   offerError.textContent = "";
+  updateOfferPlaceholder();
 
   offerVatOptions.forEach((option) => {
     option.classList.toggle("active", option.dataset.vat === selectedOfferVatType);
@@ -513,8 +514,22 @@ offerVatOptions.forEach((option) => {
     });
 
     option.classList.add("active");
+    updateOfferPlaceholder();
   });
 });
+
+function updateOfferPlaceholder() {
+  if (!selectedOfferDeal) return;
+
+  const currentOffer =
+    selectedOfferVatType === "VAT0"
+      ? selectedOfferDeal.current_offer_vat0
+      : selectedOfferDeal.current_offer_margin;
+
+  offerAmountInput.placeholder = currentOffer
+    ? `Current offer: ${currentOffer}`
+    : "Enter your offer";
+}
 
 confirmOfferBtn.addEventListener("click", async () => {
   if (!selectedOfferDeal || !currentSeller) return;
@@ -523,8 +538,8 @@ confirmOfferBtn.addEventListener("click", async () => {
 
   offerError.textContent = "";
 
-  if (!Number.isFinite(offerAmount) || offerAmount <= 0) {
-    offerError.textContent = "Enter a valid offer amount.";
+  if (!Number.isInteger(offerAmount) || offerAmount <= 0) {
+    offerError.textContent = "Enter a valid whole euro amount.";
     return;
   }
 
