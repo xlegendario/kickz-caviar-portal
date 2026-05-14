@@ -5,9 +5,12 @@ const priceViewButtons = document.querySelectorAll(".price-view-btn");
 
 const searchInput = document.getElementById("searchInput");
 const brandFilter = document.getElementById("brandFilter");
+const sortFilter = document.getElementById("sortFilter");
 
 let searchQuery = "";
 let selectedBrand = "";
+let selectedSort = localStorage.getItem("kc_sort") || "newest";
+sortFilter.value = selectedSort;
 
 let currentType = localStorage.getItem("kc_market_type") || "quick";
 let priceView = localStorage.getItem("kc_price_view") || "margin";
@@ -48,6 +51,8 @@ async function loadDeals(type = "quick", reset = true) {
     const params = new URLSearchParams({
       type,
       page_size: "40"
+      sort: selectedSort,
+      price_view: priceView
     });
     
     if (selectedBrand) {
@@ -398,7 +403,7 @@ priceViewButtons.forEach((button) => {
     localStorage.setItem("kc_price_view", priceView);
 
     syncMarketUi();
-    renderDeals();
+    loadDeals(currentType, true);
   });
 });
 
@@ -442,6 +447,12 @@ loadBrands();
 
 brandFilter.addEventListener("change", () => {
   selectedBrand = brandFilter.value;
+  loadDeals(currentType, true);
+});
+
+sortFilter.addEventListener("change", () => {
+  selectedSort = sortFilter.value;
+  localStorage.setItem("kc_sort", selectedSort);
   loadDeals(currentType, true);
 });
 
