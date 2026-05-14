@@ -33,26 +33,25 @@
       </div>
     </section>
 
-    <section class="market-tabs">
-      <button class="market-tab" data-market-type="quick">Quick Deals</button>
-      <button class="market-tab" data-market-type="wtb">Want To Buys</button>
-    </section>
-        
-    <section class="price-view-row">
-      <div class="price-view-switch">
-        <span class="price-view-label">Payout View</span>
+    <div class="market-top-row">
+      <section class="switch-group">
+        <div class="switch-label">Deal Type</div>
+    
+        <div class="market-tabs">
+          <button class="market-tab" data-market-type="quick">Quick Deals</button>
+          <button class="market-tab" data-market-type="wtb">Want To Buys</button>
+        </div>
+      </section>
+    
+      <section class="switch-group align-right">
+        <div class="switch-label">Payout View</div>
     
         <div class="price-view-toggle">
-          <button class="price-view-btn active" data-price-view="margin">
-            Margin / VAT21
-          </button>
-    
-          <button class="price-view-btn" data-price-view="vat0">
-            VAT0
-          </button>
+          <button class="price-view-btn" data-price-view="margin">Margin / VAT21</button>
+          <button class="price-view-btn" data-price-view="vat0">VAT0</button>
         </div>
-      </div>
-    </section>
+      </section>
+    </div>
 
     <section class="toolbar">
       <input type="text" placeholder="Search SKU, product..." class="search-input"/>
