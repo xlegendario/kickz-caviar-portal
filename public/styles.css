@@ -690,6 +690,10 @@ body {
   font-weight: 700;
 }
 
+#offerError {
+  margin-top: 12px;
+}
+
 .vat-options {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
