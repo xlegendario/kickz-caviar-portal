@@ -1,8 +1,10 @@
 const dealsGrid = document.getElementById("dealsGrid");
 
 const marketTabs = document.querySelectorAll(".market-tab");
+const priceViewButtons = document.querySelectorAll(".price-view-btn");
 
-let currentType = "quick";
+let currentType = localStorage.getItem("kc_market_type") || "quick";
+let priceView = localStorage.getItem("kc_price_view") || "margin";
 let currentDeals = [];
 let nextOffset = "";
 let hasMore = false;
@@ -77,14 +79,14 @@ function renderDealCard(deal) {
         <div class="payout-box">
           <span class="payout-label">Current</span>
           <span class="payout-value">
-            ${deal.current_payout_margin || "-"}
+            ${priceView === "vat0" ? deal.current_payout_vat0 || "-" : deal.current_payout_margin || "-"}
           </span>
         </div>
 
         <div class="payout-box">
           <span class="payout-label">Max</span>
           <span class="payout-value">
-            ${deal.max_payout_margin || "-"}
+            ${priceView === "vat0" ? deal.max_payout_vat0 || "-" : deal.max_payout_margin || "-"}
           </span>
         </div>
 
@@ -96,7 +98,7 @@ function renderDealCard(deal) {
         <div class="payout-box">
           <span class="payout-label">Current Offer</span>
           <span class="payout-value">
-            ${deal.current_offer_margin || "No offer yet"}
+            ${priceView === "vat0" ? deal.current_offer_vat0 || "No offer yet" : deal.current_offer_margin || "No offer yet"}
           </span>
         </div>
 
@@ -209,15 +211,42 @@ marketTabs.forEach((tab, index) => {
 
     tab.classList.add("active");
 
-    currentType = index === 0 ? "quick" : "wtb";
+    localStorage.setItem("kc_market_type", currentType);
 
     loadDeals(currentType);
 
   });
-
 });
 
-loadDeals();
+priceViewButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    priceView = button.dataset.priceView;
+
+    localStorage.setItem("kc_price_view", priceView);
+
+    priceViewButtons.forEach((item) => {
+      item.classList.remove("active");
+    });
+
+    button.classList.add("active");
+
+    renderDeals();
+  });
+});
+
+function setInitialMarketState() {
+  marketTabs.forEach((tab, index) => {
+    const type = index === 0 ? "quick" : "wtb";
+    tab.classList.toggle("active", type === currentType);
+  });
+
+  priceViewButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.priceView === priceView);
+  });
+}
+
+setInitialMarketState();
+loadDeals(currentType);
 
 window.addEventListener("scroll", () => {
   if (!hasMore || isLoading) return;
