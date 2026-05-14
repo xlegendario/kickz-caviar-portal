@@ -46,6 +46,14 @@ async function loadDeals(type = "quick", reset = true) {
       type,
       page_size: "40"
     });
+    
+    if (selectedBrand) {
+      params.set("brand", selectedBrand);
+    }
+    
+    if (searchQuery) {
+      params.set("search", searchQuery);
+    }
 
     if (!reset && nextOffset) {
       params.set("offset", nextOffset);
@@ -203,6 +211,7 @@ function renderDeals() {
 
   if (!filteredDeals.length) {
     document.getElementById("loadingMore")?.remove();
+    hasMore = false;
   
     dealsGrid.innerHTML = `
       <div class="empty-state">
@@ -306,9 +315,9 @@ async function loadBrands() {
 
 loadBrands();
 
-searchInput.addEventListener("input", () => {
-  searchQuery = searchInput.value.trim();
-  renderDeals();
+brandFilter.addEventListener("change", () => {
+  selectedBrand = brandFilter.value;
+  loadDeals(currentType, true);
 });
 
 brandFilter.addEventListener("change", () => {
