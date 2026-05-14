@@ -369,6 +369,46 @@ body {
     0 6px 18px rgba(0,0,0,0.4);
 }
 
+@media (max-width: 900px) {
+  .topbar {
+    flex-direction: column;
+    height: auto;
+    gap: 18px;
+    padding: 20px;
+  }
+
+  .page {
+    padding: 22px;
+  }
+
+  .hero h2 {
+    font-size: 34px;
+  }
+
+  .search-input {
+    min-width: 100%;
+  }
+}
+
+@media (max-width: 1300px) {
+  .deals-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 950px) {
+  .deals-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .deals-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
 .loading-state,
 .empty-state {
   width: 100%;
@@ -419,41 +459,27 @@ body {
   margin-top: 0;
 }
 
-@media (max-width: 900px) {
-  .topbar {
+.payout-box {
+  min-width: 0;
+}
+
+.payout-value {
+  font-size: clamp(18px, 1.6vw, 24px);
+  white-space: nowrap;
+}
+
+@media (max-width: 1450px) {
+  .deal-payouts {
+    gap: 10px;
+  }
+
+  .payout-box {
+    padding: 14px 12px;
+  }
+}
+
+@media (max-width: 1150px) {
+  .deal-payouts {
     flex-direction: column;
-    height: auto;
-    gap: 18px;
-    padding: 20px;
-  }
-
-  .page {
-    padding: 22px;
-  }
-
-  .hero h2 {
-    font-size: 34px;
-  }
-
-  .search-input {
-    min-width: 100%;
-  }
-}
-
-@media (max-width: 1300px) {
-  .deals-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 950px) {
-  .deals-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 620px) {
-  .deals-grid {
-    grid-template-columns: 1fr;
   }
 }
