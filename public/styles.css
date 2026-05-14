@@ -572,6 +572,29 @@ body {
   font-weight: 700;
 }
 
+.vat-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 22px 0;
+}
+
+.vat-option {
+  height: 50px;
+  border-radius: 14px;
+  border: 1px solid #333;
+  background: #141414;
+  color: #aaa;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.vat-option.active {
+  background: linear-gradient(180deg, #fff27a, #f0a500);
+  color: black;
+  border-color: #f0a500;
+}
+
 @keyframes dotPulse {
   0%, 20% {
     opacity: 0.15;
