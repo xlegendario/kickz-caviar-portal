@@ -381,6 +381,44 @@ body {
   font-size: 18px;
 }
 
+.deal-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.deal-image-wrap {
+  min-height: 239px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.deal-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.deal-title {
+  min-height: 58px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.deal-meta {
+  min-height: 20px;
+}
+
+.deal-payouts {
+  margin-top: auto;
+}
+
+.deal-btn {
+  margin-top: 0;
+}
+
 @media (max-width: 900px) {
   .topbar {
     flex-direction: column;
