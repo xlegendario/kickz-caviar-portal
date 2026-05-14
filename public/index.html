@@ -62,6 +62,27 @@
     <section id="dealsGrid" class="deals-grid"></section>
   </main>
 
+  <div id="loginModal" class="modal-backdrop hidden">
+    <div class="login-modal">
+      <button id="closeLoginModal" class="modal-close">×</button>
+  
+      <h2>Login</h2>
+      <p>Use your seller email and temporary password.</p>
+  
+      <form id="loginForm">
+        <label>Email</label>
+        <input id="loginEmail" type="email" required placeholder="you@example.com" />
+  
+        <label>Password</label>
+        <input id="loginPassword" type="password" required placeholder="discord-00001" />
+  
+        <button type="submit" class="modal-submit">Login</button>
+  
+        <div id="loginError" class="login-error"></div>
+      </form>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>
