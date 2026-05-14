@@ -94,8 +94,9 @@ function renderDealCard(deal) {
             : `
               <div class="image-placeholder">
 
-                <div class="placeholder-icon">
-                  <span></span>
+                <div class="image-placeholder">
+                  <div class="placeholder-icon"><span></span></div>
+                  <div class="placeholder-text">Image Not Available</div>
                 </div>
               
                 <div class="placeholder-text">
