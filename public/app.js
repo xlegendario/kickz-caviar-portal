@@ -94,9 +94,9 @@ function renderDealCard(deal) {
       <div class="deal-payouts">
 
         <div class="payout-box">
-          <span class="payout-label">Max Offer</span>
+          <span class="payout-label">Current Offer</span>
           <span class="payout-value">
-            ${deal.max_offer || "-"}
+            ${deal.current_offer_margin || "No offer yet"}
           </span>
         </div>
 
