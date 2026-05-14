@@ -384,19 +384,46 @@ confirmClaimBtn.addEventListener("click", async () => {
 
   claimError.textContent = "";
 
-  console.log("CLAIM TEST PAYLOAD", {
-    order_record_id: selectedDeal.id,
-    seller_record_id: currentSeller.id,
-    seller_id: currentSeller.seller_id,
-    discord_id: currentSeller.discord_id,
-    vat_type: selectedVatType
-  });
-
-  alert(
-    `Claim test ready:\n\n${selectedDeal.product}\nVAT Type: ${selectedVatType}\nSeller: ${currentSeller.seller_id}`
-  );
-
-  closeClaimFlow();
+  confirmClaimBtn.disabled = true;
+  confirmClaimBtn.textContent = "Claiming...";
+  claimError.textContent = "";
+  
+  try {
+    const response = await fetch("/api/claim-deal", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        recordId: selectedDeal.id,
+        sellerRecordId: currentSeller.id,
+        sellerId: currentSeller.seller_id,
+        sellerDiscordId: currentSeller.discord_id,
+        vatType: selectedVatType
+      })
+    });
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(data.error || "Claim failed");
+    }
+  
+    closeClaimFlow();
+  
+    currentDeals = [];
+    nextOffset = "";
+    hasMore = false;
+  
+    await loadDeals(currentType);
+  
+    alert("Deal claimed. Your Discord deal channel has been created.");
+  } catch (err) {
+    claimError.textContent = err.message;
+  } finally {
+    confirmClaimBtn.disabled = false;
+    confirmClaimBtn.textContent = "Confirm Claim";
+  }
 });
 
 function openOfferFlow(dealId) {
