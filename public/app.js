@@ -225,3 +225,93 @@ window.addEventListener("scroll", () => {
     loadDeals(currentType, false);
   }
 });
+
+const loginBtn = document.querySelector(".login-btn");
+const loginModal = document.getElementById("loginModal");
+const closeLoginModal = document.getElementById("closeLoginModal");
+const loginForm = document.getElementById("loginForm");
+const loginEmail = document.getElementById("loginEmail");
+const loginPassword = document.getElementById("loginPassword");
+const loginError = document.getElementById("loginError");
+
+let currentSeller = JSON.parse(localStorage.getItem("kc_seller") || "null");
+
+function updateLoginState() {
+  if (currentSeller) {
+    loginBtn.textContent = currentSeller.discord || currentSeller.seller_id || "Account";
+  } else {
+    loginBtn.textContent = "Login";
+  }
+}
+
+function openLoginModal() {
+  loginError.textContent = "";
+  loginModal.classList.remove("hidden");
+}
+
+function closeModal() {
+  loginModal.classList.add("hidden");
+}
+
+loginBtn.addEventListener("click", () => {
+  if (currentSeller) {
+    const shouldLogout = confirm(`Logged in as ${currentSeller.discord}. Logout?`);
+
+    if (shouldLogout) {
+      localStorage.removeItem("kc_seller");
+      currentSeller = null;
+      updateLoginState();
+    }
+
+    return;
+  }
+
+  openLoginModal();
+});
+
+closeLoginModal.addEventListener("click", closeModal);
+
+loginModal.addEventListener("click", (event) => {
+  if (event.target === loginModal) {
+    closeModal();
+  }
+});
+
+loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  loginError.textContent = "";
+
+  try {
+    const response = await fetch("/api/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        email: loginEmail.value,
+        password: loginPassword.value
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Login failed");
+    }
+
+    currentSeller = data.seller;
+
+    localStorage.setItem("kc_seller", JSON.stringify(currentSeller));
+
+    updateLoginState();
+    closeModal();
+
+    loginEmail.value = "";
+    loginPassword.value = "";
+  } catch (err) {
+    loginError.textContent = err.message;
+  }
+});
+
+updateLoginState();
