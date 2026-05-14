@@ -202,7 +202,7 @@ function renderDealTable(deals) {
         <div>Product</div>
         <div>SKU</div>
         <div>Size</div>
-        <div>${isQuick ? "Quick Deal" : "Want To Buy"}</div>
+        <div>Deal Type</div>
         <div>${isQuick ? "Current Payout" : "Current Offer"}</div>
         ${isQuick ? "<div>Max Payout</div>" : ""}
         ${isQuick ? "<div>Timer</div>" : ""}
