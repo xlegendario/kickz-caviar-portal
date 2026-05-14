@@ -282,6 +282,56 @@ app.post("/api/claim-deal", async (req, res) => {
   }
 });
 
+app.post("/api/place-offer", async (req, res) => {
+  try {
+    const {
+      orderRecordId,
+      sellerRecordId,
+      offerAmount,
+      vatType
+    } = req.body || {};
+
+    const wtbBotBaseUrl = process.env.KICKZ_WTB_BOT_BASE_URL;
+
+    if (!wtbBotBaseUrl) {
+      return res.status(500).json({
+        error: "Missing KICKZ_WTB_BOT_BASE_URL"
+      });
+    }
+
+    const response = await fetch(`${wtbBotBaseUrl.replace(/\/$/, "")}/seller-offer/place-from-portal`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        orderRecordId,
+        sellerRecordId,
+        offerAmount,
+        vatType
+      })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: data.error || "Offer failed",
+        details: data.details || ""
+      });
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error("Portal offer failed:", err);
+
+    res.status(500).json({
+      error: "Offer failed",
+      details: err.message
+    });
+  }
+});
+
 app.get("/api/deals", async (req, res) => {
   try {
     const type = asText(req.query.type) || "quick";
