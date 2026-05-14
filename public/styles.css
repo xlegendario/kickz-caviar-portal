@@ -497,46 +497,46 @@ body {
 }
 
 .login-modal {
-  width: min(760px, calc(100vw - 40px));
+  width: min(560px, calc(100vw - 40px));
   background: linear-gradient(180deg, rgba(22,22,24,0.96), rgba(8,8,10,0.97));
   border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 30px;
-  padding: 42px 42px 32px;
+  border-radius: 24px;
+  padding: 30px 30px 24px;
   position: relative;
   box-shadow:
-    0 24px 60px rgba(0,0,0,0.58),
+    0 20px 46px rgba(0,0,0,0.56),
     inset 0 1px 0 rgba(255,255,255,0.03);
 }
 
 .modal-close {
   position: absolute;
-  top: 22px;
-  right: 22px;
-  width: 62px;
-  height: 62px;
+  top: 18px;
+  right: 18px;
+  width: 42px;
+  height: 42px;
   border-radius: 999px;
   border: 1px solid rgba(255,255,255,0.08);
   background: rgba(255,255,255,0.03);
   color: white;
   cursor: pointer;
-  font-size: 28px;
+  font-size: 22px;
   line-height: 1;
 }
 
 .login-modal h2 {
-  margin: 0 0 16px;
-  font-size: clamp(42px, 4vw, 64px);
+  margin: 0 0 12px;
+  font-size: 44px;
   line-height: 0.95;
   font-weight: 900;
-  letter-spacing: -2px;
+  letter-spacing: -1.4px;
 }
 
 .login-modal p {
-  margin: 0 0 34px;
+  margin: 0 0 26px;
   color: rgba(255,255,255,0.68);
-  font-size: 18px;
+  font-size: 15px;
   line-height: 1.45;
-  max-width: 520px;
+  max-width: 420px;
 }
 
 .login-modal form {
@@ -567,17 +567,17 @@ body {
 
 .modal-submit {
   width: 100%;
-  height: 62px;
+  height: 52px;
   border: none;
-  border-radius: 18px;
+  border-radius: 16px;
   background: linear-gradient(180deg, #58d86a, #2ca43c);
   color: white;
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 800;
   cursor: pointer;
-  margin-top: 8px;
+  margin-top: 18px;
   box-shadow:
-    0 10px 24px rgba(60,255,110,0.18),
+    0 8px 20px rgba(60,255,110,0.16),
     inset 0 1px 0 rgba(255,255,255,0.10);
   transition: 0.18s ease;
 }
@@ -597,9 +597,9 @@ body {
 #claimModal .login-modal::before {
   content: "SELECT VAT TYPE";
   display: block;
-  margin-bottom: 26px;
+  margin-bottom: 12px;
   color: rgba(255,255,255,0.78);
-  font-size: 24px;
+  font-size: 13px;
   font-weight: 900;
   letter-spacing: 1px;
 }
@@ -607,36 +607,36 @@ body {
 .vat-options {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 18px;
-  margin: 0 0 32px;
-  padding-bottom: 32px;
+  gap: 12px;
+  margin: 0 0 22px;
+  padding-bottom: 22px;
   border-bottom: 1px solid rgba(255,255,255,0.08);
 }
 
 .vat-option {
   position: relative;
-  min-height: 92px;
-  border-radius: 22px;
+  min-height: 66px;
+  border-radius: 16px;
   border: 2px solid rgba(255,255,255,0.10);
   background: linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.005));
   color: white;
   font-weight: 800;
-  font-size: 22px;
+  font-size: 15px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  padding-left: 82px;
+  padding-left: 50px;
   transition: 0.18s ease;
 }
 
 .vat-option::before {
   content: "";
   position: absolute;
-  left: 28px;
-  width: 34px;
-  height: 34px;
+  left: 18px;
+  width: 22px;
+  height: 22px;
   border-radius: 999px;
-  border: 3px solid rgba(255,255,255,0.18);
+  border: 2px solid rgba(255,255,255,0.18);
   background: transparent;
 }
 
@@ -655,32 +655,32 @@ body {
 
 #confirmClaimBtn {
   width: 100%;
-  height: 84px;
+  height: 58px;
   border: none;
-  border-radius: 22px;
+  border-radius: 16px;
   background: linear-gradient(180deg, #58d86a, #2ca43c);
   color: white;
-  font-size: 30px;
+  font-size: 17px;
   font-weight: 800;
-  letter-spacing: -1px;
+  letter-spacing: -0.2px;
   cursor: pointer;
   box-shadow:
-    0 10px 28px rgba(60,255,110,0.18),
+    0 8px 20px rgba(60,255,110,0.16),
     inset 0 1px 0 rgba(255,255,255,0.10);
 }
 
 #confirmClaimBtn::before {
   content: "✓";
-  margin-right: 14px;
+  margin-right: 10px;
 }
 
 #claimModal .login-error::before {
   content: "🔒 You can't change this after claiming.";
   display: block;
   text-align: center;
-  margin-top: 18px;
+  margin-top: 14px;
   color: rgba(255,255,255,0.28);
-  font-size: 14px;
+  font-size: 12px;
 }
 
 #claimModal .login-error {
