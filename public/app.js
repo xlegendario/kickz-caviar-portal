@@ -50,7 +50,7 @@ async function loadDeals(type = "quick", reset = true) {
 
     const params = new URLSearchParams({
       type,
-      page_size: "40"
+      page_size: "40",
       sort: selectedSort,
       price_view: priceView
     });
