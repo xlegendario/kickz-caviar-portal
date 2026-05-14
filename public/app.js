@@ -68,7 +68,7 @@ async function loadDeals(type = "quick", reset = true) {
 function renderDealCard(deal) {
 
   const isQuick = currentType === "quick";
-  const isQuick = currentType === "quick";
+  const isClaimProcessing = deal.fulfillment_status === "Claim Processing";
 
   const payoutHtml = isQuick
     ? `
