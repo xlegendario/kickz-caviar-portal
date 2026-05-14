@@ -1,0 +1,19 @@
+{
+  "name": "kickz-caviar-portal",
+  "version": "1.0.0",
+  "description": "Kickz Caviar member marketplace portal",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "airtable": "^0.12.2",
+    "compression": "^1.7.4",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
