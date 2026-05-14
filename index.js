@@ -174,8 +174,8 @@ function normalizeDeal(record) {
     current_payout_vat0: moneyValue(f["Outsource Buying Price (VAT 0%)"]),
     max_payout_vat0: moneyValue(f["Final Outsource Buying Price (VAT 0%)"]),
 
-    current_offer_margin: moneyValue(f["Current Lowest (Normalized)"]),
-    current_offer_vat0: moneyValue(f["Current Lowest (VAT0)"]),
+    current_offer_margin: moneyValue(Math.floor(numberValue(f["Current Lowest (Normalized)"]))),
+    current_offer_vat0: moneyValue(Math.floor(numberValue(f["Current Lowest (VAT0)"]))),
     maximum_buying_price: numberValue(f["Maximum Buying Price"])
   };
 }
