@@ -277,6 +277,16 @@ const confirmClaimBtn = document.getElementById("confirmClaimBtn");
 const claimError = document.getElementById("claimError");
 const vatOptions = document.querySelectorAll(".vat-option");
 
+const offerModal = document.getElementById("offerModal");
+const closeOfferModal = document.getElementById("closeOfferModal");
+const confirmOfferBtn = document.getElementById("confirmOfferBtn");
+const offerAmountInput = document.getElementById("offerAmountInput");
+const offerError = document.getElementById("offerError");
+const offerVatOptions = document.querySelectorAll(".offer-vat-option");
+
+let selectedOfferDeal = null;
+let selectedOfferVatType = "Margin";
+
 let selectedDeal = null;
 let selectedVatType = "Margin";
 
@@ -463,8 +473,100 @@ function openOfferFlow(dealId) {
     return;
   }
 
-  alert(`Offer flow coming next for deal: ${dealId}`);
+  selectedOfferDeal = currentDeals.find((deal) => deal.id === dealId);
+
+  if (!selectedOfferDeal) {
+    alert("Deal not found. Please refresh and try again.");
+    return;
+  }
+
+  selectedOfferVatType = priceView === "vat0" ? "VAT0" : "Margin";
+  offerAmountInput.value = "";
+  offerError.textContent = "";
+
+  offerVatOptions.forEach((option) => {
+    option.classList.toggle("active", option.dataset.vat === selectedOfferVatType);
+  });
+
+  offerModal.classList.remove("hidden");
 }
+
+function closeOfferFlow() {
+  offerModal.classList.add("hidden");
+  selectedOfferDeal = null;
+}
+
+closeOfferModal.addEventListener("click", closeOfferFlow);
+
+offerModal.addEventListener("click", (event) => {
+  if (event.target === offerModal) {
+    closeOfferFlow();
+  }
+});
+
+offerVatOptions.forEach((option) => {
+  option.addEventListener("click", () => {
+    selectedOfferVatType = option.dataset.vat;
+
+    offerVatOptions.forEach((item) => {
+      item.classList.remove("active");
+    });
+
+    option.classList.add("active");
+  });
+});
+
+confirmOfferBtn.addEventListener("click", async () => {
+  if (!selectedOfferDeal || !currentSeller) return;
+
+  const offerAmount = Number(offerAmountInput.value);
+
+  offerError.textContent = "";
+
+  if (!Number.isFinite(offerAmount) || offerAmount <= 0) {
+    offerError.textContent = "Enter a valid offer amount.";
+    return;
+  }
+
+  confirmOfferBtn.disabled = true;
+  confirmOfferBtn.textContent = "Submitting...";
+
+  try {
+    const response = await fetch("/api/place-offer", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        orderRecordId: selectedOfferDeal.id,
+        sellerRecordId: currentSeller.id,
+        offerAmount,
+        vatType: selectedOfferVatType
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Offer failed");
+    }
+
+    closeOfferFlow();
+
+    currentDeals = [];
+    nextOffset = "";
+    hasMore = false;
+
+    await loadDeals(currentType);
+
+    showSuccessToast("Offer submitted successfully");
+  } catch (err) {
+    offerError.textContent = err.message;
+  } finally {
+    confirmOfferBtn.disabled = false;
+    confirmOfferBtn.textContent = "Submit Offer";
+  }
+});
 
 function showSuccessToast(message) {
   const existing = document.querySelector(".success-toast");
