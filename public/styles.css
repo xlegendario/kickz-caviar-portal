@@ -561,6 +561,28 @@ body {
   outline: none;
 }
 
+.modal-submit {
+  width: 100%;
+  height: 62px;
+  border: none;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #58d86a, #2ca43c);
+  color: white;
+  font-size: 20px;
+  font-weight: 800;
+  cursor: pointer;
+  margin-top: 8px;
+  box-shadow:
+    0 10px 24px rgba(60,255,110,0.18),
+    inset 0 1px 0 rgba(255,255,255,0.10);
+  transition: 0.18s ease;
+}
+
+.modal-submit:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.04);
+}
+
 .login-error {
   min-height: 20px;
   color: #ff7b7b;
