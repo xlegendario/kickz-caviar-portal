@@ -48,10 +48,19 @@
         <option>Adidas</option>
       </select>
 
-      <select class="toolbar-select">
-        <option>Margin / VAT21</option>
-        <option>VAT0</option>
-      </select>
+      <div class="price-view-switch">
+        <span class="price-view-label">Payout View</span>
+      
+        <div class="price-view-toggle">
+          <button class="price-view-btn active" data-price-view="margin">
+            Margin / VAT21
+          </button>
+      
+          <button class="price-view-btn" data-price-view="vat0">
+            VAT0
+          </button>
+        </div>
+      </div>
 
       <div class="view-toggle">
         <button class="view-btn active">Cards</button>
