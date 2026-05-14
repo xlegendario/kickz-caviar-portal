@@ -199,6 +199,68 @@ body {
     0 4px 14px rgba(0,0,0,0.3);
 }
 
+.price-view-switch {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.price-view-label {
+  color: #888;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.price-view-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  background: #151515;
+  border: 1px solid #262626;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.03),
+    0 4px 18px rgba(0,0,0,0.25);
+}
+
+.price-view-btn {
+  height: 42px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: #999;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.price-view-btn.active {
+  background: linear-gradient(180deg, #fff27a, #f0a500);
+  color: black;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.4),
+    0 4px 14px rgba(0,0,0,0.35);
+}
+
+@media (max-width: 900px) {
+  .price-view-switch {
+    width: 100%;
+    margin-left: 0;
+    justify-content: space-between;
+  }
+
+  .price-view-toggle {
+    flex: 1;
+  }
+
+  .price-view-btn {
+    flex: 1;
+  }
+}
+
 .deals-grid {
   width: 100%;
   display: grid;
