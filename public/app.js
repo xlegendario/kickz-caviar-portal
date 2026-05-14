@@ -5,6 +5,14 @@ const priceViewButtons = document.querySelectorAll(".price-view-btn");
 
 let currentType = localStorage.getItem("kc_market_type") || "quick";
 let priceView = localStorage.getItem("kc_price_view") || "margin";
+
+if (!["quick", "wtb"].includes(currentType)) {
+  currentType = "quick";
+}
+
+if (!["margin", "vat0"].includes(priceView)) {
+  priceView = "margin";
+}
 let currentDeals = [];
 let nextOffset = "";
 let hasMore = false;
@@ -201,20 +209,24 @@ function renderLoadingMore() {
   );
 }
 
-marketTabs.forEach((tab, index) => {
+function syncMarketUi() {
+  marketTabs.forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.marketType === currentType);
+  });
 
+  priceViewButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.priceView === priceView);
+  });
+}
+
+marketTabs.forEach((tab) => {
   tab.addEventListener("click", () => {
-
-    marketTabs.forEach((t) => {
-      t.classList.remove("active");
-    });
-
-    tab.classList.add("active");
+    currentType = tab.dataset.marketType;
 
     localStorage.setItem("kc_market_type", currentType);
 
+    syncMarketUi();
     loadDeals(currentType);
-
   });
 });
 
@@ -224,12 +236,7 @@ priceViewButtons.forEach((button) => {
 
     localStorage.setItem("kc_price_view", priceView);
 
-    priceViewButtons.forEach((item) => {
-      item.classList.remove("active");
-    });
-
-    button.classList.add("active");
-
+    syncMarketUi();
     renderDeals();
   });
 });
