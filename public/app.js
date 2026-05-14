@@ -68,6 +68,7 @@ async function loadDeals(type = "quick", reset = true) {
 function renderDealCard(deal) {
 
   const isQuick = currentType === "quick";
+  const isQuick = currentType === "quick";
 
   const payoutHtml = isQuick
     ? `
@@ -149,11 +150,12 @@ function renderDealCard(deal) {
         ${payoutHtml}
 
         <button
-          class="deal-btn ${!isQuick ? "offer-btn" : ""}"
+          class="deal-btn ${!isQuick ? "offer-btn" : ""} ${isClaimProcessing ? "disabled-btn" : ""}"
           type="button"
-          onclick="${isQuick ? `openClaimModal('${deal.id}')` : `openOfferFlow('${deal.id}')`}"
+          ${isClaimProcessing ? "disabled" : ""}
+          onclick="${isClaimProcessing ? "" : isQuick ? `openClaimModal('${deal.id}')` : `openOfferFlow('${deal.id}')`}"
         >
-          ${isQuick ? "Claim Deal" : "Make Offer"}
+          ${isClaimProcessing ? "Claim in Progress..." : isQuick ? "Claim Deal" : "Make Offer"}
         </button>
 
       </div>
