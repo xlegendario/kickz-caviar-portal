@@ -186,24 +186,46 @@ app.get("/api/deals", async (req, res) => {
       });
     }
 
-    const records = await airtable(ORDERS_TABLE)
-      .select({
-        filterByFormula: formula,
-        sort: [
-          {
-            field: "Outsource Start Time",
-            direction: "desc"
-          }
-        ],
-        maxRecords: 50
-      })
-      .all();
-
+    const pageSize = Math.min(Number(req.query.page_size || 40), 40);
+    const offset = asText(req.query.offset);
+    
+    const airtableUrl = new URL(
+      `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(ORDERS_TABLE)}`
+    );
+    
+    airtableUrl.searchParams.set("filterByFormula", formula);
+    airtableUrl.searchParams.set("pageSize", String(pageSize));
+    airtableUrl.searchParams.set("sort[0][field]", "Outsource Start Time");
+    airtableUrl.searchParams.set("sort[0][direction]", "desc");
+    
+    if (offset) {
+      airtableUrl.searchParams.set("offset", offset);
+    }
+    
+    const airtableResponse = await fetch(airtableUrl, {
+      headers: {
+        Authorization: `Bearer ${AIRTABLE_TOKEN}`
+      }
+    });
+    
+    const airtableData = await airtableResponse.json();
+    
+    if (!airtableResponse.ok) {
+      throw new Error(
+        airtableData?.error?.message ||
+        airtableData?.error?.type ||
+        "Airtable request failed"
+      );
+    }
+    
+    const records = airtableData.records || [];
     const deals = records.map(normalizeDeal);
-
+    
     res.json({
       type,
       count: deals.length,
+      next_offset: airtableData.offset || "",
+      has_more: !!airtableData.offset,
       deals
     });
   } catch (err) {
