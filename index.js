@@ -332,6 +332,31 @@ app.post("/api/place-offer", async (req, res) => {
   }
 });
 
+app.get("/api/brands", async (_req, res) => {
+  try {
+    const records = await airtable(ORDERS_TABLE)
+      .select({
+        fields: ["Brand"]
+      })
+      .all();
+
+    const brands = [...new Set(
+      records
+        .map((record) => displayValue(record.fields?.["Brand"]))
+        .filter(Boolean)
+    )].sort((a, b) => a.localeCompare(b));
+
+    res.json({ brands });
+  } catch (err) {
+    console.error("Failed to load brands:", err);
+
+    res.status(500).json({
+      error: "Failed to load brands",
+      details: err.message
+    });
+  }
+});
+
 app.get("/api/deals", async (req, res) => {
   try {
     const type = asText(req.query.type) || "quick";
