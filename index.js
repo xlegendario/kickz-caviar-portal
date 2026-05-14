@@ -67,6 +67,26 @@ app.get("/api/health", (_req, res) => {
 });
 
 const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
+const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
+
+function normalizeTempPassword(discord, sellerId) {
+  const cleanDiscord = asText(discord).toLowerCase().replace(/\s+/g, "");
+  const cleanSellerId = asText(sellerId).replace(/^SE-/i, "");
+
+  return `${cleanDiscord}-${cleanSellerId}`;
+}
+
+function normalizeSeller(record) {
+  const f = record.fields || {};
+
+  return {
+    id: record.id,
+    seller_id: displayValue(f["Seller ID"]),
+    email: displayValue(f["Email"]),
+    discord: displayValue(f["Discord"]),
+    discord_id: displayValue(f["Discord ID"])
+  };
+}
 
 function escapeFormulaValue(value) {
   return asText(value).replace(/'/g, "\\'");
@@ -157,6 +177,56 @@ function normalizeDeal(record) {
     max_offer: moneyValue(f["Maximum Buying Price"])
   };
 }
+
+app.post("/api/login", async (req, res) => {
+  try {
+    const email = asText(req.body.email).toLowerCase();
+    const password = asText(req.body.password).toLowerCase();
+
+    if (!email || !password) {
+      return res.status(400).json({
+        error: "Email and password are required"
+      });
+    }
+
+    const records = await airtable(SELLERS_TABLE)
+      .select({
+        filterByFormula: `LOWER(TRIM({Email} & '')) = '${email.replace(/'/g, "\\'")}'`,
+        maxRecords: 1
+      })
+      .firstPage();
+
+    if (!records.length) {
+      return res.status(401).json({
+        error: "Invalid login"
+      });
+    }
+
+    const seller = normalizeSeller(records[0]);
+
+    const expectedPassword = normalizeTempPassword(
+      seller.discord,
+      seller.seller_id
+    );
+
+    if (password !== expectedPassword) {
+      return res.status(401).json({
+        error: "Invalid login"
+      });
+    }
+
+    res.json({
+      seller
+    });
+  } catch (err) {
+    console.error("Login failed:", err);
+
+    res.status(500).json({
+      error: "Login failed",
+      details: err.message
+    });
+  }
+});
 
 app.get("/api/deals", async (req, res) => {
   try {
