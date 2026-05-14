@@ -594,16 +594,6 @@ body {
   font-weight: 700;
 }
 
-#claimModal .login-modal::before {
-  content: "SELECT VAT TYPE";
-  display: block;
-  margin-bottom: 12px;
-  color: rgba(255,255,255,0.78);
-  font-size: 13px;
-  font-weight: 900;
-  letter-spacing: 1px;
-}
-
 .vat-options {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -611,6 +601,14 @@ body {
   margin: 0 0 22px;
   padding-bottom: 22px;
   border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.vat-label {
+  margin-bottom: 12px;
+  color: rgba(255,255,255,0.78);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 1px;
 }
 
 .vat-option {
