@@ -498,45 +498,45 @@ body {
 
 .login-modal {
   width: min(760px, calc(100vw - 40px));
-  background: linear-gradient(180deg, rgba(22,22,24,0.98), rgba(8,8,10,0.98));
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 34px;
-  padding: 44px 42px 30px;
+  background: linear-gradient(180deg, rgba(22,22,24,0.96), rgba(8,8,10,0.97));
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 30px;
+  padding: 42px 42px 32px;
   position: relative;
   box-shadow:
-    0 30px 90px rgba(0,0,0,0.72),
-    inset 0 1px 0 rgba(255,255,255,0.04);
+    0 24px 60px rgba(0,0,0,0.58),
+    inset 0 1px 0 rgba(255,255,255,0.03);
 }
 
 .modal-close {
   position: absolute;
-  top: 24px;
-  right: 24px;
-  width: 64px;
-  height: 64px;
+  top: 22px;
+  right: 22px;
+  width: 62px;
+  height: 62px;
   border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.10);
-  background: radial-gradient(circle at top, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03);
   color: white;
   cursor: pointer;
-  font-size: 40px;
+  font-size: 28px;
   line-height: 1;
 }
 
 .login-modal h2 {
-  margin: 0 0 18px;
-  font-size: clamp(42px, 4vw, 72px);
+  margin: 0 0 16px;
+  font-size: clamp(42px, 4vw, 64px);
   line-height: 0.95;
   font-weight: 900;
   letter-spacing: -2px;
 }
 
 .login-modal p {
-  margin: 0 0 40px;
+  margin: 0 0 34px;
   color: rgba(255,255,255,0.68);
-  font-size: clamp(18px, 1.6vw, 26px);
-  line-height: 1.35;
-  max-width: 540px;
+  font-size: 18px;
+  line-height: 1.45;
+  max-width: 520px;
 }
 
 .login-modal form {
@@ -617,22 +617,22 @@ body {
   position: relative;
   min-height: 92px;
   border-radius: 22px;
-  border: 2px solid rgba(255,255,255,0.12);
-  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.005));
+  border: 2px solid rgba(255,255,255,0.10);
+  background: linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.005));
   color: white;
-  font-weight: 900;
+  font-weight: 800;
   font-size: 22px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  padding-left: 78px;
-  transition: 0.2s ease;
+  padding-left: 82px;
+  transition: 0.18s ease;
 }
 
 .vat-option::before {
   content: "";
   position: absolute;
-  left: 24px;
+  left: 28px;
   width: 34px;
   height: 34px;
   border-radius: 999px;
@@ -660,13 +660,13 @@ body {
   border-radius: 22px;
   background: linear-gradient(180deg, #58d86a, #2ca43c);
   color: white;
-  font-size: 22px;
-  font-weight: 900;
+  font-size: 30px;
+  font-weight: 800;
   letter-spacing: -1px;
   cursor: pointer;
   box-shadow:
-    0 12px 40px rgba(60,255,110,0.22),
-    inset 0 1px 0 rgba(255,255,255,0.12);
+    0 10px 28px rgba(60,255,110,0.18),
+    inset 0 1px 0 rgba(255,255,255,0.10);
 }
 
 #confirmClaimBtn::before {
