@@ -61,6 +61,7 @@ async function loadDeals(type = "quick", reset = true) {
     `;
   } finally {
     isLoading = false;
+    renderLoadingMore();
   }
 }
 
@@ -171,23 +172,25 @@ function renderDeals() {
     .map(renderDealCard)
     .join("");
 
-  if (hasMore) {
-    dealsGrid.insertAdjacentHTML(
-      "afterend",
-      `
-        <div id="loadMoreWrap" class="load-more-wrap">
-          <button id="loadMoreBtn" class="load-more-btn">
-            Load more deals
-          </button>
-        </div>
-      `
-    );
+  renderLoadingMore();
+}
 
-    document.getElementById("loadMoreBtn").addEventListener("click", () => {
-      document.getElementById("loadMoreWrap")?.remove();
-      loadDeals(currentType, false);
-    });
-  }
+function renderLoadingMore() {
+  document.getElementById("loadingMore")?.remove();
+
+  if (!hasMore) return;
+
+  dealsGrid.insertAdjacentHTML(
+    "afterend",
+    `
+      <div id="loadingMore" class="loading-more">
+        <span>Loading more</span>
+        <span class="dots">
+          <span>.</span><span>.</span><span>.</span>
+        </span>
+      </div>
+    `
+  );
 }
 
 marketTabs.forEach((tab, index) => {
@@ -209,3 +212,16 @@ marketTabs.forEach((tab, index) => {
 });
 
 loadDeals();
+
+window.addEventListener("scroll", () => {
+  if (!hasMore || isLoading) return;
+
+  const distanceFromBottom =
+    document.documentElement.scrollHeight -
+    window.innerHeight -
+    window.scrollY;
+
+  if (distanceFromBottom < 500) {
+    loadDeals(currentType, false);
+  }
+});
