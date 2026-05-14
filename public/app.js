@@ -283,6 +283,9 @@ const confirmOfferBtn = document.getElementById("confirmOfferBtn");
 const offerAmountInput = document.getElementById("offerAmountInput");
 const offerError = document.getElementById("offerError");
 const offerVatOptions = document.querySelectorAll(".offer-vat-option");
+offerAmountInput.addEventListener("input", () => {
+  offerAmountInput.value = offerAmountInput.value.replace(/\D/g, "");
+});
 
 let selectedOfferDeal = null;
 let selectedOfferVatType = "Margin";
