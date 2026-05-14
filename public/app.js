@@ -202,6 +202,8 @@ function renderDeals() {
   const filteredDeals = getFilteredDeals();
 
   if (!filteredDeals.length) {
+    document.getElementById("loadingMore")?.remove();
+  
     dealsGrid.innerHTML = `
       <div class="empty-state">
         No deals found.
@@ -257,7 +259,11 @@ marketTabs.forEach((tab) => {
 
     localStorage.setItem("kc_market_type", currentType);
 
+    selectedBrand = "";
+    brandFilter.value = "";
+    
     syncMarketUi();
+    loadBrands();
     loadDeals(currentType, true);
   });
 });
@@ -278,7 +284,7 @@ loadDeals(currentType);
 
 async function loadBrands() {
   try {
-    const response = await fetch("/api/brands");
+    const response = await fetch(`/api/brands?type=${currentType}`);
     const data = await response.json();
 
     if (!response.ok) {
