@@ -964,7 +964,7 @@ body {
 .table-head {
   padding: 0 18px 8px;
   color: rgba(255,255,255,0.46);
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 900;
   text-transform: uppercase;
 }
@@ -997,6 +997,7 @@ body {
 .table-product {
   font-weight: 900;
   line-height: 1.25;
+  font-size: 15.5px;
 }
 
 .table-row > div {
@@ -1036,16 +1037,5 @@ body {
 .table-row > div {
   display: flex;
   align-items: center;
-}
-
-.table-row > div {
   font-size: 15px;
-}
-
-.table-product {
-  font-size: 15.5px;
-}
-
-.table-head {
-  font-size: 12.5px;
 }
