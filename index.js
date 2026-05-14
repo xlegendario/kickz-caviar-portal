@@ -30,6 +30,26 @@ const airtable = new Airtable({
   apiKey: AIRTABLE_TOKEN
 }).base(AIRTABLE_BASE_ID);
 
+function asText(value) {
+  if (value === null || value === undefined) return "";
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (item === null || item === undefined) return "";
+        if (typeof item === "object") {
+          return item.name || item.text || item.value || "";
+        }
+        return String(item);
+      })
+      .filter(Boolean)
+      .join(", ")
+      .trim();
+  }
+
+  return String(value).trim();
+}
+
 app.use(compression());
 app.use(express.json());
 
