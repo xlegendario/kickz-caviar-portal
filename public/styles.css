@@ -545,6 +545,10 @@ body {
   gap: 12px;
 }
 
+.login-modal .modal-submit {
+  margin-top: 18px;
+}
+
 .login-modal label {
   color: #aaa;
   font-size: 13px;
