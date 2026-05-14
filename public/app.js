@@ -233,7 +233,7 @@ function renderDeals() {
 function renderLoadingMore() {
   document.getElementById("loadingMore")?.remove();
 
-  if (!hasMore) return;
+  if (!hasMore || searchQuery) return;
 
   dealsGrid.insertAdjacentHTML(
     "afterend",
