@@ -390,6 +390,8 @@ app.get("/api/brands", async (req, res) => {
 app.get("/api/deals", async (req, res) => {
   try {
     const type = asText(req.query.type) || "quick";
+    const brand = asText(req.query.brand);
+    const search = asText(req.query.search);
 
     let formula;
 
@@ -416,6 +418,27 @@ app.get("/api/deals", async (req, res) => {
       return res.status(400).json({
         error: "Invalid deal type"
       });
+    }
+
+    const extraFilters = [];
+
+    if (brand) {
+      extraFilters.push(`{Brand} = '${escapeFormulaValue(brand)}'`);
+    }
+    
+    if (search) {
+      const safeSearch = escapeFormulaValue(search);
+    
+      extraFilters.push(`OR(
+        SEARCH(LOWER('${safeSearch}'), LOWER({Product Name} & '')),
+        SEARCH(LOWER('${safeSearch}'), LOWER({SKU} & '')),
+        SEARCH(LOWER('${safeSearch}'), LOWER({Brand} & '')),
+        SEARCH(LOWER('${safeSearch}'), LOWER({Size} & ''))
+      )`);
+    }
+    
+    if (extraFilters.length) {
+      formula = `AND(${formula}, ${extraFilters.join(",")})`;
     }
 
     const pageSize = Math.min(Number(req.query.page_size || 40), 40);
