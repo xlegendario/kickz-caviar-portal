@@ -148,7 +148,11 @@ function renderDealCard(deal) {
 
         ${payoutHtml}
 
-        <button class="deal-btn ${!isQuick ? "offer-btn" : ""}">
+        <button
+          class="deal-btn ${!isQuick ? "offer-btn" : ""}"
+          type="button"
+          onclick="${isQuick ? `openClaimModal('${deal.id}')` : `openOfferFlow('${deal.id}')`}"
+        >
           ${isQuick ? "Claim Deal" : "Make Offer"}
         </button>
 
@@ -234,6 +238,15 @@ const loginEmail = document.getElementById("loginEmail");
 const loginPassword = document.getElementById("loginPassword");
 const loginError = document.getElementById("loginError");
 
+const claimModal = document.getElementById("claimModal");
+const closeClaimModal = document.getElementById("closeClaimModal");
+const confirmClaimBtn = document.getElementById("confirmClaimBtn");
+const claimError = document.getElementById("claimError");
+const vatOptions = document.querySelectorAll(".vat-option");
+
+let selectedDeal = null;
+let selectedVatType = "Margin";
+
 let currentSeller = JSON.parse(localStorage.getItem("kc_seller") || "null");
 
 function updateLoginState() {
@@ -315,3 +328,80 @@ loginForm.addEventListener("submit", async (event) => {
 });
 
 updateLoginState();
+
+function openClaimModal(dealId) {
+  if (!currentSeller) {
+    openLoginModal();
+    return;
+  }
+
+  selectedDeal = currentDeals.find((deal) => deal.id === dealId);
+
+  if (!selectedDeal) {
+    alert("Deal not found. Please refresh and try again.");
+    return;
+  }
+
+  selectedVatType = "Margin";
+  claimError.textContent = "";
+
+  vatOptions.forEach((option) => {
+    option.classList.toggle("active", option.dataset.vat === selectedVatType);
+  });
+
+  claimModal.classList.remove("hidden");
+}
+
+function closeClaimFlow() {
+  claimModal.classList.add("hidden");
+  selectedDeal = null;
+}
+
+closeClaimModal.addEventListener("click", closeClaimFlow);
+
+claimModal.addEventListener("click", (event) => {
+  if (event.target === claimModal) {
+    closeClaimFlow();
+  }
+});
+
+vatOptions.forEach((option) => {
+  option.addEventListener("click", () => {
+    selectedVatType = option.dataset.vat;
+
+    vatOptions.forEach((item) => {
+      item.classList.remove("active");
+    });
+
+    option.classList.add("active");
+  });
+});
+
+confirmClaimBtn.addEventListener("click", async () => {
+  if (!selectedDeal || !currentSeller) return;
+
+  claimError.textContent = "";
+
+  console.log("CLAIM TEST PAYLOAD", {
+    order_record_id: selectedDeal.id,
+    seller_record_id: currentSeller.id,
+    seller_id: currentSeller.seller_id,
+    discord_id: currentSeller.discord_id,
+    vat_type: selectedVatType
+  });
+
+  alert(
+    `Claim test ready:\n\n${selectedDeal.product}\nVAT Type: ${selectedVatType}\nSeller: ${currentSeller.seller_id}`
+  );
+
+  closeClaimFlow();
+});
+
+function openOfferFlow(dealId) {
+  if (!currentSeller) {
+    openLoginModal();
+    return;
+  }
+
+  alert(`Offer flow coming next for deal: ${dealId}`);
+}
