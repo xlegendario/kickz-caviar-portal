@@ -228,6 +228,58 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
+app.post("/api/claim-deal", async (req, res) => {
+  try {
+    const {
+      recordId,
+      sellerRecordId,
+      sellerId,
+      sellerDiscordId,
+      vatType
+    } = req.body || {};
+
+    const botBaseUrl = process.env.KICKZ_BOT_BASE_URL;
+
+    if (!botBaseUrl) {
+      return res.status(500).json({
+        error: "Missing KICKZ_BOT_BASE_URL"
+      });
+    }
+
+    const response = await fetch(`${botBaseUrl.replace(/\/$/, "")}/quick-deal/claim-from-portal`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        recordId,
+        sellerRecordId,
+        sellerId,
+        sellerDiscordId,
+        vatType
+      })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: data.error || "Claim failed",
+        details: data.details || ""
+      });
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error("Portal claim failed:", err);
+
+    res.status(500).json({
+      error: "Claim failed",
+      details: err.message
+    });
+  }
+});
+
 app.get("/api/deals", async (req, res) => {
   try {
     const type = asText(req.query.type) || "quick";
