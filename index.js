@@ -288,7 +288,10 @@ app.get("/api/deals", async (req, res) => {
 
     if (type === "quick") {
       formula = `AND(
-        {Fulfillment Status} = 'Outsource',
+        OR(
+          {Fulfillment Status} = 'Outsource',
+          {Fulfillment Status} = 'Claim Processing'
+        ),
         {Auto Offer Accept?} = 'Yes'
       )`;
     } else if (type === "wtb") {
