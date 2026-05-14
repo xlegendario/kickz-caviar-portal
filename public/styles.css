@@ -1027,3 +1027,13 @@ body {
   color: rgba(255,255,255,0.42);
   cursor: not-allowed;
 }
+
+.table-row .deal-badge {
+  display: inline-flex;
+  width: fit-content;
+}
+
+.table-row > div {
+  display: flex;
+  align-items: center;
+}
