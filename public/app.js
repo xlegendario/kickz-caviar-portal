@@ -37,7 +37,7 @@ async function loadDeals(type = "quick", reset = true) {
 
       dealsGrid.innerHTML = `
         <div class="loading-state">
-          Loading deals...
+          Searching deals...
         </div>
       `;
     }
