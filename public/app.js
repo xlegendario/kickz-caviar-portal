@@ -320,9 +320,15 @@ brandFilter.addEventListener("change", () => {
   loadDeals(currentType, true);
 });
 
-brandFilter.addEventListener("change", () => {
-  selectedBrand = brandFilter.value;
-  renderDeals();
+let searchTimer = null;
+
+searchInput.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+
+  searchTimer = setTimeout(() => {
+    searchQuery = searchInput.value.trim();
+    loadDeals(currentType, true);
+  }, 350);
 });
 
 window.addEventListener("scroll", () => {
