@@ -287,7 +287,13 @@ body {
   width: 100%;
   height: 190px;
   object-fit: contain;
+  display: block;
+
+  background: #fff;
   border-radius: 18px;
+  padding: 10px;
+
+  overflow: hidden;
 }
 
 .image-placeholder {
