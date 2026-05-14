@@ -11,6 +11,7 @@ let selectedBrand = "";
 
 let currentType = localStorage.getItem("kc_market_type") || "quick";
 let priceView = localStorage.getItem("kc_price_view") || "margin";
+let layoutView = localStorage.getItem("kc_layout_view") || "cards";
 
 if (!["quick", "wtb"].includes(currentType)) {
   currentType = "quick";
@@ -190,6 +191,111 @@ function renderDealCard(deal) {
   `;
 }
 
+function renderDealTable(deals) {
+  const isQuick = currentType === "quick";
+
+  return `
+    <div class="table-wrap">
+
+      <div class="table-head">
+        <div></div>
+        <div>Product</div>
+        <div>SKU</div>
+        <div>Size</div>
+        <div>${isQuick ? "Quick Deal" : "Want To Buy"}</div>
+        <div>${isQuick ? "Current Payout" : "Current Offer"}</div>
+        ${isQuick ? "<div>Max Payout</div>" : ""}
+        ${isQuick ? "<div>Timer</div>" : ""}
+        <div></div>
+      </div>
+
+      ${deals.map((deal) => {
+        const isClaimProcessing = deal.fulfillment_status === "Claim Processing";
+
+        return `
+          <div class="table-row">
+
+            <div class="table-image-cell">
+              ${
+                deal.image_url
+                  ? `<img src="${deal.image_url}" class="table-image" />`
+                  : `<div class="table-image-placeholder"></div>`
+              }
+            </div>
+
+            <div class="table-product">${deal.product || "-"}</div>
+
+            <div>${deal.sku || "-"}</div>
+
+            <div>${deal.size || "-"}</div>
+
+            <div>
+              ${isQuick ? "Quick Deal" : "Want To Buy"}
+            </div>
+
+            <div>
+              ${
+                isQuick
+                  ? priceView === "vat0"
+                    ? deal.current_payout_vat0 || "-"
+                    : deal.current_payout_margin || "-"
+                  : priceView === "vat0"
+                    ? deal.current_offer_vat0 || "No offer yet"
+                    : deal.current_offer_margin || "No offer yet"
+              }
+            </div>
+
+            ${
+              isQuick
+                ? `
+                  <div>
+                    ${
+                      priceView === "vat0"
+                        ? deal.max_payout_vat0 || "-"
+                        : deal.max_payout_margin || "-"
+                    }
+                  </div>
+                `
+                : ""
+            }
+
+            ${
+              isQuick
+                ? `<div>${deal.time_to_max || "-"}</div>`
+                : ""
+            }
+
+            <div>
+              <button
+                class="table-btn ${!isQuick ? "offer-btn" : ""} ${isClaimProcessing ? "disabled-btn" : ""}"
+                type="button"
+                ${isClaimProcessing ? "disabled" : ""}
+                onclick="${
+                  isClaimProcessing
+                    ? ""
+                    : isQuick
+                      ? `openClaimModal('${deal.id}')`
+                      : `openOfferFlow('${deal.id}')`
+                }"
+              >
+                ${
+                  isClaimProcessing
+                    ? "In Progress"
+                    : isQuick
+                      ? "Claim"
+                      : "Offer"
+                }
+              </button>
+            </div>
+
+          </div>
+        `;
+      }).join("")}
+
+    </div>
+  `;
+}
+
 function getFilteredDeals() {
   return currentDeals.filter((deal) => {
     const query = searchQuery.toLowerCase();
@@ -223,9 +329,10 @@ function renderDeals() {
     return;
   }
 
-  dealsGrid.innerHTML = filteredDeals
-    .map(renderDealCard)
-    .join("");
+  dealsGrid.innerHTML =
+    layoutView === "table"
+      ? renderDealTable(filteredDeals)
+      : filteredDeals.map(renderDealCard).join("");
 
   renderLoadingMore();
 }
@@ -258,6 +365,11 @@ function syncMarketUi() {
     const buttonView = button.getAttribute("data-price-view");
     button.classList.toggle("active", buttonView === priceView);
   });
+
+  document.querySelectorAll(".view-btn").forEach((button) => {
+    const view = button.dataset.view;
+    button.classList.toggle("active", view === layoutView);
+  });
 }
 
 marketTabs.forEach((tab) => {
@@ -284,6 +396,17 @@ priceViewButtons.forEach((button) => {
     priceView = button.dataset.priceView;
 
     localStorage.setItem("kc_price_view", priceView);
+
+    syncMarketUi();
+    renderDeals();
+  });
+});
+
+document.querySelectorAll(".view-btn").forEach((button) => {
+  button.addEventListener("click", () => {
+    layoutView = button.dataset.view;
+
+    localStorage.setItem("kc_layout_view", layoutView);
 
     syncMarketUi();
     renderDeals();
