@@ -299,9 +299,21 @@ body {
 }
 
 .deal-title {
-  margin: 0 0 8px;
-  font-size: 22px;
-  line-height: 1.2;
+  margin: 0 0 10px;
+
+  font-size: clamp(18px, 1.15vw, 22px);
+
+  line-height: 1.15;
+
+  min-height: 78px;
+
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+
+  overflow: hidden;
+
+  word-break: break-word;
 }
 
 .deal-meta {
