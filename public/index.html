@@ -124,7 +124,14 @@
       <p>Enter your best offer. Offers must stay within the allowed buying margin.</p>
   
       <label class="offer-label">OFFER AMOUNT</label>
-      <input id="offerAmountInput" class="offer-input" type="number" min="1" step="1" inputmode="numeric" placeholder="Enter your offer" />
+      <input
+        id="offerAmountInput"
+        class="offer-input"
+        type="text"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        placeholder="Enter your offer"
+      />
   
       <div class="vat-label">SELECT VAT TYPE</div>
   
