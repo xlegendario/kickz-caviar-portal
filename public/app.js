@@ -67,7 +67,7 @@ async function loadDeals(type = "quick", reset = true) {
 
 function renderDealCard(deal) {
 
-  const isQuick = deal.auto_offer_accept === "Yes";
+  const isQuick = currentType === "quick";
 
   const payoutHtml = isQuick
     ? `
