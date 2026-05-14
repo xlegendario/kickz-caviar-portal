@@ -1,21 +1,122 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-
   <title>Kickz Caviar Portal</title>
-
   <link rel="stylesheet" href="/styles.css"/>
 </head>
 <body>
 
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-logo">KC</div>
+      <div class="brand-text">
+        <h1>Kickz Caviar</h1>
+        <span>Member Marketplace</span>
+      </div>
+    </div>
+
+    <div class="main-toggle">
+      <button class="toggle-btn active">Selling</button>
+      <button class="toggle-btn">Buying</button>
+    </div>
+
+    <button class="login-btn">Login</button>
+  </header>
+
   <main class="page">
-    <h1>Kickz Caviar Portal</h1>
-    <p>Marketplace setup works.</p>
+    <section class="hero">
+      <div class="hero-content">
+        <h2>Sell inventory directly to Kickz Caviar</h2>
+        <p>Claim quick deals instantly or place offers on active Want To Buys.</p>
+      </div>
+    </section>
+
+    <section class="market-tabs">
+      <button class="market-tab active">Quick Deals</button>
+      <button class="market-tab">Want To Buys</button>
+    </section>
+
+    <section class="toolbar">
+      <input type="text" placeholder="Search SKU, product..." class="search-input"/>
+
+      <select class="toolbar-select">
+        <option>All Brands</option>
+        <option>Nike</option>
+        <option>Jordan</option>
+        <option>Adidas</option>
+      </select>
+
+      <select class="toolbar-select">
+        <option>Margin / VAT21</option>
+        <option>VAT0</option>
+      </select>
+
+      <div class="view-toggle">
+        <button class="view-btn active">Cards</button>
+        <button class="view-btn">Table</button>
+      </div>
+    </section>
+
+    <section class="deals-grid">
+      <article class="deal-card">
+        <div class="deal-image-wrap">
+          <img src="https://images.stockx.com/images/Nike-SB-Dunk-Low-Tightbooth.png" class="deal-image"/>
+        </div>
+
+        <div class="deal-body">
+          <div class="deal-top">
+            <span class="deal-badge quick">Quick Deal</span>
+            <span class="deal-time">5h left</span>
+          </div>
+
+          <h3 class="deal-title">Nike SB Dunk Low Tightbooth</h3>
+          <div class="deal-meta">FD2629-100 • EU 44</div>
+
+          <div class="deal-payouts">
+            <div class="payout-box">
+              <span class="payout-label">Current</span>
+              <span class="payout-value">€285</span>
+            </div>
+
+            <div class="payout-box">
+              <span class="payout-label">Max</span>
+              <span class="payout-value">€305</span>
+            </div>
+          </div>
+
+          <button class="deal-btn">Claim Deal</button>
+        </div>
+      </article>
+
+      <article class="deal-card">
+        <div class="deal-image-wrap">
+          <img src="https://images.stockx.com/images/Air-Jordan-4-Retro-Red-Cement.png" class="deal-image"/>
+        </div>
+
+        <div class="deal-body">
+          <div class="deal-top">
+            <span class="deal-badge offer">Want To Buy</span>
+            <span class="deal-time">Offer Eligible</span>
+          </div>
+
+          <h3 class="deal-title">Jordan 4 Red Cement</h3>
+          <div class="deal-meta">DH6927-161 • EU 43</div>
+
+          <div class="deal-payouts">
+            <div class="payout-box">
+              <span class="payout-label">Max Offer</span>
+              <span class="payout-value">€240</span>
+            </div>
+          </div>
+
+          <button class="deal-btn offer-btn">Make Offer</button>
+        </div>
+      </article>
+    </section>
   </main>
 
   <script src="/app.js"></script>
-
 </body>
 </html>
