@@ -195,7 +195,7 @@ function renderDealTable(deals) {
   const isQuick = currentType === "quick";
 
   return `
-    <div class="table-wrap">
+    <div class="table-wrap ${isQuick ? "quick-table" : "wtb-table"}">
 
       <div class="table-head">
         <div></div>
