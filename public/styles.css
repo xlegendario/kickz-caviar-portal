@@ -87,29 +87,36 @@ body {
 }
 
 .page {
+  width: 100%;
+  max-width: 1680px;
+  margin: 0 auto;
   padding: 42px;
 }
 
 .hero {
-  margin-bottom: 36px;
+  margin-bottom: 52px;
+  padding-top: 28px;
 }
 
 .hero h2 {
-  margin: 0 0 12px;
-  font-size: 44px;
-  line-height: 1.1;
-  max-width: 700px;
+  margin: 0 0 16px;
+  font-size: 64px;
+  line-height: 1;
+  max-width: 980px;
+  letter-spacing: -2px;
 }
 
 .hero p {
-  color: #999;
-  font-size: 18px;
+  color: #888;
+  font-size: 22px;
+  max-width: 760px;
+  line-height: 1.5;
 }
 
 .market-tabs {
   display: flex;
   gap: 12px;
-  margin-bottom: 28px;
+  margin-bottom: 32px;
 }
 
 .market-tab {
@@ -129,10 +136,12 @@ body {
 }
 
 .toolbar {
+  width: 100%;
   display: flex;
   gap: 14px;
   margin-bottom: 32px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .search-input,
@@ -146,7 +155,8 @@ body {
 }
 
 .search-input {
-  min-width: 320px;
+  flex: 1;
+  min-width: 420px;
 }
 
 .view-toggle {
@@ -173,9 +183,10 @@ body {
 }
 
 .deals-grid {
+  width: 100%;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 22px;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 28px;
 }
 
 .deal-card {
