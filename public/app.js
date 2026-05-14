@@ -211,22 +211,28 @@ function renderLoadingMore() {
 
 function syncMarketUi() {
   marketTabs.forEach((tab) => {
-    tab.classList.toggle("active", tab.dataset.marketType === currentType);
+    const tabType = tab.getAttribute("data-market-type");
+    tab.classList.toggle("active", tabType === currentType);
   });
 
   priceViewButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.priceView === priceView);
+    const buttonView = button.getAttribute("data-price-view");
+    button.classList.toggle("active", buttonView === priceView);
   });
 }
 
 marketTabs.forEach((tab) => {
   tab.addEventListener("click", () => {
-    currentType = tab.dataset.marketType;
+    const selectedType = tab.getAttribute("data-market-type");
+
+    if (!selectedType) return;
+
+    currentType = selectedType;
 
     localStorage.setItem("kc_market_type", currentType);
 
     syncMarketUi();
-    loadDeals(currentType);
+    loadDeals(currentType, true);
   });
 });
 
