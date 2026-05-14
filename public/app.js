@@ -31,6 +31,8 @@ async function loadDeals(type = "quick", reset = true) {
     isLoading = true;
 
     if (reset) {
+      document.getElementById("loadingMore")?.remove();
+    
       currentDeals = [];
       nextOffset = "";
       hasMore = false;
