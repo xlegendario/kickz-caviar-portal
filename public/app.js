@@ -3,32 +3,53 @@ const dealsGrid = document.getElementById("dealsGrid");
 const marketTabs = document.querySelectorAll(".market-tab");
 
 let currentType = "quick";
+let currentDeals = [];
+let nextOffset = "";
+let hasMore = false;
+let isLoading = false;
 
-async function loadDeals(type = "quick") {
+async function loadDeals(type = "quick", reset = true) {
+  if (isLoading) return;
+
   try {
+    isLoading = true;
 
-    dealsGrid.innerHTML = `
-      <div class="loading-state">
-        Loading deals...
-      </div>
-    `;
+    if (reset) {
+      currentDeals = [];
+      nextOffset = "";
+      hasMore = false;
 
-    const response = await fetch(`/api/deals?type=${type}`);
-
-    const data = await response.json();
-
-    if (!data.deals?.length) {
       dealsGrid.innerHTML = `
-        <div class="empty-state">
-          No deals available.
+        <div class="loading-state">
+          Loading deals...
         </div>
       `;
-      return;
     }
 
-    dealsGrid.innerHTML = data.deals
-      .map(renderDealCard)
-      .join("");
+    const params = new URLSearchParams({
+      type,
+      page_size: "40"
+    });
+
+    if (!reset && nextOffset) {
+      params.set("offset", nextOffset);
+    }
+
+    const response = await fetch(`/api/deals?${params.toString()}`);
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to load deals");
+    }
+
+    currentDeals = reset
+      ? data.deals
+      : [...currentDeals, ...data.deals];
+
+    nextOffset = data.next_offset || "";
+    hasMore = !!data.has_more;
+
+    renderDeals();
 
   } catch (err) {
     console.error(err);
@@ -38,6 +59,8 @@ async function loadDeals(type = "quick") {
         Failed to load deals.
       </div>
     `;
+  } finally {
+    isLoading = false;
   }
 }
 
@@ -132,6 +155,39 @@ function renderDealCard(deal) {
 
     </article>
   `;
+}
+
+function renderDeals() {
+  if (!currentDeals.length) {
+    dealsGrid.innerHTML = `
+      <div class="empty-state">
+        No deals available.
+      </div>
+    `;
+    return;
+  }
+
+  dealsGrid.innerHTML = currentDeals
+    .map(renderDealCard)
+    .join("");
+
+  if (hasMore) {
+    dealsGrid.insertAdjacentHTML(
+      "afterend",
+      `
+        <div id="loadMoreWrap" class="load-more-wrap">
+          <button id="loadMoreBtn" class="load-more-btn">
+            Load more deals
+          </button>
+        </div>
+      `
+    );
+
+    document.getElementById("loadMoreBtn").addEventListener("click", () => {
+      document.getElementById("loadMoreWrap")?.remove();
+      loadDeals(currentType, false);
+    });
+  }
 }
 
 marketTabs.forEach((tab, index) => {
