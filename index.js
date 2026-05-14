@@ -392,6 +392,8 @@ app.get("/api/deals", async (req, res) => {
     const type = asText(req.query.type) || "quick";
     const brand = asText(req.query.brand);
     const search = asText(req.query.search);
+    const sort = asText(req.query.sort) || "newest";
+    const priceView = asText(req.query.price_view) || "margin";
 
     let formula;
 
@@ -450,8 +452,42 @@ app.get("/api/deals", async (req, res) => {
     
     airtableUrl.searchParams.set("filterByFormula", formula);
     airtableUrl.searchParams.set("pageSize", String(pageSize));
-    airtableUrl.searchParams.set("sort[0][field]", "Outsource Start Time");
-    airtableUrl.searchParams.set("sort[0][direction]", "desc");
+    let sortField = "Order Date";
+    let sortDirection = "desc";
+    
+    if (sort === "oldest") {
+      sortField = "Order Date";
+      sortDirection = "asc";
+    }
+    
+    if (sort === "az") {
+      sortField = "Product Name";
+      sortDirection = "asc";
+    }
+    
+    if (sort === "za") {
+      sortField = "Product Name";
+      sortDirection = "desc";
+    }
+    
+    if (sort === "payout_low" || sort === "payout_high") {
+      if (type === "quick") {
+        sortField =
+          priceView === "vat0"
+            ? "Outsource Buying Price (VAT 0%)"
+            : "Outsource Buying Price";
+      } else {
+        sortField =
+          priceView === "vat0"
+            ? "Current Lowest (VAT0)"
+            : "Current Lowest (Normalized)";
+      }
+    
+      sortDirection = sort === "payout_low" ? "asc" : "desc";
+    }
+    
+    airtableUrl.searchParams.set("sort[0][field]", sortField);
+    airtableUrl.searchParams.set("sort[0][direction]", sortDirection);
     
     if (offset) {
       airtableUrl.searchParams.set("offset", offset);
