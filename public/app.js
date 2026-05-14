@@ -417,7 +417,7 @@ confirmClaimBtn.addEventListener("click", async () => {
   
     await loadDeals(currentType);
   
-    alert("Deal claimed. Your Discord deal channel has been created.");
+    showSuccessToast("Deal claimed successfully");
   } catch (err) {
     claimError.textContent = err.message;
   } finally {
@@ -433,4 +433,35 @@ function openOfferFlow(dealId) {
   }
 
   alert(`Offer flow coming next for deal: ${dealId}`);
+}
+
+function showSuccessToast(message) {
+  const existing = document.querySelector(".success-toast");
+
+  if (existing) {
+    existing.remove();
+  }
+
+  const toast = document.createElement("div");
+
+  toast.className = "success-toast";
+
+  toast.innerHTML = `
+    <div class="success-toast-icon">✓</div>
+    <div class="success-toast-text">${message}</div>
+  `;
+
+  document.body.appendChild(toast);
+
+  requestAnimationFrame(() => {
+    toast.classList.add("show");
+  });
+
+  setTimeout(() => {
+    toast.classList.remove("show");
+
+    setTimeout(() => {
+      toast.remove();
+    }, 250);
+  }, 2600);
 }
