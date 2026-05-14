@@ -116,6 +116,30 @@
     </div>
   </div>
 
+  <div id="offerModal" class="modal-backdrop hidden">
+    <div class="login-modal">
+      <button id="closeOfferModal" class="modal-close">×</button>
+  
+      <h2>Place Offer</h2>
+      <p>Enter your best offer. Offers must stay within the allowed buying margin.</p>
+  
+      <label class="vat-label">OFFER AMOUNT</label>
+      <input id="offerAmountInput" class="offer-input" type="number" min="1" step="0.01" placeholder="€ amount" />
+  
+      <div class="vat-label">SELECT VAT TYPE</div>
+  
+      <div class="vat-options">
+        <button class="vat-option offer-vat-option active" data-vat="Margin">Margin</button>
+        <button class="vat-option offer-vat-option" data-vat="VAT21">VAT21</button>
+        <button class="vat-option offer-vat-option" data-vat="VAT0">VAT0</button>
+      </div>
+  
+      <button id="confirmOfferBtn" class="modal-submit">Submit Offer</button>
+  
+      <div id="offerError" class="login-error"></div>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>
