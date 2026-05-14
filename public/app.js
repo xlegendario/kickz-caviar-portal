@@ -241,18 +241,7 @@ priceViewButtons.forEach((button) => {
   });
 });
 
-function setInitialMarketState() {
-  marketTabs.forEach((tab, index) => {
-    const type = index === 0 ? "quick" : "wtb";
-    tab.classList.toggle("active", type === currentType);
-  });
-
-  priceViewButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.priceView === priceView);
-  });
-}
-
-setInitialMarketState();
+syncMarketUi();
 loadDeals(currentType);
 
 window.addEventListener("scroll", () => {
