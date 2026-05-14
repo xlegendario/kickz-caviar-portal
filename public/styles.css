@@ -480,6 +480,98 @@ body {
   animation-delay: 0.36s;
 }
 
+.hidden {
+  display: none !important;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.74);
+  backdrop-filter: blur(10px);
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.login-modal {
+  width: min(440px, 100%);
+  background: linear-gradient(180deg, #191919, #101010);
+  border: 1px solid #2d2d2d;
+  border-radius: 26px;
+  padding: 28px;
+  position: relative;
+  box-shadow:
+    0 24px 80px rgba(0,0,0,0.6),
+    inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+.modal-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid #333;
+  background: #171717;
+  color: #aaa;
+  cursor: pointer;
+  font-size: 22px;
+}
+
+.login-modal h2 {
+  margin: 0 0 8px;
+  font-size: 30px;
+}
+
+.login-modal p {
+  margin: 0 0 24px;
+  color: #888;
+}
+
+.login-modal form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.login-modal label {
+  color: #aaa;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.login-modal input {
+  height: 50px;
+  border-radius: 14px;
+  border: 1px solid #2a2a2a;
+  background: #111;
+  color: white;
+  padding: 0 14px;
+  outline: none;
+}
+
+.modal-submit {
+  height: 52px;
+  margin-top: 8px;
+  border: none;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fff27a, #f0a500);
+  color: black;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.login-error {
+  min-height: 20px;
+  color: #ff7b7b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 @keyframes dotPulse {
   0%, 20% {
     opacity: 0.15;
