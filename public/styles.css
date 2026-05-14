@@ -79,11 +79,19 @@ body {
 .login-btn {
   height: 44px;
   padding: 0 20px;
-  border: none;
+  border: 1px solid #3a3a3a;
   border-radius: 12px;
-  background: white;
+  background: linear-gradient(
+    180deg,
+    #f2f2f2,
+    #cfcfcf
+  );
+  color: black;
   font-weight: 700;
   cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.55),
+    0 4px 14px rgba(0,0,0,0.35);
 }
 
 .page {
@@ -131,8 +139,17 @@ body {
 }
 
 .market-tab.active {
-  background: white;
+  background: linear-gradient(
+    180deg,
+    #f2f2f2,
+    #cfcfcf
+  );
+
   color: black;
+
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.5),
+    0 4px 14px rgba(0,0,0,0.3);
 }
 
 .toolbar {
@@ -178,15 +195,24 @@ body {
 }
 
 .view-btn.active {
-  background: white;
+  background: linear-gradient(
+    180deg,
+    #f2f2f2,
+    #cfcfcf
+  );
+
   color: black;
+
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.5),
+    0 4px 14px rgba(0,0,0,0.3);
 }
 
 .deals-grid {
   width: 100%;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-  gap: 28px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px;
 }
 
 .deal-card {
@@ -207,9 +233,10 @@ body {
   padding: 24px;
 }
 
-.deal-image {
+.deal-image,
+.image-placeholder {
   width: 100%;
-  height: 220px;
+  height: 190px;
   object-fit: contain;
 }
 
@@ -298,7 +325,17 @@ body {
 }
 
 .offer-btn {
-  background: white;
+  background: linear-gradient(
+    180deg,
+    #f2f2f2,
+    #cfcfcf
+  );
+
+  color: black;
+
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.45),
+    0 6px 18px rgba(0,0,0,0.4);
 }
 
 @media (max-width: 900px) {
@@ -319,5 +356,23 @@ body {
 
   .search-input {
     min-width: 100%;
+  }
+}
+
+@media (max-width: 1300px) {
+  .deals-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 950px) {
+  .deals-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .deals-grid {
+    grid-template-columns: 1fr;
   }
 }
