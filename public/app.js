@@ -3,6 +3,12 @@ const dealsGrid = document.getElementById("dealsGrid");
 const marketTabs = document.querySelectorAll(".market-tab");
 const priceViewButtons = document.querySelectorAll(".price-view-btn");
 
+const searchInput = document.getElementById("searchInput");
+const brandFilter = document.getElementById("brandFilter");
+
+let searchQuery = "";
+let selectedBrand = "";
+
 let currentType = localStorage.getItem("kc_market_type") || "quick";
 let priceView = localStorage.getItem("kc_price_view") || "margin";
 
@@ -174,17 +180,37 @@ function renderDealCard(deal) {
   `;
 }
 
+function getFilteredDeals() {
+  return currentDeals.filter((deal) => {
+    const query = searchQuery.toLowerCase();
+
+    const matchesSearch =
+      !query ||
+      [deal.product, deal.sku, deal.brand, deal.size]
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+
+    const matchesBrand =
+      !selectedBrand || deal.brand === selectedBrand;
+
+    return matchesSearch && matchesBrand;
+  });
+}
+
 function renderDeals() {
-  if (!currentDeals.length) {
+  const filteredDeals = getFilteredDeals();
+
+  if (!filteredDeals.length) {
     dealsGrid.innerHTML = `
       <div class="empty-state">
-        No deals available.
+        No deals found.
       </div>
     `;
     return;
   }
 
-  dealsGrid.innerHTML = currentDeals
+  dealsGrid.innerHTML = filteredDeals
     .map(renderDealCard)
     .join("");
 
@@ -249,6 +275,40 @@ priceViewButtons.forEach((button) => {
 
 syncMarketUi();
 loadDeals(currentType);
+
+async function loadBrands() {
+  try {
+    const response = await fetch("/api/brands");
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to load brands");
+    }
+
+    brandFilter.innerHTML = `<option value="">All Brands</option>`;
+
+    data.brands.forEach((brand) => {
+      const option = document.createElement("option");
+      option.value = brand;
+      option.textContent = brand;
+      brandFilter.appendChild(option);
+    });
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+loadBrands();
+
+searchInput.addEventListener("input", () => {
+  searchQuery = searchInput.value.trim();
+  renderDeals();
+});
+
+brandFilter.addEventListener("change", () => {
+  selectedBrand = brandFilter.value;
+  renderDeals();
+});
 
 window.addEventListener("scroll", () => {
   if (!hasMore || isLoading) return;
