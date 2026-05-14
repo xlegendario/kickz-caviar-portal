@@ -415,6 +415,15 @@ body {
   cursor: pointer;
 }
 
+.disabled-btn,
+.disabled-btn:hover {
+  background: linear-gradient(180deg, #2c2c2c, #1a1a1a);
+  color: rgba(255,255,255,0.42);
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
 .offer-btn {
   background: linear-gradient(180deg, #f2f2f2, #cfcfcf);
   color: black;
