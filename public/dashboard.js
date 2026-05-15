@@ -32,7 +32,17 @@ const dashboardConfig = {
   }
 };
 
-const skeletonColumns = ["Order", "Product", "SKU", "Size", "Status", "Payout / Offer", "Date", "Action"];
+const skeletonColumns = [
+  "Order ID",
+  "Product",
+  "SKU",
+  "Size",
+  "Brand",
+  "Payout",
+  "VAT Type",
+  "Date",
+  "Action"
+];
 
 let dashboardSeller = JSON.parse(localStorage.getItem("kc_seller") || "null");
 let activeSection = localStorage.getItem("kc_dashboard_section") || "quick";
@@ -140,7 +150,18 @@ function syncDashboardUi() {
   });
 
   renderStats();
-  renderTableShell();
+
+  loadDashboardData().catch((err) => {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>${escapeHtml(err.message)}</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  });
 }
 
 function renderStats() {
@@ -152,6 +173,104 @@ function renderStats() {
       <div class="dashboard-stat-value">0</div>
     </article>
   `).join("");
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function renderOpenClaimsRows(claims) {
+  dashboardTableHead.innerHTML = skeletonColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!claims.length) {
+    renderTableShell();
+    return;
+  }
+
+  dashboardTableBody.innerHTML = claims.map((claim) => `
+    <tr>
+      <td>${escapeHtml(claim.order_id || "-")}</td>
+      <td>${escapeHtml(claim.product || "-")}</td>
+      <td>${escapeHtml(claim.sku || "-")}</td>
+      <td>${escapeHtml(claim.size || "-")}</td>
+      <td>${escapeHtml(claim.brand || "-")}</td>
+      <td>${escapeHtml(claim.payout || "-")}</td>
+      <td>${escapeHtml(claim.vat_type || "-")}</td>
+      <td>${escapeHtml(claim.date || "-")}</td>
+
+      <td>
+        ${
+          claim.discord_url
+            ? `
+              <a
+                class="dashboard-discord-btn"
+                href="${escapeHtml(claim.discord_url)}"
+                target="_blank"
+                rel="noopener"
+              >
+                DISCORD
+              </a>
+            `
+            : "-"
+        }
+      </td>
+    </tr>
+  `).join("");
+}
+
+async function loadDashboardData() {
+  if (!dashboardSeller) return;
+
+  if (activeSection === "quick" && activeTab === "open_claims") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading open claims...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+
+    const response = await fetch(
+      `/api/dashboard/open-claims?${params.toString()}`
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load open claims"
+      );
+    }
+
+    renderOpenClaimsRows(data.claims || []);
+
+    const countEl = document.querySelector(
+      '[data-count-key="quick:open_claims"]'
+    );
+
+    if (countEl) {
+      countEl.textContent = data.count || 0;
+    }
+
+    return;
+  }
+
+  renderTableShell();
 }
 
 function renderTableShell() {
@@ -176,6 +295,7 @@ function syncAuthUi() {
     dashboardLogoutBtn.classList.remove("hidden");
     dashboardSellerName.textContent = dashboardSeller.discord || dashboardSeller.email || "Seller";
     dashboardSellerId.textContent = dashboardSeller.seller_id || dashboardSeller.id || "Seller account";
+    loadDashboardData().catch(console.error);
   } else {
     dashboardLoginPanel.classList.remove("hidden");
     dashboardContent.classList.add("hidden");
