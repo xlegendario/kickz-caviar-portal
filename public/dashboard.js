@@ -312,6 +312,48 @@ async function loadDashboardData() {
     return;
   }
 
+  if (activeSection === "quick" && activeTab === "ready_to_ship") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading ready to ship quick deals...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/quick-ready-to-ship?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load ready to ship quick deals"
+      );
+    }
+  
+    renderOpenClaimsRows(data.items || []);
+  
+    const countEl = document.querySelector(
+      '[data-count-key="quick:ready_to_ship"]'
+    );
+  
+    if (countEl) {
+      countEl.textContent = data.count || 0;
+    }
+  
+    return;
+  }
+
   if (activeSection === "quick" && activeTab === "open_claims") {
     dashboardTableBody.innerHTML = `
       <tr>
