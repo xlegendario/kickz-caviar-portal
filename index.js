@@ -251,7 +251,7 @@ app.get("/api/dashboard/quick-confirmed", async (req, res) => {
           "Seller ID",
           "Item ID",
           "Type",
-          "Fulfillment Status",
+          "Fulfillment Status (UOL)",
           "Seller Offer",
           "Unfulfilled Orders Log",
           "Product Name",
@@ -265,7 +265,7 @@ app.get("/api/dashboard/quick-confirmed", async (req, res) => {
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Fulfillment Status} = 'Allocated'
+          {Fulfillment Status (UOL)} = 'Allocated'
         )`
       })
       .all();
