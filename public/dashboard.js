@@ -354,6 +354,48 @@ async function loadDashboardData() {
     return;
   }
 
+  if (activeSection === "quick" && activeTab === "shipped") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading shipped quick deals...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/quick-shipped?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load shipped quick deals"
+      );
+    }
+  
+    renderOpenClaimsRows(data.items || []);
+  
+    const countEl = document.querySelector(
+      '[data-count-key="quick:shipped"]'
+    );
+  
+    if (countEl) {
+      countEl.textContent = data.count || 0;
+    }
+  
+    return;
+  }
+
   if (activeSection === "quick" && activeTab === "open_claims") {
     dashboardTableBody.innerHTML = `
       <tr>
