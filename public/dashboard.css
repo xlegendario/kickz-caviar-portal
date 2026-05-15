@@ -809,4 +809,64 @@
 .dashboard-delete-btn {
   background: rgba(255, 87, 87, 0.18);
   color: #ff8b8b;
+
+.dashboard-table.open-offers-table table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.dashboard-table.open-offers-table th:nth-child(1),
+.dashboard-table.open-offers-table td:nth-child(1) {
+  width: 44px;
+}
+
+.dashboard-table.open-offers-table th:nth-child(2),
+.dashboard-table.open-offers-table td:nth-child(2) {
+  width: 120px;
+}
+
+.dashboard-table.open-offers-table th:nth-child(3),
+.dashboard-table.open-offers-table td:nth-child(3) {
+  width: 340px;
+}
+
+.dashboard-table.open-offers-table th:nth-child(4),
+.dashboard-table.open-offers-table td:nth-child(4) {
+  width: 140px;
+}
+
+.dashboard-table.open-offers-table th:nth-child(5),
+.dashboard-table.open-offers-table td:nth-child(5) {
+  width: 80px;
+}
+
+.dashboard-table.open-offers-table th:nth-child(6),
+.dashboard-table.open-offers-table td:nth-child(6) {
+  width: 140px;
+}
+
+.dashboard-table.open-offers-table th:nth-child(7),
+.dashboard-table.open-offers-table td:nth-child(7) {
+  width: 120px;
+}
+
+.dashboard-table.open-offers-table th:nth-child(8),
+.dashboard-table.open-offers-table td:nth-child(8) {
+  width: 110px;
+}
+
+.dashboard-table.open-offers-table th:nth-child(9),
+.dashboard-table.open-offers-table td:nth-child(9) {
+  width: 150px;
+}
+
+.dashboard-table.open-offers-table th:nth-child(10),
+.dashboard-table.open-offers-table td:nth-child(10) {
+  width: 120px;
+}
+
+.dashboard-table.open-offers-table th:nth-child(11),
+.dashboard-table.open-offers-table td:nth-child(11) {
+  width: 140px;
+}
 }
