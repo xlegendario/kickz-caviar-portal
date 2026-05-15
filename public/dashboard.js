@@ -499,7 +499,7 @@ async function loadDashboardData() {
     });
   
     const response = await fetch(
-      `/api/dashboard/quick-completed?${params.toString()}`
+      `/api/dashboard/history-completed?${params.toString()}`
     );
   
     const data = await response.json();
