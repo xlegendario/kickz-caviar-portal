@@ -228,6 +228,48 @@ function renderOpenClaimsRows(claims) {
 async function loadDashboardData() {
   if (!dashboardSeller) return;
 
+  if (activeSection === "quick" && activeTab === "confirmed") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading confirmed quick deals...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/quick-confirmed?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load confirmed quick deals"
+      );
+    }
+  
+    renderOpenClaimsRows(data.items || []);
+  
+    const countEl = document.querySelector(
+      '[data-count-key="quick:confirmed"]'
+    );
+  
+    if (countEl) {
+      countEl.textContent = data.count || 0;
+    }
+  
+    return;
+  }
+
   if (activeSection === "quick" && activeTab === "open_claims") {
     dashboardTableBody.innerHTML = `
       <tr>
