@@ -758,43 +758,31 @@
   text-align: center;
 }
 
-.dashboard-status-pill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-
-  min-width: 82px;
-  height: 34px;
-  padding: 0 14px;
-
+.dashboard-status-dot {
+  width: 14px;
+  height: 14px;
   border-radius: 999px;
-
-  font-size: 12px;
-  font-weight: 900;
-  letter-spacing: 0.04em;
-
-  border: 1px solid transparent;
+  margin: 0 auto;
 }
 
-.dashboard-status-lowest {
-  background: rgba(72, 255, 126, 0.16);
-  border-color: rgba(72, 255, 126, 0.45);
-  color: #7dff9b;
+.dashboard-status-dot-lowest {
+  background: #67ff8b;
 
   box-shadow:
-    0 0 14px rgba(72,255,126,0.22),
-    inset 0 0 12px rgba(72,255,126,0.06);
+    0 0 10px rgba(103,255,139,0.9),
+    0 0 20px rgba(103,255,139,0.45),
+    0 0 34px rgba(103,255,139,0.22);
 }
 
-.dashboard-status-beaten {
-  background: rgba(255, 82, 82, 0.16);
-  border-color: rgba(255, 82, 82, 0.4);
-  color: #ff8c8c;
+.dashboard-status-dot-beaten {
+  background: #ff6767;
 
   box-shadow:
-    0 0 14px rgba(255,82,82,0.2),
-    inset 0 0 12px rgba(255,82,82,0.05);
+    0 0 10px rgba(255,103,103,0.9),
+    0 0 20px rgba(255,103,103,0.45),
+    0 0 34px rgba(255,103,103,0.22);
 }
+
 .dashboard-action-row {
   display: flex;
   align-items: center;
