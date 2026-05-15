@@ -726,6 +726,93 @@ app.get("/api/dashboard/quick-delivered", async (req, res) => {
   }
 });
 
+app.get("/api/dashboard/quick-counts", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id"
+      });
+    }
+
+    const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Item ID",
+          "Type",
+          "Fulfillment Status (UOL)",
+          "Shipping Status",
+          "Payment Status",
+          "Seller Offer"
+        ]
+      })
+      .all();
+
+    const filteredInventory = inventoryRecords.filter((record) => {
+      const f = record.fields || {};
+
+      return (
+        linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
+        linkedRecordIsEmpty(f["Seller Offer"]) &&
+        displayValue(f["Type"]) === "Custom" &&
+        displayValue(f["Item ID"]).startsWith("OUT-")
+      );
+    });
+
+    const records = await airtable(ORDERS_TABLE)
+      .select({
+        fields: [
+          "Claimed Seller ID",
+          "Fulfillment Status"
+        ],
+        filterByFormula: `{Fulfillment Status} = 'Claim Processing'`
+      })
+      .all();
+
+    const openClaims = records.filter((record) =>
+      linkedRecordIncludes(
+        record.fields?.["Claimed Seller ID"],
+        sellerRecordId
+      )
+    );
+
+    const counts = {
+      open_claims: openClaims.length,
+
+      confirmed: filteredInventory.filter((record) =>
+        displayValue(record.fields?.["Fulfillment Status (UOL)"]) === "Allocated"
+      ).length,
+
+      label_requested: filteredInventory.filter((record) =>
+        displayValue(record.fields?.["Fulfillment Status (UOL)"]) === "Requested Label"
+      ).length,
+
+      ready_to_ship: filteredInventory.filter((record) =>
+        displayValue(record.fields?.["Fulfillment Status (UOL)"]) === "Ready to Ship"
+      ).length,
+
+      shipped: filteredInventory.filter((record) =>
+        displayValue(record.fields?.["Shipping Status"]) === "Shipped"
+      ).length,
+
+      delivered: filteredInventory.filter((record) =>
+        displayValue(record.fields?.["Shipping Status"]) === "Delivered" &&
+        displayValue(record.fields?.["Payment Status"]) === "To Pay"
+      ).length
+    };
+
+    res.json(counts);
+  } catch (err) {
+    console.error("Failed to load quick counts:", err);
+
+    res.status(500).json({
+      error: "Failed to load quick counts",
+      details: err.message
+    });
+  }
+});
 
 app.get("/api/dashboard/open-claims", async (req, res) => {
   try {
