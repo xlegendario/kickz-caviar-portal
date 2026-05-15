@@ -722,3 +722,38 @@
     inset 0 1px 0 rgba(255,255,255,0.16),
     0 6px 16px rgba(64,78,237,0.24);
 }
+
+.dashboard-table-wrap {
+  overflow-x: auto;
+}
+
+.dashboard-table {
+  min-width: 1280px;
+}
+
+.dashboard-table th,
+.dashboard-table td {
+  white-space: nowrap;
+}
+
+.dashboard-table th:nth-child(2),
+.dashboard-table td:nth-child(2) {
+  min-width: 320px;
+  white-space: normal;
+}
+
+.dashboard-table th:nth-child(3),
+.dashboard-table td:nth-child(3) {
+  min-width: 150px;
+}
+
+.dashboard-table th:nth-child(5),
+.dashboard-table td:nth-child(5) {
+  min-width: 160px;
+}
+
+.dashboard-table th:nth-child(9),
+.dashboard-table td:nth-child(9) {
+  min-width: 130px;
+  text-align: center;
+}
