@@ -593,11 +593,15 @@
 .dashboard-nav-header:hover,
 .dashboard-nav-header.open,
 .dashboard-nav-header.active {
-  background: linear-gradient(180deg, #fff27a, #f0a500);
-  border-color: rgba(255, 210, 31, 0.55);
-  color: #050505;
+  background: linear-gradient(180deg, #1b1b1b, #121212);
+
+  border-color: rgba(255, 204, 0, 0.32);
+
+  color: #ffcc00;
+
   box-shadow:
     inset 0 1px 0 rgba(255,255,255,0.03),
+    0 0 0 1px rgba(255,204,0,0.04),
     0 4px 18px rgba(0,0,0,0.25);
 }
 
