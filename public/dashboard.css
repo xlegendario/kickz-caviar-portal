@@ -698,3 +698,27 @@
 .dashboard-coming-soon .dashboard-nav-header span:last-child {
   color: rgba(255,255,255,0.42);
 }
+
+.dashboard-discord-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  min-height: 36px;
+  padding: 0 14px;
+
+  border-radius: 12px;
+
+  background: linear-gradient(180deg, #5865F2, #404EED);
+
+  color: #ffffff;
+  text-decoration: none;
+
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.4px;
+
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.16),
+    0 6px 16px rgba(64,78,237,0.24);
+}
