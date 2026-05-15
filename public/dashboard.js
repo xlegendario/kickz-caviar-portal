@@ -229,6 +229,68 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+const wtbOpenOfferColumns = [
+  "Order ID",
+  "Product",
+  "SKU",
+  "Size",
+  "Brand",
+  "Offer",
+  "VAT Type",
+  "Current Lowest",
+  "Status",
+  "Date",
+  "Action"
+];
+
+function renderWtbOpenOffersRows(offers) {
+  dashboardTableHead.innerHTML = wtbOpenOfferColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!offers.length) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${wtbOpenOfferColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No offers yet</strong>
+            <span>
+              At this moment there are no open offers in this stage.
+            </span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  dashboardTableBody.innerHTML = offers.map((offer) => `
+    <tr>
+      <td>${escapeHtml(offer.order_id || "-")}</td>
+      <td>${escapeHtml(offer.product || "-")}</td>
+      <td>${escapeHtml(offer.sku || "-")}</td>
+      <td>${escapeHtml(offer.size || "-")}</td>
+      <td>${escapeHtml(offer.brand || "-")}</td>
+      <td>${escapeHtml(offer.offer || "-")}</td>
+      <td>${escapeHtml(offer.vat_type || "-")}</td>
+      <td>${escapeHtml(offer.current_lowest || "-")}</td>
+      <td>
+        <span class="dashboard-status-pill ${offer.status === "Lowest" ? "lowest" : "beaten"}">
+          ${escapeHtml(offer.status)}
+        </span>
+      </td>
+      <td>${escapeHtml(offer.date || "-")}</td>
+      <td>
+        <div class="dashboard-action-row">
+          <button class="dashboard-edit-btn" type="button" disabled>Edit</button>
+          <button class="dashboard-delete-btn" type="button" disabled>🗑</button>
+        </div>
+      </td>
+    </tr>
+  `).join("");
+}
+
 function renderOpenClaimsRows(claims) {
   dashboardTableHead.innerHTML = skeletonColumns
     .map((column) => `<th>${column}</th>`)
@@ -272,6 +334,56 @@ function renderOpenClaimsRows(claims) {
 
 async function loadDashboardData() {
   if (!dashboardSeller) return;
+
+  if (activeSection === "wtb" && activeTab === "open_offers") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${wtbOpenOfferColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading open offers...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/wtb-open-offers?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load open offers"
+      );
+    }
+  
+    renderWtbOpenOffersRows(data.items || []);
+  
+    const countEl = document.querySelector(
+      '[data-count-key="wtb:open_offers"]'
+    );
+  
+    if (countEl) {
+      countEl.textContent = data.count || 0;
+    }
+  
+    document.querySelectorAll('[data-count-group="wtb"]')
+      .forEach((el) => {
+        el.textContent = data.count || 0;
+      });
+  
+    quickCountsCache.open_offers = data.count || 0;
+    renderStats();
+  
+    return;
+  }
 
   if (activeSection === "quick" && activeTab === "confirmed") {
     dashboardTableBody.innerHTML = `
