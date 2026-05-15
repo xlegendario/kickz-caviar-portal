@@ -757,3 +757,57 @@
   min-width: 130px;
   text-align: center;
 }
+
+.dashboard-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  min-height: 28px;
+  padding: 0 10px;
+
+  border-radius: 999px;
+
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.dashboard-status-pill.lowest {
+  background: rgba(88, 216, 106, 0.14);
+  color: #74e484;
+  box-shadow: 0 0 18px rgba(88,216,106,0.10);
+}
+
+.dashboard-status-pill.beaten {
+  background: rgba(255, 87, 87, 0.14);
+  color: #ff8b8b;
+  box-shadow: 0 0 18px rgba(255,87,87,0.10);
+}
+
+.dashboard-action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dashboard-edit-btn,
+.dashboard-delete-btn {
+  height: 34px;
+  border: none;
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.dashboard-edit-btn {
+  background: linear-gradient(180deg, #f2f2f2, #cfcfcf);
+  color: #050505;
+}
+
+.dashboard-delete-btn {
+  background: rgba(255, 87, 87, 0.18);
+  color: #ff8b8b;
+}
