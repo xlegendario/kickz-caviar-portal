@@ -748,6 +748,7 @@ app.get("/api/dashboard/quick-delivered", async (req, res) => {
 app.get("/api/dashboard/history-completed", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
+    const sellerCode = asText(req.query.seller_id);
 
     if (!sellerRecordId) {
       return res.status(400).json({
@@ -776,19 +777,13 @@ app.get("/api/dashboard/history-completed", async (req, res) => {
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Payment Status} = 'Paid'
+          {Payment Status} = 'Paid',
+          {Seller ID (Lookup)} = '${escapeFormulaValue(sellerCode)}'
         )`
       })
       .all();
 
-    const filteredInventory = inventoryRecords.filter((record) => {
-      const f = record.fields || {};
-
-      return linkedRecordIncludes(
-        f["Seller ID"],
-        sellerRecordId
-      );
-    });
+    const filteredInventory = inventoryRecords;
 
     const linkedOrderIds = [
       ...new Set(
