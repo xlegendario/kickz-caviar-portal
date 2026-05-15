@@ -495,7 +495,8 @@ async function loadDashboardData() {
     `;
   
     const params = new URLSearchParams({
-      seller_record_id: dashboardSeller.id
+      seller_record_id: dashboardSeller.id,
+      seller_id: dashboardSeller.seller_id
     });
   
     const response = await fetch(
