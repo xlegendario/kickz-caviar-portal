@@ -165,7 +165,7 @@ function syncDashboardUi() {
 }
 
 function renderStats() {
-  const cards = dashboardConfig[activeSection].tabs.slice(0, 4);
+  const cards = dashboardConfig[activeSection].tabs;
 
   dashboardStats.innerHTML = cards.map((tab) => `
     <article class="dashboard-stat-card ${tab.key === activeTab ? "active" : ""}">
