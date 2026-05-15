@@ -164,13 +164,50 @@ function syncDashboardUi() {
   });
 }
 
+let quickCountsCache = {};
+
+async function loadQuickCounts() {
+  if (!dashboardSeller) return;
+
+  const params = new URLSearchParams({
+    seller_record_id: dashboardSeller.id
+  });
+
+  const response = await fetch(
+    `/api/dashboard/quick-counts?${params.toString()}`
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      data.details ||
+      data.error ||
+      "Failed to load quick counts"
+    );
+  }
+
+  quickCountsCache = data || {};
+
+  Object.entries(quickCountsCache).forEach(([key, value]) => {
+    document.querySelectorAll(`[data-count-key="quick:${key}"]`)
+      .forEach((el) => {
+        el.textContent = value || 0;
+      });
+  });
+
+  renderStats();
+}
+
 function renderStats() {
   const cards = dashboardConfig[activeSection].tabs;
 
   dashboardStats.innerHTML = cards.map((tab) => `
     <article class="dashboard-stat-card ${tab.key === activeTab ? "active" : ""}">
       <div class="dashboard-stat-label">${tab.label}</div>
-      <div class="dashboard-stat-value">0</div>
+      <div class="dashboard-stat-value">
+        ${quickCountsCache[tab.key] || 0}
+      </div>
     </article>
   `).join("");
 }
@@ -510,6 +547,7 @@ function syncAuthUi() {
     dashboardSellerName.textContent = dashboardSeller.discord || dashboardSeller.email || "Seller";
     dashboardSellerId.textContent = dashboardSeller.seller_id || dashboardSeller.id || "Seller account";
     loadDashboardData().catch(console.error);
+    loadQuickCounts().catch(console.error);
   } else {
     dashboardLoginPanel.classList.remove("hidden");
     dashboardContent.classList.add("hidden");
@@ -568,3 +606,7 @@ renderSubnav();
 bindNavigation();
 syncDashboardUi();
 syncAuthUi();
+
+if (dashboardSeller) {
+  loadQuickCounts().catch(console.error);
+}
