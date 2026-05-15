@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kickz Caviar Seller Dashboard</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/dashboard.css" />
+</head>
+<body class="dashboard-body">
+  <div class="seller-dashboard" id="sellerDashboard">
+    <aside class="dashboard-sidebar">
+      <a class="dashboard-brand" href="/">
+        <div class="dashboard-brand-mark">KC</div>
+        <div>
+          <div class="dashboard-brand-title">Kickz Caviar</div>
+          <div class="dashboard-brand-subtitle">Seller Portal</div>
+        </div>
+      </a>
+
+      <nav class="dashboard-nav" aria-label="Seller dashboard navigation">
+        <section class="dashboard-nav-section">
+          <button class="dashboard-nav-header active" type="button" data-dashboard-section="quick">
+            <span>Quick Deals</span>
+            <span class="dashboard-nav-count" data-count-group="quick">0</span>
+          </button>
+          <div class="dashboard-subnav" data-subnav="quick"></div>
+        </section>
+
+        <section class="dashboard-nav-section">
+          <button class="dashboard-nav-header" type="button" data-dashboard-section="wtb">
+            <span>Want To Buys</span>
+            <span class="dashboard-nav-count" data-count-group="wtb">0</span>
+          </button>
+          <div class="dashboard-subnav" data-subnav="wtb"></div>
+        </section>
+
+        <section class="dashboard-nav-section">
+          <button class="dashboard-nav-header" type="button" data-dashboard-section="history">
+            <span>History</span>
+            <span class="dashboard-nav-count" data-count-group="history">0</span>
+          </button>
+          <div class="dashboard-subnav" data-subnav="history"></div>
+        </section>
+
+        <section class="dashboard-nav-section dashboard-coming-soon">
+          <div class="dashboard-nav-kicker">Coming soon</div>
+          <button class="dashboard-nav-header locked" type="button" disabled>
+            <span>Consignment</span>
+            <span>Lock</span>
+          </button>
+          <button class="dashboard-nav-header locked" type="button" disabled>
+            <span>Finance</span>
+            <span>Lock</span>
+          </button>
+        </section>
+      </nav>
+    </aside>
+
+    <main class="dashboard-main">
+      <header class="dashboard-topbar">
+        <div>
+          <div class="dashboard-eyebrow">Seller Dashboard</div>
+          <h1 id="dashboardTitle">Quick Deals</h1>
+        </div>
+        <div class="dashboard-account">
+          <div>
+            <div class="dashboard-account-name" id="dashboardSellerName">Not logged in</div>
+            <div class="dashboard-account-id" id="dashboardSellerId">Login required</div>
+          </div>
+          <button class="dashboard-logout-btn" id="dashboardLogoutBtn" type="button">Logout</button>
+        </div>
+      </header>
+
+      <section class="dashboard-login-panel hidden" id="dashboardLoginPanel">
+        <div class="dashboard-login-card">
+          <div class="dashboard-eyebrow">Secure access</div>
+          <h2>Login to open your dashboard</h2>
+          <p>Use the temporary seller login for now. Real seller auth can replace this later without changing the dashboard structure.</p>
+
+          <form id="dashboardLoginForm" class="dashboard-login-form">
+            <label>
+              Email
+              <input id="dashboardLoginEmail" type="email" autocomplete="email" required />
+            </label>
+            <label>
+              Password
+              <input id="dashboardLoginPassword" type="password" autocomplete="current-password" required />
+            </label>
+            <button type="submit">Login</button>
+            <div class="dashboard-form-error" id="dashboardLoginError"></div>
+          </form>
+        </div>
+      </section>
+
+      <section class="dashboard-content" id="dashboardContent">
+        <div class="dashboard-toolbar">
+          <div class="dashboard-search-wrap">
+            <input id="dashboardSearchInput" type="search" placeholder="Search order, product, SKU, size..." />
+          </div>
+          <a class="dashboard-back-link" href="/">Back to deals</a>
+        </div>
+
+        <div class="dashboard-stat-grid" id="dashboardStats"></div>
+
+        <section class="dashboard-table-card">
+          <div class="dashboard-table-header">
+            <div>
+              <h2 id="dashboardSubtabTitle">Open Claims</h2>
+              <p id="dashboardSubtabDescription">Skeleton view. Data connection comes next.</p>
+            </div>
+            <button class="dashboard-refresh-btn" type="button" id="dashboardRefreshBtn">Refresh</button>
+          </div>
+
+          <div class="dashboard-table-wrap">
+            <table class="dashboard-table">
+              <thead>
+                <tr id="dashboardTableHead"></tr>
+              </thead>
+              <tbody id="dashboardTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="/dashboard.js"></script>
+</body>
+</html>
