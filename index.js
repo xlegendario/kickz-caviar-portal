@@ -140,6 +140,20 @@ function linkedRecordIncludes(value, recordId) {
   return Array.isArray(value) && value.includes(recordId);
 }
 
+function formatDateEU(value) {
+  if (!value) return "";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return displayValue(value);
+
+  return new Intl.DateTimeFormat("nl-NL", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric"
+  }).format(date);
+}
+
 function normalizeDashboardOpenClaim(record) {
   const f = record.fields || {};
   const channelId = displayValue(f["Claimed Channel ID"]);
@@ -155,7 +169,7 @@ function normalizeDashboardOpenClaim(record) {
 
     payout: moneyValue(f["Claimed Seller Payout"]),
     vat_type: displayValue(f["Claimed Seller VAT Type"]),
-    date: displayValue(f["Claimed At"]),
+    date: formatDateEU(f["Claimed At"]),
 
     discord_url: channelId
       ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
