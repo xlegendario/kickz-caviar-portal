@@ -812,8 +812,9 @@
 }
 
 .dashboard-table.open-offers-table {
-  table-layout: fixed;
+  table-layout: fixed !important;
   width: 100%;
+  min-width: 1500px !important;
 }
 
 .dashboard-table.open-offers-table th:nth-child(1),
@@ -869,5 +870,4 @@
 .dashboard-table.open-offers-table th:nth-child(11),
 .dashboard-table.open-offers-table td:nth-child(11) {
   width: 140px;
-}
 }
