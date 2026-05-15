@@ -73,6 +73,7 @@ app.get("/api/health", (_req, res) => {
 const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
 const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
 const DISCORD_SERVER_ID = "922818998163361792";
+const INVENTORY_UNITS_TABLE = process.env.AIRTABLE_INVENTORY_UNITS_TABLE || "Inventory Units";
 
 function normalizeTempPassword(discord, sellerId) {
   const cleanDiscord = asText(discord).toLowerCase().replace(/\s+/g, "");
@@ -138,6 +139,14 @@ function hoursSince(value) {
 
 function linkedRecordIncludes(value, recordId) {
   return Array.isArray(value) && value.includes(recordId);
+}
+
+function linkedRecordIsEmpty(value) {
+  return !Array.isArray(value) || value.length === 0;
+}
+
+function firstLinkedRecordId(value) {
+  return Array.isArray(value) && value.length ? value[0] : "";
 }
 
 function formatDateEU(value) {
@@ -225,6 +234,103 @@ function normalizeDeal(record) {
     maximum_buying_price: numberValue(f["Maximum Buying Price"])
   };
 }
+
+app.get("/api/dashboard/quick-confirmed", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id"
+      });
+    }
+
+    const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Item ID",
+          "Type",
+          "Fulfillment Status",
+          "Seller Offer",
+          "Unfulfilled Orders Log",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "Final Purchase Price",
+          "VAT Type",
+          "Purchase Date"
+        ],
+        filterByFormula: `AND(
+          LEFT({Item ID} & '', 4) = 'OUT-',
+          {Type} = 'Custom',
+          {Fulfillment Status} = 'Allocated'
+        )`
+      })
+      .all();
+
+    const filteredInventory = inventoryRecords.filter((record) => {
+      const f = record.fields || {};
+
+      return (
+        linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
+        linkedRecordIsEmpty(f["Seller Offer"])
+      );
+    });
+
+    const linkedOrderIds = [
+      ...new Set(
+        filteredInventory
+          .map((record) => firstLinkedRecordId(record.fields?.["Unfulfilled Orders Log"]))
+          .filter(Boolean)
+      )
+    ];
+
+    const orderMap = new Map();
+
+    await Promise.all(
+      linkedOrderIds.map(async (orderRecordId) => {
+        const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
+        orderMap.set(orderRecordId, orderRecord.fields || {});
+      })
+    );
+
+    const items = filteredInventory.map((record) => {
+      const f = record.fields || {};
+      const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
+      const orderFields = orderMap.get(linkedOrderId) || {};
+      const channelId = displayValue(orderFields["Claimed Channel ID"]);
+
+      return {
+        id: record.id,
+        order_id: displayValue(orderFields["Order ID"]),
+        product: displayValue(f["Product Name"]),
+        sku: displayValue(f["SKU"]),
+        size: displayValue(f["Size"]),
+        brand: displayValue(f["Brand"]),
+        payout: moneyValue(f["Final Purchase Price"]),
+        vat_type: displayValue(f["VAT Type"]),
+        date: formatDateEU(f["Purchase Date"]),
+        discord_url: channelId
+          ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
+          : ""
+      };
+    });
+
+    res.json({
+      count: items.length,
+      items
+    });
+  } catch (err) {
+    console.error("Failed to load quick confirmed:", err);
+
+    res.status(500).json({
+      error: "Failed to load confirmed quick deals",
+      details: err.message
+    });
+  }
+});
 
 app.get("/api/dashboard/open-claims", async (req, res) => {
   try {
