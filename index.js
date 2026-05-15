@@ -459,10 +459,7 @@ app.get("/api/dashboard/quick-ready-to-ship", async (req, res) => {
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          FIND(
-            'Ready To Ship',
-            ARRAYJOIN({Fulfillment Status (UOL)})
-          )
+          {Fulfillment Status (UOL)} = 'Ready to Ship'
         )`
       })
       .all();
