@@ -522,6 +522,11 @@ async function loadDashboardData() {
     if (countEl) {
       countEl.textContent = data.count || 0;
     }
+
+    document.querySelectorAll('[data-count-group="history"]')
+    .forEach((el) => {
+      el.textContent = data.count || 0;
+    });
   
     return;
   }
