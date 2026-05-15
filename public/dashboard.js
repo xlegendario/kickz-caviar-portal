@@ -244,6 +244,9 @@ const wtbOpenOfferColumns = [
 ];
 
 function renderWtbOpenOffersRows(offers) {
+  dashboardTableBody
+    .closest(".dashboard-table")
+    ?.classList.add("open-offers-table");
   dashboardTableHead.innerHTML = wtbOpenOfferColumns
     .map((column) => `<th>${column}</th>`)
     .join("");
@@ -297,6 +300,9 @@ function renderWtbOpenOffersRows(offers) {
 }
 
 function renderOpenClaimsRows(claims) {
+  dashboardTableBody
+    .closest(".dashboard-table")
+    ?.classList.remove("open-offers-table");
   dashboardTableHead.innerHTML = skeletonColumns
     .map((column) => `<th>${column}</th>`)
     .join("");
