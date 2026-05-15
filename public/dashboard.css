@@ -602,7 +602,7 @@
   align-items: center;
   justify-content: center;
   width: 14px;
-  color: rgba(255,255,255,0.72);
+  color: #050505;
   font-size: 22px;
   font-weight: 900;
   line-height: 1;
@@ -614,8 +614,18 @@
 }
 
 .dashboard-nav-count,
-.dashboard-subnav-count,
 .dashboard-nav-header.active .dashboard-nav-count {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.12);
+  color: #050505;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.dashboard-subnav-count {
   min-width: 24px;
   height: 24px;
   padding: 0 8px;
@@ -624,17 +634,6 @@
   color: rgba(255,255,255,0.78);
   font-size: 12px;
   font-weight: 900;
-}
-
-.dashboard-subnav {
-  display: none;
-  flex-direction: column;
-  gap: 4px;
-  margin: 7px 0 10px 7px;
-  padding: 6px;
-  border-left: 1px solid rgba(255,255,255,0.08);
-  background: rgba(255,255,255,0.015);
-  border-radius: 12px;
 }
 
 .dashboard-subnav.open {
