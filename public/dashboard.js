@@ -120,7 +120,7 @@ function syncDashboardUi() {
 
   dashboardTitle.textContent = sectionConfig.label;
   dashboardSubtabTitle.textContent = tabConfig.label;
-  dashboardSubtabDescription.textContent = tabConfig.description;
+  dashboardSubtabDescription.textContent = "";
 
   document.querySelectorAll("[data-dashboard-section]").forEach((button) => {
     const isActiveSection = button.dataset.dashboardSection === activeSection;
