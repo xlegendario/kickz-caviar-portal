@@ -736,74 +736,93 @@ app.get("/api/dashboard/quick-counts", async (req, res) => {
       });
     }
 
-    const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
-      .select({
-        fields: [
-          "Seller ID",
-          "Item ID",
-          "Type",
-          "Fulfillment Status (UOL)",
-          "Shipping Status",
-          "Payment Status",
-          "Seller Offer"
-        ]
-      })
-      .all();
+    async function loadInventoryCount(formula) {
+      const records = await airtable(INVENTORY_UNITS_TABLE)
+        .select({
+          fields: [
+            "Seller ID",
+            "Seller Offer"
+          ],
+          filterByFormula: formula
+        })
+        .all();
 
-    const filteredInventory = inventoryRecords.filter((record) => {
-      const f = record.fields || {};
+      return records.filter((record) => {
+        const f = record.fields || {};
 
-      return (
-        linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
-        linkedRecordIsEmpty(f["Seller Offer"]) &&
-        displayValue(f["Type"]) === "Custom" &&
-        displayValue(f["Item ID"]).startsWith("OUT-")
-      );
-    });
+        return (
+          linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
+          linkedRecordIsEmpty(f["Seller Offer"])
+        );
+      }).length;
+    }
 
-    const records = await airtable(ORDERS_TABLE)
-      .select({
-        fields: [
-          "Claimed Seller ID",
-          "Fulfillment Status"
-        ],
-        filterByFormula: `{Fulfillment Status} = 'Claim Processing'`
-      })
-      .all();
+    const [
+      openClaimsRecords,
 
-    const openClaims = records.filter((record) =>
+      confirmedCount,
+      labelRequestedCount,
+      readyToShipCount,
+      shippedCount,
+      deliveredCount
+    ] = await Promise.all([
+      airtable(ORDERS_TABLE)
+        .select({
+          fields: [
+            "Claimed Seller ID"
+          ],
+          filterByFormula: `{Fulfillment Status} = 'Claim Processing'`
+        })
+        .all(),
+
+      loadInventoryCount(`AND(
+        LEFT({Item ID} & '', 4) = 'OUT-',
+        {Type} = 'Custom',
+        {Fulfillment Status (UOL)} = 'Allocated'
+      )`),
+
+      loadInventoryCount(`AND(
+        LEFT({Item ID} & '', 4) = 'OUT-',
+        {Type} = 'Custom',
+        {Fulfillment Status (UOL)} = 'Requested Label'
+      )`),
+
+      loadInventoryCount(`AND(
+        LEFT({Item ID} & '', 4) = 'OUT-',
+        {Type} = 'Custom',
+        {Fulfillment Status (UOL)} = 'Ready to Ship'
+      )`),
+
+      loadInventoryCount(`AND(
+        LEFT({Item ID} & '', 4) = 'OUT-',
+        {Type} = 'Custom',
+        {Shipping Status} = 'Shipped'
+      )`),
+
+      loadInventoryCount(`AND(
+        LEFT({Item ID} & '', 4) = 'OUT-',
+        {Type} = 'Custom',
+        {Shipping Status} = 'Delivered',
+        {Payment Status} = 'To Pay'
+      )`)
+    ]);
+
+    const openClaimsCount = openClaimsRecords.filter((record) =>
       linkedRecordIncludes(
         record.fields?.["Claimed Seller ID"],
         sellerRecordId
       )
-    );
+    ).length;
 
-    const counts = {
-      open_claims: openClaims.length,
+    res.json({
+      open_claims: openClaimsCount,
 
-      confirmed: filteredInventory.filter((record) =>
-        displayValue(record.fields?.["Fulfillment Status (UOL)"]) === "Allocated"
-      ).length,
-
-      label_requested: filteredInventory.filter((record) =>
-        displayValue(record.fields?.["Fulfillment Status (UOL)"]) === "Requested Label"
-      ).length,
-
-      ready_to_ship: filteredInventory.filter((record) =>
-        displayValue(record.fields?.["Fulfillment Status (UOL)"]) === "Ready to Ship"
-      ).length,
-
-      shipped: filteredInventory.filter((record) =>
-        displayValue(record.fields?.["Shipping Status"]) === "Shipped"
-      ).length,
-
-      delivered: filteredInventory.filter((record) =>
-        displayValue(record.fields?.["Shipping Status"]) === "Delivered" &&
-        displayValue(record.fields?.["Payment Status"]) === "To Pay"
-      ).length
-    };
-
-    res.json(counts);
+      confirmed: confirmedCount,
+      label_requested: labelRequestedCount,
+      ready_to_ship: readyToShipCount,
+      shipped: shippedCount,
+      delivered: deliveredCount
+    });
   } catch (err) {
     console.error("Failed to load quick counts:", err);
 
