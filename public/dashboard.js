@@ -2,30 +2,32 @@ const dashboardConfig = {
   quick: {
     label: "Quick Deals",
     tabs: [
-      { key: "open_claims", label: "Open Claims", description: "Claimed quick deals waiting for confirmation." },
-      { key: "confirmed", label: "Confirmed", description: "Confirmed quick deals allocated to you." },
-      { key: "label_requested", label: "Label Requested", description: "Quick deals where a shipping label has been requested." },
-      { key: "ready_to_ship", label: "Ready To Ship", description: "Quick deals ready to ship." },
-      { key: "shipped", label: "Shipped", description: "Quick deals marked as shipped." },
-      { key: "delivered", label: "Delivered", description: "Delivered quick deals waiting for payout." }
+      { key: "open_claims", label: "Open Claims" },
+      { key: "confirmed", label: "Confirmed" },
+      { key: "label_requested", label: "Label Requested" },
+      { key: "ready_to_ship", label: "Ready To Ship" },
+      { key: "shipped", label: "Shipped" },
+      { key: "delivered", label: "Delivered" }
     ]
   },
+
   wtb: {
     label: "Want To Buys",
     tabs: [
-      { key: "open_offers", label: "Open Offers", description: "Your active offers on want-to-buy orders." },
-      { key: "accepted", label: "Accepted", description: "Offers accepted as current winning seller offer." },
-      { key: "confirmed", label: "Confirmed", description: "Confirmed WTB sales allocated to you." },
-      { key: "label_requested", label: "Label Requested", description: "WTB sales where a shipping label has been requested." },
-      { key: "ready_to_ship", label: "Ready To Ship", description: "WTB sales ready to ship." },
-      { key: "shipped", label: "Shipped", description: "WTB sales marked as shipped." },
-      { key: "delivered", label: "Delivered", description: "Delivered WTB sales waiting for payout." }
+      { key: "open_offers", label: "Open Offers" },
+      { key: "accepted", label: "Accepted" },
+      { key: "confirmed", label: "Confirmed" },
+      { key: "label_requested", label: "Label Requested" },
+      { key: "ready_to_ship", label: "Ready To Ship" },
+      { key: "shipped", label: "Shipped" },
+      { key: "delivered", label: "Delivered" }
     ]
   },
+
   history: {
     label: "History",
     tabs: [
-      { key: "completed", label: "Completed", description: "All completed deals linked to your seller account." }
+      { key: "completed", label: "Completed" }
     ]
   }
 };
