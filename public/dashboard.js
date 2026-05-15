@@ -199,7 +199,7 @@ async function loadQuickCounts() {
   const quickTotal = Object.values(quickCountsCache)
     .reduce((sum, value) => sum + Number(value || 0), 0);
   
-  document.querySelectorAll('[data-section-count="quick"]')
+  document.querySelectorAll('[data-count-group="quick"]')
     .forEach((el) => {
       el.textContent = quickTotal;
     });
