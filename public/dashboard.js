@@ -527,6 +527,9 @@ async function loadDashboardData() {
     .forEach((el) => {
       el.textContent = data.count || 0;
     });
+
+    quickCountsCache.completed = data.count || 0;
+    renderStats();
   
     return;
   }
