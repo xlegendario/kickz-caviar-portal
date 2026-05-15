@@ -72,6 +72,7 @@ app.get("/api/health", (_req, res) => {
 
 const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
 const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
+const DISCORD_SERVER_ID = "922818998163361792";
 
 function normalizeTempPassword(discord, sellerId) {
   const cleanDiscord = asText(discord).toLowerCase().replace(/\s+/g, "");
@@ -135,6 +136,33 @@ function hoursSince(value) {
   return (Date.now() - date.getTime()) / 1000 / 60 / 60;
 }
 
+function linkedRecordIncludes(value, recordId) {
+  return Array.isArray(value) && value.includes(recordId);
+}
+
+function normalizeDashboardOpenClaim(record) {
+  const f = record.fields || {};
+  const channelId = displayValue(f["Claimed Channel ID"]);
+
+  return {
+    id: record.id,
+
+    order_id: displayValue(f["Order ID"]),
+    product: displayValue(f["Product Name"]),
+    sku: displayValue(f["SKU"]),
+    size: displayValue(f["Size"]),
+    brand: displayValue(f["Brand"]),
+
+    payout: moneyValue(f["Claimed Seller Payout"]),
+    vat_type: displayValue(f["Claimed Seller VAT Type"]),
+    date: displayValue(f["Claimed At"]),
+
+    discord_url: channelId
+      ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
+      : ""
+  };
+}
+
 function getTimeToMax(startTime) {
   if (!startTime) return "";
 
@@ -183,6 +211,58 @@ function normalizeDeal(record) {
     maximum_buying_price: numberValue(f["Maximum Buying Price"])
   };
 }
+
+app.get("/api/dashboard/open-claims", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id"
+      });
+    }
+
+    const records = await airtable(ORDERS_TABLE)
+      .select({
+        fields: [
+          "Order ID",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "Claimed Seller Payout",
+          "Claimed Seller VAT Type",
+          "Claimed At",
+          "Claimed Channel ID",
+          "Claimed Seller ID",
+          "Fulfillment Status"
+        ],
+        filterByFormula: `{Fulfillment Status} = 'Claim Processing'`
+      })
+      .all();
+
+    const claims = records
+      .filter((record) =>
+        linkedRecordIncludes(
+          record.fields?.["Claimed Seller ID"],
+          sellerRecordId
+        )
+      )
+      .map(normalizeDashboardOpenClaim);
+
+    res.json({
+      count: claims.length,
+      claims
+    });
+  } catch (err) {
+    console.error("Failed to load dashboard open claims:", err);
+
+    res.status(500).json({
+      error: "Failed to load open claims",
+      details: err.message
+    });
+  }
+});
 
 app.post("/api/login", async (req, res) => {
   try {
