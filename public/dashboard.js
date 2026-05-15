@@ -483,6 +483,48 @@ async function loadDashboardData() {
     return;
   }
 
+  if (activeSection === "history" && activeTab === "completed") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading completed history...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/quick-completed?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load completed history"
+      );
+    }
+  
+    renderOpenClaimsRows(data.items || []);
+  
+    const countEl = document.querySelector(
+      '[data-count-key="history:completed"]'
+    );
+  
+    if (countEl) {
+      countEl.textContent = data.count || 0;
+    }
+  
+    return;
+  }
+
   if (activeSection === "quick" && activeTab === "open_claims") {
     dashboardTableBody.innerHTML = `
       <tr>
