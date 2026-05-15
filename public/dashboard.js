@@ -270,6 +270,48 @@ async function loadDashboardData() {
     return;
   }
 
+  if (activeSection === "quick" && activeTab === "label_requested") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading label requested quick deals...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/quick-label-requested?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load label requested quick deals"
+      );
+    }
+  
+    renderOpenClaimsRows(data.items || []);
+  
+    const countEl = document.querySelector(
+      '[data-count-key="quick:label_requested"]'
+    );
+  
+    if (countEl) {
+      countEl.textContent = data.count || 0;
+    }
+  
+    return;
+  }
+
   if (activeSection === "quick" && activeTab === "open_claims") {
     dashboardTableBody.innerHTML = `
       <tr>
