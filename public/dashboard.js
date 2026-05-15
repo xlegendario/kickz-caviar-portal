@@ -25,7 +25,7 @@ const dashboardConfig = {
   history: {
     label: "History",
     tabs: [
-      { key: "paid", label: "Completed", description: "Paid inventory units connected to your seller account." }
+      { key: "completed", label: "Completed", description: "All completed deals linked to your seller account." }
     ]
   }
 };
