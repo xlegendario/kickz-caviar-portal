@@ -230,6 +230,7 @@ function escapeHtml(value) {
 }
 
 const wtbOpenOfferColumns = [
+  "Status",
   "Order ID",
   "Product",
   "SKU",
@@ -238,7 +239,6 @@ const wtbOpenOfferColumns = [
   "Offer",
   "VAT Type",
   "Current Lowest",
-  "Status",
   "Date",
   "Action"
 ];
@@ -267,6 +267,16 @@ function renderWtbOpenOffersRows(offers) {
 
   dashboardTableBody.innerHTML = offers.map((offer) => `
     <tr>
+      <td>
+        <span class="dashboard-status-pill ${
+          offer.status === "Lowest"
+            ? "dashboard-status-lowest"
+            : "dashboard-status-beaten"
+        }">
+          ${escapeHtml(offer.status)}
+        </span>
+      </td>
+      
       <td>${escapeHtml(offer.order_id || "-")}</td>
       <td>${escapeHtml(offer.product || "-")}</td>
       <td>${escapeHtml(offer.sku || "-")}</td>
@@ -275,11 +285,6 @@ function renderWtbOpenOffersRows(offers) {
       <td>${escapeHtml(offer.offer || "-")}</td>
       <td>${escapeHtml(offer.vat_type || "-")}</td>
       <td>${escapeHtml(offer.current_lowest || "-")}</td>
-      <td>
-        <span class="dashboard-status-pill ${offer.status === "Lowest" ? "lowest" : "beaten"}">
-          ${escapeHtml(offer.status)}
-        </span>
-      </td>
       <td>${escapeHtml(offer.date || "-")}</td>
       <td>
         <div class="dashboard-action-row">
