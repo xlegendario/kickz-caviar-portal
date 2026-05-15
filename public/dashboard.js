@@ -322,8 +322,12 @@ function renderTableShell() {
       <td colspan="${skeletonColumns.length}">
         <div class="dashboard-empty-state">
           <div class="dashboard-empty-icon">◇</div>
-          <strong>No data connected yet</strong>
-          <span>This subtab is ready. The Airtable query and exact columns can be connected next.</span>
+          <strong>No orders yet</strong>
+
+          <span>
+            At this moment there are no orders in this stage.
+            Please check the other statuses to find the order you're looking for.
+          </span>
         </div>
       </td>
     </tr>
