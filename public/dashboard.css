@@ -763,27 +763,38 @@
   align-items: center;
   justify-content: center;
 
-  min-height: 28px;
-  padding: 0 10px;
+  min-width: 82px;
+  height: 34px;
+  padding: 0 14px;
 
   border-radius: 999px;
 
   font-size: 12px;
   font-weight: 900;
+  letter-spacing: 0.04em;
+
+  border: 1px solid transparent;
 }
 
-.dashboard-status-pill.lowest {
-  background: rgba(88, 216, 106, 0.14);
-  color: #74e484;
-  box-shadow: 0 0 18px rgba(88,216,106,0.10);
+.dashboard-status-lowest {
+  background: rgba(72, 255, 126, 0.16);
+  border-color: rgba(72, 255, 126, 0.45);
+  color: #7dff9b;
+
+  box-shadow:
+    0 0 14px rgba(72,255,126,0.22),
+    inset 0 0 12px rgba(72,255,126,0.06);
 }
 
-.dashboard-status-pill.beaten {
-  background: rgba(255, 87, 87, 0.14);
-  color: #ff8b8b;
-  box-shadow: 0 0 18px rgba(255,87,87,0.10);
-}
+.dashboard-status-beaten {
+  background: rgba(255, 82, 82, 0.16);
+  border-color: rgba(255, 82, 82, 0.4);
+  color: #ff8c8c;
 
+  box-shadow:
+    0 0 14px rgba(255,82,82,0.2),
+    inset 0 0 12px rgba(255,82,82,0.05);
+}
 .dashboard-action-row {
   display: flex;
   align-items: center;
