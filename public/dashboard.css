@@ -809,8 +809,9 @@
 .dashboard-delete-btn {
   background: rgba(255, 87, 87, 0.18);
   color: #ff8b8b;
+}
 
-.dashboard-table.open-offers-table table {
+.dashboard-table.open-offers-table {
   table-layout: fixed;
   width: 100%;
 }
