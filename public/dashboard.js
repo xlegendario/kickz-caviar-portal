@@ -81,7 +81,10 @@ function bindNavigation() {
   document.querySelectorAll("[data-dashboard-section]").forEach((button) => {
     button.addEventListener("click", () => {
       const section = safeSection(button.dataset.dashboardSection);
-      setActiveView(section, dashboardConfig[section].tabs[0].key);
+      const subnav = document.querySelector(`[data-subnav="${section}"]`);
+
+      button.classList.toggle("open");
+      subnav?.classList.toggle("open");
     });
   });
 
@@ -118,7 +121,13 @@ function syncDashboardUi() {
   dashboardSubtabDescription.textContent = tabConfig.description;
 
   document.querySelectorAll("[data-dashboard-section]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.dashboardSection === activeSection);
+    const isActiveSection = button.dataset.dashboardSection === activeSection;
+    const subnav = document.querySelector(`[data-subnav="${button.dataset.dashboardSection}"]`);
+
+    if (isActiveSection) {
+      button.classList.add("open");
+      subnav?.classList.add("open");
+    }
   });
 
   document.querySelectorAll(".dashboard-subnav-btn").forEach((button) => {
