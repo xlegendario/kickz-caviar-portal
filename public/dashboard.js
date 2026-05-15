@@ -27,7 +27,7 @@ const dashboardConfig = {
   history: {
     label: "History",
     tabs: [
-      { key: "completed", label: "Completed" }
+      { key: "completed", label: "Sales" }
     ]
   }
 };
