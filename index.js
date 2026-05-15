@@ -74,6 +74,7 @@ const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Lo
 const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
 const DISCORD_SERVER_ID = "922818998163361792";
 const INVENTORY_UNITS_TABLE = process.env.AIRTABLE_INVENTORY_UNITS_TABLE || "Inventory Units";
+const SELLER_OFFERS_TABLE = process.env.AIRTABLE_SELLER_OFFERS_TABLE || "Seller Offers";
 
 function normalizeTempPassword(discord, sellerId) {
   const cleanDiscord = asText(discord).toLowerCase().replace(/\s+/g, "");
@@ -187,7 +188,13 @@ async function loadOrderFieldsMap(orderRecordIds) {
       .select({
         fields: [
           "Order ID",
-          "Claimed Channel ID"
+          "Claimed Channel ID",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "Current Lowest (Normalized)",
+          "Current Lowest (VAT0)"
         ],
         filterByFormula: formula
       })
@@ -273,6 +280,98 @@ function normalizeDeal(record) {
     maximum_buying_price: numberValue(f["Maximum Buying Price"])
   };
 }
+
+app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id"
+      });
+    }
+
+    const offerRecords = await airtable(SELLER_OFFERS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Linked Orders",
+          "Seller Offer",
+          "Offer VAT Type",
+          "Offer Date",
+          "Fulfillment Status",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand"
+        ],
+        filterByFormula: `{Fulfillment Status} = 'Outsource'`
+      })
+      .all();
+
+    const filteredOffers = offerRecords.filter((record) =>
+      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+    );
+
+    const linkedOrderIds = [
+      ...new Set(
+        filteredOffers
+          .map((record) => firstLinkedRecordId(record.fields?.["Linked Orders"]))
+          .filter(Boolean)
+      )
+    ];
+
+    const orderMap = await loadOrderFieldsMap(linkedOrderIds);
+
+    const items = filteredOffers.map((record) => {
+      const f = record.fields || {};
+      const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+      const orderFields = orderMap.get(linkedOrderId) || {};
+
+      const vatType = displayValue(f["Offer VAT Type"]);
+      const offerAmount = numberValue(f["Seller Offer"]);
+
+      const currentLowest =
+        vatType === "VAT0"
+          ? numberValue(orderFields["Current Lowest (VAT0)"])
+          : numberValue(orderFields["Current Lowest (Normalized)"]);
+
+      const isLowest =
+        offerAmount > 0 &&
+        currentLowest > 0 &&
+        Number(offerAmount) === Number(currentLowest);
+
+      return {
+        id: record.id,
+        order_id: displayValue(orderFields["Order ID"]),
+        product: displayValue(f["Product Name"] || orderFields["Product Name"]),
+        sku: displayValue(f["SKU"] || orderFields["SKU"]),
+        size: displayValue(f["Size"] || orderFields["Size"]),
+        brand: displayValue(f["Brand"] || orderFields["Brand"]),
+        offer: moneyValue(offerAmount),
+        vat_type: vatType,
+        current_lowest: moneyValue(currentLowest),
+        status: isLowest ? "Lowest" : "Beaten",
+        date: formatDateEU(f["Offer Date"]),
+        raw_date: f["Offer Date"]
+      };
+    });
+
+    const sortedItems = sortDashboardItemsNewestFirst(items);
+
+    res.json({
+      count: sortedItems.length,
+      items: sortedItems
+    });
+  } catch (err) {
+    console.error("Failed to load WTB open offers:", err);
+
+    res.status(500).json({
+      error: "Failed to load open offers",
+      details: err.message
+    });
+  }
+});
 
 app.get("/api/dashboard/quick-confirmed", async (req, res) => {
   try {
