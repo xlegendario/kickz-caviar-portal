@@ -163,6 +163,44 @@ function formatDateEU(value) {
   }).format(date);
 }
 
+function sortDashboardItemsNewestFirst(items) {
+  return [...items].sort((a, b) => {
+    const dateA = new Date(a.raw_date || 0).getTime();
+    const dateB = new Date(b.raw_date || 0).getTime();
+
+    return dateB - dateA;
+  });
+}
+
+async function loadOrderFieldsMap(orderRecordIds) {
+  const uniqueIds = [...new Set(orderRecordIds)].filter(Boolean);
+  const orderMap = new Map();
+
+  for (let i = 0; i < uniqueIds.length; i += 25) {
+    const batch = uniqueIds.slice(i, i + 25);
+
+    const formula = `OR(${batch
+      .map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`)
+      .join(",")})`;
+
+    const records = await airtable(ORDERS_TABLE)
+      .select({
+        fields: [
+          "Order ID",
+          "Claimed Channel ID"
+        ],
+        filterByFormula: formula
+      })
+      .all();
+
+    records.forEach((record) => {
+      orderMap.set(record.id, record.fields || {});
+    });
+  }
+
+  return orderMap;
+}
+
 function normalizeDashboardOpenClaim(record) {
   const f = record.fields || {};
   const channelId = displayValue(f["Claimed Channel ID"]);
@@ -179,6 +217,7 @@ function normalizeDashboardOpenClaim(record) {
     payout: moneyValue(f["Claimed Seller Payout"]),
     vat_type: displayValue(f["Claimed Seller VAT Type"]),
     date: formatDateEU(f["Claimed At"]),
+    raw_date: f["Claimed At"],
 
     discord_url: channelId
       ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
@@ -287,14 +326,7 @@ app.get("/api/dashboard/quick-confirmed", async (req, res) => {
       )
     ];
 
-    const orderMap = new Map();
-
-    await Promise.all(
-      linkedOrderIds.map(async (orderRecordId) => {
-        const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
-        orderMap.set(orderRecordId, orderRecord.fields || {});
-      })
-    );
+    const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
     const items = filteredInventory.map((record) => {
       const f = record.fields || {};
@@ -312,15 +344,18 @@ app.get("/api/dashboard/quick-confirmed", async (req, res) => {
         payout: moneyValue(f["Final Purchase Price"]),
         vat_type: displayValue(f["VAT Type"]),
         date: formatDateEU(f["Purchase Date"]),
+        raw_date: f["Purchase Date"],
         discord_url: channelId
           ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
           : ""
       };
     });
 
+    const sortedItems = sortDashboardItemsNewestFirst(items);
+
     res.json({
-      count: items.length,
-      items
+      count: sortedItems.length,
+      items: sortedItems
     });
   } catch (err) {
     console.error("Failed to load quick confirmed:", err);
@@ -384,14 +419,7 @@ app.get("/api/dashboard/quick-label-requested", async (req, res) => {
       )
     ];
 
-    const orderMap = new Map();
-
-    await Promise.all(
-      linkedOrderIds.map(async (orderRecordId) => {
-        const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
-        orderMap.set(orderRecordId, orderRecord.fields || {});
-      })
-    );
+    const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
     const items = filteredInventory.map((record) => {
       const f = record.fields || {};
@@ -409,15 +437,18 @@ app.get("/api/dashboard/quick-label-requested", async (req, res) => {
         payout: moneyValue(f["Final Purchase Price"]),
         vat_type: displayValue(f["VAT Type"]),
         date: formatDateEU(f["Purchase Date"]),
+        raw_date: f["Purchase Date"],
         discord_url: channelId
           ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
           : ""
       };
     });
 
+    const sortedItems = sortDashboardItemsNewestFirst(items);
+
     res.json({
-      count: items.length,
-      items
+      count: sortedItems.length,
+      items: sortedItems
     });
   } catch (err) {
     console.error("Failed to load quick label requested:", err);
@@ -481,14 +512,7 @@ app.get("/api/dashboard/quick-ready-to-ship", async (req, res) => {
       )
     ];
 
-    const orderMap = new Map();
-
-    await Promise.all(
-      linkedOrderIds.map(async (orderRecordId) => {
-        const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
-        orderMap.set(orderRecordId, orderRecord.fields || {});
-      })
-    );
+    const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
     const items = filteredInventory.map((record) => {
       const f = record.fields || {};
@@ -506,15 +530,18 @@ app.get("/api/dashboard/quick-ready-to-ship", async (req, res) => {
         payout: moneyValue(f["Final Purchase Price"]),
         vat_type: displayValue(f["VAT Type"]),
         date: formatDateEU(f["Purchase Date"]),
+        raw_date: f["Purchase Date"],
         discord_url: channelId
           ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
           : ""
       };
     });
 
+    const sortedItems = sortDashboardItemsNewestFirst(items);
+
     res.json({
-      count: items.length,
-      items
+      count: sortedItems.length,
+      items: sortedItems
     });
   } catch (err) {
     console.error("Failed to load quick ready to ship:", err);
@@ -579,14 +606,7 @@ app.get("/api/dashboard/quick-shipped", async (req, res) => {
       )
     ];
 
-    const orderMap = new Map();
-
-    await Promise.all(
-      linkedOrderIds.map(async (orderRecordId) => {
-        const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
-        orderMap.set(orderRecordId, orderRecord.fields || {});
-      })
-    );
+    const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
     const items = filteredInventory.map((record) => {
       const f = record.fields || {};
@@ -604,15 +624,18 @@ app.get("/api/dashboard/quick-shipped", async (req, res) => {
         payout: moneyValue(f["Final Purchase Price"]),
         vat_type: displayValue(f["VAT Type"]),
         date: formatDateEU(f["Purchase Date"]),
+        raw_date: f["Purchase Date"],
         discord_url: channelId
           ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
           : ""
       };
     });
 
+    const sortedItems = sortDashboardItemsNewestFirst(items);
+
     res.json({
-      count: items.length,
-      items
+      count: sortedItems.length,
+      items: sortedItems
     });
   } catch (err) {
     console.error("Failed to load quick shipped:", err);
@@ -681,14 +704,7 @@ app.get("/api/dashboard/quick-delivered", async (req, res) => {
       )
     ];
 
-    const orderMap = new Map();
-
-    await Promise.all(
-      linkedOrderIds.map(async (orderRecordId) => {
-        const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
-        orderMap.set(orderRecordId, orderRecord.fields || {});
-      })
-    );
+    const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
     const items = filteredInventory.map((record) => {
       const f = record.fields || {};
@@ -706,15 +722,18 @@ app.get("/api/dashboard/quick-delivered", async (req, res) => {
         payout: moneyValue(f["Final Purchase Price"]),
         vat_type: displayValue(f["VAT Type"]),
         date: formatDateEU(f["Purchase Date"]),
+        raw_date: f["Purchase Date"],
         discord_url: channelId
           ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
           : ""
       };
     });
 
+    const sortedItems = sortDashboardItemsNewestFirst(items);
+
     res.json({
-      count: items.length,
-      items
+      count: sortedItems.length,
+      items: sortedItems
     });
   } catch (err) {
     console.error("Failed to load quick delivered:", err);
@@ -779,14 +798,7 @@ app.get("/api/dashboard/history-completed", async (req, res) => {
       )
     ];
 
-    const orderMap = new Map();
-
-    await Promise.all(
-      linkedOrderIds.map(async (orderRecordId) => {
-        const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
-        orderMap.set(orderRecordId, orderRecord.fields || {});
-      })
-    );
+    const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
     const items = filteredInventory.map((record) => {
       const f = record.fields || {};
@@ -804,15 +816,18 @@ app.get("/api/dashboard/history-completed", async (req, res) => {
         payout: moneyValue(f["Final Purchase Price"]),
         vat_type: displayValue(f["VAT Type"]),
         date: formatDateEU(f["Purchase Date"]),
+        raw_date: f["Purchase Date"],
         discord_url: channelId
           ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
           : ""
       };
     });
 
+    const sortedItems = sortDashboardItemsNewestFirst(items);
+
     res.json({
-      count: items.length,
-      items
+      count: sortedItems.length,
+      items: sortedItems
     });
   } catch (err) {
     console.error("Failed to load quick completed:", err);
@@ -970,9 +985,11 @@ app.get("/api/dashboard/open-claims", async (req, res) => {
       )
       .map(normalizeDashboardOpenClaim);
 
+    const sortedClaims = sortDashboardItemsNewestFirst(claims);
+
     res.json({
-      count: claims.length,
-      claims
+      count: sortedClaims.length,
+      claims: sortedClaims
     });
   } catch (err) {
     console.error("Failed to load dashboard open claims:", err);
