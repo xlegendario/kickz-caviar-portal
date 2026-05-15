@@ -726,6 +726,105 @@ app.get("/api/dashboard/quick-delivered", async (req, res) => {
   }
 });
 
+app.get("/api/dashboard/history-completed", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id"
+      });
+    }
+
+    const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Item ID",
+          "Type",
+          "Fulfillment Status (UOL)",
+          "Shipping Status",
+          "Payment Status",
+          "Unfulfilled Orders Log",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "Final Purchase Price",
+          "VAT Type",
+          "Purchase Date"
+        ],
+        filterByFormula: `AND(
+          LEFT({Item ID} & '', 4) = 'OUT-',
+          {Type} = 'Custom',
+          {Payment Status} = 'Paid'
+        )`
+      })
+      .all();
+
+    const filteredInventory = inventoryRecords.filter((record) => {
+      const f = record.fields || {};
+
+      return linkedRecordIncludes(
+        f["Seller ID"],
+        sellerRecordId
+      );
+    });
+
+    const linkedOrderIds = [
+      ...new Set(
+        filteredInventory
+          .map((record) => firstLinkedRecordId(record.fields?.["Unfulfilled Orders Log"]))
+          .filter(Boolean)
+      )
+    ];
+
+    const orderMap = new Map();
+
+    await Promise.all(
+      linkedOrderIds.map(async (orderRecordId) => {
+        const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
+        orderMap.set(orderRecordId, orderRecord.fields || {});
+      })
+    );
+
+    const items = filteredInventory.map((record) => {
+      const f = record.fields || {};
+      const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
+      const orderFields = orderMap.get(linkedOrderId) || {};
+      const channelId = displayValue(orderFields["Claimed Channel ID"]);
+
+      return {
+        id: record.id,
+        order_id: displayValue(orderFields["Order ID"]),
+        product: displayValue(f["Product Name"]),
+        sku: displayValue(f["SKU"]),
+        size: displayValue(f["Size"]),
+        brand: displayValue(f["Brand"]),
+        payout: moneyValue(f["Final Purchase Price"]),
+        vat_type: displayValue(f["VAT Type"]),
+        date: formatDateEU(f["Purchase Date"]),
+        discord_url: channelId
+          ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
+          : ""
+      };
+    });
+
+    res.json({
+      count: items.length,
+      items
+    });
+  } catch (err) {
+    console.error("Failed to load quick completed:", err);
+
+    res.status(500).json({
+      error: "Failed to load completed history",
+      details: err.message
+    });
+  }
+});
+
+
 app.get("/api/dashboard/quick-counts", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
