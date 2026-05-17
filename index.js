@@ -1041,6 +1041,116 @@ app.get("/api/dashboard/quick-counts", async (req, res) => {
   }
 });
 
+app.get("/api/dashboard/counts", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+    const sellerCode = asText(req.query.seller_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({ error: "Missing seller_record_id" });
+    }
+
+    async function loadInventoryCount(formula, requireEmptySellerOffer = true) {
+      const records = await airtable(INVENTORY_UNITS_TABLE)
+        .select({
+          fields: ["Seller ID", "Seller Offer"],
+          filterByFormula: formula
+        })
+        .all();
+
+      return records.filter((record) => {
+        const f = record.fields || {};
+
+        return (
+          linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
+          (!requireEmptySellerOffer || linkedRecordIsEmpty(f["Seller Offer"]))
+        );
+      }).length;
+    }
+
+    const [
+      openClaimsRecords,
+      quickConfirmed,
+      quickLabelRequested,
+      quickReadyToShip,
+      quickShipped,
+      quickDelivered,
+      wtbOpenOffersRecords,
+      historyCompletedRecords
+    ] = await Promise.all([
+      airtable(ORDERS_TABLE)
+        .select({
+          fields: ["Claimed Seller ID"],
+          filterByFormula: `{Fulfillment Status} = 'Claim Processing'`
+        })
+        .all(),
+
+      loadInventoryCount(`AND(LEFT({Item ID} & '', 4) = 'OUT-', {Type} = 'Custom', {Fulfillment Status (UOL)} = 'Allocated')`),
+      loadInventoryCount(`AND(LEFT({Item ID} & '', 4) = 'OUT-', {Type} = 'Custom', {Fulfillment Status (UOL)} = 'Requested Label')`),
+      loadInventoryCount(`AND(LEFT({Item ID} & '', 4) = 'OUT-', {Type} = 'Custom', {Fulfillment Status (UOL)} = 'Ready to Ship')`),
+      loadInventoryCount(`AND(LEFT({Item ID} & '', 4) = 'OUT-', {Type} = 'Custom', {Shipping Status} = 'Shipped')`),
+      loadInventoryCount(`AND(LEFT({Item ID} & '', 4) = 'OUT-', {Type} = 'Custom', {Shipping Status} = 'Delivered', {Payment Status} = 'To Pay')`),
+
+      airtable(SELLER_OFFERS_TABLE)
+        .select({
+          fields: ["Seller ID"],
+          filterByFormula: `{Fulfillment Status} = 'Outsource'`
+        })
+        .all(),
+
+      airtable(INVENTORY_UNITS_TABLE)
+        .select({
+          fields: ["Seller ID (Lookup)"],
+          filterByFormula: `AND(
+            LEFT({Item ID} & '', 4) = 'OUT-',
+            {Type} = 'Custom',
+            {Payment Status} = 'Paid',
+            {Seller ID (Lookup)} = '${escapeFormulaValue(sellerCode)}'
+          )`
+        })
+        .all()
+    ]);
+
+    const openClaims = openClaimsRecords.filter((record) =>
+      linkedRecordIncludes(record.fields?.["Claimed Seller ID"], sellerRecordId)
+    ).length;
+
+    const wtbOpenOffers = wtbOpenOffersRecords.filter((record) =>
+      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+    ).length;
+
+    res.json({
+      quick: {
+        open_claims: openClaims,
+        confirmed: quickConfirmed,
+        label_requested: quickLabelRequested,
+        ready_to_ship: quickReadyToShip,
+        shipped: quickShipped,
+        delivered: quickDelivered
+      },
+      wtb: {
+        open_offers: wtbOpenOffers,
+        accepted: 0,
+        confirmed: 0,
+        label_requested: 0,
+        ready_to_ship: 0,
+        shipped: 0,
+        delivered: 0
+      },
+      history: {
+        completed: historyCompletedRecords.length
+      }
+    });
+  } catch (err) {
+    console.error("Failed to load dashboard counts:", err);
+
+    res.status(500).json({
+      error: "Failed to load dashboard counts",
+      details: err.message
+    });
+  }
+});
+
 app.get("/api/dashboard/open-claims", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
