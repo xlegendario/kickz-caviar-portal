@@ -166,43 +166,48 @@ function syncDashboardUi() {
 
 let quickCountsCache = {};
 
-async function loadQuickCounts() {
+let dashboardCountsCache = {
+  quick: {},
+  wtb: {},
+  history: {}
+};
+
+let quickCountsCache = {};
+
+async function loadDashboardCounts() {
   if (!dashboardSeller) return;
 
   const params = new URLSearchParams({
-    seller_record_id: dashboardSeller.id
+    seller_record_id: dashboardSeller.id,
+    seller_id: dashboardSeller.seller_id
   });
 
-  const response = await fetch(
-    `/api/dashboard/quick-counts?${params.toString()}`
-  );
-
+  const response = await fetch(`/api/dashboard/counts?${params.toString()}`);
   const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(
-      data.details ||
-      data.error ||
-      "Failed to load quick counts"
-    );
+    throw new Error(data.details || data.error || "Failed to load dashboard counts");
   }
 
-  quickCountsCache = data || {};
+  dashboardCountsCache = data || { quick: {}, wtb: {}, history: {} };
+  quickCountsCache = dashboardCountsCache.quick || {};
 
-  Object.entries(quickCountsCache).forEach(([key, value]) => {
-    document.querySelectorAll(`[data-count-key="quick:${key}"]`)
+  Object.entries(dashboardCountsCache).forEach(([section, counts]) => {
+    Object.entries(counts || {}).forEach(([key, value]) => {
+      document.querySelectorAll(`[data-count-key="${section}:${key}"]`)
+        .forEach((el) => {
+          el.textContent = value || 0;
+        });
+    });
+
+    const total = Object.values(counts || {})
+      .reduce((sum, value) => sum + Number(value || 0), 0);
+
+    document.querySelectorAll(`[data-count-group="${section}"]`)
       .forEach((el) => {
-        el.textContent = value || 0;
+        el.textContent = total;
       });
   });
-
-  const quickTotal = Object.values(quickCountsCache)
-    .reduce((sum, value) => sum + Number(value || 0), 0);
-  
-  document.querySelectorAll('[data-count-group="quick"]')
-    .forEach((el) => {
-      el.textContent = quickTotal;
-    });
 
   renderStats();
 }
@@ -214,7 +219,7 @@ function renderStats() {
     <article class="dashboard-stat-card ${tab.key === activeTab ? "active" : ""}">
       <div class="dashboard-stat-label">${tab.label}</div>
       <div class="dashboard-stat-value">
-        ${quickCountsCache[tab.key] || 0}
+        ${dashboardCountsCache[activeSection]?.[tab.key] || 0}
       </div>
     </article>
   `).join("");
@@ -729,7 +734,7 @@ function syncAuthUi() {
     dashboardSellerName.textContent = dashboardSeller.discord || dashboardSeller.email || "Seller";
     dashboardSellerId.textContent = dashboardSeller.seller_id || dashboardSeller.id || "Seller account";
     loadDashboardData().catch(console.error);
-    loadQuickCounts().catch(console.error);
+    loadDashboardCounts().catch(console.error);
   } else {
     dashboardLoginPanel.classList.remove("hidden");
     dashboardContent.classList.add("hidden");
@@ -790,5 +795,5 @@ syncDashboardUi();
 syncAuthUi();
 
 if (dashboardSeller) {
-  loadQuickCounts().catch(console.error);
+  loadDashboardCounts().catch(console.error);
 }
