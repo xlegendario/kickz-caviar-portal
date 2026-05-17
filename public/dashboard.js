@@ -164,8 +164,6 @@ function syncDashboardUi() {
   });
 }
 
-let quickCountsCache = {};
-
 let dashboardCountsCache = {
   quick: {},
   wtb: {},
