@@ -142,6 +142,14 @@ function getImageUrl(value) {
   return value[0].url;
 }
 
+function firstAttachmentUrl(value) {
+  if (!Array.isArray(value) || !value.length) {
+    return "";
+  }
+
+  return value[0]?.url || "";
+}
+
 function hoursSince(value) {
   if (!value) return 0;
 
@@ -212,6 +220,7 @@ async function loadOrderFieldsMap(orderRecordIds) {
           "Lowest Offer Seller ID",
           "WTB Created Channel ID",
           "Shipping Label URL (Permanent)",
+          "Shipping Label",
           "Tracking URL"
         ],
         filterByFormula: formula
@@ -948,7 +957,14 @@ app.get("/api/dashboard/quick-ready-to-ship", async (req, res) => {
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
       const orderFields = orderMap.get(linkedOrderId) || {};
       const channelId = displayValue(orderFields["Claimed Channel ID"]);
-      const labelUrl = displayValue(orderFields["Shipping Label URL (Permanent)"]);
+      const permanentLabelUrl =
+        displayValue(orderFields["Shipping Label URL (Permanent)"]);
+      
+      const shippingLabelAttachment =
+        firstAttachmentUrl(orderFields["Shipping Label"]);
+      
+      const labelUrl =
+        permanentLabelUrl || shippingLabelAttachment || "";
 
       return {
         id: record.id,
