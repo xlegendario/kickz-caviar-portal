@@ -343,12 +343,14 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
 
       return {
         id: record.id,
+        order_record_id: linkedOrderId,
         order_id: displayValue(orderFields["Order ID"]),
         product: displayValue(f["Product Name"] || orderFields["Product Name"]),
         sku: displayValue(f["SKU"] || orderFields["SKU"]),
         size: displayValue(f["Size"] || orderFields["Size"]),
         brand: displayValue(f["Brand"] || orderFields["Brand"]),
         offer: moneyValue(offerAmount),
+        offer_raw: offerAmount,
         vat_type: vatType,
         current_lowest: moneyValue(currentLowest),
         status: isLowest ? "Lowest" : "Beaten",
@@ -368,6 +370,39 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
 
     res.status(500).json({
       error: "Failed to load open offers",
+      details: err.message
+    });
+  }
+});
+
+app.delete("/api/dashboard/wtb-open-offers/:offerId", async (req, res) => {
+  try {
+    const offerId = asText(req.params.offerId);
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!offerId || !sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing offerId or seller_record_id"
+      });
+    }
+
+    const offerRecord = await airtable(SELLER_OFFERS_TABLE).find(offerId);
+    const f = offerRecord.fields || {};
+
+    if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({
+        error: "Not allowed"
+      });
+    }
+
+    await airtable(SELLER_OFFERS_TABLE).destroy(offerId);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to delete open offer:", err);
+
+    res.status(500).json({
+      error: "Failed to delete offer",
       details: err.message
     });
   }
