@@ -211,7 +211,8 @@ async function loadOrderFieldsMap(orderRecordIds) {
           "Partner or Seller",
           "Lowest Offer Seller ID",
           "WTB Created Channel ID",
-          "Shipping Label URL (Permanent)"
+          "Shipping Label URL (Permanent)",
+          "Tracking URL"
         ],
         filterByFormula: formula
       })
@@ -1043,6 +1044,7 @@ app.get("/api/dashboard/quick-shipped", async (req, res) => {
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
       const orderFields = orderMap.get(linkedOrderId) || {};
       const channelId = displayValue(orderFields["Claimed Channel ID"]);
+      const trackingUrl = displayValue(orderFields["Tracking URL"]);
 
       return {
         id: record.id,
@@ -1057,7 +1059,8 @@ app.get("/api/dashboard/quick-shipped", async (req, res) => {
         raw_date: f["Purchase Date"],
         discord_url: channelId
           ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
-          : ""
+          : "",
+        tracking_url: trackingUrl
       };
     });
 
@@ -1141,6 +1144,7 @@ app.get("/api/dashboard/quick-delivered", async (req, res) => {
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
       const orderFields = orderMap.get(linkedOrderId) || {};
       const channelId = displayValue(orderFields["Claimed Channel ID"]);
+      const trackingUrl = displayValue(orderFields["Tracking URL"]);
 
       return {
         id: record.id,
@@ -1155,7 +1159,8 @@ app.get("/api/dashboard/quick-delivered", async (req, res) => {
         raw_date: f["Purchase Date"],
         discord_url: channelId
           ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
-          : ""
+          : "",
+        tracking_url: trackingUrl
       };
     });
 
