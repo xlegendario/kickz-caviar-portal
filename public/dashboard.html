@@ -169,6 +169,45 @@
     </div>
   </div>
 
+  <div id="issueModal" class="dashboard-modal hidden">
+    <div class="dashboard-modal-card">
+      <button class="dashboard-modal-close" type="button" data-issue-close>×</button>
+  
+      <h3>Report Issue</h3>
+      <p>Describe the issue clearly so our team can review it.</p>
+  
+      <form id="issueForm">
+        <input id="issueInventoryId" type="hidden" />
+  
+        <label for="issueNotes">Issue</label>
+        <textarea
+          id="issueNotes"
+          class="dashboard-modal-textarea"
+          placeholder="Describe the issue..."
+          rows="6"
+          required
+        ></textarea>
+  
+        <div id="issueError" class="dashboard-form-error"></div>
+  
+        <button type="submit" class="dashboard-modal-submit">
+          Submit Issue
+        </button>
+      </form>
+    </div>
+  </div>
+  
+  <div id="viewIssueModal" class="dashboard-modal hidden">
+    <div class="dashboard-modal-card">
+      <button class="dashboard-modal-close" type="button" data-view-issue-close>×</button>
+  
+      <h3>Issue Note</h3>
+      <p>Full issue description.</p>
+  
+      <div id="viewIssueNote" class="dashboard-issue-note-box"></div>
+    </div>
+  </div>
+
   <script src="/dashboard.js"></script>
 </body>
 </html>
