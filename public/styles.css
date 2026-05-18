@@ -1148,3 +1148,32 @@ body {
     inset 0 1px 0 rgba(255,255,255,0.55),
     0 4px 14px rgba(0,0,0,0.35);
 }
+
+.login-subtext {
+  margin-bottom: 14px !important;
+}
+
+.forgot-password-btn {
+  padding: 0;
+
+  border: none;
+  background: transparent;
+
+  color: #ffcc00;
+
+  font-size: 13px;
+  font-weight: 800;
+
+  cursor: pointer;
+
+  text-align: left;
+
+  opacity: 0.92;
+
+  transition: 0.18s ease;
+}
+
+.forgot-password-btn:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
