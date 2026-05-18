@@ -1311,6 +1311,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
       quickDelivered,
       wtbOpenOffersRecords,
       wtbAcceptedRecords,
+      wtbConfirmedRecords,
       historyCompletedRecords
     ] = await Promise.all([
       airtable(ORDERS_TABLE)
@@ -1339,6 +1340,20 @@ app.get("/api/dashboard/counts", async (req, res) => {
           filterByFormula: `{Fulfillment Status} = 'Confirmed'`
         })
         .all(),
+
+      airtable(INVENTORY_UNITS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Seller Offer"
+        ],
+        filterByFormula: `AND(
+          LEFT({Item ID} & '', 4) = 'OUT-',
+          {Type} = 'Custom',
+          {Fulfillment Status (UOL)} = 'Allocated'
+        )`
+      })
+      .all(),
       
       airtable(INVENTORY_UNITS_TABLE)
         .select({
@@ -1385,6 +1400,15 @@ app.get("/api/dashboard/counts", async (req, res) => {
       );
     }).length;
 
+    const wtbConfirmed = wtbConfirmedRecords.filter((record) => {
+      const f = record.fields || {};
+    
+      return (
+        linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
+        !linkedRecordIsEmpty(f["Seller Offer"])
+      );
+    }).length;
+
     res.json({
       quick: {
         open_claims: openClaims,
@@ -1397,7 +1421,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
       wtb: {
         open_offers: wtbOpenOffers,
         accepted: wtbAccepted,
-        confirmed: 0,
+        confirmed: wtbConfirmed,
         label_requested: 0,
         ready_to_ship: 0,
         shipped: 0,
