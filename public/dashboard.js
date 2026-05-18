@@ -1,3 +1,5 @@
+const WTB_BOT_BASE_URL = "https://discord-wtb-bot.onrender.com.onrender.com";
+
 const dashboardConfig = {
   quick: {
     label: "Quick Deals",
@@ -294,8 +296,24 @@ function renderWtbOpenOffersRows(offers) {
       <td>${escapeHtml(offer.date || "-")}</td>
       <td>
         <div class="dashboard-action-row">
-          <button class="dashboard-edit-btn" type="button" disabled>Edit</button>
-          <button class="dashboard-delete-btn" type="button" disabled>🗑</button>
+          <button
+            class="dashboard-edit-btn"
+            type="button"
+            data-edit-offer-id="${escapeHtml(offer.id)}"
+            data-order-record-id="${escapeHtml(offer.order_record_id)}"
+            data-vat-type="${escapeHtml(offer.vat_type)}"
+            data-current-offer="${escapeHtml(offer.offer_raw)}"
+          >
+            Edit
+          </button>
+        
+          <button
+            class="dashboard-delete-btn"
+            type="button"
+            data-delete-offer-id="${escapeHtml(offer.id)}"
+          >
+            🗑
+          </button>
         </div>
       </td>
     </tr>
@@ -741,6 +759,110 @@ function syncAuthUi() {
     dashboardSellerId.textContent = "Login required";
   }
 }
+
+async function handleEditOffer(button) {
+  const orderRecordId = button.dataset.orderRecordId;
+  const vatType = button.dataset.vatType;
+  const currentOffer = button.dataset.currentOffer || "";
+
+  const nextOffer = window.prompt(
+    `Enter your new offer (${vatType}). Whole numbers only.`,
+    currentOffer
+  );
+
+  if (nextOffer === null) return;
+
+  const cleanOffer = Number(nextOffer);
+
+  if (!Number.isInteger(cleanOffer) || cleanOffer <= 0) {
+    alert("Please enter a valid whole number.");
+    return;
+  }
+
+  button.disabled = true;
+  button.textContent = "Saving...";
+
+  try {
+    const response = await fetch(`${WTB_BOT_BASE_URL}/seller-offer/place-from-portal`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        orderRecordId,
+        sellerRecordId: dashboardSeller.id,
+        offerAmount: cleanOffer,
+        vatType
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to update offer");
+    }
+
+    await loadDashboardData();
+    await loadDashboardCounts();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Edit";
+  }
+}
+
+async function handleDeleteOffer(button) {
+  const offerId = button.dataset.deleteOfferId;
+
+  const confirmed = window.confirm(
+    "Are you sure you want to delete this offer?"
+  );
+
+  if (!confirmed) return;
+
+  button.disabled = true;
+
+  try {
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+
+    const response = await fetch(
+      `/api/dashboard/wtb-open-offers/${offerId}?${params.toString()}`,
+      {
+        method: "DELETE"
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to delete offer");
+    }
+
+    await loadDashboardData();
+    await loadDashboardCounts();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+dashboardTableBody.addEventListener("click", async (event) => {
+  const editButton = event.target.closest("[data-edit-offer-id]");
+  const deleteButton = event.target.closest("[data-delete-offer-id]");
+
+  if (editButton) {
+    await handleEditOffer(editButton);
+    return;
+  }
+
+  if (deleteButton) {
+    await handleDeleteOffer(deleteButton);
+  }
+});
 
 dashboardLoginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
