@@ -1287,3 +1287,38 @@
   transform: translateY(-1px);
   filter: brightness(1.04);
 }
+
+.dashboard-issue-submit-btn {
+  width: 100%;
+  height: 56px;
+
+  margin-top: 18px;
+
+  border: none;
+  border-radius: 18px;
+
+  background: linear-gradient(180deg, #58d86a, #2ca43c);
+  color: white;
+
+  font-size: 18px;
+  font-weight: 900;
+
+  cursor: pointer;
+
+  box-shadow:
+    0 10px 24px rgba(60,255,110,0.18),
+    inset 0 1px 0 rgba(255,255,255,0.10);
+
+  transition: 0.18s ease;
+}
+
+.dashboard-issue-submit-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.04);
+}
+
+.dashboard-issue-submit-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+}
