@@ -362,10 +362,10 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
         sku: displayValue(f["SKU"] || orderFields["SKU"]),
         size: displayValue(f["Size"] || orderFields["Size"]),
         brand: displayValue(f["Brand"] || orderFields["Brand"]),
-        offer: moneyValue(offerAmount),
+        offer: moneyWholeValue(offerAmount),
         offer_raw: offerAmount,
         vat_type: vatType,
-        current_lowest: moneyValue(currentLowest),
+        current_lowest: moneyWholeValue(currentLowest),
         status: isLowest ? "Lowest" : "Beaten",
         date: formatDateEU(f["Offer Date"]),
         raw_date: f["Offer Date"]
