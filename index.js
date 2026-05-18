@@ -1217,6 +1217,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
       quickShipped,
       quickDelivered,
       wtbOpenOffersRecords,
+      wtbAcceptedRecords,
       historyCompletedRecords
     ] = await Promise.all([
       airtable(ORDERS_TABLE)
@@ -1238,7 +1239,14 @@ app.get("/api/dashboard/counts", async (req, res) => {
           filterByFormula: `{Fulfillment Status} = 'Outsource'`
         })
         .all(),
-
+      
+      airtable(SELLER_OFFERS_TABLE)
+        .select({
+          fields: ["Seller ID", "Linked Orders"],
+          filterByFormula: `{Fulfillment Status} = 'Confirmed'`
+        })
+        .all(),
+      
       airtable(INVENTORY_UNITS_TABLE)
         .select({
           fields: ["Seller ID (Lookup)"],
@@ -1260,6 +1268,30 @@ app.get("/api/dashboard/counts", async (req, res) => {
       linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
     ).length;
 
+    const wtbAcceptedBase = wtbAcceptedRecords.filter((record) =>
+      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+    );
+    
+    const wtbAcceptedOrderIds = [
+      ...new Set(
+        wtbAcceptedBase
+          .map((record) => firstLinkedRecordId(record.fields?.["Linked Orders"]))
+          .filter(Boolean)
+      )
+    ];
+    
+    const wtbAcceptedOrderMap = await loadOrderFieldsMap(wtbAcceptedOrderIds);
+    
+    const wtbAccepted = wtbAcceptedBase.filter((record) => {
+      const linkedOrderId = firstLinkedRecordId(record.fields?.["Linked Orders"]);
+      const orderFields = wtbAcceptedOrderMap.get(linkedOrderId) || {};
+    
+      return (
+        displayValue(orderFields["Partner or Seller"]) === "Seller" &&
+        displayValue(orderFields["Lowest Offer Seller ID"]) === sellerCode
+      );
+    }).length;
+
     res.json({
       quick: {
         open_claims: openClaims,
@@ -1271,7 +1303,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
       },
       wtb: {
         open_offers: wtbOpenOffers,
-        accepted: 0,
+        accepted: wtbAccepted,
         confirmed: 0,
         label_requested: 0,
         ready_to_ship: 0,
