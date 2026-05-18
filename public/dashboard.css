@@ -806,6 +806,10 @@
 }
 
 .dashboard-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  
   background: #f3f3f3;
   color: #050505;
 
