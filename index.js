@@ -210,7 +210,8 @@ async function loadOrderFieldsMap(orderRecordIds) {
           "Current Lowest (VAT0)",
           "Partner or Seller",
           "Lowest Offer Seller ID",
-          "WTB Created Channel ID"
+          "WTB Created Channel ID",
+          "Shipping Label URL (Permanent)"
         ],
         filterByFormula: formula
       })
@@ -946,6 +947,7 @@ app.get("/api/dashboard/quick-ready-to-ship", async (req, res) => {
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
       const orderFields = orderMap.get(linkedOrderId) || {};
       const channelId = displayValue(orderFields["Claimed Channel ID"]);
+      const labelUrl = displayValue(orderFields["Shipping Label URL (Permanent)"]);
 
       return {
         id: record.id,
@@ -960,7 +962,8 @@ app.get("/api/dashboard/quick-ready-to-ship", async (req, res) => {
         raw_date: f["Purchase Date"],
         discord_url: channelId
           ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
-          : ""
+          : "",
+        label_url: labelUrl
       };
     });
 
