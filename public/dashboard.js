@@ -1,5 +1,3 @@
-const WTB_BOT_BASE_URL = "https://discord-wtb-bot.onrender.com";
-
 const dashboardConfig = {
   quick: {
     label: "Quick Deals",
@@ -877,7 +875,7 @@ editOfferForm.addEventListener("submit", async (event) => {
   submitBtn.textContent = "Saving...";
 
   try {
-    const response = await fetch(`${WTB_BOT_BASE_URL}/seller-offer/place-from-portal`, {
+    const response = await fetch("/api/place-offer", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
