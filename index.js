@@ -207,7 +207,9 @@ async function loadOrderFieldsMap(orderRecordIds) {
           "Size",
           "Brand",
           "Current Lowest (Normalized)",
-          "Current Lowest (VAT0)"
+          "Current Lowest (VAT0)",
+          "Partner or Seller",
+          "Lowest Offer Seller ID"
         ],
         filterByFormula: formula
       })
@@ -293,6 +295,98 @@ function normalizeDeal(record) {
     maximum_buying_price: numberValue(f["Maximum Buying Price"])
   };
 }
+
+app.get("/api/dashboard/wtb-accepted", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+    const sellerCode = asText(req.query.seller_id);
+
+    if (!sellerRecordId || !sellerCode) {
+      return res.status(400).json({
+        error: "Missing seller_record_id or seller_id"
+      });
+    }
+
+    const offerRecords = await airtable(SELLER_OFFERS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Linked Orders",
+          "Seller Offer",
+          "Offer VAT Type",
+          "Offer Date",
+          "Fulfillment Status",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand"
+        ],
+        filterByFormula: `{Fulfillment Status} = 'Confirmed'`
+      })
+      .all();
+
+    const filteredOffers = offerRecords.filter((record) =>
+      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+    );
+
+    const linkedOrderIds = [
+      ...new Set(
+        filteredOffers
+          .map((record) => firstLinkedRecordId(record.fields?.["Linked Orders"]))
+          .filter(Boolean)
+      )
+    ];
+
+    const orderMap = await loadOrderFieldsMap(linkedOrderIds);
+
+    const acceptedOffers = filteredOffers.filter((record) => {
+      const linkedOrderId = firstLinkedRecordId(record.fields?.["Linked Orders"]);
+      const orderFields = orderMap.get(linkedOrderId) || {};
+
+      return (
+        displayValue(orderFields["Partner or Seller"]) === "Seller" &&
+        displayValue(orderFields["Lowest Offer Seller ID"]) === sellerCode
+      );
+    });
+
+    const items = acceptedOffers.map((record) => {
+      const f = record.fields || {};
+      const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+      const orderFields = orderMap.get(linkedOrderId) || {};
+
+      const offerAmount = numberValue(f["Seller Offer"]);
+
+      return {
+        id: record.id,
+        order_record_id: linkedOrderId,
+        order_id: displayValue(orderFields["Order ID"]),
+        product: displayValue(f["Product Name"] || orderFields["Product Name"]),
+        sku: displayValue(f["SKU"] || orderFields["SKU"]),
+        size: displayValue(f["Size"] || orderFields["Size"]),
+        brand: displayValue(f["Brand"] || orderFields["Brand"]),
+        offer: moneyWholeValue(offerAmount),
+        vat_type: displayValue(f["Offer VAT Type"]),
+        date: formatDateEU(f["Offer Date"]),
+        raw_date: f["Offer Date"],
+        status: "Offer accepted, waiting processing.."
+      };
+    });
+
+    const sortedItems = sortDashboardItemsNewestFirst(items);
+
+    res.json({
+      count: sortedItems.length,
+      items: sortedItems
+    });
+  } catch (err) {
+    console.error("Failed to load WTB accepted:", err);
+
+    res.status(500).json({
+      error: "Failed to load accepted offers",
+      details: err.message
+    });
+  }
+});
 
 app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
   try {
