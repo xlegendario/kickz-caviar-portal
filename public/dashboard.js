@@ -808,12 +808,6 @@ async function loadDashboardData() {
       countEl.textContent = data.count || 0;
     }
   
-    document.querySelectorAll('[data-count-group="wtb"]')
-      .forEach((el) => {
-        el.textContent = data.count || 0;
-      });
-  
-    quickCountsCache.open_offers = data.count || 0;
     renderStats();
   
     return;
@@ -1324,8 +1318,23 @@ dashboardLogoutBtn.addEventListener("click", () => {
   syncAuthUi();
 });
 
-dashboardRefreshBtn.addEventListener("click", () => {
+dashboardRefreshBtn.addEventListener("click", async () => {
   renderTableShell();
+
+  try {
+    await loadDashboardData();
+    await loadDashboardCounts();
+  } catch (err) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>${escapeHtml(err.message)}</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
 });
 
 dashboardSearchInput.addEventListener("input", () => {
