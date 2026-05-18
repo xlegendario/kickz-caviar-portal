@@ -59,6 +59,7 @@ const dashboardLoginForm = document.getElementById("dashboardLoginForm");
 const dashboardLoginEmail = document.getElementById("dashboardLoginEmail");
 const dashboardLoginPassword = document.getElementById("dashboardLoginPassword");
 const dashboardLoginError = document.getElementById("dashboardLoginError");
+const dashboardForgotPasswordBtn = document.getElementById("dashboardForgotPasswordBtn");
 const dashboardStats = document.getElementById("dashboardStats");
 const dashboardSubtabTitle = document.getElementById("dashboardSubtabTitle");
 const dashboardSubtabDescription = document.getElementById("dashboardSubtabDescription");
@@ -1663,6 +1664,46 @@ dashboardLoginForm.addEventListener("submit", async (event) => {
     syncAuthUi();
   } catch (err) {
     dashboardLoginError.textContent = err.message;
+  }
+});
+
+dashboardForgotPasswordBtn.addEventListener("click", async () => {
+  dashboardLoginError.textContent = "";
+  dashboardLoginError.style.color = "#ff7b7b";
+
+  const email = dashboardLoginEmail.value.trim();
+
+  if (!email) {
+    dashboardLoginError.textContent = "Enter your email first.";
+    return;
+  }
+
+  dashboardForgotPasswordBtn.disabled = true;
+  dashboardForgotPasswordBtn.textContent = "Sending...";
+
+  try {
+    const response = await fetch("/api/forgot-password", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ email })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || data.details || "Failed to send reset email");
+    }
+
+    dashboardLoginError.style.color = "#58d86a";
+    dashboardLoginError.textContent = "If this email exists, a password link has been sent.";
+  } catch (err) {
+    dashboardLoginError.style.color = "#ff7b7b";
+    dashboardLoginError.textContent = err.message;
+  } finally {
+    dashboardForgotPasswordBtn.disabled = false;
+    dashboardForgotPasswordBtn.textContent = "First time login or forgot password?";
   }
 });
 
