@@ -1162,3 +1162,30 @@
     inset 0 1px 0 rgba(255,255,255,0.55),
     0 4px 14px rgba(0,0,0,0.22);
 }
+
+.dashboard-issue-btn,
+.dashboard-view-btn,
+.dashboard-solve-btn {
+  height: 38px;
+  border: none;
+  border-radius: 12px;
+  padding: 0 16px;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.dashboard-issue-btn {
+  background: #f04438;
+  color: #fff;
+}
+
+.dashboard-view-btn {
+  background: linear-gradient(135deg, #2f80ed, #66b3ff);
+  color: #fff;
+}
+
+.dashboard-solve-btn {
+  background: #16b364;
+  color: #fff;
+}
