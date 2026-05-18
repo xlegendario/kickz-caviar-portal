@@ -897,6 +897,8 @@ async function loadDashboardData() {
     if (countEl) {
       countEl.textContent = data.count || 0;
     }
+
+    dashboardCountsCache.wtb.open_offers = data.count || 0;
   
     renderStats();
   
