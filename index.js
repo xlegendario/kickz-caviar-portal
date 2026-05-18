@@ -2308,30 +2308,43 @@ app.post("/api/forgot-password", async (req, res) => {
       from: RESET_EMAIL_FROM,
       subject: "Set your Kickz Caviar Seller Portal password",
       html: `
-        <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;">
-          <h2>Set your password</h2>
-          <p>Click the button below to set or reset your Kickz Caviar Seller Portal password.</p>
-
-          <p>
+        <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;background:#f5f5f5;padding:28px;">
+          <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:18px;padding:30px;text-align:center;">
+            <img
+              src="https://i.imgur.com/gRmfHif.png"
+              alt="Kickz Caviar"
+              style="width:120px;height:auto;margin:0 auto 22px;display:block;"
+            />
+      
+            <h2 style="margin:0 0 12px;font-size:28px;line-height:1.1;color:#111;">
+              Set your seller portal password
+            </h2>
+      
+            <p style="margin:0 0 24px;color:#555;font-size:15px;">
+              Click the button below to set or reset your Kickz Caviar Seller Portal password.
+            </p>
+      
             <a href="${resetUrl}"
                style="
-                 background:#111;
-                 color:#ffcc00;
-                 padding:12px 18px;
-                 border-radius:10px;
+                 background:linear-gradient(180deg,#fff27a,#f0a500);
+                 color:#050505;
+                 padding:14px 22px;
+                 border-radius:14px;
                  text-decoration:none;
-                 font-weight:bold;
+                 font-weight:900;
                  display:inline-block;
                ">
-              Set password
+              Set Password
             </a>
-          </p>
-
-          <p>This link expires in 1 hour.</p>
-
-          <p style="color:#666;font-size:13px;">
-            If you did not request this, you can ignore this email.
-          </p>
+      
+            <p style="margin:24px 0 0;color:#555;font-size:14px;">
+              This link expires in 1 hour.
+            </p>
+      
+            <p style="margin:18px 0 0;color:#999;font-size:12px;">
+              If you did not request this, you can ignore this email.
+            </p>
+          </div>
         </div>
       `
     });
