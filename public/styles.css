@@ -1173,3 +1173,23 @@ body {
   color: white;
   text-decoration: underline;
 }
+
+.kc-header-logo {
+  width: 172px;
+  height: auto;
+  display: block;
+}
+
+.brand {
+  min-width: 190px;
+}
+
+.dashboard-brand-logo {
+  width: 178px;
+  height: auto;
+  display: block;
+}
+
+.dashboard-brand {
+  padding-bottom: 30px;
+}
