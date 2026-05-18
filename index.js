@@ -79,6 +79,10 @@ app.get("/dashboard", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "dashboard.html"));
 });
 
+app.get("/reset-password", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "reset-password.html"));
+});
+
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
@@ -2259,6 +2263,154 @@ app.post("/api/login", async (req, res) => {
 
     res.status(500).json({
       error: "Login failed",
+      details: err.message
+    });
+  }
+});
+
+app.post("/api/forgot-password", async (req, res) => {
+  try {
+    const email = asText(req.body.email).toLowerCase();
+
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    const records = await airtable(SELLERS_TABLE)
+      .select({
+        filterByFormula: `LOWER(TRIM({Email} & '')) = '${escapeFormulaValue(email)}'`,
+        maxRecords: 1
+      })
+      .firstPage();
+
+    if (!records.length) {
+      return res.json({ ok: true });
+    }
+
+    const seller = normalizeSeller(records[0]);
+
+    if (!seller.seller_id || !seller.portal_enabled) {
+      return res.json({ ok: true });
+    }
+
+    const token = crypto.randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+    await airtable(SELLERS_TABLE).update(records[0].id, {
+      "Password Reset Token": token,
+      "Password Reset Expires At": expiresAt
+    });
+
+    const resetUrl = `${APP_PUBLIC_BASE_URL}/reset-password?token=${token}`;
+
+    await sgMail.send({
+      to: email,
+      from: RESET_EMAIL_FROM,
+      subject: "Set your Kickz Caviar Seller Portal password",
+      html: `
+        <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;">
+          <h2>Set your password</h2>
+          <p>Click the button below to set or reset your Kickz Caviar Seller Portal password.</p>
+
+          <p>
+            <a href="${resetUrl}"
+               style="
+                 background:#111;
+                 color:#ffcc00;
+                 padding:12px 18px;
+                 border-radius:10px;
+                 text-decoration:none;
+                 font-weight:bold;
+                 display:inline-block;
+               ">
+              Set password
+            </a>
+          </p>
+
+          <p>This link expires in 1 hour.</p>
+
+          <p style="color:#666;font-size:13px;">
+            If you did not request this, you can ignore this email.
+          </p>
+        </div>
+      `
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Forgot password failed:", err);
+
+    res.status(500).json({
+      error: "Failed to send reset email",
+      details: err.message
+    });
+  }
+});
+
+app.post("/api/reset-password", async (req, res) => {
+  try {
+    const token = asText(req.body.token);
+    const password = asText(req.body.password);
+    const passwordConfirm = asText(req.body.password_confirm);
+
+    if (!token) {
+      return res.status(400).json({ error: "Missing reset token" });
+    }
+
+    if (!password || password.length < 8) {
+      return res.status(400).json({
+        error: "Password must be at least 8 characters"
+      });
+    }
+
+    if (password !== passwordConfirm) {
+      return res.status(400).json({
+        error: "Passwords do not match"
+      });
+    }
+
+    const records = await airtable(SELLERS_TABLE)
+      .select({
+        filterByFormula: `{Password Reset Token} = '${escapeFormulaValue(token)}'`,
+        maxRecords: 1
+      })
+      .firstPage();
+
+    if (!records.length) {
+      return res.status(400).json({
+        error: "Invalid or expired reset link"
+      });
+    }
+
+    const seller = records[0];
+    const expiresAtRaw = seller.fields["Password Reset Expires At"];
+
+    if (!expiresAtRaw) {
+      return res.status(400).json({
+        error: "Invalid or expired reset link"
+      });
+    }
+
+    const expiresAt = new Date(expiresAtRaw);
+
+    if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() < Date.now()) {
+      return res.status(400).json({
+        error: "Reset link expired"
+      });
+    }
+
+    await airtable(SELLERS_TABLE).update(seller.id, {
+      "Portal Password": password,
+      "Password Reset Token": "",
+      "Password Reset Expires At": null
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Reset password failed:", err);
+
+    res.status(500).json({
+      error: "Failed to reset password",
       details: err.message
     });
   }
