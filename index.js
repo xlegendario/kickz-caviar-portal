@@ -406,7 +406,7 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
           "Item ID",
           "Type",
           "Fulfillment Status (UOL)",
-          "Seller Offer",
+          "Final Purchase Price",
           "Unfulfilled Orders Log",
           "Product Name",
           "SKU",
