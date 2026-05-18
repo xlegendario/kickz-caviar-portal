@@ -431,7 +431,7 @@ function renderReadyToShipRows(items) {
                   rel="noopener"
                   title="Download label"
                 >
-                  ↓
+                  ⬇
                 </a>
               `
               : ""
