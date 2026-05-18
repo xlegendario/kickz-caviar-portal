@@ -1154,26 +1154,25 @@ body {
 }
 
 .forgot-password-btn {
+  margin-top: 12px;
   padding: 0;
 
   border: none;
   background: transparent;
 
-  color: #ffcc00;
+  color: rgba(255,255,255,0.82);
 
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 700;
 
   cursor: pointer;
 
   text-align: left;
 
-  opacity: 0.92;
-
   transition: 0.18s ease;
 }
 
 .forgot-password-btn:hover {
-  opacity: 1;
+  color: white;
   text-decoration: underline;
 }
