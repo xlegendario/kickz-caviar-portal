@@ -526,6 +526,7 @@ const profileBtn = document.querySelector(".profile-btn");
 const loginModal = document.getElementById("loginModal");
 const closeLoginModal = document.getElementById("closeLoginModal");
 const loginForm = document.getElementById("loginForm");
+const forgotPasswordBtn = document.getElementById("forgotPasswordBtn");
 const loginEmail = document.getElementById("loginEmail");
 const loginPassword = document.getElementById("loginPassword");
 const loginError = document.getElementById("loginError");
