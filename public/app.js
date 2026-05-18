@@ -7,6 +7,11 @@ const searchInput = document.getElementById("searchInput");
 const brandFilter = document.getElementById("brandFilter");
 const sortFilter = document.getElementById("sortFilter");
 
+const forgotForm = document.getElementById("forgotForm");
+const forgotEmail = document.getElementById("forgotEmail");
+const forgotError = document.getElementById("forgotError");
+const backToLoginBtn = document.getElementById("backToLoginBtn");
+
 let searchQuery = "";
 let selectedBrand = "";
 let selectedSort = localStorage.getItem("kc_sort") || "newest";
@@ -626,19 +631,30 @@ loginForm.addEventListener("submit", async (event) => {
   }
 });
 
-forgotPasswordBtn.addEventListener("click", async () => {
+forgotPasswordBtn.addEventListener("click", () => {
+  loginForm.classList.add("hidden");
+  forgotForm.classList.remove("hidden");
+
   loginError.textContent = "";
-  loginError.style.color = "#ff7b7b";
+  forgotError.textContent = "";
 
-  const email = loginEmail.value.trim();
+  forgotEmail.value = loginEmail.value.trim();
+  forgotEmail.focus();
+});
 
-  if (!email) {
-    loginError.textContent = "Enter your email first.";
-    return;
-  }
+backToLoginBtn.addEventListener("click", () => {
+  forgotForm.classList.add("hidden");
+  loginForm.classList.remove("hidden");
 
-  forgotPasswordBtn.disabled = true;
-  forgotPasswordBtn.textContent = "Sending...";
+  forgotError.textContent = "";
+  loginError.textContent = "";
+});
+
+forgotForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  forgotError.textContent = "";
+  forgotError.style.color = "#ff7b7b";
 
   try {
     const response = await fetch("/api/forgot-password", {
@@ -646,29 +662,22 @@ forgotPasswordBtn.addEventListener("click", async () => {
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ email })
+      body: JSON.stringify({
+        email: forgotEmail.value.trim()
+      })
     });
 
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(
-        data.error ||
-        data.details ||
-        "Failed to send reset email"
-      );
+      throw new Error(data.error || data.details || "Failed to send password link");
     }
 
-    loginError.style.color = "#58d86a";
-    loginError.textContent =
-      "If this email exists, a password link has been sent.";
+    forgotError.style.color = "#58d86a";
+    forgotError.textContent = "If this email exists, a password link has been sent.";
   } catch (err) {
-    loginError.style.color = "#ff7b7b";
-    loginError.textContent = err.message;
-  } finally {
-    forgotPasswordBtn.disabled = false;
-    forgotPasswordBtn.textContent =
-      "First time login or forgot password?";
+    forgotError.style.color = "#ff7b7b";
+    forgotError.textContent = err.message;
   }
 });
 
