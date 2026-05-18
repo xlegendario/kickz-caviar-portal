@@ -124,6 +124,19 @@ function moneyValue(value) {
   }).format(n);
 }
 
+function moneyWholeValue(value) {
+  const n = numberValue(value);
+
+  if (!n) return "";
+
+  return new Intl.NumberFormat("nl-NL", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: 0,
+    minimumFractionDigits: 0
+  }).format(Math.floor(n));
+}
+
 function getImageUrl(value) {
   if (!Array.isArray(value) || !value[0]?.url) return "";
   return value[0].url;
