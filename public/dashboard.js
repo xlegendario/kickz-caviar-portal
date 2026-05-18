@@ -463,6 +463,74 @@ function renderReadyToShipRows(items) {
   `).join("");
 }
 
+function renderTrackingRows(items) {
+  dashboardTableBody
+    .closest(".dashboard-table")
+    ?.classList.remove("open-offers-table");
+
+  dashboardTableHead.innerHTML = skeletonColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    renderTableShell();
+    return;
+  }
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${escapeHtml(item.product || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.payout || "-")}</td>
+      <td>${escapeHtml(item.vat_type || "-")}</td>
+      <td>${escapeHtml(item.date || "-")}</td>
+
+      <td>
+        <div class="dashboard-action-row">
+          ${
+            item.tracking_url
+              ? `
+                <a
+                  class="dashboard-track-btn"
+                  href="${escapeHtml(item.tracking_url)}"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  TRACK
+                </a>
+              `
+              : ""
+          }
+
+          ${
+            item.discord_url
+              ? `
+                <a
+                  class="dashboard-discord-btn"
+                  href="${escapeHtml(item.discord_url)}"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  DISCORD
+                </a>
+              `
+              : ""
+          }
+
+          ${
+            !item.tracking_url && !item.discord_url
+              ? "-"
+              : ""
+          }
+        </div>
+      </td>
+    </tr>
+  `).join("");
+}
+
 function renderOpenClaimsRows(claims) {
   dashboardTableBody
     .closest(".dashboard-table")
@@ -852,7 +920,7 @@ async function loadDashboardData() {
       );
     }
   
-    renderOpenClaimsRows(data.items || []);
+    renderTrackingRows(data.items || []);
   
     const countEl = document.querySelector(
       '[data-count-key="quick:shipped"]'
@@ -894,7 +962,7 @@ async function loadDashboardData() {
       );
     }
   
-    renderOpenClaimsRows(data.items || []);
+    renderTrackingRows(data.items || []);
   
     const countEl = document.querySelector(
       '[data-count-key="quick:delivered"]'
