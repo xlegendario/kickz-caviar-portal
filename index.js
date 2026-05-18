@@ -4,6 +4,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import Airtable from "airtable";
 import compression from "compression";
+import crypto from "crypto";
+import sgMail from "@sendgrid/mail";
 
 dotenv.config();
 
@@ -15,7 +17,11 @@ const __dirname = path.dirname(__filename);
 const {
   PORT = 3000,
   AIRTABLE_TOKEN,
-  AIRTABLE_BASE_ID
+  AIRTABLE_BASE_ID,
+  SENDGRID_API_KEY,
+  RESET_EMAIL_FROM,
+  APP_PUBLIC_BASE_URL = "https://kickz-caviar-portal.onrender.com",
+  SELLER_SIGNUP_URL = "https://discord.com/channels/922818998163361792/1444130166703128676"
 } = process.env;
 
 if (!AIRTABLE_TOKEN) {
@@ -29,6 +35,16 @@ if (!AIRTABLE_BASE_ID) {
 const airtable = new Airtable({
   apiKey: AIRTABLE_TOKEN
 }).base(AIRTABLE_BASE_ID);
+
+if (!SENDGRID_API_KEY) {
+  throw new Error("Missing SENDGRID_API_KEY");
+}
+
+if (!RESET_EMAIL_FROM) {
+  throw new Error("Missing RESET_EMAIL_FROM");
+}
+
+sgMail.setApiKey(SENDGRID_API_KEY);
 
 function asText(value) {
   if (value === null || value === undefined) return "";
@@ -91,7 +107,9 @@ function normalizeSeller(record) {
     seller_id: displayValue(f["Seller ID"]),
     email: displayValue(f["Email"]),
     discord: displayValue(f["Discord"]),
-    discord_id: displayValue(f["Discord ID"])
+    discord_id: displayValue(f["Discord ID"]),
+    portal_password: displayValue(f["Portal Password"]),
+    portal_enabled: f["Portal Enabled"] !== false
   };
 }
 
@@ -2180,7 +2198,7 @@ app.get("/api/dashboard/open-claims", async (req, res) => {
 app.post("/api/login", async (req, res) => {
   try {
     const email = asText(req.body.email).toLowerCase();
-    const password = asText(req.body.password).toLowerCase();
+    const password = asText(req.body.password);
 
     if (!email || !password) {
       return res.status(400).json({
@@ -2190,7 +2208,7 @@ app.post("/api/login", async (req, res) => {
 
     const records = await airtable(SELLERS_TABLE)
       .select({
-        filterByFormula: `LOWER(TRIM({Email} & '')) = '${email.replace(/'/g, "\\'")}'`,
+        filterByFormula: `LOWER(TRIM({Email} & '')) = '${escapeFormulaValue(email)}'`,
         maxRecords: 1
       })
       .firstPage();
@@ -2203,19 +2221,38 @@ app.post("/api/login", async (req, res) => {
 
     const seller = normalizeSeller(records[0]);
 
-    const expectedPassword = normalizeTempPassword(
-      seller.discord,
-      seller.seller_id
-    );
+    if (!seller.portal_enabled) {
+      return res.status(403).json({
+        error: "Portal access disabled"
+      });
+    }
 
-    if (password !== expectedPassword) {
+    if (!seller.seller_id) {
+      return res.status(403).json({
+        error: "Please sign up through Discord first"
+      });
+    }
+
+    if (!seller.portal_password) {
+      return res.status(403).json({
+        error: "Please set your password first"
+      });
+    }
+
+    if (seller.portal_password !== password) {
       return res.status(401).json({
         error: "Invalid login"
       });
     }
 
     res.json({
-      seller
+      seller: {
+        id: seller.id,
+        seller_id: seller.seller_id,
+        email: seller.email,
+        discord: seller.discord,
+        discord_id: seller.discord_id
+      }
     });
   } catch (err) {
     console.error("Login failed:", err);
