@@ -240,6 +240,59 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+const wtbAcceptedColumns = [
+  "Order ID",
+  "Product",
+  "SKU",
+  "Size",
+  "Brand",
+  "Payout / Offer",
+  "VAT Type",
+  "Date",
+  "Status"
+];
+
+function renderWtbAcceptedRows(items) {
+  dashboardTableBody
+    .closest(".dashboard-table")
+    ?.classList.remove("open-offers-table");
+
+  dashboardTableHead.innerHTML = wtbAcceptedColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${wtbAcceptedColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No accepted offers yet</strong>
+            <span>
+              At this moment there are no accepted offers waiting for processing.
+            </span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${escapeHtml(item.product || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.offer || "-")}</td>
+      <td>${escapeHtml(item.vat_type || "-")}</td>
+      <td>${escapeHtml(item.date || "-")}</td>
+      <td>${escapeHtml(item.status || "-")}</td>
+    </tr>
+  `).join("");
+}
+
 const wtbOpenOfferColumns = [
   "",
   "Order ID",
@@ -387,6 +440,52 @@ function renderOpenClaimsRows(claims) {
 
 async function loadDashboardData() {
   if (!dashboardSeller) return;
+
+  if (activeSection === "wtb" && activeTab === "accepted") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${wtbAcceptedColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading accepted offers...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id,
+      seller_id: dashboardSeller.seller_id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/wtb-accepted?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load accepted offers"
+      );
+    }
+  
+    renderWtbAcceptedRows(data.items || []);
+  
+    const countEl = document.querySelector(
+      '[data-count-key="wtb:accepted"]'
+    );
+  
+    if (countEl) {
+      countEl.textContent = data.count || 0;
+    }
+  
+    dashboardCountsCache.wtb.accepted = data.count || 0;
+    renderStats();
+  
+    return;
+  }
 
   if (activeSection === "wtb" && activeTab === "open_offers") {
     dashboardTableBody.innerHTML = `
