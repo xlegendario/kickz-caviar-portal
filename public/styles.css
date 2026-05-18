@@ -1175,13 +1175,16 @@ body {
 }
 
 .kc-header-logo {
-  width: 172px;
-  height: auto;
+  height: 54px;
+  width: auto;
   display: block;
+  object-fit: contain;
 }
 
 .brand {
-  min-width: 190px;
+  display: flex;
+  align-items: center;
+  height: 100%;
 }
 
 .dashboard-brand-logo {
