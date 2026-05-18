@@ -688,17 +688,6 @@
   color: #ffffff;
 }
 
-.dashboard-coming-soon .dashboard-nav-header {
-  text-transform: none;
-  color: rgba(255,255,255,0.36);
-  background: #101010;
-  border-color: #202020;
-}
-
-.dashboard-coming-soon .dashboard-nav-header span:last-child {
-  color: rgba(255,255,255,0.42);
-}
-
 .dashboard-discord-btn {
   display: inline-flex;
   align-items: center;
@@ -1407,4 +1396,50 @@
   text-transform: uppercase;
 
   border: 1px solid rgba(255,255,255,0.06);
+}
+
+.dashboard-coming-soon .dashboard-coming-soon-main {
+  width: 100%;
+  min-height: 50px;
+  padding: 0 14px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  border-radius: 14px;
+  border: 1px solid rgba(255, 204, 0, 0.22);
+
+  background: linear-gradient(180deg, #171717, #101010);
+  color: #ffcc00;
+
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+
+  opacity: 0.7;
+  cursor: not-allowed;
+
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.03),
+    0 4px 18px rgba(0,0,0,0.25);
+}
+
+.dashboard-coming-soon-badge {
+  min-width: 70px;
+  height: 24px;
+  padding: 0 10px;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.78);
+
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
 }
