@@ -74,6 +74,14 @@ const editOfferVatTypeLabel = document.getElementById("editOfferVatTypeLabel");
 const editOfferAmount = document.getElementById("editOfferAmount");
 const editOfferError = document.getElementById("editOfferError");
 const editOfferCurrentLowest = document.getElementById("editOfferCurrentLowest");
+const issueModal = document.getElementById("issueModal");
+const issueForm = document.getElementById("issueForm");
+const issueInventoryId = document.getElementById("issueInventoryId");
+const issueNotes = document.getElementById("issueNotes");
+const issueError = document.getElementById("issueError");
+
+const viewIssueModal = document.getElementById("viewIssueModal");
+const viewIssueNote = document.getElementById("viewIssueNote");
 
 function safeSection(section) {
   return dashboardConfig[section] ? section : "quick";
@@ -1400,6 +1408,28 @@ function closeEditOfferModal() {
   editOfferModal.classList.add("hidden");
 }
 
+function openIssueModal(inventoryId) {
+  issueError.textContent = "";
+  issueInventoryId.value = inventoryId || "";
+  issueNotes.value = "";
+
+  issueModal.classList.remove("hidden");
+  issueNotes.focus();
+}
+
+function closeIssueModal() {
+  issueModal.classList.add("hidden");
+}
+
+function openViewIssueModal(note) {
+  viewIssueNote.textContent = note || "No issue note found.";
+  viewIssueModal.classList.remove("hidden");
+}
+
+function closeViewIssueModal() {
+  viewIssueModal.classList.add("hidden");
+}
+
 async function handleDeleteOffer(button) {
   const offerId = button.dataset.deleteOfferId;
 
@@ -1439,43 +1469,19 @@ async function handleDeleteOffer(button) {
 }
 
 dashboardTableBody.addEventListener("click", async (event) => {
-  const editButton = event.target.closest("[data-edit-offer-id]");
-  const deleteButton = event.target.closest("[data-delete-offer-id]");
   const issueButton = event.target.closest("[data-report-issue-id]");
   const viewIssueButton = event.target.closest("[data-issue-note]");
   const solveIssueButton = event.target.closest("[data-solve-issue-id]");
+  const editButton = event.target.closest("[data-edit-offer-id]");
+  const deleteButton = event.target.closest("[data-delete-offer-id]");
   
   if (issueButton) {
-    const issueNotes = window.prompt("Describe the issue:");
-  
-    if (!issueNotes) return;
-  
-    const response = await fetch(
-      `/api/dashboard/history/${issueButton.dataset.reportIssueId}/issue`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          seller_record_id: dashboardSeller.id,
-          issue_notes: issueNotes
-        })
-      }
-    );
-  
-    const data = await response.json();
-  
-    if (!response.ok) {
-      alert(data.details || data.error || "Failed to report issue");
-      return;
-    }
-  
-    await loadDashboardData();
-    await loadDashboardCounts();
+    openIssueModal(issueButton.dataset.reportIssueId);
     return;
   }
   
   if (viewIssueButton) {
-    alert(viewIssueButton.dataset.issueNote || "No issue note found.");
+    openViewIssueModal(viewIssueButton.dataset.issueNote || "");
     return;
   }
   
@@ -1519,6 +1525,14 @@ dashboardTableBody.addEventListener("click", async (event) => {
 
 document.querySelectorAll("[data-edit-offer-close]").forEach((button) => {
   button.addEventListener("click", closeEditOfferModal);
+});
+
+document.querySelectorAll("[data-issue-close]").forEach((button) => {
+  button.addEventListener("click", closeIssueModal);
+});
+
+document.querySelectorAll("[data-view-issue-close]").forEach((button) => {
+  button.addEventListener("click", closeViewIssueModal);
 });
 
 editOfferForm.addEventListener("submit", async (event) => {
@@ -1568,6 +1582,56 @@ editOfferForm.addEventListener("submit", async (event) => {
   } finally {
     submitBtn.disabled = false;
     submitBtn.textContent = "Save Offer";
+  }
+});
+
+issueForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  issueError.textContent = "";
+
+  const inventoryId = issueInventoryId.value;
+  const cleanNotes = issueNotes.value.trim();
+
+  if (!cleanNotes) {
+    issueError.textContent = "Please describe the issue.";
+    return;
+  }
+
+  const submitBtn = issueForm.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Submitting...";
+
+  try {
+    const response = await fetch(
+      `/api/dashboard/history/${inventoryId}/issue`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          seller_record_id: dashboardSeller.id,
+          issue_notes: cleanNotes
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to report issue");
+    }
+
+    closeIssueModal();
+
+    await loadDashboardData();
+    await loadDashboardCounts();
+  } catch (err) {
+    issueError.textContent = err.message;
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Submit Issue";
   }
 });
 
