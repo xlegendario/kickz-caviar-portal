@@ -111,22 +111,18 @@
       <form id="loginForm">
         <label>Email</label>
         <input id="loginEmail" type="email" required placeholder="you@example.com" />
-  
+      
         <label>Password</label>
         <input id="loginPassword" type="password" required />
-        
-        <button
-          type="button"
-          id="forgotPasswordBtn"
-          class="forgot-password-btn"
-        >
+      
+        <button type="button" id="forgotPasswordBtn" class="forgot-password-btn">
           First time login or forgot password?
         </button>
-  
+      
         <button type="submit" class="modal-submit login-submit-btn">
           LOGIN
         </button>
-        
+      
         <a
           class="modal-signup-btn"
           href="https://discord.com/channels/922818998163361792/1444130166703128676"
@@ -135,8 +131,23 @@
         >
           SIGN UP
         </a>
-        
+      
         <div id="loginError" class="login-error"></div>
+      </form>
+      
+      <form id="forgotForm" class="hidden">
+        <label>Email</label>
+        <input id="forgotEmail" type="email" required placeholder="you@example.com" />
+      
+        <button type="submit" class="modal-submit login-submit-btn">
+          REQUEST PASSWORD LINK
+        </button>
+      
+        <button type="button" id="backToLoginBtn" class="forgot-password-btn">
+          Back to login
+        </button>
+      
+        <div id="forgotError" class="login-error"></div>
       </form>
     </div>
   </div>
