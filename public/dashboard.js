@@ -1377,6 +1377,8 @@ function syncAuthUi() {
     dashboardLoginPanel.classList.add("hidden");
     dashboardContent.classList.remove("hidden");
     dashboardLogoutBtn.classList.remove("hidden");
+    document.querySelector(".dashboard-sidebar")?.classList.remove("hidden");
+    document.querySelector(".dashboard-topbar")?.classList.remove("hidden");
     dashboardSellerName.textContent = dashboardSeller.discord || dashboardSeller.email || "Seller";
     dashboardSellerId.textContent = dashboardSeller.seller_id || dashboardSeller.id || "Seller account";
     loadDashboardData().catch(console.error);
@@ -1385,6 +1387,8 @@ function syncAuthUi() {
     dashboardLoginPanel.classList.remove("hidden");
     dashboardContent.classList.add("hidden");
     dashboardLogoutBtn.classList.add("hidden");
+    document.querySelector(".dashboard-sidebar")?.classList.add("hidden");
+    document.querySelector(".dashboard-topbar")?.classList.add("hidden");
     dashboardSellerName.textContent = "Not logged in";
     dashboardSellerId.textContent = "Login required";
   }
