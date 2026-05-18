@@ -1883,6 +1883,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
       wtbReadyToShipRecords,
       wtbShippedRecords,
       wtbDeliveredRecords,
+      historyIssuesRecords,
       historyCompletedRecords
     ] = await Promise.all([
       airtable(ORDERS_TABLE)
@@ -1993,9 +1994,9 @@ app.get("/api/dashboard/counts", async (req, res) => {
           {Issue Status} = 'Troubled'
         )`
       })
-      .all()
-      
-      airtable(INVENTORY_UNITS_TABLE)
+      .all(),
+    
+    airtable(INVENTORY_UNITS_TABLE)
         .select({
           fields: ["Seller ID (Lookup)"],
           filterByFormula: `AND(
