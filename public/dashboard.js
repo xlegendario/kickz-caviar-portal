@@ -1254,6 +1254,51 @@ async function loadDashboardData() {
     return;
   }
 
+  if (activeSection === "history" && activeTab === "issues") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${historyIssueColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading history issues...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/history-issues?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load history issues"
+      );
+    }
+  
+    renderHistoryIssuesRows(data.items || []);
+  
+    const countEl = document.querySelector(
+      '[data-count-key="history:issues"]'
+    );
+  
+    if (countEl) {
+      countEl.textContent = data.count || 0;
+    }
+  
+    dashboardCountsCache.history.issues = data.count || 0;
+    renderStats();
+  
+    return;
+  }
+
   if (activeSection === "quick" && activeTab === "open_claims") {
     dashboardTableBody.innerHTML = `
       <tr>
@@ -1396,6 +1441,71 @@ async function handleDeleteOffer(button) {
 dashboardTableBody.addEventListener("click", async (event) => {
   const editButton = event.target.closest("[data-edit-offer-id]");
   const deleteButton = event.target.closest("[data-delete-offer-id]");
+  const issueButton = event.target.closest("[data-report-issue-id]");
+  const viewIssueButton = event.target.closest("[data-issue-note]");
+  const solveIssueButton = event.target.closest("[data-solve-issue-id]");
+  
+  if (issueButton) {
+    const issueNotes = window.prompt("Describe the issue:");
+  
+    if (!issueNotes) return;
+  
+    const response = await fetch(
+      `/api/dashboard/history/${issueButton.dataset.reportIssueId}/issue`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          seller_record_id: dashboardSeller.id,
+          issue_notes: issueNotes
+        })
+      }
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      alert(data.details || data.error || "Failed to report issue");
+      return;
+    }
+  
+    await loadDashboardData();
+    await loadDashboardCounts();
+    return;
+  }
+  
+  if (viewIssueButton) {
+    alert(viewIssueButton.dataset.issueNote || "No issue note found.");
+    return;
+  }
+  
+  if (solveIssueButton) {
+    const confirmed = window.confirm("Mark this issue as solved?");
+  
+    if (!confirmed) return;
+  
+    const response = await fetch(
+      `/api/dashboard/history/${solveIssueButton.dataset.solveIssueId}/solve-issue`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          seller_record_id: dashboardSeller.id
+        })
+      }
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      alert(data.details || data.error || "Failed to solve issue");
+      return;
+    }
+  
+    await loadDashboardData();
+    await loadDashboardCounts();
+    return;
+  }
 
   if (editButton) {
     openEditOfferModal(editButton);
