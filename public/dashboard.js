@@ -768,6 +768,51 @@ async function loadDashboardData() {
     return;
   }
 
+  if (activeSection === "wtb" && activeTab === "shipped") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading shipped WTB sales...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/wtb-shipped?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load shipped WTB sales"
+      );
+    }
+  
+    renderTrackingRows(data.items || []);
+  
+    const countEl = document.querySelector(
+      '[data-count-key="wtb:shipped"]'
+    );
+  
+    if (countEl) {
+      countEl.textContent = data.count || 0;
+    }
+  
+    dashboardCountsCache.wtb.shipped = data.count || 0;
+    renderStats();
+  
+    return;
+  }
+
   if (activeSection === "wtb" && activeTab === "open_offers") {
     dashboardTableBody.innerHTML = `
       <tr>
