@@ -586,6 +586,109 @@ app.get("/api/dashboard/wtb-label-requested", async (req, res) => {
   }
 });
 
+app.get("/api/dashboard/wtb-ready-to-ship", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id"
+      });
+    }
+
+    const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Item ID",
+          "Type",
+          "Fulfillment Status (UOL)",
+          "Seller Offer",
+          "Final Purchase Price",
+          "Unfulfilled Orders Log",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "VAT Type",
+          "Purchase Date"
+        ],
+        filterByFormula: `AND(
+          LEFT({Item ID} & '', 4) = 'OUT-',
+          {Type} = 'Custom',
+          {Fulfillment Status (UOL)} = 'Ready to Ship'
+        )`
+      })
+      .all();
+
+    const filteredInventory = inventoryRecords.filter((record) => {
+      const f = record.fields || {};
+
+      return (
+        linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
+        !linkedRecordIsEmpty(f["Seller Offer"])
+      );
+    });
+
+    const linkedOrderIds = [
+      ...new Set(
+        filteredInventory
+          .map((record) => firstLinkedRecordId(record.fields?.["Unfulfilled Orders Log"]))
+          .filter(Boolean)
+      )
+    ];
+
+    const orderMap = await loadOrderFieldsMap(linkedOrderIds);
+
+    const items = filteredInventory.map((record) => {
+      const f = record.fields || {};
+      const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
+      const orderFields = orderMap.get(linkedOrderId) || {};
+      const channelId = displayValue(orderFields["WTB Created Channel ID"]);
+
+      const permanentLabelUrl =
+        displayValue(orderFields["Shipping Label URL (Permanent)"]);
+
+      const shippingLabelAttachment =
+        firstAttachmentUrl(orderFields["Shipping Label"]);
+
+      const labelUrl =
+        permanentLabelUrl || shippingLabelAttachment || "";
+
+      return {
+        id: record.id,
+        order_id: displayValue(orderFields["Order ID"]),
+        product: displayValue(f["Product Name"]),
+        sku: displayValue(f["SKU"]),
+        size: displayValue(f["Size"]),
+        brand: displayValue(f["Brand"]),
+        payout: moneyWholeValue(f["Final Purchase Price"]),
+        vat_type: displayValue(f["VAT Type"]),
+        date: formatDateEU(f["Purchase Date"]),
+        raw_date: f["Purchase Date"],
+        discord_url: channelId
+          ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
+          : "",
+        label_url: labelUrl
+      };
+    });
+
+    const sortedItems = sortDashboardItemsNewestFirst(items);
+
+    res.json({
+      count: sortedItems.length,
+      items: sortedItems
+    });
+  } catch (err) {
+    console.error("Failed to load WTB ready to ship:", err);
+
+    res.status(500).json({
+      error: "Failed to load ready to ship WTB sales",
+      details: err.message
+    });
+  }
+});
+
 app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
@@ -1431,6 +1534,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
       wtbAcceptedRecords,
       wtbConfirmedRecords,
       wtbLabelRequestedRecords,
+      wtbReadyToShipRecords,
       historyCompletedRecords
     ] = await Promise.all([
       airtable(ORDERS_TABLE)
@@ -1484,6 +1588,20 @@ app.get("/api/dashboard/counts", async (req, res) => {
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
           {Fulfillment Status (UOL)} = 'Requested Label'
+        )`
+      })
+      .all(),
+
+      airtable(INVENTORY_UNITS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Seller Offer"
+        ],
+        filterByFormula: `AND(
+          LEFT({Item ID} & '', 4) = 'OUT-',
+          {Type} = 'Custom',
+          {Fulfillment Status (UOL)} = 'Ready to Ship'
         )`
       })
       .all(),
@@ -1551,6 +1669,15 @@ app.get("/api/dashboard/counts", async (req, res) => {
       );
     }).length;
 
+    const wtbReadyToShip = wtbReadyToShipRecords.filter((record) => {
+      const f = record.fields || {};
+    
+      return (
+        linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
+        !linkedRecordIsEmpty(f["Seller Offer"])
+      );
+    }).length;
+
     res.json({
       quick: {
         open_claims: openClaims,
@@ -1565,7 +1692,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
         accepted: wtbAccepted,
         confirmed: wtbConfirmed,
         label_requested: wtbLabelRequested,
-        ready_to_ship: 0,
+        ready_to_ship: wtbReadyToShip,
         shipped: 0,
         delivered: 0
       },
