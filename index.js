@@ -1982,6 +1982,18 @@ app.get("/api/dashboard/counts", async (req, res) => {
         )`
       })
       .all(),
+
+      airtable(INVENTORY_UNITS_TABLE)
+      .select({
+        fields: ["Seller ID"],
+        filterByFormula: `AND(
+          LEFT({Item ID} & '', 4) = 'OUT-',
+          {Type} = 'Custom',
+          {Payment Status} = 'Paid',
+          {Issue Status} = 'Troubled'
+        )`
+      })
+      .all()
       
       airtable(INVENTORY_UNITS_TABLE)
         .select({
@@ -2007,6 +2019,10 @@ app.get("/api/dashboard/counts", async (req, res) => {
     const wtbAcceptedBase = wtbAcceptedRecords.filter((record) =>
       linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
     );
+
+    const historyIssues = historyIssuesRecords.filter((record) =>
+      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+    ).length;
     
     const wtbAcceptedOrderIds = [
       ...new Set(
@@ -2092,7 +2108,8 @@ app.get("/api/dashboard/counts", async (req, res) => {
         delivered: wtbDelivered
       },
       history: {
-        completed: historyCompletedRecords.length
+        completed: historyCompletedRecords.length,
+        issues: historyIssues
       }
     });
   } catch (err) {
