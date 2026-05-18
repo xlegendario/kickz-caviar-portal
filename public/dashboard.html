@@ -134,6 +134,36 @@
     </main>
   </div>
 
+  <div class="dashboard-modal hidden" id="editOfferModal">
+    <div class="dashboard-modal-backdrop" data-edit-offer-close></div>
+  
+    <div class="dashboard-modal-card">
+      <button class="dashboard-modal-close" type="button" data-edit-offer-close>×</button>
+  
+      <h2>Edit Offer</h2>
+      <p>Update your existing offer.</p>
+  
+      <form id="editOfferForm" class="dashboard-modal-form">
+        <input type="hidden" id="editOfferOrderRecordId" />
+        <input type="hidden" id="editOfferVatType" />
+  
+        <label>
+          Offer amount
+          <input id="editOfferAmount" type="number" min="1" step="1" required />
+        </label>
+  
+        <div class="dashboard-locked-vat">
+          <span>VAT Type</span>
+          <strong id="editOfferVatTypeLabel">-</strong>
+        </div>
+  
+        <button type="submit">Save Offer</button>
+  
+        <div class="dashboard-form-error" id="editOfferError"></div>
+      </form>
+    </div>
+  </div>
+
   <script src="/dashboard.js"></script>
 </body>
 </html>
