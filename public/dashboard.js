@@ -246,7 +246,7 @@ const wtbAcceptedColumns = [
   "SKU",
   "Size",
   "Brand",
-  "Payout / Offer",
+  "Payout",
   "VAT Type",
   "Date",
   "Status"
