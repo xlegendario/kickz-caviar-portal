@@ -310,6 +310,7 @@ function renderWtbOpenOffersRows(offers) {
             data-order-record-id="${escapeHtml(offer.order_record_id)}"
             data-vat-type="${escapeHtml(offer.vat_type)}"
             data-current-offer="${escapeHtml(offer.offer_raw)}"
+            data-current-lowest="${escapeHtml(offer.current_lowest)}"
           >
             Edit
           </button>
