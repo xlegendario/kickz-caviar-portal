@@ -813,6 +813,51 @@ async function loadDashboardData() {
     return;
   }
 
+  if (activeSection === "wtb" && activeTab === "delivered") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading delivered WTB sales...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/wtb-delivered?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load delivered WTB sales"
+      );
+    }
+  
+    renderTrackingRows(data.items || []);
+  
+    const countEl = document.querySelector(
+      '[data-count-key="wtb:delivered"]'
+    );
+  
+    if (countEl) {
+      countEl.textContent = data.count || 0;
+    }
+  
+    dashboardCountsCache.wtb.delivered = data.count || 0;
+    renderStats();
+  
+    return;
+  }
+
   if (activeSection === "wtb" && activeTab === "open_offers") {
     dashboardTableBody.innerHTML = `
       <tr>
