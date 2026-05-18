@@ -1,4 +1,4 @@
-const WTB_BOT_BASE_URL = "https://discord-wtb-bot.onrender.com.onrender.com";
+const WTB_BOT_BASE_URL = "https://discord-wtb-bot.onrender.com";
 
 const dashboardConfig = {
   quick: {
