@@ -350,9 +350,8 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
           : numberValue(orderFields["Current Lowest (Normalized)"]);
 
       const isLowest =
-        offerAmount > 0 &&
-        currentLowest > 0 &&
-        Number(offerAmount) === Number(currentLowest);
+        displayValue(orderFields["Lowest Offer Seller ID"]) ===
+        displayValue(req.query.seller_id);
 
       return {
         id: record.id,
