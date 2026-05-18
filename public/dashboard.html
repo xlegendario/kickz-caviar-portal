@@ -85,7 +85,7 @@
         <div class="dashboard-login-card">
           <div class="dashboard-eyebrow">Secure access</div>
           <h2>Login to open your dashboard</h2>
-          <p>Use the temporary seller login for now. Real seller auth can replace this later without changing the dashboard structure.</p>
+          <p>Login with your seller email and password. First time here? Set your password first.</p>
 
           <form id="dashboardLoginForm" class="dashboard-login-form">
             <label>
@@ -97,6 +97,24 @@
               <input id="dashboardLoginPassword" type="password" autocomplete="current-password" required />
             </label>
             <button type="submit">Login</button>
+
+            <button
+              class="dashboard-secondary-auth-btn"
+              id="dashboardForgotPasswordBtn"
+              type="button"
+            >
+              First time login or forgot password?
+            </button>
+            
+            <a
+              class="dashboard-signup-btn"
+              href="https://discord.com/channels/922818998163361792"
+              target="_blank"
+              rel="noopener"
+            >
+              SIGN UP
+            </a>
+            
             <div class="dashboard-form-error" id="dashboardLoginError"></div>
           </form>
         </div>
