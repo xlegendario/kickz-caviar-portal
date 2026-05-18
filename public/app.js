@@ -626,6 +626,52 @@ loginForm.addEventListener("submit", async (event) => {
   }
 });
 
+forgotPasswordBtn.addEventListener("click", async () => {
+  loginError.textContent = "";
+  loginError.style.color = "#ff7b7b";
+
+  const email = loginEmail.value.trim();
+
+  if (!email) {
+    loginError.textContent = "Enter your email first.";
+    return;
+  }
+
+  forgotPasswordBtn.disabled = true;
+  forgotPasswordBtn.textContent = "Sending...";
+
+  try {
+    const response = await fetch("/api/forgot-password", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ email })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ||
+        data.details ||
+        "Failed to send reset email"
+      );
+    }
+
+    loginError.style.color = "#58d86a";
+    loginError.textContent =
+      "If this email exists, a password link has been sent.";
+  } catch (err) {
+    loginError.style.color = "#ff7b7b";
+    loginError.textContent = err.message;
+  } finally {
+    forgotPasswordBtn.disabled = false;
+    forgotPasswordBtn.textContent =
+      "First time login or forgot password?";
+  }
+});
+
 updateLoginState();
 
 function openClaimModal(dealId) {
