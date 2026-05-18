@@ -482,6 +482,99 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
   }
 });
 
+app.get("/api/dashboard/wtb-label-requested", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id"
+      });
+    }
+
+    const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Item ID",
+          "Type",
+          "Fulfillment Status (UOL)",
+          "Seller Offer",
+          "Final Purchase Price",
+          "Unfulfilled Orders Log",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "VAT Type",
+          "Purchase Date"
+        ],
+        filterByFormula: `AND(
+          LEFT({Item ID} & '', 4) = 'OUT-',
+          {Type} = 'Custom',
+          {Fulfillment Status (UOL)} = 'Requested Label'
+        )`
+      })
+      .all();
+
+    const filteredInventory = inventoryRecords.filter((record) => {
+      const f = record.fields || {};
+
+      return (
+        linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
+        !linkedRecordIsEmpty(f["Seller Offer"])
+      );
+    });
+
+    const linkedOrderIds = [
+      ...new Set(
+        filteredInventory
+          .map((record) => firstLinkedRecordId(record.fields?.["Unfulfilled Orders Log"]))
+          .filter(Boolean)
+      )
+    ];
+
+    const orderMap = await loadOrderFieldsMap(linkedOrderIds);
+
+    const items = filteredInventory.map((record) => {
+      const f = record.fields || {};
+      const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
+      const orderFields = orderMap.get(linkedOrderId) || {};
+      const channelId = displayValue(orderFields["WTB Created Channel ID"]);
+
+      return {
+        id: record.id,
+        order_id: displayValue(orderFields["Order ID"]),
+        product: displayValue(f["Product Name"]),
+        sku: displayValue(f["SKU"]),
+        size: displayValue(f["Size"]),
+        brand: displayValue(f["Brand"]),
+        payout: moneyWholeValue(f["Final Purchase Price"]),
+        vat_type: displayValue(f["VAT Type"]),
+        date: formatDateEU(f["Purchase Date"]),
+        raw_date: f["Purchase Date"],
+        discord_url: channelId
+          ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
+          : ""
+      };
+    });
+
+    const sortedItems = sortDashboardItemsNewestFirst(items);
+
+    res.json({
+      count: sortedItems.length,
+      items: sortedItems
+    });
+  } catch (err) {
+    console.error("Failed to load WTB label requested:", err);
+
+    res.status(500).json({
+      error: "Failed to load label requested WTB sales",
+      details: err.message
+    });
+  }
+});
+
 app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
