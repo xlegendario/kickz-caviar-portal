@@ -107,24 +107,21 @@
       <button id="closeLoginModal" class="modal-close">×</button>
   
       <h2>Login</h2>
-      <p class="login-subtext">
-        Login with your seller email and password.
-      </p>
-      
-      <button
-        type="button"
-        id="forgotPasswordBtn"
-        class="forgot-password-btn"
-      >
-        First time login or forgot password?
-      </button>
   
       <form id="loginForm">
         <label>Email</label>
         <input id="loginEmail" type="email" required placeholder="you@example.com" />
   
         <label>Password</label>
-        <input id="loginPassword" type="password" required placeholder="discord-00001" />
+        <input id="loginPassword" type="password" required />
+        
+        <button
+          type="button"
+          id="forgotPasswordBtn"
+          class="forgot-password-btn"
+        >
+          First time login or forgot password?
+        </button>
   
         <button type="submit" class="modal-submit login-submit-btn">
           LOGIN
