@@ -455,7 +455,7 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
         brand: displayValue(f["Brand"]),
-        payout: moneyWholeValue(f["Seller Offer"]),
+        payout: moneyWholeValue(f["Final Purchase Price"]),
         vat_type: displayValue(f["VAT Type"]),
         date: formatDateEU(f["Purchase Date"]),
         raw_date: f["Purchase Date"],
