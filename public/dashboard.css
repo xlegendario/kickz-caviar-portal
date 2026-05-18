@@ -1189,3 +1189,80 @@
   background: #16b364;
   color: #fff;
 }
+
+.dashboard-modal-textarea {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+
+  border-radius: 14px;
+  border: 1px solid #2a2a2a;
+
+  background: #141414;
+  color: white;
+
+  padding: 14px 16px;
+  outline: none;
+
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.03),
+    0 4px 18px rgba(0,0,0,0.28);
+}
+
+.dashboard-modal-textarea:focus {
+  border-color: #ffd21f;
+  box-shadow:
+    0 0 0 1px rgba(255,210,31,0.15) inset,
+    0 0 30px rgba(255,210,31,0.08);
+}
+
+.dashboard-issue-note-box {
+  margin-top: 18px;
+
+  max-height: 340px;
+  overflow-y: auto;
+
+  white-space: pre-wrap;
+  word-break: break-word;
+
+  border-radius: 16px;
+  border: 1px solid #2a2a2a;
+
+  background: #141414;
+  color: rgba(255,255,255,0.88);
+
+  padding: 18px;
+
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.dashboard-solve-btn {
+  height: 38px;
+
+  border: none;
+  border-radius: 12px;
+
+  padding: 0 16px;
+
+  background: linear-gradient(180deg, #58d86a, #2ca43c);
+  color: white;
+
+  font-size: 12px;
+  font-weight: 900;
+
+  cursor: pointer;
+
+  box-shadow:
+    0 8px 18px rgba(60,255,110,0.16),
+    inset 0 1px 0 rgba(255,255,255,0.14);
+}
+
+.dashboard-solve-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.04);
+}
