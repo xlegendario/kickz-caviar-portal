@@ -67,6 +67,13 @@ const dashboardTableHead = document.getElementById("dashboardTableHead");
 const dashboardTableBody = document.getElementById("dashboardTableBody");
 const dashboardRefreshBtn = document.getElementById("dashboardRefreshBtn");
 const dashboardSearchInput = document.getElementById("dashboardSearchInput");
+const editOfferModal = document.getElementById("editOfferModal");
+const editOfferForm = document.getElementById("editOfferForm");
+const editOfferOrderRecordId = document.getElementById("editOfferOrderRecordId");
+const editOfferVatType = document.getElementById("editOfferVatType");
+const editOfferVatTypeLabel = document.getElementById("editOfferVatTypeLabel");
+const editOfferAmount = document.getElementById("editOfferAmount");
+const editOfferError = document.getElementById("editOfferError");
 
 function safeSection(section) {
   return dashboardConfig[section] ? section : "quick";
@@ -774,56 +781,21 @@ function syncAuthUi() {
   }
 }
 
-async function handleEditOffer(button) {
-  const orderRecordId = button.dataset.orderRecordId;
-  const vatType = button.dataset.vatType;
-  const currentOffer = button.dataset.currentOffer || "";
+function openEditOfferModal(button) {
+  editOfferError.textContent = "";
 
-  const nextOffer = window.prompt(
-    `Enter your new offer (${vatType}). Whole numbers only.`,
-    currentOffer
-  );
+  editOfferOrderRecordId.value = button.dataset.orderRecordId || "";
+  editOfferVatType.value = button.dataset.vatType || "";
+  editOfferVatTypeLabel.textContent = button.dataset.vatType || "-";
+  editOfferAmount.value = button.dataset.currentOffer || "";
 
-  if (nextOffer === null) return;
+  editOfferModal.classList.remove("hidden");
+  editOfferAmount.focus();
+  editOfferAmount.select();
+}
 
-  const cleanOffer = Number(nextOffer);
-
-  if (!Number.isInteger(cleanOffer) || cleanOffer <= 0) {
-    alert("Please enter a valid whole number.");
-    return;
-  }
-
-  button.disabled = true;
-  button.textContent = "Saving...";
-
-  try {
-    const response = await fetch(`${WTB_BOT_BASE_URL}/seller-offer/place-from-portal`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        orderRecordId,
-        sellerRecordId: dashboardSeller.id,
-        offerAmount: cleanOffer,
-        vatType
-      })
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.details || data.error || "Failed to update offer");
-    }
-
-    await loadDashboardData();
-    await loadDashboardCounts();
-  } catch (err) {
-    alert(err.message);
-  } finally {
-    button.disabled = false;
-    button.textContent = "Edit";
-  }
+function closeEditOfferModal() {
+  editOfferModal.classList.add("hidden");
 }
 
 async function handleDeleteOffer(button) {
@@ -869,12 +841,66 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const deleteButton = event.target.closest("[data-delete-offer-id]");
 
   if (editButton) {
-    await handleEditOffer(editButton);
+    openEditOfferModal(editButton);
     return;
   }
 
   if (deleteButton) {
     await handleDeleteOffer(deleteButton);
+  }
+});
+
+document.querySelectorAll("[data-edit-offer-close]").forEach((button) => {
+  button.addEventListener("click", closeEditOfferModal);
+});
+
+editOfferForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  editOfferError.textContent = "";
+
+  const orderRecordId = editOfferOrderRecordId.value;
+  const vatType = editOfferVatType.value;
+  const cleanOffer = Number(editOfferAmount.value);
+
+  if (!Number.isInteger(cleanOffer) || cleanOffer <= 0) {
+    editOfferError.textContent = "Please enter a valid whole number.";
+    return;
+  }
+
+  const submitBtn = editOfferForm.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Saving...";
+
+  try {
+    const response = await fetch(`${WTB_BOT_BASE_URL}/seller-offer/place-from-portal`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        orderRecordId,
+        sellerRecordId: dashboardSeller.id,
+        offerAmount: cleanOffer,
+        vatType
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to update offer");
+    }
+
+    closeEditOfferModal();
+
+    await loadDashboardData();
+    await loadDashboardCounts();
+  } catch (err) {
+    editOfferError.textContent = err.message;
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Save Offer";
   }
 });
 
