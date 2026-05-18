@@ -8,6 +8,7 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "@sendgrid/mail": "^8.1.4",
     "airtable": "^0.12.2",
     "compression": "^1.7.4",
     "dotenv": "^16.4.7",
