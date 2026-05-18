@@ -791,12 +791,16 @@
 
 .dashboard-edit-btn,
 .dashboard-delete-btn {
-  height: 34px;
+  height: 38px;
+  min-width: 48px;
+
   border: none;
-  border-radius: 10px;
-  padding: 0 12px;
+  border-radius: 12px;
+  padding: 0 14px;
+
   font-size: 12px;
   font-weight: 900;
+
   cursor: pointer;
   opacity: 1;
 }
@@ -815,8 +819,8 @@
 }
 
 .dashboard-delete-btn {
-  width: 42px;
-  height: 42px;
+  width: 48px;
+  height: 38px;
 
   display: inline-flex;
   align-items: center;
@@ -931,4 +935,168 @@
 .dashboard-table.open-offers-table th:nth-child(11),
 .dashboard-table.open-offers-table td:nth-child(11) {
   width: 140px;
+}
+
+.dashboard-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+
+  display: grid;
+  place-items: center;
+
+  padding: 24px;
+}
+
+.dashboard-modal-backdrop {
+  position: absolute;
+  inset: 0;
+
+  background: rgba(0,0,0,0.72);
+  backdrop-filter: blur(10px);
+}
+
+.dashboard-modal-card {
+  position: relative;
+  z-index: 1;
+
+  width: min(560px, 100%);
+  padding: 34px;
+
+  border-radius: 26px;
+  border: 1px solid #2a2a2a;
+
+  background:
+    radial-gradient(circle at top left, rgba(255,204,0,0.08), transparent 36%),
+    linear-gradient(180deg, #181818, #101010);
+
+  box-shadow:
+    0 30px 90px rgba(0,0,0,0.62),
+    inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+.dashboard-modal-card h2 {
+  margin: 0;
+  font-size: 44px;
+  line-height: 0.95;
+  letter-spacing: -1.4px;
+  font-weight: 900;
+}
+
+.dashboard-modal-card p {
+  margin: 14px 0 28px;
+  color: rgba(255,255,255,0.66);
+  line-height: 1.45;
+}
+
+.dashboard-modal-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+
+  width: 44px;
+  height: 44px;
+
+  border-radius: 999px;
+  border: 1px solid #333;
+
+  background: #1b1b1b;
+  color: white;
+
+  font-size: 26px;
+  line-height: 1;
+
+  cursor: pointer;
+}
+
+.dashboard-modal-form {
+  display: grid;
+  gap: 18px;
+}
+
+.dashboard-modal-form label {
+  display: grid;
+  gap: 10px;
+
+  color: #aaa;
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.dashboard-modal-form input {
+  height: 54px;
+
+  border-radius: 14px;
+  border: 1px solid #2b2b2b;
+
+  background: #111;
+  color: white;
+
+  padding: 0 16px;
+
+  font-size: 18px;
+  font-weight: 900;
+
+  outline: none;
+}
+
+.dashboard-modal-form input:focus {
+  border-color: #ffcc00;
+  box-shadow:
+    0 0 0 1px rgba(255,204,0,0.18) inset,
+    0 0 32px rgba(255,204,0,0.08);
+}
+
+.dashboard-locked-vat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  min-height: 58px;
+  padding: 0 16px;
+
+  border-radius: 16px;
+  border: 1px solid #2b2b2b;
+
+  background: rgba(255,255,255,0.025);
+}
+
+.dashboard-locked-vat span {
+  color: #aaa;
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.dashboard-locked-vat strong {
+  color: #ffcc00;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.dashboard-modal-form button[type="submit"] {
+  height: 58px;
+
+  border: none;
+  border-radius: 16px;
+
+  background: linear-gradient(180deg, #49d862, #29a93d);
+  color: white;
+
+  font-size: 17px;
+  font-weight: 900;
+
+  cursor: pointer;
+
+  box-shadow:
+    0 14px 32px rgba(73,216,98,0.18),
+    inset 0 1px 0 rgba(255,255,255,0.12);
+}
+
+.dashboard-modal-form button[type="submit"]:disabled {
+  opacity: 0.65;
+  cursor: wait;
 }
