@@ -74,6 +74,7 @@ const editOfferVatType = document.getElementById("editOfferVatType");
 const editOfferVatTypeLabel = document.getElementById("editOfferVatTypeLabel");
 const editOfferAmount = document.getElementById("editOfferAmount");
 const editOfferError = document.getElementById("editOfferError");
+const editOfferCurrentLowest = document.getElementById("editOfferCurrentLowest");
 
 function safeSection(section) {
   return dashboardConfig[section] ? section : "quick";
@@ -310,7 +311,7 @@ function renderWtbOpenOffersRows(offers) {
             data-order-record-id="${escapeHtml(offer.order_record_id)}"
             data-vat-type="${escapeHtml(offer.vat_type)}"
             data-current-offer="${escapeHtml(offer.offer_raw)}"
-            data-current-lowest="${escapeHtml(offer.current_lowest)}"
+            data-current-lowest="${escapeHtml(offer.current_lowest || "-")}"
           >
             Edit
           </button>
@@ -789,6 +790,8 @@ function openEditOfferModal(button) {
   editOfferVatType.value = button.dataset.vatType || "";
   editOfferVatTypeLabel.textContent = button.dataset.vatType || "-";
   editOfferAmount.value = button.dataset.currentOffer || "";
+  editOfferCurrentLowest.textContent =
+    button.dataset.currentLowest || "-";
 
   editOfferModal.classList.remove("hidden");
   editOfferAmount.focus();
