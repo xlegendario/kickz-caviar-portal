@@ -1106,32 +1106,37 @@
 }
 
 .dashboard-download-btn {
-  width: 46px;
+  width: 48px;
   height: 38px;
 
   display: inline-flex;
   align-items: center;
   justify-content: center;
 
-  border-radius: 12px;
+  border-radius: 10px;
   border: none;
 
-  background: linear-gradient(180deg, #ffd957, #ffb51f);
+  background: #f7c843;
   color: #050505;
-
-  font-size: 22px;
-  font-weight: 900;
-  line-height: 1;
 
   text-decoration: none;
 
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+
   box-shadow:
-    0 8px 18px rgba(255, 190, 40, 0.20),
-    inset 0 1px 0 rgba(255,255,255,0.35);
+    inset 0 1px 0 rgba(255,255,255,0.25),
+    0 6px 16px rgba(247, 200, 67, 0.22);
+
+  transition:
+    transform 0.15s ease,
+    filter 0.15s ease;
 }
 
 .dashboard-download-btn:hover {
   transform: translateY(-1px);
+  filter: brightness(1.04);
 }
 
 .dashboard-track-btn {
