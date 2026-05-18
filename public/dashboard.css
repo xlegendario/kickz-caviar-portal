@@ -1176,8 +1176,29 @@
 }
 
 .dashboard-issue-btn {
-  background: #f04438;
-  color: #fff;
+  height: 38px;
+
+  border: none;
+  border-radius: 12px;
+
+  padding: 0 16px;
+
+  background: linear-gradient(180deg, #fff27a, #f0a500);
+  color: black;
+
+  font-size: 12px;
+  font-weight: 900;
+
+  cursor: pointer;
+
+  box-shadow:
+    0 8px 18px rgba(255,204,0,0.16),
+    inset 0 1px 0 rgba(255,255,255,0.22);
+}
+
+.dashboard-issue-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.03);
 }
 
 .dashboard-view-btn {
