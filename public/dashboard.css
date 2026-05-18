@@ -1345,3 +1345,39 @@
   cursor: not-allowed;
   transform: none;
 }
+
+.dashboard-coming-soon-main {
+  opacity: 0.6;
+  cursor: not-allowed;
+
+  border: 1px solid rgba(255, 210, 31, 0.18);
+  background:
+    linear-gradient(
+      90deg,
+      rgba(255,210,31,0.08),
+      rgba(255,210,31,0.02)
+    );
+}
+
+.dashboard-coming-soon-main:hover {
+  transform: none;
+}
+
+.dashboard-coming-soon-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  height: 24px;
+  padding: 0 10px;
+
+  border-radius: 999px;
+
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.82);
+
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
