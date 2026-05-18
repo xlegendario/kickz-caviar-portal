@@ -1202,8 +1202,31 @@
 }
 
 .dashboard-view-btn {
-  background: linear-gradient(135deg, #2f80ed, #66b3ff);
-  color: #fff;
+  height: 38px;
+
+  border: none;
+  border-radius: 12px;
+
+  padding: 0 16px;
+
+  background: linear-gradient(180deg, #f4f4f4, #d9d9d9);
+  color: black;
+
+  font-size: 12px;
+  font-weight: 900;
+
+  cursor: pointer;
+
+  box-shadow:
+    0 6px 14px rgba(255,255,255,0.08),
+    inset 0 1px 0 rgba(255,255,255,0.75);
+
+  transition: 0.18s ease;
+}
+
+.dashboard-view-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.02);
 }
 
 .dashboard-solve-btn {
