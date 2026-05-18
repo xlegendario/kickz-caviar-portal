@@ -521,6 +521,8 @@ window.addEventListener("scroll", () => {
 });
 
 const loginBtn = document.querySelector(".login-btn");
+const signupBtn = document.querySelector(".signup-btn");
+const profileBtn = document.querySelector(".profile-btn");
 const loginModal = document.getElementById("loginModal");
 const closeLoginModal = document.getElementById("closeLoginModal");
 const loginForm = document.getElementById("loginForm");
@@ -554,9 +556,14 @@ let currentSeller = JSON.parse(localStorage.getItem("kc_seller") || "null");
 
 function updateLoginState() {
   if (currentSeller) {
-    loginBtn.textContent = currentSeller.discord || currentSeller.seller_id || "Account";
+    loginBtn.classList.add("hidden");
+    signupBtn.classList.add("hidden");
+    profileBtn.classList.remove("hidden");
   } else {
-    loginBtn.textContent = "Login";
+    loginBtn.classList.remove("hidden");
+    signupBtn.classList.remove("hidden");
+    profileBtn.classList.add("hidden");
+    loginBtn.textContent = "LOGIN";
   }
 }
 
@@ -570,18 +577,6 @@ function closeModal() {
 }
 
 loginBtn.addEventListener("click", () => {
-  if (currentSeller) {
-    const shouldLogout = confirm(`Logged in as ${currentSeller.discord}. Logout?`);
-
-    if (shouldLogout) {
-      localStorage.removeItem("kc_seller");
-      currentSeller = null;
-      updateLoginState();
-    }
-
-    return;
-  }
-
   openLoginModal();
 });
 
