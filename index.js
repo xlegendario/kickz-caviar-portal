@@ -1519,7 +1519,9 @@ app.get("/api/dashboard/history-completed", async (req, res) => {
           "Brand",
           "Final Purchase Price",
           "VAT Type",
-          "Purchase Date"
+          "Purchase Date",
+          "Issue Notes",
+          "Issue Status"
         ],
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
