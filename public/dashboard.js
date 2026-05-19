@@ -836,7 +836,7 @@ function renderHistoryIssuesRows(items) {
       secondaryValue: (item) => item.issue_status,
       actions: (item) => `
         <button
-          class="dashboard-mobile-btn dashboard-mobile-view-btn"
+          class="dashboard-mobile-btn dashboard-mobile-download-btn"
           type="button"
           data-issue-note="${escapeHtml(item.issue_notes || "")}"
         >
