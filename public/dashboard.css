@@ -514,16 +514,58 @@
   font-weight: 700;
 }
 
+.dashboard-mobile-menu-btn,
+.dashboard-sidebar-backdrop {
+  display: none;
+}
+
 @media (max-width: 1100px) {
   .seller-dashboard {
     grid-template-columns: 1fr;
   }
 
+  .dashboard-mobile-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 44px;
+    padding: 0 16px;
+    border-radius: 14px;
+    border: 1px solid #262626;
+    background: #151515;
+    color: white;
+    font-weight: 900;
+    cursor: pointer;
+  }
+
   .dashboard-sidebar {
-    position: relative;
-    height: auto;
-    border-right: none;
-    border-bottom: 1px solid #1a1a1a;
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 1000;
+    width: min(320px, 86vw);
+    height: 100vh;
+    transform: translateX(-105%);
+    transition: transform 0.22s ease;
+    border-right: 1px solid #1a1a1a;
+    border-bottom: none;
+  }
+
+  .dashboard-sidebar.open {
+    transform: translateX(0);
+  }
+
+  .dashboard-sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+    background: rgba(0,0,0,0.62);
+    backdrop-filter: blur(6px);
+  }
+
+  .dashboard-sidebar-backdrop.open {
+    display: block;
   }
 
   .dashboard-stat-grid {
