@@ -88,6 +88,11 @@ const issueError = document.getElementById("issueError");
 const viewIssueModal = document.getElementById("viewIssueModal");
 const viewIssueNote = document.getElementById("viewIssueNote");
 
+const labelInstructionsModal = document.getElementById("labelInstructionsModal");
+const confirmLabelDownloadBtn = document.getElementById("confirmLabelDownloadBtn");
+
+let pendingLabelUrl = "";
+
 function safeSection(section) {
   return dashboardConfig[section] ? section : "quick";
 }
@@ -575,6 +580,7 @@ function renderWtbOpenOffersRows(offers) {
     </tr>
   `).join("");
 }
+
 function renderReadyToShipRows(items) {
   dashboardTableBody
     .closest(".dashboard-table")
@@ -598,24 +604,23 @@ function renderReadyToShipRows(items) {
       actions: (item) => `
         ${
           item.label_url
-            ? `<a
-                class="dashboard-mobile-btn dashboard-mobile-download-btn"
-                href="${escapeHtml(item.label_url)}"
-                target="_blank"
-                rel="noopener"
-                title="Download label"
-              >
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-                  <path
-                    d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="3"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </a>`
+            ? `<button
+                  class="dashboard-mobile-btn dashboard-mobile-download-btn"
+                  type="button"
+                  data-label-url="${escapeHtml(item.label_url)}"
+                  title="Download label"
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                    <path
+                      d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="3"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>`
             : ""
         }
         ${
@@ -653,11 +658,10 @@ function renderReadyToShipRows(items) {
           ${
             item.label_url
               ? `
-                <a
+                <button
                   class="dashboard-download-btn"
-                  href="${escapeHtml(item.label_url)}"
-                  target="_blank"
-                  rel="noopener"
+                  type="button"
+                  data-label-url="${escapeHtml(item.label_url)}"
                   title="Download label"
                 >
                   <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
@@ -670,7 +674,7 @@ function renderReadyToShipRows(items) {
                       stroke-linejoin="round"
                     />
                   </svg>
-                </a>
+                </button>
               `
               : ""
           }
@@ -1823,10 +1827,17 @@ dashboardStatsToggle?.addEventListener("click", () => {
 
 dashboardTableBody.addEventListener("click", async (event) => {
   const issueButton = event.target.closest("[data-report-issue-id]");
+  const labelButton = event.target.closest("[data-label-url]");
   const viewIssueButton = event.target.closest("[data-issue-note]");
   const solveIssueButton = event.target.closest("[data-solve-issue-id]");
   const editButton = event.target.closest("[data-edit-offer-id]");
   const deleteButton = event.target.closest("[data-delete-offer-id]");
+
+  if (labelButton) {
+    pendingLabelUrl = labelButton.dataset.labelUrl || "";
+    labelInstructionsModal?.classList.remove("hidden");
+    return;
+  }
   
   if (issueButton) {
     openIssueModal(issueButton.dataset.reportIssueId);
@@ -1886,6 +1897,22 @@ document.querySelectorAll("[data-issue-close]").forEach((button) => {
 
 document.querySelectorAll("[data-view-issue-close]").forEach((button) => {
   button.addEventListener("click", closeViewIssueModal);
+});
+
+document.querySelectorAll("[data-label-instructions-close]").forEach((button) => {
+  button.addEventListener("click", () => {
+    labelInstructionsModal?.classList.add("hidden");
+    pendingLabelUrl = "";
+  });
+});
+
+confirmLabelDownloadBtn?.addEventListener("click", () => {
+  if (!pendingLabelUrl) return;
+
+  window.open(pendingLabelUrl, "_blank", "noopener");
+
+  labelInstructionsModal?.classList.add("hidden");
+  pendingLabelUrl = "";
 });
 
 editOfferForm.addEventListener("submit", async (event) => {
