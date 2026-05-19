@@ -1820,9 +1820,19 @@
   }
 
   .dashboard-stats-arrow {
-    font-size: 30px;
-    font-weight: 900;
-    line-height: 0.8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  
+    width: 26px;
+    height: 26px;
+  
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1;
+  
+    color: rgba(255,255,255,0.92);
+  
     transform-origin: center;
     transition: transform 0.18s ease;
   }
