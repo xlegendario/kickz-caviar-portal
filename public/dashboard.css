@@ -1938,7 +1938,7 @@
   .dashboard-mobile-main {
     flex: 1;
     min-width: 0;
-    min-height: 90px;
+    min-height: 96px;
   
     display: flex;
     flex-direction: column;
