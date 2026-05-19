@@ -1941,13 +1941,12 @@
   }
 
   .dashboard-mobile-product {
-    min-height: 38px;
     color: white;
     font-size: 12px;
     font-weight: 800;
     line-height: 1.24;
     white-space: normal;
-    overflow: hidden;
+    overflow: visible;
   }
 
   .dashboard-mobile-size {
