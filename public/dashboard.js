@@ -521,7 +521,7 @@ function renderWtbOpenOffersRows(offers) {
                 
                   <div class="dashboard-mobile-actions">
                     <button
-                      class="dashboard-mobile-btn dashboard-mobile-discord-btn"
+                      class="dashboard-mobile-btn dashboard-mobile-edit-btn"
                       type="button"
                       data-edit-offer-id="${escapeHtml(offer.id)}"
                       data-order-record-id="${escapeHtml(offer.order_record_id)}"
@@ -844,31 +844,6 @@ function renderHistorySalesRows(items) {
     return;
   }
 
-  renderOpenClaimsRows(
-    items.map((item) => ({
-      ...item,
-      discord_url: ""
-    }))
-  );
-
-  dashboardTableBody.querySelectorAll("tr").forEach((row, index) => {
-    const item = items[index];
-    const actionCell = row.querySelector("td:last-child");
-
-    if (!actionCell || !item) return;
-
-    actionCell.innerHTML = `
-      <button
-        class="dashboard-issue-btn"
-        type="button"
-        data-report-issue-id="${escapeHtml(item.id)}"
-      >
-        ISSUE
-      </button>
-    `;
-  });
-}
-function renderHistorySalesRows(items) {
   renderOpenClaimsRows(
     items.map((item) => ({
       ...item,
