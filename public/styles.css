@@ -893,10 +893,11 @@ body {
 
 @media (max-width: 900px) {
   .topbar {
-    flex-direction: column;
+    flex-direction: row;
     height: auto;
     gap: 18px;
     padding: 20px;
+    flex-wrap: wrap;
   }
 
   .page {
@@ -1398,4 +1399,29 @@ body {
     border-radius: 14px;
     font-size: 13px;
   }
+}
+
+@media (max-width: 620px) {
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .brand {
+    order: 1;
+  }
+
+  .header-auth {
+    order: 2;
+    margin-left: auto;
+  }
+
+  .main-toggle {
+    order: 3;
+    width: 100%;
+    margin-top: 8px;
+  }
+
 }
