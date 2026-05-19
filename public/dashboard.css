@@ -2057,6 +2057,16 @@
       inset 0 1px 0 rgba(255,255,255,0.32);
   }
 
+  .dashboard-mobile-issue-btn {
+    background: linear-gradient(180deg, #fff27a, #f0a500);
+    color: #050505;
+    border-color: rgba(255,255,255,0.18);
+
+    box-shadow:
+      0 6px 14px rgba(255,204,0,0.18),
+      inset 0 1px 0 rgba(255,255,255,0.32);
+  }
+
   .dashboard-mobile-discord-btn {
     background: linear-gradient(180deg, #5865F2, #404EED);
     color: #ffffff;
@@ -2202,5 +2212,13 @@
     line-height: 1.35;
     color: rgba(255,255,255,0.55);
     white-space: normal !important;
+  }
+}
+
+@media (max-width: 768px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
   }
 }
