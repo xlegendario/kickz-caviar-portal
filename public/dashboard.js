@@ -908,7 +908,7 @@ function renderHistorySalesRows(items) {
       secondaryValue: (item) => item.date,
       actions: (item) => `
         <button
-          class="dashboard-mobile-btn dashboard-mobile-discord-btn"
+          class="dashboard-mobile-btn dashboard-mobile-issue-btn"
           type="button"
           data-report-issue-id="${escapeHtml(item.id)}"
         >
