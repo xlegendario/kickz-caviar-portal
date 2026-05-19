@@ -1995,3 +1995,11 @@
     font-weight: 800;
   }
 }
+
+.seller-dashboard.auth-only .dashboard-topbar,
+.seller-dashboard.auth-only .dashboard-content,
+.seller-dashboard.auth-only .dashboard-sidebar,
+.seller-dashboard.auth-only .dashboard-sidebar-backdrop,
+.seller-dashboard.auth-only .dashboard-mobile-menu-btn {
+  display: none !important;
+}
