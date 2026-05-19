@@ -1940,9 +1940,9 @@
   .dashboard-mobile-product {
     min-height: 38px;
     color: white;
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 800;
-    line-height: 1.32;
+    line-height: 1.24;
     white-space: normal;
     overflow: hidden;
     display: -webkit-box;
@@ -1990,7 +1990,7 @@
   
   .dashboard-mobile-meta-value {
     color: white;
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 900;
   }
 
@@ -1998,6 +1998,7 @@
     display: flex;
     align-items: center;
     justify-content: flex-end;
+    gap: 8px;
     margin-top: 0;
     flex-shrink: 0;
   }
