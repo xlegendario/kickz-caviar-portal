@@ -421,7 +421,7 @@ function renderWtbOpenOffersRows(offers) {
                     data-current-offer="${escapeHtml(offer.offer_raw)}"
                     data-current-lowest="${escapeHtml(offer.current_lowest || "-")}"
                   >
-                    Edit Offer
+                    Edit
                   </button>
                 </div>
               </div>
