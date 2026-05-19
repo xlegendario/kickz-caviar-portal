@@ -250,21 +250,84 @@ function renderStats() {
   const statsPanel = document.querySelector(".dashboard-stats-panel");
 
   if (window.innerWidth <= 768) {
-    statsPanel?.classList.toggle("open", statsOpen);
-  } else {
-    statsPanel?.classList.add("open");
-  }
-  
-  const cards = dashboardConfig[activeSection].tabs;
 
-  dashboardStats.innerHTML = cards.map((tab) => `
-    <article class="dashboard-stat-card ${tab.key === activeTab ? "active" : ""}">
-      <div class="dashboard-stat-label">${tab.label}</div>
-      <div class="dashboard-stat-value">
-        ${dashboardCountsCache[activeSection]?.[tab.key] || 0}
-      </div>
-    </article>
+  dashboardTableBody.innerHTML = offers.map((offer) => `
+    <tr>
+      <td>
+
+        <article class="dashboard-mobile-card">
+
+          <div class="dashboard-mobile-card-top">
+
+            <div
+              class="dashboard-mobile-status ${
+                offer.status === "Lowest"
+                  ? "lowest"
+                  : "beaten"
+              }"
+            ></div>
+
+            <div class="dashboard-mobile-main">
+
+              <div class="dashboard-mobile-product">
+                ${escapeHtml(offer.product || "-")}
+              </div>
+
+              <div class="dashboard-mobile-size">
+                Size: ${escapeHtml(offer.size || "-")}
+              </div>
+
+              <div class="dashboard-mobile-prices">
+
+                <div class="dashboard-mobile-price-box">
+                  <div class="dashboard-mobile-price-label">
+                    Your Offer
+                  </div>
+
+                  <div class="dashboard-mobile-price-value">
+                    ${escapeHtml(offer.offer || "-")}
+                  </div>
+                </div>
+
+                <div class="dashboard-mobile-price-box">
+                  <div class="dashboard-mobile-price-label">
+                    Current Lowest
+                  </div>
+
+                  <div class="dashboard-mobile-price-value">
+                    ${escapeHtml(offer.current_lowest || "-")}
+                  </div>
+                </div>
+
+              </div>
+
+              <div class="dashboard-mobile-actions">
+
+                <button
+                  class="dashboard-mobile-btn"
+                  type="button"
+                  data-edit-offer-id="${escapeHtml(offer.id)}"
+                  data-order-record-id="${escapeHtml(offer.order_record_id)}"
+                  data-vat-type="${escapeHtml(offer.vat_type)}"
+                  data-current-offer="${escapeHtml(offer.offer_raw)}"
+                  data-current-lowest="${escapeHtml(offer.current_lowest || "-")}"
+                >
+                  Edit Offer
+                </button>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        </article>
+
+      </td>
+    </tr>
   `).join("");
+
+  return;
 }
 
 function escapeHtml(value) {
