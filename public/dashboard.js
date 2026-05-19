@@ -387,16 +387,28 @@ function renderWtbOpenOffersRows(offers) {
                 <div class="dashboard-mobile-product">${escapeHtml(offer.product || "-")}</div>
                 <div class="dashboard-mobile-size">Size: ${escapeHtml(offer.size || "-")}</div>
 
-                <div class="dashboard-mobile-prices">
-                  <div class="dashboard-mobile-price-box">
-                    <div class="dashboard-mobile-price-label">Your Offer</div>
-                    <div class="dashboard-mobile-price-value">${escapeHtml(offer.offer || "-")}</div>
-                  </div>
+                <div class="dashboard-mobile-meta">
 
-                  <div class="dashboard-mobile-price-box">
-                    <div class="dashboard-mobile-price-label">Current Lowest</div>
-                    <div class="dashboard-mobile-price-value">${escapeHtml(offer.current_lowest || "-")}</div>
+                  <div class="dashboard-mobile-meta-item">
+                    <div class="dashboard-mobile-meta-label">
+                      Offer
+                    </div>
+                
+                    <div class="dashboard-mobile-meta-value">
+                      ${escapeHtml(offer.offer || "-")}
+                    </div>
                   </div>
+                
+                  <div class="dashboard-mobile-meta-item">
+                    <div class="dashboard-mobile-meta-label">
+                      Lowest
+                    </div>
+                
+                    <div class="dashboard-mobile-meta-value">
+                      ${escapeHtml(offer.current_lowest || "-")}
+                    </div>
+                  </div>
+                
                 </div>
 
                 <div class="dashboard-mobile-actions">
