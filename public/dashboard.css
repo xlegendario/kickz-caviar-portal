@@ -2008,3 +2008,47 @@
 .seller-dashboard.auth-only .dashboard-mobile-menu-btn {
   display: none !important;
 }
+
+@media (max-width: 768px) {
+  .dashboard-table.mobile-cards {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: fixed !important;
+    border-collapse: separate !important;
+  }
+
+  .dashboard-table.mobile-cards tbody,
+  .dashboard-table.mobile-cards tr,
+  .dashboard-table.mobile-cards td {
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .dashboard-table.mobile-cards td {
+    padding: 0 !important;
+    border-bottom: none !important;
+    white-space: normal !important;
+    overflow: hidden !important;
+  }
+
+  .dashboard-table.mobile-cards tbody {
+    padding: 14px !important;
+  }
+
+  .dashboard-mobile-card {
+    max-width: 100% !important;
+  }
+
+  .dashboard-mobile-main,
+  .dashboard-mobile-product {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .dashboard-mobile-product {
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+}
