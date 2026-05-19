@@ -1755,7 +1755,9 @@ function openIssueModal(inventoryId) {
   issueNotes.value = "";
 
   issueModal.classList.remove("hidden");
-  issueNotes.focus();
+  if (window.innerWidth > 768) {
+    issueNotes.focus();
+  }
 }
 
 function closeIssueModal() {
