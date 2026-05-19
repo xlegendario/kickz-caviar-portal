@@ -337,6 +337,18 @@ function renderMobileOrderCards(items, options = {}) {
                         ${escapeHtml(secondaryValue(item) || "-")}
                       </div>
                     </div>
+                    ${
+                      options.thirdLabel
+                        ? `
+                          <div class="dashboard-mobile-meta-item">
+                            <div class="dashboard-mobile-meta-label">${escapeHtml(options.thirdLabel)}</div>
+                            <div class="dashboard-mobile-meta-value">
+                              ${escapeHtml(options.thirdValue(item) || "-")}
+                            </div>
+                          </div>
+                        `
+                        : ""
+                    }
 
                   </div>
 
@@ -405,7 +417,9 @@ function renderWtbAcceptedRows(items) {
       primaryLabel: "Offer",
       primaryValue: (item) => item.offer,
       secondaryLabel: "Date",
-      secondaryValue: (item) => item.date
+      secondaryValue: (item) => item.date,
+      thirdLabel: "Status",
+      thirdValue: () => "Processing..."
     });
     return;
   }
