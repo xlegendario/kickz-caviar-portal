@@ -2021,6 +2021,12 @@
   
     font-size: 13px;
     font-weight: 800;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    white-space: nowrap;
   }
 }
 
