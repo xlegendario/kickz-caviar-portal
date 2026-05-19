@@ -2226,42 +2226,15 @@
 @media (max-width: 768px) {
   .dashboard-topbar {
     display: grid !important;
-    grid-template-columns: auto 1fr auto !important;
+    grid-template-columns: 1fr auto !important;
     grid-template-areas:
-      "menu title account" !important;
+      "title title"
+      "menu account" !important;
 
     align-items: center !important;
-    gap: 14px !important;
+    gap: 22px 14px !important;
 
     padding: 34px 22px 28px !important;
-  }
-
-  .dashboard-mobile-menu-btn {
-    grid-area: menu !important;
-
-    width: 74px !important;
-    min-width: 74px !important;
-    height: 64px !important;
-    padding: 0 !important;
-
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-
-    border-radius: 22px !important;
-    border: 1px solid rgba(255, 204, 0, 0.18) !important;
-    background: #151515 !important;
-
-    font-size: 0 !important;
-    color: #d4af37 !important;
-  }
-
-  .dashboard-mobile-menu-btn::before {
-    content: "☰";
-    font-size: 28px;
-    line-height: 1;
-    font-weight: 400;
-    color: #d4af37;
   }
 
   .dashboard-topbar > div:first-of-type {
@@ -2270,17 +2243,48 @@
   }
 
   .dashboard-topbar h1 {
-    font-size: 46px !important;
+    font-size: 62px !important;
+    line-height: 0.94 !important;
+    letter-spacing: -2px !important;
   }
 
   .dashboard-account {
     grid-area: account !important;
     width: auto !important;
-    margin-left: 0 !important;
+    margin-left: auto !important;
   }
 
   .dashboard-account > div {
     display: none !important;
+  }
+
+  .dashboard-mobile-menu-btn {
+    grid-area: menu !important;
+
+    width: 74px !important;
+    height: 64px !important;
+    min-width: 74px !important;
+    padding: 0 !important;
+
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+
+    border-radius: 22px !important;
+    border: 1px solid rgba(255, 204, 0, 0.30) !important;
+    background: #151515 !important;
+
+    font-size: 0 !important;
+    color: #ffcc00 !important;
+  }
+
+  .dashboard-mobile-menu-btn::before {
+    content: "☰";
+    font-size: 34px;
+    line-height: 1;
+    font-weight: 700;
+    color: #ffcc00;
+    transform: translateY(-1px);
   }
 
   .dashboard-logout-btn {
