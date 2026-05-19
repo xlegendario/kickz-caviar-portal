@@ -2243,9 +2243,9 @@
   }
 
   .dashboard-topbar h1 {
-    font-size: 62px !important;
-    line-height: 0.94 !important;
-    letter-spacing: -2px !important;
+    font-size: 46px !important;
+    line-height: 0.95 !important;
+    letter-spacing: -1.4px !important;
   }
 
   .dashboard-account {
@@ -2260,37 +2260,36 @@
 
   .dashboard-mobile-menu-btn {
     grid-area: menu !important;
-
-    width: 74px !important;
-    height: 64px !important;
-    min-width: 74px !important;
+  
+    width: 62px !important;
+    height: 52px !important;
+    min-width: 62px !important;
     padding: 0 !important;
-
+  
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
-
-    border-radius: 22px !important;
-    border: 1px solid rgba(255, 204, 0, 0.30) !important;
+  
+    border-radius: 18px !important;
+    border: 1px solid rgba(255, 204, 0, 0.26) !important;
     background: #151515 !important;
-
+  
     font-size: 0 !important;
     color: #ffcc00 !important;
   }
 
   .dashboard-mobile-menu-btn::before {
     content: "☰";
-    font-size: 34px;
+    font-size: 30px;
     line-height: 1;
-    font-weight: 700;
+    font-weight: 400;
     color: #ffcc00;
     transform: translateY(-1px);
   }
-
   .dashboard-logout-btn {
-    height: 64px !important;
-    min-height: 64px !important;
-    padding: 0 24px !important;
-    border-radius: 22px !important;
+    height: 52px !important;
+    min-height: 52px !important;
+    padding: 0 22px !important;
+    border-radius: 18px !important;
   }
 }
