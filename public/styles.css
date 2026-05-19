@@ -1424,4 +1424,32 @@ body {
     border-radius: 14px;
     font-size: 13px;
   }
+
+  .offer-vat-options,
+  .claim-vat-options,
+  .vat-options {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    width: 100%;
+  }
+  
+  .offer-vat-option,
+  .claim-vat-option,
+  .vat-option {
+    min-width: 0 !important;
+    width: 100% !important;
+    padding: 0 8px !important;
+    height: 74px !important;
+    border-radius: 18px !important;
+    font-size: 14px !important;
+  }
+
+  .modal-card,
+  .offer-modal,
+  .claim-modal {
+    width: calc(100vw - 32px) !important;
+    max-width: 100% !important;
+    overflow-x: hidden;
+  }
 }
