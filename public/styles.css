@@ -1462,4 +1462,18 @@ body {
   .vat-option::before {
     display: none !important;
   }
+
+  .deal-time,
+  .deal-status {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: break-word;
+    text-align: right;
+    line-height: 1.1;
+    font-size: 11px;
+  }
+
+  .deal-top {
+    align-items: flex-start;
+  }
 }
