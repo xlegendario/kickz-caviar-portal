@@ -1492,4 +1492,20 @@ body {
     text-align: right;
     line-height: 1.05;
   }
+
+  .deals-loading,
+  .loading-card,
+  .deal-loading-card {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+  
+  .deals-loading span,
+  .loading-card span,
+  .deal-loading-card span {
+    width: 100%;
+    line-height: 1.2;
+  }
 }
