@@ -2028,6 +2028,61 @@
     text-decoration: none;
     white-space: nowrap;
   }
+
+  .dashboard-mobile-edit-btn {
+    background: linear-gradient(180deg, #1f1f1f, #131313);
+    color: white;
+    border-color: rgba(255,255,255,0.10);
+  }
+
+  .dashboard-mobile-download-btn {
+    width: 42px;
+    min-width: 42px;
+    padding: 0;
+
+    background: linear-gradient(180deg, #f7c843, #e3ad1f);
+    color: #050505;
+
+    border-color: rgba(255,255,255,0.18);
+
+    box-shadow:
+      0 6px 14px rgba(247,200,67,0.18),
+      inset 0 1px 0 rgba(255,255,255,0.32);
+  }
+
+  .dashboard-mobile-discord-btn {
+    background: linear-gradient(180deg, #5865F2, #404EED);
+    color: #ffffff;
+
+    border-color: rgba(255,255,255,0.10);
+
+    box-shadow:
+      0 6px 14px rgba(64,78,237,0.18),
+      inset 0 1px 0 rgba(255,255,255,0.12);
+  }
+
+  .dashboard-mobile-track-btn {
+    background: linear-gradient(180deg, #f3f3f3, #d6d6d6);
+    color: #050505;
+
+    border-color: rgba(255,255,255,0.18);
+
+    box-shadow:
+      0 6px 14px rgba(255,255,255,0.08),
+      inset 0 1px 0 rgba(255,255,255,0.65);
+  }
+
+  .dashboard-mobile-view-btn {
+    background: linear-gradient(180deg, #f3f3f3, #d6d6d6);
+    color: #050505;
+    border-color: rgba(255,255,255,0.18);
+  }
+
+  .dashboard-mobile-solved-btn {
+    background: linear-gradient(180deg, #58d86a, #2ca43c);
+    color: white;
+    border-color: rgba(255,255,255,0.10);
+  }
 }
 
 .seller-dashboard.auth-only .dashboard-topbar,
