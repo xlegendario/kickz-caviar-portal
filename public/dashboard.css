@@ -2071,3 +2071,25 @@
     white-space: normal !important;
   }
 }
+
+@media (max-width: 768px) {
+  .dashboard-offer-action-row {
+    display: flex;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .dashboard-offer-action-row .dashboard-locked-vat {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .dashboard-offer-save-btn {
+    width: auto !important;
+    min-width: 104px;
+    height: 58px !important;
+    margin-top: 0 !important;
+    padding: 0 18px !important;
+    flex-shrink: 0;
+  }
+}
