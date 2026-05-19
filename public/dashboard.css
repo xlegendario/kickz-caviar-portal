@@ -1820,9 +1820,10 @@
   }
 
   .dashboard-stats-arrow {
-    font-size: 24px;
+    font-size: 30px;
     font-weight: 900;
-    line-height: 1;
+    line-height: 0.8;
+    transform-origin: center;
     transition: transform 0.18s ease;
   }
   
@@ -1831,7 +1832,7 @@
   }
   
   .dashboard-stats-panel:not(.open) .dashboard-stats-arrow {
-    transform: rotate(180deg);
+    transform: rotate(0deg);
   }
 
   .dashboard-stats-panel:not(.open) .dashboard-stat-grid {
