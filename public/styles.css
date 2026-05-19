@@ -1246,8 +1246,14 @@ body {
   }
 
   .profile-btn {
-    height: 42px;
-    width: 42px;
+    height: 72px;
+    width: 72px;
+    border-radius: 22px;
+  }
+  
+  .profile-btn svg {
+    width: 30px;
+    height: 30px;
   }
 
   .toggle-btn {
@@ -1474,6 +1480,16 @@ body {
   }
 
   .deal-top {
-    align-items: flex-start;
+    align-items: center;
+  }
+
+  .deal-time {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-height: 26px;
+    max-width: 72px;
+    text-align: right;
+    line-height: 1.05;
   }
 }
