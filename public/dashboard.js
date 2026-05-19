@@ -814,6 +814,82 @@ const historyIssueColumns = [
   "Action"
 ];
 
+function renderHistoryIssuesRows(items) {
+  dashboardTableBody
+    .closest(".dashboard-table")
+    ?.classList.remove("open-offers-table");
+
+  dashboardTableHead.innerHTML = historyIssueColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    renderTableShell();
+    return;
+  }
+
+  if (isMobileDashboard()) {
+    renderMobileOrderCards(items, {
+      primaryLabel: "Payout",
+      primaryValue: (item) => item.payout,
+      secondaryLabel: "Status",
+      secondaryValue: (item) => item.issue_status,
+      actions: (item) => `
+        <button
+          class="dashboard-mobile-btn dashboard-mobile-view-btn"
+          type="button"
+          data-issue-note="${escapeHtml(item.issue_notes || "")}"
+        >
+          View
+        </button>
+
+        <button
+          class="dashboard-mobile-btn dashboard-mobile-solved-btn"
+          type="button"
+          data-solve-issue-id="${escapeHtml(item.id)}"
+        >
+          Solved
+        </button>
+      `
+    });
+    return;
+  }
+
+  setMobileTableMode(false);
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${escapeHtml(item.product || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.payout || "-")}</td>
+      <td>${escapeHtml(item.vat_type || "-")}</td>
+      <td>${escapeHtml(item.date || "-")}</td>
+      <td>
+        <button
+          class="dashboard-view-btn"
+          type="button"
+          data-issue-note="${escapeHtml(item.issue_notes || "")}"
+        >
+          VIEW
+        </button>
+      </td>
+      <td>${escapeHtml(item.issue_status || "-")}</td>
+      <td>
+        <button
+          class="dashboard-solve-btn"
+          type="button"
+          data-solve-issue-id="${escapeHtml(item.id)}"
+        >
+          SOLVED
+        </button>
+      </td>
+    </tr>
+  `).join("");
+}
+
 function renderHistorySalesRows(items) {
   if (isMobileDashboard()) {
     dashboardTableHead.innerHTML = skeletonColumns
