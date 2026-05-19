@@ -1319,8 +1319,12 @@ body {
     width: 100%;
     max-width: 100%;
     min-width: 0;
-    height: 48px;
+    height: 58px;
     font-size: 16px;
+  }
+
+  .search-input {
+    padding: 0 22px;
   }
 
   html,
