@@ -1246,14 +1246,14 @@ body {
   }
 
   .profile-btn {
-    height: 72px;
-    width: 72px;
-    border-radius: 22px;
+    height: 62px;
+    width: 62px;
+    border-radius: 18px;
   }
   
   .profile-btn svg {
-    width: 30px;
-    height: 30px;
+    width: 26px;
+    height: 26px;
   }
 
   .toggle-btn {
