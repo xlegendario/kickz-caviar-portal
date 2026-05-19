@@ -206,7 +206,7 @@ let dashboardCountsCache = {
 };
 
 let quickCountsCache = {};
-let statsOpen = window.innerWidth > 768;
+let statsOpen = false;
 
 async function loadDashboardCounts() {
   if (!dashboardSeller) return;
@@ -247,10 +247,12 @@ async function loadDashboardCounts() {
 }
 
 function renderStats() {
+  const statsPanel = document.querySelector(".dashboard-stats-panel");
+
   if (window.innerWidth <= 768) {
-    document
-      .querySelector(".dashboard-stats-panel")
-      ?.classList.toggle("open", statsOpen);
+    statsPanel?.classList.toggle("open", statsOpen);
+  } else {
+    statsPanel?.classList.add("open");
   }
   
   const cards = dashboardConfig[activeSection].tabs;
