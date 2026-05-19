@@ -521,7 +521,7 @@ function renderWtbOpenOffersRows(offers) {
                 
                   <div class="dashboard-mobile-actions">
                     <button
-                      class="dashboard-mobile-btn"
+                      class="dashboard-mobile-btn dashboard-mobile-discord-btn"
                       type="button"
                       data-edit-offer-id="${escapeHtml(offer.id)}"
                       data-order-record-id="${escapeHtml(offer.order_record_id)}"
@@ -598,12 +598,36 @@ function renderReadyToShipRows(items) {
       actions: (item) => `
         ${
           item.label_url
-            ? `<a class="dashboard-mobile-btn" href="${escapeHtml(item.label_url)}" target="_blank" rel="noopener">Download</a>`
+            ? `<a
+                class="dashboard-mobile-btn dashboard-mobile-download-btn"
+                href="${escapeHtml(item.label_url)}"
+                target="_blank"
+                rel="noopener"
+                title="Download label"
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                  <path
+                    d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="3"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </a>`
             : ""
         }
         ${
           item.discord_url
-            ? `<a class="dashboard-mobile-btn" href="${escapeHtml(item.discord_url)}" target="_blank" rel="noopener">Discord</a>`
+            ? `<a
+                class="dashboard-mobile-btn dashboard-mobile-discord-btn"
+                href="${escapeHtml(item.discord_url)}"
+                target="_blank"
+                rel="noopener"
+              >
+                Discord
+              </a>`
             : ""
         }
       `
@@ -700,12 +724,19 @@ function renderTrackingRows(items) {
       actions: (item) => `
         ${
           item.tracking_url
-            ? `<a class="dashboard-mobile-btn" href="${escapeHtml(item.tracking_url)}" target="_blank" rel="noopener">Track</a>`
+            ? `<a
+                class="dashboard-mobile-btn dashboard-mobile-track-btn"
+                href="${escapeHtml(item.tracking_url)}"
+                target="_blank"
+                rel="noopener"
+              >
+                Track
+              </a>`
             : ""
         }
         ${
           item.discord_url
-            ? `<a class="dashboard-mobile-btn" href="${escapeHtml(item.discord_url)}" target="_blank" rel="noopener">Discord</a>`
+            ? `<a class="dashboard-mobile-btn dashboard-mobile-discord-btn" href="${escapeHtml(item.discord_url)}" target="_blank" rel="noopener">Discord</a>`
             : ""
         }
       `
@@ -801,7 +832,7 @@ function renderHistorySalesRows(items) {
       secondaryValue: (item) => item.date,
       actions: (item) => `
         <button
-          class="dashboard-mobile-btn"
+          class="dashboard-mobile-btn dashboard-mobile-discord-btn"
           type="button"
           data-report-issue-id="${escapeHtml(item.id)}"
         >
@@ -885,7 +916,7 @@ function renderOpenClaimsRows(claims) {
       actions: (item) => `
         ${
           item.discord_url
-            ? `<a class="dashboard-mobile-btn" href="${escapeHtml(item.discord_url)}" target="_blank" rel="noopener">Discord</a>`
+            ? `<a class="dashboard-mobile-btn dashboard-mobile-discord-btn" href="${escapeHtml(item.discord_url)}" target="_blank" rel="noopener">Discord</a>`
             : ""
         }
       `
