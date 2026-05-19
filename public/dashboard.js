@@ -67,6 +67,9 @@ const dashboardTableHead = document.getElementById("dashboardTableHead");
 const dashboardTableBody = document.getElementById("dashboardTableBody");
 const dashboardRefreshBtn = document.getElementById("dashboardRefreshBtn");
 const dashboardSearchInput = document.getElementById("dashboardSearchInput");
+const dashboardMobileMenuBtn = document.getElementById("dashboardMobileMenuBtn");
+const dashboardSidebarBackdrop = document.getElementById("dashboardSidebarBackdrop");
+const dashboardSidebar = document.querySelector(".dashboard-sidebar");
 const editOfferModal = document.getElementById("editOfferModal");
 const editOfferForm = document.getElementById("editOfferForm");
 const editOfferOrderRecordId = document.getElementById("editOfferOrderRecordId");
@@ -108,6 +111,16 @@ function renderSubnav() {
 }
 
 function bindNavigation() {
+    dashboardMobileMenuBtn?.addEventListener("click", () => {
+    dashboardSidebar?.classList.add("open");
+    dashboardSidebarBackdrop?.classList.add("open");
+  });
+
+  dashboardSidebarBackdrop?.addEventListener("click", () => {
+    dashboardSidebar?.classList.remove("open");
+    dashboardSidebarBackdrop?.classList.remove("open");
+  });
+  
   document.querySelectorAll("[data-dashboard-section]").forEach((button) => {
     button.addEventListener("click", () => {
       const section = safeSection(button.dataset.dashboardSection);
@@ -121,6 +134,9 @@ function bindNavigation() {
   document.querySelectorAll(".dashboard-subnav-btn").forEach((button) => {
     button.addEventListener("click", () => {
       setActiveView(button.dataset.section, button.dataset.tab);
+  
+      dashboardSidebar?.classList.remove("open");
+      dashboardSidebarBackdrop?.classList.remove("open");
     });
   });
 }
