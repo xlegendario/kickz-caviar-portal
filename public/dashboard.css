@@ -2004,8 +2004,13 @@
     align-items: stretch;
     justify-content: flex-end;
     gap: 6px;
-    margin-top: -34px;
+    margin-top: 0;
+    transform: translateY(8px);
     flex-shrink: 0;
+  }
+
+  .dashboard-mobile-actions:has(.dashboard-mobile-btn:only-child) {
+    transform: translateY(0);
   }
 
   .dashboard-mobile-btn {
