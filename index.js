@@ -241,6 +241,7 @@ async function loadOrderFieldsMap(orderRecordIds) {
           "Partner or Seller",
           "Lowest Offer Seller ID",
           "WTB Created Channel ID",
+          "Channel Created?",
           "Shipping Label URL (Permanent)",
           "Shipping Label",
           "Tracking URL"
@@ -376,10 +377,12 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
     const acceptedOffers = filteredOffers.filter((record) => {
       const linkedOrderId = firstLinkedRecordId(record.fields?.["Linked Orders"]);
       const orderFields = orderMap.get(linkedOrderId) || {};
-
+      const channelCreated = orderFields["Channel Created?"] === true;
+    
       return (
         displayValue(orderFields["Partner or Seller"]) === "Seller" &&
-        displayValue(orderFields["Lowest Offer Seller ID"]) === sellerCode
+        displayValue(orderFields["Lowest Offer Seller ID"]) === sellerCode &&
+        !channelCreated
       );
     });
 
@@ -499,8 +502,73 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
       };
     });
 
-    const sortedItems = sortDashboardItemsNewestFirst(items);
-
+    const offerRecords = await airtable(SELLER_OFFERS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Linked Orders",
+          "Seller Offer",
+          "Offer VAT Type",
+          "Offer Date",
+          "Fulfillment Status",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand"
+        ],
+        filterByFormula: `{Fulfillment Status} = 'Confirmed'`
+      })
+      .all();
+    
+    const filteredOffers = offerRecords.filter((record) =>
+      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+    );
+    
+    const offerLinkedOrderIds = [
+      ...new Set(
+        filteredOffers
+          .map((record) => firstLinkedRecordId(record.fields?.["Linked Orders"]))
+          .filter(Boolean)
+      )
+    ];
+    
+    const offerOrderMap = await loadOrderFieldsMap(offerLinkedOrderIds);
+    
+    const channelCreatedOffers = filteredOffers
+      .filter((record) => {
+        const linkedOrderId = firstLinkedRecordId(record.fields?.["Linked Orders"]);
+        const orderFields = offerOrderMap.get(linkedOrderId) || {};
+    
+        return orderFields["Channel Created?"] === true;
+      })
+      .map((record) => {
+        const f = record.fields || {};
+        const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+        const orderFields = offerOrderMap.get(linkedOrderId) || {};
+        const channelId = displayValue(orderFields["WTB Created Channel ID"]);
+    
+        return {
+          id: record.id,
+          order_id: displayValue(orderFields["Order ID"]),
+          product: displayValue(f["Product Name"] || orderFields["Product Name"]),
+          sku: displayValue(f["SKU"] || orderFields["SKU"]),
+          size: displayValue(f["Size"] || orderFields["Size"]),
+          brand: displayValue(f["Brand"] || orderFields["Brand"]),
+          payout: moneyWholeValue(f["Seller Offer"]),
+          vat_type: displayValue(f["Offer VAT Type"]),
+          date: formatDateEU(f["Offer Date"]),
+          raw_date: f["Offer Date"],
+          discord_url: channelId
+            ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
+            : ""
+        };
+      });
+    
+    const sortedItems = sortDashboardItemsNewestFirst([
+      ...items,
+      ...channelCreatedOffers
+    ]);
+    
     res.json({
       count: sortedItems.length,
       items: sortedItems
