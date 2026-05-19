@@ -387,26 +387,38 @@ function renderWtbOpenOffersRows(offers) {
                 <div class="dashboard-mobile-product">${escapeHtml(offer.product || "-")}</div>
                 <div class="dashboard-mobile-size">Size: ${escapeHtml(offer.size || "-")}</div>
 
-                <div class="dashboard-mobile-meta">
+                <div class="dashboard-mobile-bottom-row">
 
-                  <div class="dashboard-mobile-meta-item">
-                    <div class="dashboard-mobile-meta-label">
-                      Offer
+                  <div class="dashboard-mobile-meta">
+                
+                    <div class="dashboard-mobile-meta-item">
+                      <div class="dashboard-mobile-meta-label">Offer</div>
+                      <div class="dashboard-mobile-meta-value">
+                        ${escapeHtml(offer.offer || "-")}
+                      </div>
                     </div>
                 
-                    <div class="dashboard-mobile-meta-value">
-                      ${escapeHtml(offer.offer || "-")}
+                    <div class="dashboard-mobile-meta-item">
+                      <div class="dashboard-mobile-meta-label">Lowest</div>
+                      <div class="dashboard-mobile-meta-value">
+                        ${escapeHtml(offer.current_lowest || "-")}
+                      </div>
                     </div>
+                
                   </div>
                 
-                  <div class="dashboard-mobile-meta-item">
-                    <div class="dashboard-mobile-meta-label">
-                      Lowest
-                    </div>
-                
-                    <div class="dashboard-mobile-meta-value">
-                      ${escapeHtml(offer.current_lowest || "-")}
-                    </div>
+                  <div class="dashboard-mobile-actions">
+                    <button
+                      class="dashboard-mobile-btn"
+                      type="button"
+                      data-edit-offer-id="${escapeHtml(offer.id)}"
+                      data-order-record-id="${escapeHtml(offer.order_record_id)}"
+                      data-vat-type="${escapeHtml(offer.vat_type)}"
+                      data-current-offer="${escapeHtml(offer.offer_raw)}"
+                      data-current-lowest="${escapeHtml(offer.current_lowest || "-")}"
+                    >
+                      Edit
+                    </button>
                   </div>
                 
                 </div>
