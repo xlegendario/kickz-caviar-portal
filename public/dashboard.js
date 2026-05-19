@@ -1399,6 +1399,8 @@ function syncAuthUi() {
     dashboardLoginPanel.classList.add("hidden");
     dashboardContent.classList.remove("hidden");
     dashboardLogoutBtn.classList.remove("hidden");
+    document.querySelector(".dashboard-mobile-menu-btn")?.classList.remove("hidden");
+    document.querySelector(".dashboard-account")?.classList.remove("hidden");
     document.getElementById("sellerDashboard")?.classList.remove("auth-only");
     document.querySelector(".dashboard-sidebar")?.classList.remove("hidden");
     document.querySelector(".dashboard-topbar")?.classList.remove("hidden");
@@ -1410,6 +1412,8 @@ function syncAuthUi() {
     dashboardLoginPanel.classList.remove("hidden");
     dashboardContent.classList.add("hidden");
     dashboardLogoutBtn.classList.add("hidden");
+    document.querySelector(".dashboard-mobile-menu-btn")?.classList.add("hidden");
+    document.querySelector(".dashboard-account")?.classList.add("hidden");
     document.getElementById("sellerDashboard")?.classList.add("auth-only");
     document.querySelector(".dashboard-sidebar")?.classList.add("hidden");
     document.querySelector(".dashboard-topbar")?.classList.add("hidden");
