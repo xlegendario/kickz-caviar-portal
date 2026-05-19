@@ -61,6 +61,7 @@ const dashboardLoginPassword = document.getElementById("dashboardLoginPassword")
 const dashboardLoginError = document.getElementById("dashboardLoginError");
 const dashboardForgotPasswordBtn = document.getElementById("dashboardForgotPasswordBtn");
 const dashboardStats = document.getElementById("dashboardStats");
+const dashboardStatsToggle = document.getElementById("dashboardStatsToggle");
 const dashboardSubtabTitle = document.getElementById("dashboardSubtabTitle");
 const dashboardSubtabDescription = document.getElementById("dashboardSubtabDescription");
 const dashboardTableHead = document.getElementById("dashboardTableHead");
@@ -205,6 +206,7 @@ let dashboardCountsCache = {
 };
 
 let quickCountsCache = {};
+let statsOpen = window.innerWidth > 768;
 
 async function loadDashboardCounts() {
   if (!dashboardSeller) return;
@@ -245,6 +247,12 @@ async function loadDashboardCounts() {
 }
 
 function renderStats() {
+  if (window.innerWidth <= 768) {
+    document
+      .querySelector(".dashboard-stats-panel")
+      ?.classList.toggle("open", statsOpen);
+  }
+  
   const cards = dashboardConfig[activeSection].tabs;
 
   dashboardStats.innerHTML = cards.map((tab) => `
@@ -1490,6 +1498,16 @@ async function handleDeleteOffer(button) {
     button.disabled = false;
   }
 }
+
+dashboardStatsToggle?.addEventListener("click", () => {
+  if (window.innerWidth > 768) return;
+
+  statsOpen = !statsOpen;
+
+  document
+    .querySelector(".dashboard-stats-panel")
+    ?.classList.toggle("open", statsOpen);
+});
 
 dashboardTableBody.addEventListener("click", async (event) => {
   const issueButton = event.target.closest("[data-report-issue-id]");
