@@ -378,88 +378,50 @@ function renderWtbOpenOffersRows(offers) {
   if (window.innerWidth <= 768) {
 
   dashboardTableBody.innerHTML = offers.map((offer) => `
-    <tr>
-      <td>
-
-        <article
-          class="dashboard-mobile-card"
-          data-offer-id="${escapeHtml(offer.id)}"
+  <tr>
+    <td>
+      <div
+        class="dashboard-status-dot ${
+          offer.status === "Lowest"
+            ? "dashboard-status-dot-lowest"
+            : "dashboard-status-dot-beaten"
+        }"
+      ></div>
+    </td>
+    <td>${escapeHtml(offer.order_id || "-")}</td>
+    <td>${escapeHtml(offer.product || "-")}</td>
+    <td>${escapeHtml(offer.sku || "-")}</td>
+    <td>${escapeHtml(offer.size || "-")}</td>
+    <td>${escapeHtml(offer.brand || "-")}</td>
+    <td>${escapeHtml(offer.offer || "-")}</td>
+    <td>${escapeHtml(offer.vat_type || "-")}</td>
+    <td>${escapeHtml(offer.current_lowest || "-")}</td>
+    <td>${escapeHtml(offer.date || "-")}</td>
+    <td>
+      <div class="dashboard-action-row">
+        <button
+          class="dashboard-edit-btn"
+          type="button"
+          data-edit-offer-id="${escapeHtml(offer.id)}"
+          data-order-record-id="${escapeHtml(offer.order_record_id)}"
+          data-vat-type="${escapeHtml(offer.vat_type)}"
+          data-current-offer="${escapeHtml(offer.offer_raw)}"
+          data-current-lowest="${escapeHtml(offer.current_lowest || "-")}"
         >
+          Edit
+        </button>
 
-          <div class="dashboard-mobile-card-top">
-
-            <div
-              class="dashboard-mobile-status ${
-                offer.status === "Lowest"
-                  ? "lowest"
-                  : "beaten"
-              }"
-            ></div>
-
-            <div class="dashboard-mobile-main">
-
-              <div class="dashboard-mobile-product">
-                ${escapeHtml(offer.product || "-")}
-              </div>
-
-              <div class="dashboard-mobile-size">
-                Size: ${escapeHtml(offer.size || "-")}
-              </div>
-
-              <div class="dashboard-mobile-prices">
-
-                <div class="dashboard-mobile-price-box">
-                  <div class="dashboard-mobile-price-label">
-                    Your Offer
-                  </div>
-
-                  <div class="dashboard-mobile-price-value">
-                    ${escapeHtml(offer.offer || "-")}
-                  </div>
-                </div>
-
-                <div class="dashboard-mobile-price-box">
-                  <div class="dashboard-mobile-price-label">
-                    Current Lowest
-                  </div>
-
-                  <div class="dashboard-mobile-price-value">
-                    ${escapeHtml(offer.current_lowest || "-")}
-                  </div>
-                </div>
-
-              </div>
-
-              <div class="dashboard-mobile-actions">
-
-                <button
-                  class="dashboard-mobile-btn"
-                  type="button"
-                  data-edit-offer-id="${escapeHtml(offer.id)}"
-                  data-order-record-id="${escapeHtml(offer.order_record_id)}"
-                  data-vat-type="${escapeHtml(offer.vat_type)}"
-                  data-current-offer="${escapeHtml(offer.offer_raw)}"
-                  data-current-lowest="${escapeHtml(offer.current_lowest || "-")}"
-                >
-                  Edit Offer
-                </button>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        </article>
-
-      </td>
-    </tr>
-  `).join("");
-
-  return;
-}
-
-dashboardTableBody.innerHTML = offers.map((offer) => `
+        <button
+          class="dashboard-delete-btn"
+          type="button"
+          data-delete-offer-id="${escapeHtml(offer.id)}"
+        >
+          Delete
+        </button>
+      </div>
+    </td>
+  </tr>
+`).join("");
 }
 
 function renderReadyToShipRows(items) {
