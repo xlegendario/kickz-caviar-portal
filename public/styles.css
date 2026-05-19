@@ -1317,22 +1317,35 @@ body {
     gap: 10px;
     width: 100%;
     max-width: 100%;
-    overflow: hidden;
   }
 
-  .search-input,
+  .search-input {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  
+    height: 58px !important;
+    min-height: 58px !important;
+    padding: 0 22px !important;
+  
+    font-size: 16px !important;
+    line-height: normal !important;
+  
+    border-radius: 18px !important;
+  
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  
   .toolbar-select {
     width: 100%;
     max-width: 100%;
     min-width: 0;
-    height: 64px;
+  
+    height: 58px;
     font-size: 16px;
-    border-radius: 20px;
-  }
-
-  .search-input {
-    padding: 0 22px !important;
-    line-height: 64px;
+    border-radius: 18px;
   }
 
   html,
@@ -1453,9 +1466,7 @@ body {
     font-size: 14px !important;
   }
 
-  .modal-card,
-  .offer-modal,
-  .claim-modal {
+  .login-modal {
     width: calc(100vw - 32px) !important;
     max-width: 100% !important;
     overflow-x: hidden;
