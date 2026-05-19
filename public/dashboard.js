@@ -420,21 +420,6 @@ function renderWtbOpenOffersRows(offers) {
                       Edit
                     </button>
                   </div>
-                
-                </div>
-
-                <div class="dashboard-mobile-actions">
-                  <button
-                    class="dashboard-mobile-btn"
-                    type="button"
-                    data-edit-offer-id="${escapeHtml(offer.id)}"
-                    data-order-record-id="${escapeHtml(offer.order_record_id)}"
-                    data-vat-type="${escapeHtml(offer.vat_type)}"
-                    data-current-offer="${escapeHtml(offer.offer_raw)}"
-                    data-current-lowest="${escapeHtml(offer.current_lowest || "-")}"
-                  >
-                    Edit
-                  </button>
                 </div>
               </div>
             </div>
