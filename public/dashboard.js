@@ -1470,8 +1470,11 @@ function openEditOfferModal(button) {
     button.dataset.currentLowest || "-";
 
   editOfferModal.classList.remove("hidden");
-  editOfferAmount.focus();
-  editOfferAmount.select();
+
+  if (window.innerWidth > 768) {
+    editOfferAmount.focus();
+    editOfferAmount.select();
+  }
 }
 
 function closeEditOfferModal() {
