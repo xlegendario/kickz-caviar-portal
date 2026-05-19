@@ -1325,12 +1325,14 @@ body {
     width: 100%;
     max-width: 100%;
     min-width: 0;
-    height: 58px;
+    height: 64px;
     font-size: 16px;
+    border-radius: 20px;
   }
 
   .search-input {
-    padding: 0 22px;
+    padding: 0 22px !important;
+    line-height: 64px;
   }
 
   html,
@@ -1493,19 +1495,23 @@ body {
     line-height: 1.05;
   }
 
-  .deals-loading,
   .loading-card,
-  .deal-loading-card {
+  .deal-loading-card,
+  .deals-loading {
     display: flex;
     align-items: center;
     justify-content: center;
     text-align: center;
   }
   
-  .deals-loading span,
   .loading-card span,
-  .deal-loading-card span {
+  .deal-loading-card span,
+  .deals-loading span {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    line-height: 1.15;
     width: 100%;
-    line-height: 1.2;
   }
 }
