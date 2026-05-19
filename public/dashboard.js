@@ -267,6 +267,92 @@ function renderStats() {
   `).join("");
 }
 
+function isMobileDashboard() {
+  return window.innerWidth <= 768;
+}
+
+function setMobileTableMode(isMobile = isMobileDashboard()) {
+  const table = dashboardTableBody.closest(".dashboard-table");
+
+  if (isMobile) {
+    table?.classList.add("mobile-cards");
+  } else {
+    table?.classList.remove("mobile-cards");
+  }
+}
+
+function mobileActionButton(html) {
+  return html || "";
+}
+
+function renderMobileOrderCards(items, options = {}) {
+  setMobileTableMode(true);
+
+  const {
+    primaryLabel = "Payout",
+    primaryValue = (item) => item.payout || item.offer || "-",
+    secondaryLabel = "Date",
+    secondaryValue = (item) => item.date || "-",
+    statusDot = null,
+    actions = () => ""
+  } = options;
+
+  dashboardTableBody.innerHTML = items.map((item) => {
+    const dotClass = statusDot ? statusDot(item) : "";
+
+    return `
+      <tr>
+        <td>
+          <article class="dashboard-mobile-card">
+            <div class="dashboard-mobile-card-top">
+
+              ${
+                dotClass
+                  ? `<div class="dashboard-mobile-status ${dotClass}"></div>`
+                  : ""
+              }
+
+              <div class="dashboard-mobile-main">
+                <div class="dashboard-mobile-product">
+                  ${escapeHtml(item.product || "-")}
+                </div>
+
+                <div class="dashboard-mobile-size">
+                  Size: ${escapeHtml(item.size || "-")}
+                </div>
+
+                <div class="dashboard-mobile-bottom-row">
+                  <div class="dashboard-mobile-meta">
+
+                    <div class="dashboard-mobile-meta-item">
+                      <div class="dashboard-mobile-meta-label">${escapeHtml(primaryLabel)}</div>
+                      <div class="dashboard-mobile-meta-value">
+                        ${escapeHtml(primaryValue(item) || "-")}
+                      </div>
+                    </div>
+
+                    <div class="dashboard-mobile-meta-item">
+                      <div class="dashboard-mobile-meta-label">${escapeHtml(secondaryLabel)}</div>
+                      <div class="dashboard-mobile-meta-value">
+                        ${escapeHtml(secondaryValue(item) || "-")}
+                      </div>
+                    </div>
+
+                  </div>
+
+                  <div class="dashboard-mobile-actions">
+                    ${actions(item)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+        </td>
+      </tr>
+    `;
+  }).join("");
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -313,6 +399,18 @@ function renderWtbAcceptedRows(items) {
     `;
     return;
   }
+
+  if (isMobileDashboard()) {
+    renderMobileOrderCards(items, {
+      primaryLabel: "Offer",
+      primaryValue: (item) => item.offer,
+      secondaryLabel: "Date",
+      secondaryValue: (item) => item.date
+    });
+    return;
+  }
+  
+  setMobileTableMode(false);
 
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
@@ -477,6 +575,30 @@ function renderReadyToShipRows(items) {
     return;
   }
 
+  if (isMobileDashboard()) {
+    renderMobileOrderCards(items, {
+      primaryLabel: "Payout",
+      primaryValue: (item) => item.payout,
+      secondaryLabel: "Date",
+      secondaryValue: (item) => item.date,
+      actions: (item) => `
+        ${
+          item.label_url
+            ? `<a class="dashboard-mobile-btn" href="${escapeHtml(item.label_url)}" target="_blank" rel="noopener">Download</a>`
+            : ""
+        }
+        ${
+          item.discord_url
+            ? `<a class="dashboard-mobile-btn" href="${escapeHtml(item.discord_url)}" target="_blank" rel="noopener">Discord</a>`
+            : ""
+        }
+      `
+    });
+    return;
+  }
+  
+  setMobileTableMode(false);
+
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td>${escapeHtml(item.order_id || "-")}</td>
@@ -555,6 +677,30 @@ function renderTrackingRows(items) {
     return;
   }
 
+  if (isMobileDashboard()) {
+    renderMobileOrderCards(items, {
+      primaryLabel: "Payout",
+      primaryValue: (item) => item.payout,
+      secondaryLabel: "Date",
+      secondaryValue: (item) => item.date,
+      actions: (item) => `
+        ${
+          item.tracking_url
+            ? `<a class="dashboard-mobile-btn" href="${escapeHtml(item.tracking_url)}" target="_blank" rel="noopener">Track</a>`
+            : ""
+        }
+        ${
+          item.discord_url
+            ? `<a class="dashboard-mobile-btn" href="${escapeHtml(item.discord_url)}" target="_blank" rel="noopener">Discord</a>`
+            : ""
+        }
+      `
+    });
+    return;
+  }
+  
+  setMobileTableMode(false);
+
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td>${escapeHtml(item.order_id || "-")}</td>
@@ -623,53 +769,60 @@ const historyIssueColumns = [
   "Action"
 ];
 
-function renderHistoryIssuesRows(items) {
-  dashboardTableBody
-    .closest(".dashboard-table")
-    ?.classList.remove("open-offers-table");
+function renderHistorySalesRows(items) {
+  if (isMobileDashboard()) {
+    dashboardTableHead.innerHTML = skeletonColumns
+      .map((column) => `<th>${column}</th>`)
+      .join("");
 
-  dashboardTableHead.innerHTML = historyIssueColumns
-    .map((column) => `<th>${column}</th>`)
-    .join("");
+    if (!items.length) {
+      renderTableShell();
+      return;
+    }
 
-  if (!items.length) {
-    renderTableShell();
+    renderMobileOrderCards(items, {
+      primaryLabel: "Payout",
+      primaryValue: (item) => item.payout,
+      secondaryLabel: "Date",
+      secondaryValue: (item) => item.date,
+      actions: (item) => `
+        <button
+          class="dashboard-mobile-btn"
+          type="button"
+          data-report-issue-id="${escapeHtml(item.id)}"
+        >
+          Issue
+        </button>
+      `
+    });
+
     return;
   }
 
-  dashboardTableBody.innerHTML = items.map((item) => `
-    <tr>
-      <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.product || "-")}</td>
-      <td>${escapeHtml(item.sku || "-")}</td>
-      <td>${escapeHtml(item.size || "-")}</td>
-      <td>${escapeHtml(item.brand || "-")}</td>
-      <td>${escapeHtml(item.payout || "-")}</td>
-      <td>${escapeHtml(item.vat_type || "-")}</td>
-      <td>${escapeHtml(item.date || "-")}</td>
-      <td>
-        <button
-          class="dashboard-view-btn"
-          type="button"
-          data-issue-note="${escapeHtml(item.issue_notes || "")}"
-        >
-          VIEW
-        </button>
-      </td>
-      <td>${escapeHtml(item.issue_status || "-")}</td>
-      <td>
-        <button
-          class="dashboard-solve-btn"
-          type="button"
-          data-solve-issue-id="${escapeHtml(item.id)}"
-        >
-          SOLVED
-        </button>
-      </td>
-    </tr>
-  `).join("");
-}
+  renderOpenClaimsRows(
+    items.map((item) => ({
+      ...item,
+      discord_url: ""
+    }))
+  );
 
+  dashboardTableBody.querySelectorAll("tr").forEach((row, index) => {
+    const item = items[index];
+    const actionCell = row.querySelector("td:last-child");
+
+    if (!actionCell || !item) return;
+
+    actionCell.innerHTML = `
+      <button
+        class="dashboard-issue-btn"
+        type="button"
+        data-report-issue-id="${escapeHtml(item.id)}"
+      >
+        ISSUE
+      </button>
+    `;
+  });
+}
 function renderHistorySalesRows(items) {
   renderOpenClaimsRows(
     items.map((item) => ({
@@ -708,6 +861,25 @@ function renderOpenClaimsRows(claims) {
     renderTableShell();
     return;
   }
+
+  if (isMobileDashboard()) {
+    renderMobileOrderCards(claims, {
+      primaryLabel: "Payout",
+      primaryValue: (item) => item.payout,
+      secondaryLabel: "Date",
+      secondaryValue: (item) => item.date,
+      actions: (item) => `
+        ${
+          item.discord_url
+            ? `<a class="dashboard-mobile-btn" href="${escapeHtml(item.discord_url)}" target="_blank" rel="noopener">Discord</a>`
+            : ""
+        }
+      `
+    });
+    return;
+  }
+  
+  setMobileTableMode(false);
 
   dashboardTableBody.innerHTML = claims.map((claim) => `
     <tr>
