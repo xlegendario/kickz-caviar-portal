@@ -1888,6 +1888,7 @@
   .dashboard-mobile-card {
     position: relative;
     width: 100%;
+    min-height: 154px;
   
     padding: 16px;
   
@@ -1935,6 +1936,7 @@
   .dashboard-mobile-main {
     flex: 1;
     min-width: 0;
+    min-height: 112px;
   
     display: flex;
     flex-direction: column;
@@ -1951,7 +1953,6 @@
 
   .dashboard-mobile-size {
     margin-top: 4px;
-    margin-bottom: auto;
     color: #8a8a8a;
     font-size: 12px;
     font-weight: 700;
@@ -1963,6 +1964,7 @@
     justify-content: space-between;
     gap: 12px;
     margin-top: 12px;
+    margin-top: auto;
   }
   
   .dashboard-mobile-meta {
