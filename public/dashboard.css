@@ -1820,29 +1820,19 @@
   }
 
   .dashboard-stats-arrow {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-  
-    width: 26px;
-    height: 26px;
-  
-    font-size: 20px;
-    font-weight: 600;
+    width: 14px;
+    color: rgba(255,255,255,0.78);
+    font-size: 22px;
+    font-weight: 900;
     line-height: 1;
-  
-    color: rgba(255,255,255,0.92);
-  
-    transform-origin: center;
     transition: transform 0.18s ease;
   }
   
   .dashboard-stats-panel.open .dashboard-stats-arrow {
-    transform: rotate(180deg);
-  }
-  
-  .dashboard-stats-panel:not(.open) .dashboard-stats-arrow {
-    transform: rotate(0deg);
+    transform: rotate(90deg);
   }
 
   .dashboard-stats-panel:not(.open) .dashboard-stat-grid {
