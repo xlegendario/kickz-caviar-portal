@@ -1196,3 +1196,206 @@ body {
 .dashboard-brand {
   padding-bottom: 30px;
 }
+
+@media (max-width: 620px) {
+  .topbar {
+    display: grid;
+    grid-template-columns: auto auto;
+    grid-template-areas:
+      "brand auth"
+      "toggle toggle";
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px 14px;
+    height: auto;
+    padding: 22px;
+  }
+
+  .brand {
+    grid-area: brand;
+  }
+
+  .kc-header-logo {
+    height: 58px;
+  }
+
+  .header-auth {
+    grid-area: auth;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .signup-btn,
+  .login-btn {
+    height: 42px;
+    padding: 0 14px;
+    border-radius: 14px;
+    font-size: 12px;
+  }
+
+  .profile-btn {
+    height: 42px;
+    width: 42px;
+  }
+
+  .main-toggle {
+    grid-area: toggle;
+    width: 100%;
+    border-radius: 18px;
+  }
+
+  .toggle-btn {
+    flex: 1;
+    height: 48px;
+    font-size: 14px;
+    border-radius: 14px;
+  }
+
+  .hero {
+    margin-bottom: 26px;
+  }
+
+  .hero h2 {
+    font-size: 34px;
+    line-height: 0.95;
+    letter-spacing: -1.4px;
+  }
+
+  .hero p {
+    font-size: 16px;
+    line-height: 1.35;
+  }
+
+  .market-top-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .switch-group,
+  .switch-group.align-right {
+    align-items: stretch;
+  }
+
+  .switch-label {
+    font-size: 11px;
+  }
+
+  .market-tabs,
+  .price-view-toggle {
+    width: 100%;
+    border-radius: 16px;
+  }
+
+  .market-tab,
+  .price-view-btn {
+    flex: 1;
+    height: 52px;
+    padding: 0 6px;
+    font-size: 12px;
+    line-height: 1.15;
+    white-space: normal;
+  }
+
+  .toolbar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .search-input {
+    grid-column: 1 / -1;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .toolbar-select,
+  .search-input {
+    height: 48px;
+    font-size: 16px;
+  }
+
+  .view-toggle {
+    display: none;
+  }
+
+  .deals-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .deal-card {
+    border-radius: 20px;
+  }
+
+  .deal-image-wrap {
+    min-height: 126px;
+    padding: 10px;
+  }
+
+  .deal-image,
+  .image-placeholder {
+    height: 112px;
+    border-radius: 14px;
+  }
+
+  .deal-body {
+    padding: 12px;
+  }
+
+  .deal-top {
+    margin-bottom: 10px;
+    gap: 6px;
+  }
+
+  .deal-badge {
+    height: 26px;
+    padding: 0 9px;
+    font-size: 11px;
+  }
+
+  .deal-time {
+    font-size: 11px;
+  }
+
+  .deal-title {
+    font-size: 14px;
+    line-height: 1.15;
+    min-height: 48px;
+    margin-bottom: 8px;
+    -webkit-line-clamp: 3;
+  }
+
+  .deal-meta {
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+
+  .deal-payouts {
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .payout-box {
+    min-height: 58px;
+    padding: 8px;
+    border-radius: 14px;
+  }
+
+  .payout-label {
+    font-size: 11px;
+    margin-bottom: 5px;
+  }
+
+  .payout-value {
+    font-size: 15px;
+  }
+
+  .deal-btn {
+    height: 42px;
+    border-radius: 14px;
+    font-size: 13px;
+  }
+}
