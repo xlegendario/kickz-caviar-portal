@@ -1012,6 +1012,44 @@ function renderOpenClaimsRows(claims) {
   `).join("");
 }
 
+function renderConfirmedRows(items) {
+  renderOpenClaimsRows(items);
+
+  dashboardTableBody.querySelectorAll("tr").forEach((row, index) => {
+    const item = items[index];
+    const actionCell = row.querySelector("td:last-child");
+
+    if (!actionCell || !item) return;
+
+    actionCell.innerHTML = `
+      <div class="dashboard-action-stack">
+        ${
+          item.discord_url
+            ? `
+              <a
+                class="dashboard-discord-btn"
+                href="${escapeHtml(item.discord_url)}"
+                target="_blank"
+                rel="noopener"
+              >
+                DISCORD
+              </a>
+            `
+            : ""
+        }
+
+        <button
+          class="dashboard-issue-btn"
+          type="button"
+          data-request-label-id="${escapeHtml(item.order_record_id || "")}"
+        >
+          REQUEST LABEL
+        </button>
+      </div>
+    `;
+  });
+}
+
 async function loadDashboardData() {
   if (!dashboardSeller) return;
 
@@ -1090,7 +1128,7 @@ async function loadDashboardData() {
       );
     }
   
-    renderOpenClaimsRows(data.items || []);
+    renderConfirmedRows(data.items || []);
   
     const countEl = document.querySelector(
       '[data-count-key="wtb:confirmed"]'
@@ -1362,7 +1400,7 @@ async function loadDashboardData() {
       );
     }
   
-    renderOpenClaimsRows(data.items || []);
+    renderConfirmedRows(data.items || []);
   
     const countEl = document.querySelector(
       '[data-count-key="quick:confirmed"]'
@@ -1832,6 +1870,46 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const solveIssueButton = event.target.closest("[data-solve-issue-id]");
   const editButton = event.target.closest("[data-edit-offer-id]");
   const deleteButton = event.target.closest("[data-delete-offer-id]");
+  const requestLabelButton = event.target.closest("[data-request-label-id]");
+
+  if (requestLabelButton) {
+    const orderRecordId = requestLabelButton.dataset.requestLabelId;
+  
+    if (!orderRecordId) {
+      alert("Missing order record ID.");
+      return;
+    }
+  
+    requestLabelButton.disabled = true;
+    requestLabelButton.textContent = "REQUESTING...";
+  
+    try {
+      const response = await fetch("/api/dashboard/request-label", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          order_record_id: orderRecordId
+        })
+      });
+  
+      const data = await response.json();
+  
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to request label");
+      }
+  
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message || "Failed to request label");
+      requestLabelButton.disabled = false;
+      requestLabelButton.textContent = "REQUEST LABEL";
+    }
+  
+    return;
+  }
 
   if (labelButton) {
     pendingLabelUrl = labelButton.dataset.labelUrl || "";
