@@ -1993,7 +1993,7 @@ function getSelectedConsignmentVatType() {
 
 function createConsignmentSizeRow() {
   const row = document.createElement("div");
-  row.className = "consignment-size-row";
+  row.className = "consignment-size-row has-remove";
 
   row.innerHTML = `
     <label>
