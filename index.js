@@ -147,12 +147,130 @@ app.get("/api/consignment/inventory", async (req, res) => {
   }
 });
 
+app.post("/api/consignment/inventory/manual", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const sellerId = asText(req.body?.seller_id);
+    const sku = asText(req.body?.sku).toUpperCase();
+    const size = asText(req.body?.size);
+    const vatType = asText(req.body?.vat_type);
+    const sellingPriceSuggested = Number(req.body?.selling_price_suggested);
+    const quantity = Number(req.body?.quantity);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({ error: "Missing seller_record_id" });
+    }
+
+    if (!sku) {
+      return res.status(400).json({ error: "Missing SKU" });
+    }
+
+    if (!size) {
+      return res.status(400).json({ error: "Missing size" });
+    }
+
+    if (!["Margin", "VAT0", "VAT21"].includes(vatType)) {
+      return res.status(400).json({
+        error: "VAT Type must be Margin, VAT0 or VAT21"
+      });
+    }
+
+    if (!Number.isFinite(sellingPriceSuggested) || sellingPriceSuggested <= 0) {
+      return res.status(400).json({
+        error: "Selling Price (Suggested) must be higher than 0"
+      });
+    }
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      return res.status(400).json({
+        error: "Quantity must be a positive whole number"
+      });
+    }
+
+    const productInfo = await lookupSkuMasterProduct(sku);
+
+    const { data: existingRows, error: existingError } = await supabase
+      .from("consignment_inventory")
+      .select("id, quantity")
+      .eq("seller_record_id", sellerRecordId)
+      .eq("sku", sku)
+      .eq("size", size)
+      .limit(1);
+
+    if (existingError) {
+      throw existingError;
+    }
+
+    if (existingRows.length) {
+      const existing = existingRows[0];
+
+      const { data, error } = await supabase
+        .from("consignment_inventory")
+        .update({
+          seller_id: sellerId,
+          product_name: productInfo.product_name,
+          brand: productInfo.brand,
+          vat_type: vatType,
+          selling_price_suggested: sellingPriceSuggested,
+          quantity: Number(existing.quantity || 0) + quantity,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", existing.id)
+        .select()
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      return res.json({
+        ok: true,
+        mode: "updated",
+        item: data
+      });
+    }
+
+    const { data, error } = await supabase
+      .from("consignment_inventory")
+      .insert({
+        seller_record_id: sellerRecordId,
+        seller_id: sellerId,
+        product_name: productInfo.product_name,
+        brand: productInfo.brand,
+        sku,
+        size,
+        vat_type: vatType,
+        selling_price_suggested: sellingPriceSuggested,
+        quantity
+      })
+      .select()
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    res.json({
+      ok: true,
+      mode: "created",
+      item: data
+    });
+  } catch (err) {
+    console.error("Failed to manually add consignment inventory:", err);
+
+    res.status(500).json({
+      error: "Failed to add consignment inventory",
+      details: err.message
+    });
+  }
+});
+
 const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
 const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
 const DISCORD_SERVER_ID = "922818998163361792";
 const INVENTORY_UNITS_TABLE = process.env.AIRTABLE_INVENTORY_UNITS_TABLE || "Inventory Units";
 const SELLER_OFFERS_TABLE = process.env.AIRTABLE_SELLER_OFFERS_TABLE || "Seller Offers";
-const MERCHANTS_TABLE = process.env.AIRTABLE_MERCHANTS_TABLE || "Merchants";
+const SKU_MASTER_TABLE = process.env.AIRTABLE_SKU_MASTER_TABLE || "SKU Master";
 
 function normalizeTempPassword(discord, sellerId) {
   const cleanDiscord = asText(discord).toLowerCase().replace(/\s+/g, "");
@@ -273,6 +391,39 @@ function sortDashboardItemsNewestFirst(items) {
 
     return dateB - dateA;
   });
+}
+
+async function lookupSkuMasterProduct(sku) {
+  const cleanSku = asText(sku);
+
+  if (!cleanSku) {
+    return {
+      product_name: "",
+      brand: ""
+    };
+  }
+
+  const records = await airtable(SKU_MASTER_TABLE)
+    .select({
+      fields: ["SKU", "Product Name", "Brand"],
+      filterByFormula: `{SKU} = '${escapeFormulaValue(cleanSku)}'`,
+      maxRecords: 1
+    })
+    .all();
+
+  const record = records[0];
+
+  if (!record) {
+    return {
+      product_name: "",
+      brand: ""
+    };
+  }
+
+  return {
+    product_name: displayValue(record.fields?.["Product Name"]),
+    brand: displayValue(record.fields?.["Brand"])
+  };
 }
 
 async function loadOrderFieldsMap(orderRecordIds) {
