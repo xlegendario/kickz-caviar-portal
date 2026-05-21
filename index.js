@@ -96,6 +96,7 @@ const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
 const DISCORD_SERVER_ID = "922818998163361792";
 const INVENTORY_UNITS_TABLE = process.env.AIRTABLE_INVENTORY_UNITS_TABLE || "Inventory Units";
 const SELLER_OFFERS_TABLE = process.env.AIRTABLE_SELLER_OFFERS_TABLE || "Seller Offers";
+const MERCHANTS_TABLE = process.env.AIRTABLE_MERCHANTS_TABLE || "Merchants";
 
 function normalizeTempPassword(discord, sellerId) {
   const cleanDiscord = asText(discord).toLowerCase().replace(/\s+/g, "");
@@ -242,6 +243,9 @@ async function loadOrderFieldsMap(orderRecordIds) {
           "Partner or Seller",
           "Lowest Offer Seller ID",
           "WTB Created Channel ID",
+          "Client",
+          "Shopify Order Number",
+          "Store Name",
           "Channel Created?",
           "Shipping Label URL (Permanent)",
           "Shipping Label",
@@ -489,6 +493,7 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
       return {
         id: record.id,
         order_id: displayValue(orderFields["Order ID"]),
+        order_record_id: linkedOrderId,
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
@@ -551,6 +556,7 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
         return {
           id: record.id,
           order_id: displayValue(orderFields["Order ID"]),
+          order_record_id: linkedOrderId,
           product: displayValue(f["Product Name"] || orderFields["Product Name"]),
           sku: displayValue(f["SKU"] || orderFields["SKU"]),
           size: displayValue(f["Size"] || orderFields["Size"]),
@@ -579,6 +585,92 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
 
     res.status(500).json({
       error: "Failed to load confirmed WTB sales",
+      details: err.message
+    });
+  }
+});
+
+app.post("/api/dashboard/request-label", async (req, res) => {
+  try {
+    const orderRecordId = asText(req.body?.order_record_id);
+
+    if (!orderRecordId) {
+      return res.status(400).json({
+        error: "Missing order_record_id"
+      });
+    }
+
+    if (!DISCORD_BOT_BASE_URL) {
+      return res.status(500).json({
+        error: "Missing DISCORD_BOT_BASE_URL"
+      });
+    }
+
+    const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
+    const f = orderRecord.fields || {};
+
+    const orderId = displayValue(f["Order ID"]) || orderRecord.id;
+    const clientId = Array.isArray(f["Client"]) ? f["Client"][0] : "";
+
+    if (!clientId) {
+      return res.status(400).json({
+        error: `Order ${orderId} has no linked merchant/client`
+      });
+    }
+
+    const merchantRecord = await airtable(MERCHANTS_TABLE).find(clientId);
+    const mf = merchantRecord.fields || {};
+
+    const labelRequestChannelId =
+      displayValue(mf["Label Request Channel ID"]) || "1506989427183058996";
+
+    const labelRequestUrl =
+      `${APP_PUBLIC_BASE_URL.replace(/\/$/, "")}/label-request.html?record_id=${encodeURIComponent(orderRecord.id)}`;
+
+    await airtable(ORDERS_TABLE).update(orderRecord.id, {
+      "Fulfillment Status": "Requested Label",
+      "Label Error Message": null
+    });
+
+    const response = await fetch(
+      `${DISCORD_BOT_BASE_URL.replace(/\/$/, "")}/post-label-request`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          channel_id: labelRequestChannelId,
+          record_id: orderRecord.id,
+          order_id: orderId,
+          shopify_order_number: displayValue(f["Shopify Order Number"]),
+          product_name: displayValue(f["Product Name"]),
+          sku: displayValue(f["SKU"]),
+          size: displayValue(f["Size"]),
+          store_name: displayValue(f["Store Name"]) || displayValue(mf["Store Name"]),
+          label_request_url: labelRequestUrl,
+          seller_country_code: "",
+          preferred_courier: "",
+          courier_instruction: ""
+        })
+      }
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to post label request");
+    }
+
+    res.json({
+      ok: true,
+      order_id: orderId
+    });
+  } catch (err) {
+    console.error("Dashboard request label failed:", err);
+
+    res.status(500).json({
+      error: "Failed to request label",
       details: err.message
     });
   }
@@ -1162,6 +1254,7 @@ app.get("/api/dashboard/quick-confirmed", async (req, res) => {
       return {
         id: record.id,
         order_id: displayValue(orderFields["Order ID"]),
+        order_record_id: linkedOrderId,
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
