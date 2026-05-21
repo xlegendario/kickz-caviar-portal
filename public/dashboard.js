@@ -115,6 +115,15 @@ const viewIssueNote = document.getElementById("viewIssueNote");
 const labelInstructionsModal = document.getElementById("labelInstructionsModal");
 const confirmLabelDownloadBtn = document.getElementById("confirmLabelDownloadBtn");
 
+const consignmentAddStockModal = document.getElementById("consignmentAddStockModal");
+const consignmentAddStockForm = document.getElementById("consignmentAddStockForm");
+const consignmentSkuInput = document.getElementById("consignmentSkuInput");
+const consignmentSizeInput = document.getElementById("consignmentSizeInput");
+const consignmentVatTypeInput = document.getElementById("consignmentVatTypeInput");
+const consignmentSellingPriceInput = document.getElementById("consignmentSellingPriceInput");
+const consignmentQuantityInput = document.getElementById("consignmentQuantityInput");
+const consignmentAddStockError = document.getElementById("consignmentAddStockError");
+
 let pendingLabelUrl = "";
 
 function canAccessSection(section) {
@@ -1180,6 +1189,12 @@ async function loadDashboardData() {
   if (!dashboardSeller) return;
 
   if (activeSection === "consignment" && activeTab === "inventory") {
+    dashboardSubtabDescription.innerHTML = `
+      <button class="dashboard-refresh-btn" type="button" id="consignmentOpenAddStockBtn">
+        Add Stock
+      </button>
+    `;
+    
     dashboardTableBody.innerHTML = `
       <tr>
         <td colspan="${consignmentInventoryColumns.length}">
@@ -1961,6 +1976,20 @@ function closeEditOfferModal() {
   editOfferModal.classList.add("hidden");
 }
 
+function openConsignmentAddStockModal() {
+  consignmentAddStockError.textContent = "";
+  consignmentAddStockForm.reset();
+  consignmentAddStockModal.classList.remove("hidden");
+
+  if (window.innerWidth > 768) {
+    consignmentSkuInput.focus();
+  }
+}
+
+function closeConsignmentAddStockModal() {
+  consignmentAddStockModal.classList.add("hidden");
+}
+
 function openIssueModal(inventoryId) {
   issueError.textContent = "";
   issueInventoryId.value = inventoryId || "";
@@ -2031,6 +2060,14 @@ dashboardStatsToggle?.addEventListener("click", () => {
   document
     .querySelector(".dashboard-stats-panel")
     ?.classList.toggle("open", statsOpen);
+});
+
+dashboardContent.addEventListener("click", (event) => {
+  const addStockButton = event.target.closest("#consignmentOpenAddStockBtn");
+
+  if (addStockButton) {
+    openConsignmentAddStockModal();
+  }
 });
 
 dashboardTableBody.addEventListener("click", async (event) => {
@@ -2139,6 +2176,10 @@ document.querySelectorAll("[data-edit-offer-close]").forEach((button) => {
   button.addEventListener("click", closeEditOfferModal);
 });
 
+document.querySelectorAll("[data-consignment-add-close]").forEach((button) => {
+  button.addEventListener("click", closeConsignmentAddStockModal);
+});
+
 document.querySelectorAll("[data-issue-close]").forEach((button) => {
   button.addEventListener("click", closeIssueModal);
 });
@@ -2210,6 +2251,50 @@ editOfferForm.addEventListener("submit", async (event) => {
   } finally {
     submitBtn.disabled = false;
     submitBtn.textContent = "Save Offer";
+  }
+});
+
+consignmentAddStockForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  consignmentAddStockError.textContent = "";
+
+  const submitBtn = consignmentAddStockForm.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Adding...";
+
+  try {
+    const response = await fetch("/api/consignment/inventory/manual", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        seller_record_id: dashboardSeller.id,
+        seller_id: dashboardSeller.seller_id,
+        sku: consignmentSkuInput.value,
+        size: consignmentSizeInput.value,
+        vat_type: consignmentVatTypeInput.value,
+        selling_price_suggested: consignmentSellingPriceInput.value,
+        quantity: consignmentQuantityInput.value
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to add stock");
+    }
+
+    closeConsignmentAddStockModal();
+
+    await loadDashboardData();
+    await loadDashboardCounts();
+  } catch (err) {
+    consignmentAddStockError.textContent = err.message;
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Add Stock";
   }
 });
 
