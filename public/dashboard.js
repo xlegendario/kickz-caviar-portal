@@ -234,11 +234,12 @@ function syncDashboardUi() {
   });
 }
 
-let dashboardCountsCache = {
+dashboardCountsCache = {
   quick: {},
   wtb: {},
   consignment: {},
-  history: {}
+  history: {},
+  ...(data || {})
 };
 
 let quickCountsCache = {};
