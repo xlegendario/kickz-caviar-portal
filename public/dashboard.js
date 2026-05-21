@@ -1013,6 +1013,44 @@ function renderOpenClaimsRows(claims) {
 }
 
 function renderConfirmedRows(items) {
+  if (!items.length) {
+    renderTableShell();
+    return;
+  }
+
+  if (isMobileDashboard()) {
+    renderMobileOrderCards(items, {
+      primaryLabel: "Payout",
+      primaryValue: (item) => item.payout,
+      secondaryLabel: "Date",
+      secondaryValue: (item) => item.date,
+      actions: (item) => `
+        ${
+          item.discord_url
+            ? `<a
+                class="dashboard-mobile-btn dashboard-mobile-discord-btn"
+                href="${escapeHtml(item.discord_url)}"
+                target="_blank"
+                rel="noopener"
+              >
+                Discord
+              </a>`
+            : ""
+        }
+
+        <button
+          class="dashboard-mobile-btn dashboard-mobile-request-label-btn"
+          type="button"
+          data-request-label-id="${escapeHtml(item.order_record_id || "")}"
+        >
+          Request Label
+        </button>
+      `
+    });
+
+    return;
+  }
+
   renderOpenClaimsRows(items);
 
   dashboardTableBody.querySelectorAll("tr").forEach((row, index) => {
@@ -1032,18 +1070,18 @@ function renderConfirmedRows(items) {
                 target="_blank"
                 rel="noopener"
               >
-                DISCORD
+                Discord
               </a>
             `
             : ""
         }
 
         <button
-          class="dashboard-issue-btn"
+          class="dashboard-issue-btn dashboard-request-label-btn"
           type="button"
           data-request-label-id="${escapeHtml(item.order_record_id || "")}"
         >
-          REQUEST LABEL
+          Request Label
         </button>
       </div>
     `;
