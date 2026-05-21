@@ -21,7 +21,8 @@ const {
   SENDGRID_API_KEY,
   RESET_EMAIL_FROM,
   APP_PUBLIC_BASE_URL = "https://kickz-caviar-portal.onrender.com",
-  SELLER_SIGNUP_URL = "https://discord.com/channels/922818998163361792/1444130166703128676"
+  SELLER_SIGNUP_URL = "https://discord.com/channels/922818998163361792/1444130166703128676",
+  DISCORD_BOT_BASE_URL
 } = process.env;
 
 if (!AIRTABLE_TOKEN) {
