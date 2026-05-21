@@ -58,6 +58,17 @@ const skeletonColumns = [
   "Action"
 ];
 
+const consignmentInventoryColumns = [
+  "Product",
+  "SKU",
+  "Size",
+  "Brand",
+  "VAT Type",
+  "Suggested Price",
+  "Price incl. VAT",
+  "Quantity"
+];
+
 let dashboardSeller = JSON.parse(localStorage.getItem("kc_seller") || "null");
 let activeSection = localStorage.getItem("kc_dashboard_section") || "quick";
 let activeTab = localStorage.getItem("kc_dashboard_tab") || "open_claims";
@@ -428,6 +439,46 @@ const wtbAcceptedColumns = [
   "Date",
   "Status"
 ];
+
+function renderConsignmentInventoryRows(items) {
+  dashboardTableBody
+    .closest(".dashboard-table")
+    ?.classList.remove("open-offers-table");
+
+  dashboardTableHead.innerHTML = consignmentInventoryColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${consignmentInventoryColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No consignment inventory yet</strong>
+            <span>Upload or add stock to start selling through consignment.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  setMobileTableMode(false);
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.product_name || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.vat_type || "-")}</td>
+      <td>${escapeHtml(item.selling_price_suggested || "-")}</td>
+      <td>${escapeHtml(item.suggested_selling_price_incl_vat || "-")}</td>
+      <td>${escapeHtml(item.quantity || "0")}</td>
+    </tr>
+  `).join("");
+}
 
 function renderWtbAcceptedRows(items) {
   dashboardTableBody
@@ -1129,18 +1180,45 @@ function renderConfirmedRows(items) {
 async function loadDashboardData() {
   if (!dashboardSeller) return;
 
-  if (activeSection === "consignment") {
-    dashboardTableHead.innerHTML = "";
+  if (activeSection === "consignment" && activeTab === "inventory") {
     dashboardTableBody.innerHTML = `
       <tr>
-        <td>
+        <td colspan="${consignmentInventoryColumns.length}">
           <div class="dashboard-empty-state">
-            <strong>Consignment coming soon</strong>
-            <span>This section is enabled for consignors only.</span>
+            <strong>Loading consignment inventory...</strong>
           </div>
         </td>
       </tr>
     `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/consignment/inventory?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load consignment inventory"
+      );
+    }
+  
+    renderConsignmentInventoryRows(data.items || []);
+  
+    dashboardCountsCache.consignment.inventory = data.count || 0;
+    renderStats();
+  
+    return;
+  }
+  
+  if (activeSection === "consignment") {
+    renderTableShell();
     return;
   }
 
