@@ -120,7 +120,8 @@ const consignmentSkuInput = document.getElementById("consignmentSkuInput");
 const consignmentSizeRows = document.getElementById("consignmentSizeRows");
 const consignmentAddSizeRowBtn = document.getElementById("consignmentAddSizeRowBtn");
 const consignmentAddAnotherProductBtn = document.getElementById("consignmentAddAnotherProductBtn");
-const consignmentAddStockError = document.getElementById("consignmentAddStockError");
+const consignmentAddStockError = document.getElementById("consignmentAddStockError");|
+const consignmentAddStockSuccess = document.getElementById("consignmentAddStockSuccess");
 
 let pendingLabelUrl = "";
 
@@ -1975,6 +1976,7 @@ function closeEditOfferModal() {
 
 function openConsignmentAddStockModal() {
   consignmentAddStockError.textContent = "";
+  consignmentAddStockSuccess.textContent = "";
   resetConsignmentAddStockForm();
   consignmentAddStockModal.classList.remove("hidden");
 
@@ -2390,6 +2392,10 @@ consignmentAddAnotherProductBtn?.addEventListener("click", async () => {
     await submitConsignmentStockRows();
 
     resetConsignmentAddStockForm();
+    consignmentAddStockSuccess.textContent = "Previous product added successfully.";
+    setTimeout(() => {
+      consignmentAddStockSuccess.textContent = "";
+    }, 2500);
     await loadDashboardData();
     await loadDashboardCounts();
 
