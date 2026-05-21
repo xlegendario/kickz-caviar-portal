@@ -2448,3 +2448,73 @@
     grid-template-columns: 1fr;
   }
 }
+
+#consignmentAddStockModal .dashboard-modal-card {
+  width: min(760px, calc(100vw - 32px));
+  max-width: 760px;
+  overflow: hidden;
+}
+
+#consignmentAddStockForm {
+  display: grid;
+  gap: 18px;
+}
+
+#consignmentAddStockForm input,
+#consignmentAddStockForm select,
+#consignmentAddStockForm button {
+  width: 100%;
+}
+
+#consignmentAddStockForm > label {
+  display: grid;
+  gap: 8px;
+}
+
+#consignmentAddStockForm .consignment-vat-select {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  margin: 0;
+}
+
+#consignmentAddStockForm .dashboard-vat-title {
+  grid-column: 1 / -1;
+}
+
+#consignmentAddStockForm .consignment-vat-card {
+  min-width: 0;
+  width: 100%;
+  height: 64px;
+}
+
+#consignmentAddStockForm .consignment-size-row,
+#consignmentAddStockForm .consignment-size-row:first-child {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr 1fr;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+#consignmentAddStockForm .consignment-size-row label {
+  min-width: 0;
+}
+
+#consignmentAddStockForm .consignment-size-row.has-remove {
+  grid-template-columns: 1fr 1.4fr 1fr 42px;
+}
+
+@media (max-width: 768px) {
+  #consignmentAddStockModal .dashboard-modal-card {
+    width: min(94vw, 520px);
+  }
+
+  #consignmentAddStockForm .consignment-vat-select,
+  #consignmentAddStockForm .consignment-size-row,
+  #consignmentAddStockForm .consignment-size-row:first-child,
+  #consignmentAddStockForm .consignment-size-row.has-remove {
+    grid-template-columns: 1fr;
+  }
+}
