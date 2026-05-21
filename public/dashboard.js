@@ -2347,6 +2347,10 @@ consignmentSizeRows?.addEventListener("click", (event) => {
 
   if (!removeButton) return;
 
+  if (consignmentSizeRows.querySelectorAll(".consignment-size-row").length <= 1) {
+    return;
+  }
+  
   removeButton.closest(".consignment-size-row")?.remove();
 });
 
@@ -2372,7 +2376,10 @@ consignmentAddStockForm?.addEventListener("submit", async (event) => {
     consignmentAddStockError.textContent = err.message;
   } finally {
     submitBtn.disabled = false;
-    submitBtn.textContent = "Add Stock";
+    submitBtn.textContent =
+      submitBtn === consignmentAddAnotherProductBtn
+        ? "Add another product"
+        : "Add Stock";
   }
 });
 
