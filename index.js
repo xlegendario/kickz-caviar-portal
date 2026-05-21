@@ -627,10 +627,6 @@ app.post("/api/dashboard/request-label", async (req, res) => {
     const labelRequestUrl =
       `${APP_PUBLIC_BASE_URL.replace(/\/$/, "")}/label-request.html?record_id=${encodeURIComponent(orderRecord.id)}`;
 
-    await airtable(ORDERS_TABLE).update(orderRecord.id, {
-      "Fulfillment Status": "Requested Label",
-      "Label Error Message": null
-    });
 
     const response = await fetch(
       `${DISCORD_BOT_BASE_URL.replace(/\/$/, "")}/post-label-request`,
@@ -661,6 +657,11 @@ app.post("/api/dashboard/request-label", async (req, res) => {
     if (!response.ok) {
       throw new Error(data.details || data.error || "Failed to post label request");
     }
+
+    await airtable(ORDERS_TABLE).update(orderRecord.id, {
+      "Fulfillment Status": "Requested Label",
+      "Label Error Message": null
+    });
 
     res.json({
       ok: true,
