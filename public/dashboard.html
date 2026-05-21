@@ -279,6 +279,55 @@
     </div>
   </div>
 
+  <div class="dashboard-modal hidden" id="consignmentAddStockModal">
+    <div class="dashboard-modal-backdrop" data-consignment-add-close></div>
+
+    <div class="dashboard-modal-card">
+      <button class="dashboard-modal-close" type="button" data-consignment-add-close>×</button>
+
+      <h2>Add Consignment Stock</h2>
+      <p>Add one SKU/size combination to your consignment inventory.</p>
+
+      <form id="consignmentAddStockForm" class="dashboard-modal-form">
+        <label>
+          SKU
+          <input id="consignmentSkuInput" type="text" required />
+        </label>
+
+        <label>
+          Size EU
+          <input id="consignmentSizeInput" type="text" required />
+        </label>
+
+        <label>
+          VAT Type
+          <select id="consignmentVatTypeInput" required>
+            <option value="">Select VAT Type</option>
+            <option value="Margin">Margin</option>
+            <option value="VAT0">VAT0</option>
+            <option value="VAT21">VAT21</option>
+          </select>
+        </label>
+
+        <label>
+          Selling Price Suggested
+          <input id="consignmentSellingPriceInput" type="number" min="1" step="1" required />
+        </label>
+
+        <label>
+          Quantity
+          <input id="consignmentQuantityInput" type="number" min="1" step="1" required />
+        </label>
+
+        <button type="submit" class="dashboard-issue-submit-btn">
+          Add Stock
+        </button>
+
+        <div class="dashboard-form-error" id="consignmentAddStockError"></div>
+      </form>
+    </div>
+  </div>
+
   <script src="/dashboard.js"></script>
 </body>
 </html>
