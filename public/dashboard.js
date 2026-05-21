@@ -259,7 +259,13 @@ async function loadDashboardCounts() {
     throw new Error(data.details || data.error || "Failed to load dashboard counts");
   }
 
-  dashboardCountsCache = data || { quick: {}, wtb: {}, history: {} };
+  dashboardCountsCache = {
+    quick: {},
+    wtb: {},
+    consignment: {},
+    history: {},
+    ...(data || {})
+  };
   quickCountsCache = dashboardCountsCache.quick || {};
 
   Object.entries(dashboardCountsCache).forEach(([section, counts]) => {
@@ -1837,6 +1843,7 @@ function syncAuthUi() {
     document.querySelector(".dashboard-topbar")?.classList.remove("hidden");
     dashboardSellerName.textContent = dashboardSeller.discord || dashboardSeller.email || "Seller";
     dashboardSellerId.textContent = dashboardSeller.seller_id || dashboardSeller.id || "Seller account";
+    syncConsignmentAccess();
     loadDashboardData().catch(console.error);
     loadDashboardCounts().catch(console.error);
   } else {
@@ -1850,8 +1857,8 @@ function syncAuthUi() {
     document.querySelector(".dashboard-topbar")?.classList.add("hidden");
     dashboardSellerName.textContent = "Not logged in";
     dashboardSellerId.textContent = "Login required";
+    syncConsignmentAccess();
   }
-  syncConsignmentAccess();
 }
 
 function openEditOfferModal(button) {
