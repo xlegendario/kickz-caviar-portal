@@ -2027,7 +2027,7 @@ function resetConsignmentAddStockForm() {
       </label>
 
       <label>
-        Selling Price Suggested
+        Selling Price
         <input class="consignment-price-input" type="number" min="1" step="1" required />
       </label>
 
