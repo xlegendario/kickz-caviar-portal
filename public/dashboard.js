@@ -474,7 +474,6 @@ function renderConsignmentInventoryRows(items) {
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.selling_price_suggested || "-")}</td>
-      <td>${escapeHtml(item.suggested_selling_price_incl_vat || "-")}</td>
       <td>${escapeHtml(item.quantity || "0")}</td>
     </tr>
   `).join("");
