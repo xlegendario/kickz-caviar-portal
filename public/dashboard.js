@@ -1997,20 +1997,17 @@ function createConsignmentSizeRow() {
 
   row.innerHTML = `
     <label>
-      Size EU
       <input class="consignment-size-input" type="text" required />
     </label>
-
+  
     <label>
-      Selling Price Suggested
       <input class="consignment-price-input" type="number" min="1" step="1" required />
     </label>
-
+  
     <label>
-      Quantity
       <input class="consignment-quantity-input" type="number" min="1" step="1" required />
     </label>
-
+  
     <button type="button" class="dashboard-modal-close consignment-remove-size-btn">×</button>
   `;
 
@@ -2378,8 +2375,8 @@ consignmentAddStockForm?.addEventListener("submit", async (event) => {
     submitBtn.disabled = false;
     submitBtn.textContent =
       submitBtn === consignmentAddAnotherProductBtn
-        ? "Add another product"
-        : "Add Stock";
+        ? "+ Add another product"
+        : "Confirm";
   }
 });
 
@@ -2401,7 +2398,7 @@ consignmentAddAnotherProductBtn?.addEventListener("click", async () => {
     consignmentAddStockError.textContent = err.message;
   } finally {
     consignmentAddAnotherProductBtn.disabled = false;
-    consignmentAddAnotherProductBtn.textContent = "Add another product";
+    consignmentAddAnotherProductBtn.textContent = "+ Add another product";
   }
 });
 
