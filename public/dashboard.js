@@ -2338,7 +2338,19 @@ editOfferForm.addEventListener("submit", async (event) => {
 });
 
 consignmentAddSizeRowBtn?.addEventListener("click", () => {
-  consignmentSizeRows.appendChild(createConsignmentSizeRow());
+  const previousRow = [...consignmentSizeRows.querySelectorAll(".consignment-size-row")].at(-1);
+  const previousPrice = previousRow?.querySelector(".consignment-price-input")?.value || "";
+
+  const newRow = createConsignmentSizeRow();
+
+  const priceInput = newRow.querySelector(".consignment-price-input");
+  if (priceInput) {
+    priceInput.value = previousPrice;
+  }
+
+  consignmentSizeRows.appendChild(newRow);
+
+  newRow.querySelector(".consignment-size-input")?.focus();
 });
 
 consignmentSizeRows?.addEventListener("click", (event) => {
