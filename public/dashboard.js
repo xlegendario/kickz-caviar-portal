@@ -24,6 +24,19 @@ const dashboardConfig = {
     ]
   },
 
+  consignment: {
+    label: "Consignment",
+    tabs: [
+      { key: "inventory", label: "Inventory" },
+      { key: "offers", label: "Offers" },
+      { key: "confirmed", label: "Confirmed" },
+      { key: "label_requested", label: "Label Requested" },
+      { key: "ready_to_ship", label: "Ready To Ship" },
+      { key: "shipped", label: "Shipped" },
+      { key: "delivered", label: "Delivered" }
+    ]
+  },
+
   history: {
     label: "History",
     tabs: [
@@ -93,8 +106,25 @@ const confirmLabelDownloadBtn = document.getElementById("confirmLabelDownloadBtn
 
 let pendingLabelUrl = "";
 
+function canAccessSection(section) {
+  if (section !== "consignment") return true;
+  return dashboardSeller?.consignor === true;
+}
+
+function syncConsignmentAccess() {
+  const section = document.querySelector("[data-consignment-nav-section]");
+  section?.classList.toggle("hidden", !canAccessSection("consignment"));
+
+  if (!canAccessSection(activeSection)) {
+    activeSection = "quick";
+    activeTab = "open_claims";
+    localStorage.setItem("kc_dashboard_section", activeSection);
+    localStorage.setItem("kc_dashboard_tab", activeTab);
+  }
+}
+
 function safeSection(section) {
-  return dashboardConfig[section] ? section : "quick";
+  return dashboardConfig[section] && canAccessSection(section) ? section : "quick";
 }
 
 function safeTab(section, tab) {
@@ -207,6 +237,7 @@ function syncDashboardUi() {
 let dashboardCountsCache = {
   quick: {},
   wtb: {},
+  consignment: {},
   history: {}
 };
 
@@ -1091,6 +1122,21 @@ function renderConfirmedRows(items) {
 async function loadDashboardData() {
   if (!dashboardSeller) return;
 
+  if (activeSection === "consignment") {
+    dashboardTableHead.innerHTML = "";
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td>
+          <div class="dashboard-empty-state">
+            <strong>Consignment coming soon</strong>
+            <span>This section is enabled for consignors only.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
   if (activeSection === "wtb" && activeTab === "accepted") {
     dashboardTableBody.innerHTML = `
       <tr>
@@ -1805,6 +1851,7 @@ function syncAuthUi() {
     dashboardSellerName.textContent = "Not logged in";
     dashboardSellerId.textContent = "Login required";
   }
+  syncConsignmentAccess();
 }
 
 function openEditOfferModal(button) {
