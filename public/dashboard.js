@@ -120,7 +120,7 @@ const consignmentSkuInput = document.getElementById("consignmentSkuInput");
 const consignmentSizeRows = document.getElementById("consignmentSizeRows");
 const consignmentAddSizeRowBtn = document.getElementById("consignmentAddSizeRowBtn");
 const consignmentAddAnotherProductBtn = document.getElementById("consignmentAddAnotherProductBtn");
-const consignmentAddStockError = document.getElementById("consignmentAddStockError");|
+const consignmentAddStockError = document.getElementById("consignmentAddStockError");
 const consignmentAddStockSuccess = document.getElementById("consignmentAddStockSuccess");
 
 let pendingLabelUrl = "";
