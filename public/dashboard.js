@@ -65,7 +65,6 @@ const consignmentInventoryColumns = [
   "Brand",
   "VAT Type",
   "Suggested Price",
-  "Price incl. VAT",
   "Quantity"
 ];
 
@@ -254,12 +253,11 @@ function syncDashboardUi() {
   });
 }
 
-dashboardCountsCache = {
+let dashboardCountsCache = {
   quick: {},
   wtb: {},
   consignment: {},
-  history: {},
-  ...(data || {})
+  history: {}
 };
 
 let quickCountsCache = {};
