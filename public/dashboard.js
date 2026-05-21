@@ -435,6 +435,54 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+function cleanSkuInput(value) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9\-\/ ]/g, "")
+    .replace(/^\s+|\s+$/g, "");
+}
+
+function cleanSizeInput(value) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9.\/ ]/g, "")
+    .replace(/^\s+|\s+$/g, "");
+}
+
+function cleanWholeNumberInput(value) {
+  return String(value || "")
+    .replace(/[^\d]/g, "")
+    .replace(/^\s+|\s+$/g, "");
+}
+
+function bindConsignmentInputCleaning() {
+  consignmentSkuInput?.addEventListener("input", () => {
+    const cursor = consignmentSkuInput.selectionStart;
+    consignmentSkuInput.value = cleanSkuInput(consignmentSkuInput.value);
+    consignmentSkuInput.setSelectionRange(cursor, cursor);
+  });
+
+  consignmentSizeRows?.addEventListener("input", (event) => {
+    const sizeInput = event.target.closest(".consignment-size-input");
+    const priceInput = event.target.closest(".consignment-price-input");
+    const quantityInput = event.target.closest(".consignment-quantity-input");
+
+    if (sizeInput) {
+      const cursor = sizeInput.selectionStart;
+      sizeInput.value = cleanSizeInput(sizeInput.value);
+      sizeInput.setSelectionRange(cursor, cursor);
+    }
+
+    if (priceInput) {
+      priceInput.value = cleanWholeNumberInput(priceInput.value);
+    }
+
+    if (quantityInput) {
+      quantityInput.value = cleanWholeNumberInput(quantityInput.value);
+    }
+  });
+}
+
 const wtbAcceptedColumns = [
   "Order ID",
   "Product",
@@ -2040,14 +2088,23 @@ function resetConsignmentAddStockForm() {
 }
 
 async function submitConsignmentStockRows() {
-  const sku = consignmentSkuInput.value.trim();
+  const sku = cleanSkuInput(consignmentSkuInput.value);
+  consignmentSkuInput.value = sku;
   const vatType = getSelectedConsignmentVatType();
   const rows = [...consignmentSizeRows.querySelectorAll(".consignment-size-row")];
 
   for (const row of rows) {
-    const size = row.querySelector(".consignment-size-input")?.value;
-    const price = row.querySelector(".consignment-price-input")?.value;
-    const quantity = row.querySelector(".consignment-quantity-input")?.value;
+    const sizeInput = row.querySelector(".consignment-size-input");
+    const priceInput = row.querySelector(".consignment-price-input");
+    const quantityInput = row.querySelector(".consignment-quantity-input");
+    
+    const size = cleanSizeInput(sizeInput?.value);
+    const price = cleanWholeNumberInput(priceInput?.value);
+    const quantity = cleanWholeNumberInput(quantityInput?.value);
+    
+    if (sizeInput) sizeInput.value = size;
+    if (priceInput) priceInput.value = price;
+    if (quantityInput) quantityInput.value = quantity;
 
     const response = await fetch("/api/consignment/inventory/manual", {
       method: "POST",
@@ -2573,6 +2630,7 @@ dashboardSearchInput.addEventListener("input", () => {
 
 renderSubnav();
 bindNavigation();
+bindConsignmentInputCleaning();
 syncDashboardUi();
 syncAuthUi();
 
