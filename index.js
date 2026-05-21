@@ -6,6 +6,7 @@ import Airtable from "airtable";
 import compression from "compression";
 import crypto from "crypto";
 import sgMail from "@sendgrid/mail";
+import { createClient } from "@supabase/supabase-js";
 
 dotenv.config();
 
@@ -22,7 +23,9 @@ const {
   RESET_EMAIL_FROM,
   APP_PUBLIC_BASE_URL = "https://kickz-caviar-portal.onrender.com",
   SELLER_SIGNUP_URL = "https://discord.com/channels/922818998163361792/1444130166703128676",
-  DISCORD_BOT_BASE_URL
+  DISCORD_BOT_BASE_URL,
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY
 } = process.env;
 
 if (!AIRTABLE_TOKEN) {
@@ -44,6 +47,16 @@ if (!SENDGRID_API_KEY) {
 if (!RESET_EMAIL_FROM) {
   throw new Error("Missing RESET_EMAIL_FROM");
 }
+
+if (!SUPABASE_URL) {
+  throw new Error("Missing SUPABASE_URL");
+}
+
+if (!SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 sgMail.setApiKey(SENDGRID_API_KEY);
 
@@ -89,6 +102,50 @@ app.get("/api/health", (_req, res) => {
     ok: true,
     app: "Kickz Caviar Portal"
   });
+});
+
+app.get("/api/consignment/inventory", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id"
+      });
+    }
+
+    const { data, error } = await supabase
+      .from("consignment_inventory")
+      .select(`
+        id,
+        product_name,
+        sku,
+        size,
+        brand,
+        vat_type,
+        selling_price_suggested,
+        suggested_selling_price_incl_vat,
+        quantity
+      `)
+      .eq("seller_record_id", sellerRecordId)
+      .gt("quantity", 0)
+      .order("sku", { ascending: true })
+      .order("size", { ascending: true });
+
+    if (error) throw error;
+
+    res.json({
+      count: data.length,
+      items: data
+    });
+  } catch (err) {
+    console.error("Failed to load consignment inventory:", err);
+
+    res.status(500).json({
+      error: "Failed to load consignment inventory",
+      details: err.message
+    });
+  }
 });
 
 const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
