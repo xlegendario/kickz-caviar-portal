@@ -40,14 +40,6 @@ const airtable = new Airtable({
   apiKey: AIRTABLE_TOKEN
 }).base(AIRTABLE_BASE_ID);
 
-if (!SENDGRID_API_KEY) {
-  throw new Error("Missing SENDGRID_API_KEY");
-}
-
-if (!RESET_EMAIL_FROM) {
-  throw new Error("Missing RESET_EMAIL_FROM");
-}
-
 if (!SUPABASE_URL) {
   throw new Error("Missing SUPABASE_URL");
 }
@@ -57,6 +49,14 @@ if (!SUPABASE_SERVICE_ROLE_KEY) {
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+if (!SENDGRID_API_KEY) {
+  throw new Error("Missing SENDGRID_API_KEY");
+}
+
+if (!RESET_EMAIL_FROM) {
+  throw new Error("Missing RESET_EMAIL_FROM");
+}
 
 sgMail.setApiKey(SENDGRID_API_KEY);
 
