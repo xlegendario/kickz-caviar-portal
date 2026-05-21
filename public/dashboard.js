@@ -2051,11 +2051,11 @@ function createConsignmentSizeRow() {
     </label>
   
     <label>
-      <input class="consignment-price-input" type="number" min="1" step="1" required />
+      <input class="consignment-price-input" type="text" inputmode="numeric" required />
     </label>
   
     <label>
-      <input class="consignment-quantity-input" type="number" min="1" step="1" required />
+      <input class="consignment-quantity-input" type="text" inputmode="numeric" required />
     </label>
   
     <button type="button" class="dashboard-modal-close consignment-remove-size-btn">×</button>
@@ -2076,12 +2076,12 @@ function resetConsignmentAddStockForm() {
 
       <label>
         Selling Price
-        <input class="consignment-price-input" type="number" min="1" step="1" required />
+        <input class="consignment-price-input" type="text" inputmode="numeric" required />
       </label>
 
       <label>
         Quantity
-        <input class="consignment-quantity-input" type="number" min="1" step="1" required />
+        <input class="consignment-quantity-input" type="text" inputmode="numeric" required />
       </label>
     </div>
   `;
