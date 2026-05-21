@@ -293,36 +293,57 @@
           SKU
           <input id="consignmentSkuInput" type="text" required />
         </label>
-
-        <label>
-          Size EU
-          <input id="consignmentSizeInput" type="text" required />
-        </label>
-
-        <label>
-          VAT Type
-          <select id="consignmentVatTypeInput" required>
-            <option value="">Select VAT Type</option>
-            <option value="Margin">Margin</option>
-            <option value="VAT0">VAT0</option>
-            <option value="VAT21">VAT21</option>
-          </select>
-        </label>
-
-        <label>
-          Selling Price Suggested
-          <input id="consignmentSellingPriceInput" type="number" min="1" step="1" required />
-        </label>
-
-        <label>
-          Quantity
-          <input id="consignmentQuantityInput" type="number" min="1" step="1" required />
-        </label>
-
+        
+        <div class="dashboard-vat-select">
+          <div class="dashboard-vat-title">Select VAT Type</div>
+        
+          <label class="dashboard-vat-option">
+            <input type="radio" name="consignmentVatType" value="Margin" checked />
+            <span>Margin</span>
+          </label>
+        
+          <label class="dashboard-vat-option">
+            <input type="radio" name="consignmentVatType" value="VAT21" />
+            <span>VAT21</span>
+          </label>
+        
+          <label class="dashboard-vat-option">
+            <input type="radio" name="consignmentVatType" value="VAT0" />
+            <span>VAT0</span>
+          </label>
+        </div>
+        
+        <div id="consignmentSizeRows" class="consignment-size-rows">
+          <div class="consignment-size-row">
+            <label>
+              Size EU
+              <input class="consignment-size-input" type="text" required />
+            </label>
+        
+            <label>
+              Selling Price Suggested
+              <input class="consignment-price-input" type="number" min="1" step="1" required />
+            </label>
+        
+            <label>
+              Quantity
+              <input class="consignment-quantity-input" type="number" min="1" step="1" required />
+            </label>
+          </div>
+        </div>
+        
+        <button type="button" class="dashboard-refresh-btn" id="consignmentAddSizeRowBtn">
+          + Add another size
+        </button>
+        
         <button type="submit" class="dashboard-issue-submit-btn">
           Add Stock
         </button>
-
+        
+        <button type="button" class="dashboard-refresh-btn" id="consignmentAddAnotherProductBtn">
+          Add another product
+        </button>
+        
         <div class="dashboard-form-error" id="consignmentAddStockError"></div>
       </form>
     </div>
