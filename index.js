@@ -115,7 +115,8 @@ function normalizeSeller(record) {
     discord: displayValue(f["Discord"]),
     discord_id: displayValue(f["Discord ID"]),
     portal_password: displayValue(f["Portal Password"]),
-    portal_enabled: f["Portal Enabled"] !== false
+    portal_enabled: f["Portal Enabled"] !== false,
+    consignor: f["Consignor?"] === true
   };
 }
 
@@ -2418,7 +2419,8 @@ app.post("/api/login", async (req, res) => {
         seller_id: seller.seller_id,
         email: seller.email,
         discord: seller.discord,
-        discord_id: seller.discord_id
+        discord_id: seller.discord_id,
+        consignor: seller.consignor
       }
     });
   } catch (err) {
