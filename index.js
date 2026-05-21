@@ -124,7 +124,6 @@ app.get("/api/consignment/inventory", async (req, res) => {
         brand,
         vat_type,
         selling_price_suggested,
-        suggested_selling_price_incl_vat,
         quantity
       `)
       .eq("seller_record_id", sellerRecordId)
