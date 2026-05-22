@@ -2826,13 +2826,11 @@ consignmentCsvForm?.addEventListener("submit", async (event) => {
     const text = await file.text();
     const result = parseConsignmentCsv(text);
 
-    if (consignmentCsvMode.value === "replace") {
-      const duplicates = getDuplicateCsvSkuSizeRows(result.rows);
+    const duplicates = getDuplicateCsvSkuSizeRows(result.rows);
     
-      if (duplicates.length) {
-        openConsignmentCsvDuplicateModal(duplicates);
-        return;
-      }
+    if (duplicates.length) {
+      openConsignmentCsvDuplicateModal(duplicates);
+      return;
     }
 
     if (result.errors.length) {
