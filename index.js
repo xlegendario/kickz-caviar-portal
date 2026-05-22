@@ -513,6 +513,12 @@ async function refreshConsignmentStockLevel(sku, size) {
     ? Math.min(...prices)
     : null;
 
+  const { data: existingStockLevel } = await supabase
+    .from("consignment_stock_levels")
+    .select("product_name, brand")
+    .eq("stock_counter_key", stockCounterKey)
+    .maybeSingle();
+  
   const firstInfoRow =
     activeRows[0] ||
     rows?.find((row) => row.product_name || row.brand) ||
@@ -524,10 +530,16 @@ async function refreshConsignmentStockLevel(sku, size) {
     .upsert(
       {
         stock_counter_key: stockCounterKey,
-        product_name: firstInfoRow.product_name || "",
+        product_name:
+          firstInfoRow.product_name ||
+          existingStockLevel?.product_name ||
+          "",
         sku: cleanSku,
         size: cleanSize,
-        brand: firstInfoRow.brand || "",
+        brand:
+          firstInfoRow.brand ||
+          existingStockLevel?.brand ||
+          "",
         stock_level: stockLevel,
         lowest_suggested_price: lowestSuggestedPrice,
         updated_at: new Date().toISOString()
