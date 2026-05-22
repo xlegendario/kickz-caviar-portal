@@ -542,7 +542,7 @@ app.post("/api/consignment/inventory/csv-replace", async (req, res) => {
 
     if (existingError) throw existingError;
 
-    const touchedKeys = new Set();
+    const touchedItems = new Map();
 
     for (const existing of existingRows || []) {
       const key = getStockCounterKey(existing.sku, existing.size);
@@ -558,7 +558,10 @@ app.post("/api/consignment/inventory/csv-replace", async (req, res) => {
 
         if (error) throw error;
 
-        touchedKeys.add(key);
+        touchedItems.set(key, {
+          sku: existing.sku,
+          size: existing.size
+        });
       }
     }
 
@@ -579,15 +582,14 @@ app.post("/api/consignment/inventory/csv-replace", async (req, res) => {
       touchedKeys.add(getStockCounterKey(row.sku, row.size));
     }
 
-    for (const key of touchedKeys) {
-      const [sku, ...sizeParts] = key.split("-");
-      await refreshConsignmentStockLevel(sku, sizeParts.join("-"));
+    for (const item of touchedItems.values()) {
+      await refreshConsignmentStockLevel(item.sku, item.size);
     }
 
     res.json({
       ok: true,
       count: results.length,
-      zeroed: [...touchedKeys].length - results.length,
+      zeroed: Math.max(0, touchedItems.size - results.length),
       results
     });
   } catch (err) {
