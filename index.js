@@ -792,6 +792,134 @@ app.post("/api/consignment/offers/preview", async (req, res) => {
   }
 });
 
+app.post("/api/consignment/offers/create", async (req, res) => {
+  try {
+    const orderRecordId = asText(req.body?.order_record_id);
+    const orderId = asText(req.body?.order_id);
+    const sku = asText(req.body?.sku).toUpperCase();
+    const size = asText(req.body?.size);
+    const maximumBuyingPrice = Number(req.body?.maximum_buying_price);
+
+    if (!orderRecordId) return res.status(400).json({ error: "Missing order_record_id" });
+    if (!sku) return res.status(400).json({ error: "Missing SKU" });
+    if (!size) return res.status(400).json({ error: "Missing size" });
+
+    const calculatedOfferPrice = calculateConsignmentOfferPrice(maximumBuyingPrice);
+
+    if (calculatedOfferPrice === null) {
+      return res.status(400).json({ error: "Invalid Maximum Buying Price" });
+    }
+
+    const { data: inventoryRows, error: inventoryError } = await supabase
+      .from("consignment_inventory")
+      .select(`
+        id,
+        product_name,
+        sku,
+        size,
+        brand,
+        vat_type,
+        selling_price_suggested,
+        quantity,
+        seller_id,
+        seller_record_id
+      `)
+      .eq("sku", sku)
+      .eq("size", size)
+      .gt("quantity", 0);
+
+    if (inventoryError) throw inventoryError;
+
+    const results = [];
+
+    for (const row of inventoryRows || []) {
+      const sellerPrice = Number(row.selling_price_suggested);
+      const offerPrice =
+        sellerPrice <= calculatedOfferPrice
+          ? sellerPrice
+          : calculatedOfferPrice;
+
+      const offerPayload = {
+        order_record_id: orderRecordId,
+        order_id: orderId,
+        sku: row.sku,
+        size: row.size,
+        product_name: row.product_name,
+        brand: row.brand,
+        seller_record_id: row.seller_record_id,
+        seller_id: row.seller_id,
+        inventory_id: row.id,
+        seller_price: sellerPrice,
+        offer_price: offerPrice,
+        vat_type: row.vat_type,
+        quantity_at_offer: Number(row.quantity || 0),
+        status: "open",
+        updated_at: new Date().toISOString()
+      };
+
+      const { data: existingOffers, error: existingError } = await supabase
+        .from("consignment_offers")
+        .select("id")
+        .eq("order_record_id", orderRecordId)
+        .eq("seller_record_id", row.seller_record_id)
+        .eq("inventory_id", row.id)
+        .in("status", ["open"])
+        .limit(1);
+
+      if (existingError) throw existingError;
+
+      if (existingOffers?.length) {
+        const { data, error } = await supabase
+          .from("consignment_offers")
+          .update(offerPayload)
+          .eq("id", existingOffers[0].id)
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        results.push({
+          mode: "updated",
+          offer: data
+        });
+
+        continue;
+      }
+
+      const { data, error } = await supabase
+        .from("consignment_offers")
+        .insert(offerPayload)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      results.push({
+        mode: "created",
+        offer: data
+      });
+    }
+
+    res.json({
+      ok: true,
+      order_record_id: orderRecordId,
+      order_id: orderId,
+      sku,
+      size,
+      calculated_offer_price: calculatedOfferPrice,
+      count: results.length,
+      results
+    });
+  } catch (err) {
+    console.error("Failed to create consignment offers:", err);
+
+    res.status(500).json({
+      error: "Failed to create consignment offers",
+      details: err.message
+    });
+  }
+});
+
 const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
 const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
 const DISCORD_SERVER_ID = "922818998163361792";
