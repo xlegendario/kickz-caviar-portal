@@ -2675,3 +2675,13 @@
     grid-template-columns: 1fr;
   }
 }
+
+.dashboard-table-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dashboard-table-actions .consignment-inventory-actions {
+  margin-left: 0;
+}
