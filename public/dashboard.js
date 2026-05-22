@@ -262,17 +262,13 @@ function syncDashboardUi() {
       subnav?.classList.add("open");
     }
   });
-
-  document.querySelectorAll(".dashboard-subnav-btn").forEach((button) => {
-    button.classList.remove("active");
-  });
   
   document.querySelectorAll(".dashboard-subnav-btn").forEach((button) => {
-    const isActive =
+    button.classList.toggle(
+      "active",
       button.dataset.section === activeSection &&
-      button.dataset.tab === activeTab;
-  
-    button.classList.toggle("active", isActive);
+      button.dataset.tab === activeTab
+    );
   });
 
   renderStats();
