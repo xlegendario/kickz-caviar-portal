@@ -64,7 +64,8 @@ const consignmentInventoryColumns = [
   "Size",
   "Brand",
   "VAT Type",
-  "Suggested Price",
+  "Selling Price",
+  "Lowest Price",
   "Quantity",
   "Action"
 ];
