@@ -262,6 +262,81 @@ async function addConsignmentInventoryRow({
   };
 }
 
+async function setConsignmentInventoryRow({
+  sellerRecordId,
+  sellerId,
+  sku,
+  size,
+  vatType,
+  sellingPriceSuggested,
+  quantity
+}) {
+  const cleanSku = asText(sku).toUpperCase();
+  const cleanSize = asText(size);
+  const cleanVatType = asText(vatType);
+  const cleanPrice = Number(sellingPriceSuggested);
+  const cleanQuantity = Number(quantity);
+
+  const productInfo = await lookupSkuMasterProduct(cleanSku);
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from("consignment_inventory")
+    .select("id")
+    .eq("seller_record_id", sellerRecordId)
+    .eq("sku", cleanSku)
+    .eq("size", cleanSize)
+    .limit(1);
+
+  if (existingError) throw existingError;
+
+  if (existingRows.length) {
+    const { data, error } = await supabase
+      .from("consignment_inventory")
+      .update({
+        seller_id: sellerId,
+        product_name: productInfo.product_name,
+        brand: productInfo.brand,
+        vat_type: cleanVatType,
+        selling_price_suggested: cleanPrice,
+        quantity: cleanQuantity,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", existingRows[0].id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    return {
+      mode: "updated",
+      item: data
+    };
+  }
+
+  const { data, error } = await supabase
+    .from("consignment_inventory")
+    .insert({
+      seller_record_id: sellerRecordId,
+      seller_id: sellerId,
+      product_name: productInfo.product_name,
+      brand: productInfo.brand,
+      sku: cleanSku,
+      size: cleanSize,
+      vat_type: cleanVatType,
+      selling_price_suggested: cleanPrice,
+      quantity: cleanQuantity
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  return {
+    mode: "created",
+    item: data
+  };
+}
+
 app.post("/api/consignment/inventory/manual", async (req, res) => {
   try {
     const sellerRecordId = asText(req.body?.seller_record_id);
@@ -388,6 +463,138 @@ app.post("/api/consignment/inventory/csv-add", async (req, res) => {
 
     res.status(500).json({
       error: "Failed to add consignment inventory through CSV",
+      details: err.message
+    });
+  }
+});
+
+app.post("/api/consignment/inventory/csv-replace", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const sellerId = asText(req.body?.seller_id);
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+
+    if (!sellerRecordId) {
+      return res.status(400).json({ error: "Missing seller_record_id" });
+    }
+
+    if (!rows.length) {
+      return res.status(400).json({ error: "No CSV rows provided" });
+    }
+
+    if (rows.length > 500) {
+      return res.status(400).json({
+        error: "CSV upload is limited to 500 rows"
+      });
+    }
+
+    const normalizedRows = rows.map((row) => ({
+      row_number: row.row_number,
+      sku: asText(row.sku).toUpperCase(),
+      size: asText(row.size),
+      vat_type: asText(row.vat_type),
+      selling_price_suggested: Number(row.selling_price_suggested),
+      quantity: Number(row.quantity)
+    }));
+
+    const csvKeys = new Set();
+
+    for (const row of normalizedRows) {
+      const key = getStockCounterKey(row.sku, row.size);
+
+      if (!row.sku || !row.size) {
+        return res.status(400).json({
+          error: `Invalid row ${row.row_number || ""}: missing SKU or Size`
+        });
+      }
+
+      if (csvKeys.has(key)) {
+        return res.status(400).json({
+          error: `Duplicate SKU + Size in CSV: ${row.sku} / ${row.size}`
+        });
+      }
+
+      csvKeys.add(key);
+
+      if (!["Margin", "VAT0", "VAT21"].includes(row.vat_type)) {
+        return res.status(400).json({
+          error: `Invalid row ${row.row_number || ""}: invalid VAT Type`
+        });
+      }
+
+      if (!Number.isFinite(row.selling_price_suggested) || row.selling_price_suggested <= 0) {
+        return res.status(400).json({
+          error: `Invalid row ${row.row_number || ""}: invalid Selling Price`
+        });
+      }
+
+      if (!Number.isInteger(row.quantity) || row.quantity < 0) {
+        return res.status(400).json({
+          error: `Invalid row ${row.row_number || ""}: invalid Quantity`
+        });
+      }
+    }
+
+    const { data: existingRows, error: existingError } = await supabase
+      .from("consignment_inventory")
+      .select("id, sku, size, quantity")
+      .eq("seller_record_id", sellerRecordId);
+
+    if (existingError) throw existingError;
+
+    const touchedKeys = new Set();
+
+    for (const existing of existingRows || []) {
+      const key = getStockCounterKey(existing.sku, existing.size);
+
+      if (!csvKeys.has(key) && Number(existing.quantity || 0) !== 0) {
+        const { error } = await supabase
+          .from("consignment_inventory")
+          .update({
+            quantity: 0,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", existing.id);
+
+        if (error) throw error;
+
+        touchedKeys.add(key);
+      }
+    }
+
+    const results = [];
+
+    for (const row of normalizedRows) {
+      const result = await setConsignmentInventoryRow({
+        sellerRecordId,
+        sellerId,
+        sku: row.sku,
+        size: row.size,
+        vatType: row.vat_type,
+        sellingPriceSuggested: row.selling_price_suggested,
+        quantity: row.quantity
+      });
+
+      results.push(result);
+      touchedKeys.add(getStockCounterKey(row.sku, row.size));
+    }
+
+    for (const key of touchedKeys) {
+      const [sku, ...sizeParts] = key.split("-");
+      await refreshConsignmentStockLevel(sku, sizeParts.join("-"));
+    }
+
+    res.json({
+      ok: true,
+      count: results.length,
+      zeroed: [...touchedKeys].length - results.length,
+      results
+    });
+  } catch (err) {
+    console.error("Failed to replace consignment inventory through CSV:", err);
+
+    res.status(500).json({
+      error: "Failed to replace consignment inventory through CSV",
       details: err.message
     });
   }
