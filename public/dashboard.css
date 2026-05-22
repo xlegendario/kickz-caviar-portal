@@ -2708,8 +2708,7 @@
   margin-left: 0;
 }
 
-#dashboardSubtabDescription {
-  display: flex;
-  justify-content: flex-end;
-  width: 100%;
+.dashboard-table-header > div:first-child {
+  flex: 1;
+  min-width: 0;
 }
