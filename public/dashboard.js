@@ -2799,8 +2799,44 @@ consignmentCsvForm?.addEventListener("submit", async (event) => {
       return;
     }
 
-    consignmentCsvPreview.textContent =
-      `${result.rows.length} valid rows found. Database write comes next.`;
+    if (consignmentCsvMode.value !== "add") {
+      consignmentCsvPreview.textContent =
+        `${result.rows.length} valid rows found. Replace Stock write comes next.`;
+      return;
+    }
+    
+    const submitBtn = consignmentCsvForm.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Uploading...";
+    
+    try {
+      const response = await fetch("/api/consignment/inventory/csv-add", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          seller_record_id: dashboardSeller.id,
+          seller_id: dashboardSeller.seller_id,
+          rows: result.rows
+        })
+      });
+    
+      const data = await response.json();
+    
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to upload CSV");
+      }
+    
+      consignmentCsvPreview.textContent =
+        `${data.count || result.rows.length} rows uploaded successfully.`;
+    
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Preview CSV";
+    }
   } catch (err) {
     consignmentCsvError.textContent = err.message;
   }
