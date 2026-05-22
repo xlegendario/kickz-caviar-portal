@@ -223,10 +223,13 @@ app.post("/api/consignment/inventory/manual", async (req, res) => {
         throw error;
       }
 
+      const stockLevel = await refreshConsignmentStockLevel(sku, size);
+
       return res.json({
         ok: true,
         mode: "updated",
-        item: data
+        item: data,
+        stock_level: stockLevel
       });
     }
 
@@ -250,10 +253,13 @@ app.post("/api/consignment/inventory/manual", async (req, res) => {
       throw error;
     }
 
+    const stockLevel = await refreshConsignmentStockLevel(sku, size);
+
     res.json({
       ok: true,
       mode: "created",
-      item: data
+      item: data,
+      stock_level: stockLevel
     });
   } catch (err) {
     console.error("Failed to manually add consignment inventory:", err);
@@ -393,6 +399,10 @@ function sortDashboardItemsNewestFirst(items) {
   });
 }
 
+function getStockCounterKey(sku, size) {
+  return `${asText(sku).toUpperCase()}-${asText(size).toUpperCase()}`;
+}
+
 async function lookupSkuMasterProduct(sku) {
   const cleanSku = asText(sku);
 
@@ -424,6 +434,69 @@ async function lookupSkuMasterProduct(sku) {
     product_name: displayValue(record.fields?.["Product Name"]),
     brand: displayValue(record.fields?.["Brand"])
   };
+}
+
+async function refreshConsignmentStockLevel(sku, size) {
+  const cleanSku = asText(sku).toUpperCase();
+  const cleanSize = asText(size).toUpperCase();
+  const stockCounterKey = getStockCounterKey(cleanSku, cleanSize);
+
+  const { data: rows, error: rowsError } = await supabase
+    .from("consignment_inventory")
+    .select("product_name, sku, size, brand, quantity, selling_price_suggested")
+    .eq("sku", cleanSku)
+    .eq("size", cleanSize);
+
+  if (rowsError) {
+    throw rowsError;
+  }
+
+  const activeRows = (rows || []).filter((row) => Number(row.quantity || 0) > 0);
+
+  const stockLevel = activeRows.reduce(
+    (sum, row) => sum + Number(row.quantity || 0),
+    0
+  );
+
+  const prices = activeRows
+    .map((row) => Number(row.selling_price_suggested))
+    .filter((price) => Number.isFinite(price) && price > 0);
+
+  const lowestSuggestedPrice = prices.length
+    ? Math.min(...prices)
+    : null;
+
+  const firstInfoRow =
+    activeRows[0] ||
+    rows?.find((row) => row.product_name || row.brand) ||
+    rows?.[0] ||
+    {};
+
+  const { data, error } = await supabase
+    .from("consignment_stock_levels")
+    .upsert(
+      {
+        stock_counter_key: stockCounterKey,
+        product_name: firstInfoRow.product_name || "",
+        sku: cleanSku,
+        size: cleanSize,
+        brand: firstInfoRow.brand || "",
+        stock_level: stockLevel,
+        lowest_suggested_price: lowestSuggestedPrice,
+        updated_at: new Date().toISOString()
+      },
+      {
+        onConflict: "stock_counter_key"
+      }
+    )
+    .select()
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
 }
 
 async function loadOrderFieldsMap(orderRecordIds) {
