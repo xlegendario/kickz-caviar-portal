@@ -1397,7 +1397,7 @@ async function loadDashboardData() {
         </button>
     
         <button class="dashboard-refresh-btn" type="button" id="consignmentOpenCsvUploadBtn">
-          Upload Stock CSV
+          + Upload CSV
         </button>
       </div>
     `);
