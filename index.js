@@ -33,6 +33,9 @@ const {
   SUPABASE_SERVICE_ROLE_KEY
 } = process.env;
 
+const AIRTABLE_ORDERS_TABLE = "Unfulfilled Orders Log";
+const AIRTABLE_INVENTORY_UNITS_TABLE = "Inventory Units";
+
 if (!AIRTABLE_TOKEN) {
   throw new Error("Missing AIRTABLE_TOKEN");
 }
@@ -75,6 +78,30 @@ async function initDiscord() {
   }
 
   console.log("✅ Discord bot logged in");
+}
+
+async function createConsignmentInventoryUnitFromOffer(offer) {
+  const itemId = `CS-${Date.now()}`;
+
+  const created = await airtable(AIRTABLE_INVENTORY_UNITS_TABLE).create({
+    "Item ID": itemId,
+    "Type": "Consignment",
+    "Availability Status": "Reserved",
+
+    "Product Name": offer.product_name,
+    "SKU": offer.sku,
+    "Size": offer.size,
+    "Brand": offer.brand,
+
+    "Seller ID": offer.seller_id,
+
+    "Purchase Price": Number(offer.offer_price),
+    "VAT Type": offer.vat_type,
+
+    "Selling Method": "Plug & Play"
+  });
+
+  return created;
 }
 
 if (!SENDGRID_API_KEY) {
@@ -305,6 +332,17 @@ function bindConsignmentDiscordButtons() {
       }
 
       if (action === "confirm_offer") {
+        const inventoryUnit =
+          await createConsignmentInventoryUnitFromOffer(offer);
+      
+        await airtable(AIRTABLE_ORDERS_TABLE).update(
+          offer.order_record_id,
+          {
+            "Linked Inventory Unit": [{ id: inventoryUnit.id }],
+            "Fulfillment Status": "Allocated"
+          }
+        );
+      
         await supabase
           .from("consignment_offers")
           .update({
@@ -314,13 +352,13 @@ function bindConsignmentDiscordButtons() {
             updated_at: new Date().toISOString()
           })
           .eq("id", offer.id);
-
+      
         await disableConsignmentDiscordButtons(
           interaction.channelId,
           interaction.message.id,
           `✅ Confirmed by ${offer.seller_id}.`
         );
-
+      
         return;
       }
     } catch (err) {
