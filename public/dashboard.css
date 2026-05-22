@@ -2557,51 +2557,74 @@
 }
 
 /* Consignment inventory column sizing */
-.dashboard-table:has([data-consignment-delete-id]) {
+.dashboard-table:has([data-consignment-delete-id]),
+.dashboard-table:has([data-consignment-edit-id]) {
   table-layout: fixed;
-  min-width: 1100px;
+  min-width: 1350px;
 }
 
 .dashboard-table:has([data-consignment-delete-id]) th:nth-child(1),
-.dashboard-table:has([data-consignment-delete-id]) td:nth-child(1) {
-  width: 36%;
+.dashboard-table:has([data-consignment-delete-id]) td:nth-child(1),
+.dashboard-table:has([data-consignment-edit-id]) th:nth-child(1),
+.dashboard-table:has([data-consignment-edit-id]) td:nth-child(1) {
+  width: 34%;
   white-space: normal;
 }
 
 .dashboard-table:has([data-consignment-delete-id]) th:nth-child(2),
-.dashboard-table:has([data-consignment-delete-id]) td:nth-child(2) {
+.dashboard-table:has([data-consignment-delete-id]) td:nth-child(2),
+.dashboard-table:has([data-consignment-edit-id]) th:nth-child(2),
+.dashboard-table:has([data-consignment-edit-id]) td:nth-child(2) {
   width: 130px;
 }
 
 .dashboard-table:has([data-consignment-delete-id]) th:nth-child(3),
-.dashboard-table:has([data-consignment-delete-id]) td:nth-child(3) {
-  width: 80px;
+.dashboard-table:has([data-consignment-delete-id]) td:nth-child(3),
+.dashboard-table:has([data-consignment-edit-id]) th:nth-child(3),
+.dashboard-table:has([data-consignment-edit-id]) td:nth-child(3) {
+  width: 75px;
 }
 
 .dashboard-table:has([data-consignment-delete-id]) th:nth-child(4),
-.dashboard-table:has([data-consignment-delete-id]) td:nth-child(4) {
-  width: 110px;
+.dashboard-table:has([data-consignment-delete-id]) td:nth-child(4),
+.dashboard-table:has([data-consignment-edit-id]) th:nth-child(4),
+.dashboard-table:has([data-consignment-edit-id]) td:nth-child(4) {
+  width: 105px;
 }
 
 .dashboard-table:has([data-consignment-delete-id]) th:nth-child(5),
-.dashboard-table:has([data-consignment-delete-id]) td:nth-child(5) {
+.dashboard-table:has([data-consignment-delete-id]) td:nth-child(5),
+.dashboard-table:has([data-consignment-edit-id]) th:nth-child(5),
+.dashboard-table:has([data-consignment-edit-id]) td:nth-child(5) {
   width: 100px;
 }
 
 .dashboard-table:has([data-consignment-delete-id]) th:nth-child(6),
-.dashboard-table:has([data-consignment-delete-id]) td:nth-child(6) {
-  width: 150px;
+.dashboard-table:has([data-consignment-delete-id]) td:nth-child(6),
+.dashboard-table:has([data-consignment-edit-id]) th:nth-child(6),
+.dashboard-table:has([data-consignment-edit-id]) td:nth-child(6) {
+  width: 145px;
 }
 
 .dashboard-table:has([data-consignment-delete-id]) th:nth-child(7),
-.dashboard-table:has([data-consignment-delete-id]) td:nth-child(7) {
-  width: 100px;
+.dashboard-table:has([data-consignment-delete-id]) td:nth-child(7),
+.dashboard-table:has([data-consignment-edit-id]) th:nth-child(7),
+.dashboard-table:has([data-consignment-edit-id]) td:nth-child(7) {
+  width: 145px;
 }
 
 .dashboard-table:has([data-consignment-delete-id]) th:nth-child(8),
-.dashboard-table:has([data-consignment-delete-id]) td:nth-child(8) {
-  width: 90px;
-  text-align: center;
+.dashboard-table:has([data-consignment-delete-id]) td:nth-child(8),
+.dashboard-table:has([data-consignment-edit-id]) th:nth-child(8),
+.dashboard-table:has([data-consignment-edit-id]) td:nth-child(8) {
+  width: 95px;
+}
+
+.dashboard-table:has([data-consignment-delete-id]) th:nth-child(9),
+.dashboard-table:has([data-consignment-delete-id]) td:nth-child(9),
+.dashboard-table:has([data-consignment-edit-id]) th:nth-child(9),
+.dashboard-table:has([data-consignment-edit-id]) td:nth-child(9) {
+  width: 150px;
 }
 
 .consignment-inventory-actions {
