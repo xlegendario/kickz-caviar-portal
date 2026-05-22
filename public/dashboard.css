@@ -2637,11 +2637,11 @@
 .consignment-inventory-actions .dashboard-issue-submit-btn,
 .consignment-inventory-actions .dashboard-refresh-btn {
   width: auto;
-  height: 46px;
-  min-height: 46px;
+  height: 44px;
+  min-height: 44px;
   margin-top: 0;
-  padding: 0 18px;
-  font-size: 15px;
+  padding: 0 16px;
+  font-size: 14px;
   font-weight: 900;
   line-height: 1;
 }
