@@ -2836,7 +2836,7 @@ consignmentCsvForm?.addEventListener("submit", async (event) => {
       await loadDashboardCounts();
     } finally {
       submitBtn.disabled = false;
-      submitBtn.textContent = "Preview CSV";
+      submitBtn.textContent = "Upload";
     }
   } catch (err) {
     consignmentCsvError.textContent = err.message;
