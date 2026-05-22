@@ -261,10 +261,15 @@ function syncDashboardUi() {
   });
 
   document.querySelectorAll(".dashboard-subnav-btn").forEach((button) => {
-    button.classList.toggle(
-      "active",
-      button.dataset.section === activeSection && button.dataset.tab === activeTab
-    );
+    button.classList.remove("active");
+  });
+  
+  document.querySelectorAll(".dashboard-subnav-btn").forEach((button) => {
+    const isActive =
+      button.dataset.section === activeSection &&
+      button.dataset.tab === activeTab;
+  
+    button.classList.toggle("active", isActive);
   });
 
   renderStats();
