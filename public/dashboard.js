@@ -70,6 +70,18 @@ const consignmentInventoryColumns = [
   "Action"
 ];
 
+const consignmentOfferColumns = [
+  "Order ID",
+  "Product",
+  "SKU",
+  "Size",
+  "Brand",
+  "Your Price",
+  "Offer",
+  "VAT Type",
+  "Action"
+];
+
 let dashboardSeller = JSON.parse(localStorage.getItem("kc_seller") || "null");
 let activeSection = localStorage.getItem("kc_dashboard_section") || "quick";
 let activeTab = localStorage.getItem("kc_dashboard_tab") || "open_claims";
@@ -711,6 +723,57 @@ function renderConsignmentInventoryRows(items) {
               <path d="M10 11v6" stroke="currentColor"/>
               <path d="M14 11v6" stroke="currentColor"/>
             </svg>
+          </button>
+        </div>
+      </td>
+    </tr>
+  `).join("");
+}
+
+function renderConsignmentOfferRows(items) {
+  dashboardTableBody
+    .closest(".dashboard-table")
+    ?.classList.remove("open-offers-table");
+
+  dashboardTableHead.innerHTML = consignmentOfferColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${consignmentOfferColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No consignment offers yet</strong>
+            <span>When one of your consignment items matches an order, it will show here.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  setMobileTableMode(false);
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${escapeHtml(item.product_name || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${item.seller_price ? `€${escapeHtml(item.seller_price)}` : "-"}</td>
+      <td>${item.offer_price ? `€${escapeHtml(item.offer_price)}` : "-"}</td>
+      <td>${escapeHtml(item.vat_type || "-")}</td>
+      <td>
+        <div class="dashboard-action-row">
+          <button
+            class="dashboard-edit-btn"
+            type="button"
+            disabled
+          >
+            Pending
           </button>
         </div>
       </td>
@@ -1467,6 +1530,43 @@ async function loadDashboardData() {
     renderConsignmentInventoryRows(data.items || []);
   
     dashboardCountsCache.consignment.inventory = data.count || 0;
+    renderStats();
+  
+    return;
+  }
+
+  if (activeSection === "consignment" && activeTab === "offers") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${consignmentOfferColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading consignment offers...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/consignment/offers?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load consignment offers"
+      );
+    }
+  
+    renderConsignmentOfferRows(data.items || []);
+  
+    dashboardCountsCache.consignment.offers = data.count || 0;
     renderStats();
   
     return;
