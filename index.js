@@ -453,7 +453,7 @@ function bindConsignmentDiscordButtons() {
           interaction.message.id,
           `✅ Confirmed by ${lockedOffer.seller_id}.`
         );
-      
+
         return;
       }
     } catch (err) {
