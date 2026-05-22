@@ -594,16 +594,15 @@ function bindConsignmentInputCleaning() {
     if (quantityInput) {
       quantityInput.value = cleanWholeNumberInput(quantityInput.value);
     }
+  });
+  consignmentEditSellingPriceInput?.addEventListener("input", () => {
+    consignmentEditSellingPriceInput.value =
+      cleanWholeNumberInput(consignmentEditSellingPriceInput.value);
+  });
     
-    consignmentEditSellingPriceInput?.addEventListener("input", () => {
-      consignmentEditSellingPriceInput.value =
-        cleanWholeNumberInput(consignmentEditSellingPriceInput.value);
-    });
-    
-    consignmentEditQuantityInput?.addEventListener("input", () => {
-      consignmentEditQuantityInput.value =
-        cleanWholeNumberInput(consignmentEditQuantityInput.value);
-    });
+  consignmentEditQuantityInput?.addEventListener("input", () => {
+    consignmentEditQuantityInput.value =
+      cleanWholeNumberInput(consignmentEditQuantityInput.value);
   });
 }
 
@@ -683,7 +682,6 @@ function renderConsignmentInventoryRows(items) {
           </button>
         </div>
       </td>
-      </tr>
     </tr>
   `).join("");
 }
