@@ -92,7 +92,7 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     "VAT Type": offer.vat_type,
     "Purchase Price": purchasePrice,
     "Shipping Deduction": 0,
-    "Purchase Date": new Date().toISOString().slice(0, 10),
+    "Purchase Date": new Date().toLocaleDateString("en-CA"),
 
     "Seller ID": [{ id: offer.seller_record_id }],
     "Ticket Number": offer.order_id,
