@@ -720,6 +720,78 @@ app.patch("/api/consignment/inventory/:id", async (req, res) => {
   }
 });
 
+app.post("/api/consignment/offers/preview", async (req, res) => {
+  try {
+    const sku = asText(req.body?.sku).toUpperCase();
+    const size = asText(req.body?.size);
+    const maximumBuyingPrice = Number(req.body?.maximum_buying_price);
+
+    if (!sku) return res.status(400).json({ error: "Missing SKU" });
+    if (!size) return res.status(400).json({ error: "Missing size" });
+
+    const calculatedOfferPrice = calculateConsignmentOfferPrice(maximumBuyingPrice);
+
+    if (calculatedOfferPrice === null) {
+      return res.status(400).json({ error: "Invalid Maximum Buying Price" });
+    }
+
+    const { data: inventoryRows, error } = await supabase
+      .from("consignment_inventory")
+      .select(`
+        id,
+        product_name,
+        sku,
+        size,
+        brand,
+        vat_type,
+        selling_price_suggested,
+        quantity,
+        seller_id,
+        seller_record_id
+      `)
+      .eq("sku", sku)
+      .eq("size", size)
+      .gt("quantity", 0);
+
+    if (error) throw error;
+
+    const offers = (inventoryRows || []).map((row) => ({
+      inventory_id: row.id,
+      seller_record_id: row.seller_record_id,
+      seller_id: row.seller_id,
+      sku: row.sku,
+      size: row.size,
+      product_name: row.product_name,
+      brand: row.brand,
+      vat_type: row.vat_type,
+      seller_price: Number(row.selling_price_suggested),
+      calculated_offer_price: calculatedOfferPrice,
+      offer_price:
+        Number(row.selling_price_suggested) <= calculatedOfferPrice
+          ? Number(row.selling_price_suggested)
+          : calculatedOfferPrice,
+      quantity: Number(row.quantity || 0)
+    }));
+
+    res.json({
+      ok: true,
+      sku,
+      size,
+      maximum_buying_price: maximumBuyingPrice,
+      calculated_offer_price: calculatedOfferPrice,
+      count: offers.length,
+      offers
+    });
+  } catch (err) {
+    console.error("Failed to preview consignment offers:", err);
+
+    res.status(500).json({
+      error: "Failed to preview consignment offers",
+      details: err.message
+    });
+  }
+});
+
 const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
 const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
 const DISCORD_SERVER_ID = "922818998163361792";
@@ -851,6 +923,22 @@ function sortDashboardItemsNewestFirst(items) {
 
 function getStockCounterKey(sku, size) {
   return `${asText(sku).toUpperCase()}-${asText(size).toUpperCase()}`;
+}
+
+function roundUpToStep(value, step = 2.5) {
+  return Math.ceil(Number(value || 0) / step) * step;
+}
+
+function calculateConsignmentOfferPrice(maximumBuyingPrice) {
+  const max = Number(maximumBuyingPrice);
+
+  if (!Number.isFinite(max) || max <= 0) {
+    return null;
+  }
+
+  const rawOffer = max - (max * 0.075) - 5;
+
+  return roundUpToStep(rawOffer, 2.5);
 }
 
 async function lookupSkuMasterProduct(sku) {
