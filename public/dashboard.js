@@ -2197,7 +2197,14 @@ async function handleDeleteOffer(button) {
       }
     );
 
-    const data = await response.json();
+    const raw = await response.text();
+
+    let data = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      throw new Error(raw || "Delete endpoint did not return JSON");
+    }
 
     if (!response.ok) {
       throw new Error(data.details || data.error || "Failed to delete offer");
