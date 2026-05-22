@@ -2606,6 +2606,8 @@
 
 .consignment-inventory-actions {
   display: flex;
+  align-items: center;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: 10px;
 }
@@ -2617,6 +2619,9 @@
   min-height: 46px;
   margin-top: 0;
   padding: 0 18px;
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1;
 }
 
 .consignment-csv-mode-grid {
