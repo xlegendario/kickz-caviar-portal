@@ -2603,3 +2603,18 @@
   width: 90px;
   text-align: center;
 }
+
+.consignment-inventory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.consignment-inventory-actions .dashboard-issue-submit-btn,
+.consignment-inventory-actions .dashboard-refresh-btn {
+  width: auto;
+  height: 46px;
+  min-height: 46px;
+  margin-top: 0;
+  padding: 0 18px;
+}
