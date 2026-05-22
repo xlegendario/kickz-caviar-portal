@@ -328,7 +328,7 @@ function bindConsignmentDiscordButtons() {
             closed_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           })
-          .eq("id", offer.id);
+          .eq("id", lockedOffer.id)
 
         await disableConsignmentDiscordButtons(
           interaction.channelId,
@@ -340,13 +340,18 @@ function bindConsignmentDiscordButtons() {
       }
 
       if (action === "confirm_offer") {
-        const { data: freshOffer } = await supabase
+        const { data: lockedOffer, error: lockError } = await supabase
           .from("consignment_offers")
-          .select("status")
-          .eq("id", offer.id)
+          .update({
+            status: "processing",
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", lockedOffer.id)
+          .eq("status", "open")
+          .select()
           .single();
         
-        if (!freshOffer || freshOffer.status !== "open") {
+        if (lockError || !lockedOffer) {
           await disableConsignmentDiscordButtons(
             interaction.channelId,
             interaction.message.id,
@@ -356,7 +361,7 @@ function bindConsignmentDiscordButtons() {
           return;
         }
         const inventoryUnit =
-          await createConsignmentInventoryUnitFromOffer(offer);
+          await createConsignmentInventoryUnitFromOffer(lockedOffer);
 
         const { data: inventoryRow, error: inventoryFetchError } =
           await supabase
@@ -398,7 +403,7 @@ function bindConsignmentDiscordButtons() {
             closed_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           })
-          .eq("id", offer.id);
+          .eq("id", lockedOffer.id)
 
         const { data: competingOffers } = await supabase
           .from("consignment_offers")
