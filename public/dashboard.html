@@ -435,5 +435,20 @@
   </div>
 
   <script src="/dashboard.js"></script>
+
+  <div class="dashboard-modal hidden" id="consignmentCsvDuplicateModal">
+    <div class="dashboard-modal-backdrop"></div>
+  
+    <div class="dashboard-modal-card">
+      <h2>Duplicate rows found</h2>
+      <p>Please review the CSV and try again.</p>
+  
+      <div class="consignment-duplicate-list" id="consignmentCsvDuplicateList"></div>
+  
+      <button type="button" class="dashboard-issue-submit-btn" id="consignmentCsvDuplicateBackBtn">
+        Back
+      </button>
+    </div>
+  </div>
 </body>
 </html>
