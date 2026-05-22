@@ -2243,12 +2243,6 @@ dashboardTableBody.addEventListener("click", async (event) => {
   if (consignmentDeleteButton) {
     const inventoryId = consignmentDeleteButton.dataset.consignmentDeleteId;
 
-    const confirmed = window.confirm(
-      "Are you sure you want to delete this inventory row?"
-    );
-
-    if (!confirmed) return;
-
     consignmentDeleteButton.disabled = true;
 
     try {
