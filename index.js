@@ -920,6 +920,51 @@ app.post("/api/consignment/offers/create", async (req, res) => {
   }
 });
 
+app.get("/api/consignment/offers", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({ error: "Missing seller_record_id" });
+    }
+
+    const { data, error } = await supabase
+      .from("consignment_offers")
+      .select(`
+        id,
+        order_id,
+        order_record_id,
+        product_name,
+        sku,
+        size,
+        brand,
+        seller_price,
+        offer_price,
+        vat_type,
+        status,
+        created_at
+      `)
+      .eq("seller_record_id", sellerRecordId)
+      .eq("status", "open")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    res.json({
+      ok: true,
+      count: data?.length || 0,
+      items: data || []
+    });
+  } catch (err) {
+    console.error("Failed to load consignment offers:", err);
+
+    res.status(500).json({
+      error: "Failed to load consignment offers",
+      details: err.message
+    });
+  }
+});
+
 const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
 const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
 const DISCORD_SERVER_ID = "922818998163361792";
