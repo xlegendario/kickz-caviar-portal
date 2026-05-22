@@ -2743,3 +2743,21 @@
   margin-right: 12px;
   cursor: pointer;
 }
+
+.consignment-duplicate-list {
+  max-height: 260px;
+  overflow-y: auto;
+  display: grid;
+  gap: 10px;
+  margin: 20px 0 24px;
+}
+
+.consignment-duplicate-list div {
+  padding: 13px 15px;
+  border-radius: 14px;
+  background: rgba(255, 90, 90, 0.08);
+  border: 1px solid rgba(255, 90, 90, 0.22);
+  color: #ff9b9b;
+  font-size: 14px;
+  font-weight: 900;
+}
