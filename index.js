@@ -346,7 +346,7 @@ function bindConsignmentDiscordButtons() {
             status: "processing",
             updated_at: new Date().toISOString()
           })
-          .eq("id", lockedOffer.id)
+          .eq("id", offer.id)
           .eq("status", "open")
           .select()
           .single();
@@ -367,7 +367,7 @@ function bindConsignmentDiscordButtons() {
           await supabase
             .from("consignment_inventory")
             .select("id, quantity, sku, size")
-            .eq("id", offer.inventory_id)
+            .eq("id", lockedOffer.inventory_id)
             .single();
         
         if (inventoryFetchError) {
@@ -412,11 +412,11 @@ function bindConsignmentDiscordButtons() {
             discord_channel_id,
             discord_message_id
           `)
-          .eq("order_record_id", offer.order_record_id)
+          .eq("order_record_id", lockedOffer.order_record_id)
           .eq("status", "open");
         
         for (const competingOffer of competingOffers || []) {
-          if (competingOffer.id === offer.id) {
+          if (competingOffer.id === lockedOffer.id)
             continue;
           }
         
@@ -451,7 +451,7 @@ function bindConsignmentDiscordButtons() {
         await disableConsignmentDiscordButtons(
           interaction.channelId,
           interaction.message.id,
-          `✅ Confirmed by ${offer.seller_id}.`
+          `✅ Confirmed by ${lockedOffer.seller_id}.`
         );
       
         return;
