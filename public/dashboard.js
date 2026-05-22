@@ -2360,10 +2360,10 @@ dashboardContent.addEventListener("click", (event) => {
     openConsignmentAddStockModal();
   }
 
-  const csvButton = event.target.closest("[data-consignment-csv-mode]");
-  
+  const csvButton = event.target.closest("#consignmentOpenCsvUploadBtn");
+
   if (csvButton) {
-    openConsignmentCsvModal(csvButton.dataset.consignmentCsvMode);
+    openConsignmentCsvModal("add");
   }
 });
 
@@ -2671,6 +2671,9 @@ consignmentCsvForm?.addEventListener("submit", async (event) => {
 
   consignmentCsvPreview.textContent = "";
   consignmentCsvError.textContent = "";
+
+  consignmentCsvMode.value =
+    document.querySelector('input[name="consignmentCsvModeChoice"]:checked')?.value || "add";
 
   const file = consignmentCsvFileInput.files?.[0];
 
