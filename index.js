@@ -106,7 +106,7 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     "Margin": "10%",
     "Base Costs": 0,
 
-    "Unfulfilled Orders Log": [offer.order_record_id]
+    "Unfulfilled Orders Log": [offer.order_record_id],
   });
 
   return created;
