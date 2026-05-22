@@ -2618,3 +2618,55 @@
   margin-top: 0;
   padding: 0 18px;
 }
+
+.consignment-csv-mode-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.consignment-csv-mode-card {
+  border: 1px solid #2b2b2b;
+  border-radius: 18px;
+  background: #111;
+  padding: 16px;
+  cursor: pointer;
+  display: grid;
+  gap: 8px;
+}
+
+.consignment-csv-mode-card input {
+  display: none;
+}
+
+.consignment-csv-mode-card strong {
+  color: white;
+  font-size: 15px;
+}
+
+.consignment-csv-mode-card span {
+  color: rgba(255,255,255,0.58);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.consignment-csv-mode-card:has(input:checked) {
+  border-color: #ffcc00;
+  background: linear-gradient(180deg, rgba(255,204,0,0.12), #111);
+  box-shadow: 0 0 0 1px rgba(255,204,0,0.28) inset;
+}
+
+.consignment-template-download {
+  width: 100%;
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+@media (max-width: 768px) {
+  .consignment-csv-mode-grid {
+    grid-template-columns: 1fr;
+  }
+}
