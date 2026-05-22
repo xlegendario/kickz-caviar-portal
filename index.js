@@ -1044,19 +1044,17 @@ app.post("/api/consignment/offers/create", async (req, res) => {
         throw error;
       }
 
-      const { data: sellerRow, error: sellerError } = await supabase
-        .from("sellers")
-        .select(`
-          seller_id,
-          consignment_offer_channel_id,
-          consignment_confirmation_channel_id
-        `)
-        .eq("record_id", row.seller_record_id)
-        .single();
-
-      if (sellerError) {
-        throw sellerError;
-      }
+      const sellerRecord = await airtable(SELLERS_TABLE).find(row.seller_record_id);
+      
+      const sellerRow = {
+        seller_id: displayValue(sellerRecord.fields?.["Seller ID"]),
+        consignment_offer_channel_id: displayValue(
+          sellerRecord.fields?.["Consignment Offer Channel ID"]
+        ),
+        consignment_confirmation_channel_id: displayValue(
+          sellerRecord.fields?.["Consignment Confirmation Channel ID"]
+        )
+      };
 
       const discordResult =
         await sendConsignmentOfferDiscordMessage({
