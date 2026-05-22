@@ -1418,6 +1418,8 @@ function renderConfirmedRows(items) {
 async function loadDashboardData() {
   if (!dashboardSeller) return;
 
+  document.getElementById("consignmentInventoryActions")?.remove();
+
   if (activeSection === "consignment" && activeTab === "inventory") {
     document.getElementById("consignmentInventoryActions")?.remove();
     
