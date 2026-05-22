@@ -271,6 +271,53 @@ app.post("/api/consignment/inventory/manual", async (req, res) => {
   }
 });
 
+app.delete("/api/consignment/inventory/:id", async (req, res) => {
+  try {
+    const inventoryId = asText(req.params.id);
+
+    if (!inventoryId) {
+      return res.status(400).json({
+        error: "Missing inventory id"
+      });
+    }
+
+    const { data: existingItem, error: existingError } = await supabase
+      .from("consignment_inventory")
+      .select("id, sku, size")
+      .eq("id", inventoryId)
+      .single();
+
+    if (existingError) {
+      throw existingError;
+    }
+
+    const { error } = await supabase
+      .from("consignment_inventory")
+      .delete()
+      .eq("id", inventoryId);
+
+    if (error) {
+      throw error;
+    }
+
+    await refreshConsignmentStockLevel(
+      existingItem.sku,
+      existingItem.size
+    );
+
+    res.json({
+      ok: true
+    });
+  } catch (err) {
+    console.error("Failed to delete consignment inventory:", err);
+
+    res.status(500).json({
+      error: "Failed to delete consignment inventory",
+      details: err.message
+    });
+  }
+});
+
 const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
 const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
 const DISCORD_SERVER_ID = "922818998163361792";
