@@ -1367,12 +1367,8 @@ async function loadDashboardData() {
           + Add Stock
         </button>
     
-        <button class="dashboard-refresh-btn" type="button" data-consignment-csv-mode="add">
-          Add Stock through CSV
-        </button>
-    
-        <button class="dashboard-refresh-btn" type="button" data-consignment-csv-mode="replace">
-          Replace Inventory through CSV
+        <button class="dashboard-refresh-btn" type="button" id="consignmentOpenCsvUploadBtn">
+          Upload Stock CSV
         </button>
       </div>
     `;
