@@ -328,7 +328,7 @@ function bindConsignmentDiscordButtons() {
             closed_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           })
-          .eq("id", lockedOffer.id)
+          .eq("id", offer.id)
 
         await disableConsignmentDiscordButtons(
           interaction.channelId,
