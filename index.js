@@ -726,6 +726,7 @@ const DISCORD_SERVER_ID = "922818998163361792";
 const INVENTORY_UNITS_TABLE = process.env.AIRTABLE_INVENTORY_UNITS_TABLE || "Inventory Units";
 const SELLER_OFFERS_TABLE = process.env.AIRTABLE_SELLER_OFFERS_TABLE || "Seller Offers";
 const SKU_MASTER_TABLE = process.env.AIRTABLE_SKU_MASTER_TABLE || "SKU Master";
+const STOCK_LEVELS_TABLE = process.env.AIRTABLE_STOCK_LEVELS_TABLE || "Stock Levels";
 
 function normalizeTempPassword(discord, sellerId) {
   const cleanDiscord = asText(discord).toLowerCase().replace(/\s+/g, "");
@@ -885,6 +886,38 @@ async function lookupSkuMasterProduct(sku) {
   };
 }
 
+async function syncConsignmentStockLevelToAirtable(stockLevel) {
+  const stockCounterKey = asText(stockLevel?.stock_counter_key);
+  const sku = asText(stockLevel?.sku).toUpperCase();
+  const size = asText(stockLevel?.size);
+  const partnerStockLevel = Number(stockLevel?.stock_level || 0);
+
+  if (!stockCounterKey || !sku || !size) {
+    return;
+  }
+
+  const records = await airtable(STOCK_LEVELS_TABLE)
+    .select({
+      fields: ["Stock Counter Key", "SKU", "Size", "Partner Stock Level"],
+      filterByFormula: `{Stock Counter Key} = '${escapeFormulaValue(stockCounterKey)}'`,
+      maxRecords: 1
+    })
+    .all();
+
+  const fields = {
+    "SKU": sku,
+    "Size": size,
+    "Partner Stock Level": partnerStockLevel
+  };
+
+  if (records.length) {
+    await airtable(STOCK_LEVELS_TABLE).update(records[0].id, fields);
+    return;
+  }
+
+  await airtable(STOCK_LEVELS_TABLE).create(fields);
+}
+
 async function refreshConsignmentStockLevel(sku, size) {
   const cleanSku = asText(sku).toUpperCase();
   const cleanSize = asText(size).toUpperCase();
@@ -956,7 +989,9 @@ async function refreshConsignmentStockLevel(sku, size) {
   if (error) {
     throw error;
   }
-
+  
+  await syncConsignmentStockLevelToAirtable(data);
+  
   return data;
 }
 
