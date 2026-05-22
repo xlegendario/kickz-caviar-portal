@@ -775,9 +775,18 @@ function renderConsignmentOfferRows(items) {
           <button
             class="dashboard-edit-btn"
             type="button"
-            disabled
+            data-consignment-confirm-offer-id="${escapeHtml(item.id || "")}"
           >
-            Pending
+            Confirm
+          </button>
+
+          <button
+            class="dashboard-delete-btn"
+            type="button"
+            data-consignment-deny-offer-id="${escapeHtml(item.id || "")}"
+            title="Deny offer"
+          >
+            ✕
           </button>
         </div>
       </td>
@@ -2559,6 +2568,77 @@ dashboardContent.addEventListener("click", (event) => {
 });
 
 dashboardTableBody.addEventListener("click", async (event) => {
+    const consignmentConfirmOfferButton = event.target.closest("[data-consignment-confirm-offer-id]");
+
+    if (consignmentConfirmOfferButton) {
+      const offerId = consignmentConfirmOfferButton.dataset.consignmentConfirmOfferId;
+  
+      consignmentConfirmOfferButton.disabled = true;
+      consignmentConfirmOfferButton.textContent = "Confirming...";
+  
+      try {
+        const response = await fetch(`/api/consignment/offers/${offerId}/confirm`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            seller_record_id: dashboardSeller.id
+          })
+        });
+  
+        const data = await response.json();
+  
+        if (!response.ok) {
+          throw new Error(data.details || data.error || "Failed to confirm offer");
+        }
+  
+        await loadDashboardData();
+        await loadDashboardCounts();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        consignmentConfirmOfferButton.disabled = false;
+        consignmentConfirmOfferButton.textContent = "Confirm";
+      }
+  
+      return;
+    }
+  
+    const consignmentDenyOfferButton = event.target.closest("[data-consignment-deny-offer-id]");
+  
+    if (consignmentDenyOfferButton) {
+      const offerId = consignmentDenyOfferButton.dataset.consignmentDenyOfferId;
+  
+      consignmentDenyOfferButton.disabled = true;
+  
+      try {
+        const response = await fetch(`/api/consignment/offers/${offerId}/deny`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            seller_record_id: dashboardSeller.id
+          })
+        });
+  
+        const data = await response.json();
+  
+        if (!response.ok) {
+          throw new Error(data.details || data.error || "Failed to deny offer");
+        }
+  
+        await loadDashboardData();
+        await loadDashboardCounts();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        consignmentDenyOfferButton.disabled = false;
+      }
+  
+      return;
+    }
   const consignmentEditButton = event.target.closest("[data-consignment-edit-id]");
 
   if (consignmentEditButton) {
