@@ -2761,3 +2761,35 @@
   font-size: 14px;
   font-weight: 900;
 }
+
+.dashboard-confirm-btn {
+  border: none;
+  background: #2ecc71;
+  color: #fff;
+  border-radius: 14px;
+  padding: 10px 18px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.dashboard-confirm-btn:hover {
+  transform: translateY(-1px);
+  opacity: 0.92;
+}
+
+.dashboard-deny-btn {
+  border: none;
+  background: #e74c3c;
+  color: #fff;
+  border-radius: 14px;
+  padding: 10px 18px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.dashboard-deny-btn:hover {
+  transform: translateY(-1px);
+  opacity: 0.92;
+}
