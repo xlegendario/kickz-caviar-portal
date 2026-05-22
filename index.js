@@ -579,7 +579,11 @@ app.post("/api/consignment/inventory/csv-replace", async (req, res) => {
       });
 
       results.push(result);
-      touchedKeys.add(getStockCounterKey(row.sku, row.size));
+      
+      touchedItems.set(getStockCounterKey(row.sku, row.size), {
+        sku: row.sku,
+        size: row.size
+      });
     }
 
     for (const item of touchedItems.values()) {
