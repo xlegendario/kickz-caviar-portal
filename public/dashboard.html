@@ -354,6 +354,33 @@
     </div>
   </div>
 
+  <div class="dashboard-modal hidden" id="consignmentCsvModal">
+    <div class="dashboard-modal-backdrop" data-consignment-csv-close></div>
+  
+    <div class="dashboard-modal-card">
+      <button class="dashboard-modal-close" type="button" data-consignment-csv-close>×</button>
+  
+      <h2>Upload CSV</h2>
+      <p>Upload consignment stock using the required CSV columns.</p>
+  
+      <form id="consignmentCsvForm" class="dashboard-modal-form">
+        <input type="hidden" id="consignmentCsvMode" />
+  
+        <label>
+          CSV File
+          <input id="consignmentCsvFileInput" type="file" accept=".csv,text/csv" required />
+        </label>
+  
+        <div class="dashboard-form-success" id="consignmentCsvPreview"></div>
+        <div class="dashboard-form-error" id="consignmentCsvError"></div>
+  
+        <button type="submit" class="dashboard-issue-submit-btn">
+          Preview CSV
+        </button>
+      </form>
+    </div>
+  </div>
+
   <script src="/dashboard.js"></script>
 </body>
 </html>
