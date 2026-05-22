@@ -103,7 +103,7 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     "Payment Note": `€${purchasePrice.toFixed(2)}`,
     "Payment Status": "To Pay",
     "Availability Status": "Sold",
-    "Margin": "10%",
+    "Margin %": "10%",
     "Base Costs": 0,
 
     "Unfulfilled Orders Log": [offer.order_record_id],
