@@ -366,13 +366,35 @@
       <form id="consignmentCsvForm" class="dashboard-modal-form">
         <input type="hidden" id="consignmentCsvMode" />
   
-        <label>
-          CSV File
-          <input id="consignmentCsvFileInput" type="file" accept=".csv,text/csv" required />
-        </label>
-  
-        <div class="dashboard-form-success" id="consignmentCsvPreview"></div>
-        <div class="dashboard-form-error" id="consignmentCsvError"></div>
+          <div class="consignment-csv-mode-grid">
+            <label class="consignment-csv-mode-card">
+              <input type="radio" name="consignmentCsvModeChoice" value="add" checked />
+              <strong>Add Stock</strong>
+              <span>Add quantities on top of your current inventory.</span>
+            </label>
+          
+            <label class="consignment-csv-mode-card">
+              <input type="radio" name="consignmentCsvModeChoice" value="replace" />
+              <strong>Replace Stock</strong>
+              <span>Set all rows from the CSV as your new inventory.</span>
+            </label>
+          </div>
+          
+          <a
+            class="dashboard-refresh-btn consignment-template-download"
+            href="/templates/consignment-stock-template.csv"
+            download
+          >
+            Download CSV Template
+          </a>
+          
+          <label>
+            CSV File
+            <input id="consignmentCsvFileInput" type="file" accept=".csv,text/csv" required />
+          </label>
+          
+          <div class="dashboard-form-success" id="consignmentCsvPreview"></div>
+          <div class="dashboard-form-error" id="consignmentCsvError"></div>
   
         <button type="submit" class="dashboard-issue-submit-btn">
           Preview CSV
