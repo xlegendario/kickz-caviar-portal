@@ -1362,19 +1362,13 @@ async function loadDashboardData() {
 
   if (activeSection === "consignment" && activeTab === "inventory") {
     dashboardSubtabDescription.innerHTML = `
-      <div class="dashboard-table-actions">
-        <div class="consignment-inventory-actions">
-          <button class="dashboard-issue-submit-btn" type="button" id="consignmentOpenAddStockBtn">
-            + Add Stock
-          </button>
+      <div class="consignment-inventory-actions">
+        <button class="dashboard-issue-submit-btn" type="button" id="consignmentOpenAddStockBtn">
+          + Add Stock
+        </button>
     
-          <button class="dashboard-refresh-btn" type="button" id="consignmentOpenCsvUploadBtn">
-            Upload Stock CSV
-          </button>
-        </div>
-    
-        <button class="dashboard-refresh-btn" type="button" id="dashboardRefreshBtnInline">
-          Refresh
+        <button class="dashboard-refresh-btn" type="button" id="consignmentOpenCsvUploadBtn">
+          Upload Stock CSV
         </button>
       </div>
     `;
@@ -2833,29 +2827,6 @@ dashboardLogoutBtn.addEventListener("click", () => {
   localStorage.removeItem("kc_seller");
   dashboardSeller = null;
   syncAuthUi();
-});
-
-document.addEventListener("click", async (event) => {
-  const inlineRefreshBtn = event.target.closest("#dashboardRefreshBtnInline");
-
-  if (!inlineRefreshBtn) return;
-
-  renderTableShell();
-
-  try {
-    await loadDashboardData();
-    await loadDashboardCounts();
-  } catch (err) {
-    dashboardTableBody.innerHTML = `
-      <tr>
-        <td colspan="${skeletonColumns.length}">
-          <div class="dashboard-empty-state">
-            <strong>${escapeHtml(err.message)}</strong>
-          </div>
-        </td>
-      </tr>
-    `;
-  }
 });
 
 dashboardRefreshBtn.addEventListener("click", async () => {
