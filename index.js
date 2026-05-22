@@ -933,14 +933,31 @@ app.post("/api/consignment/offers/create", async (req, res) => {
     const size = asText(req.body?.size);
     const maximumBuyingPrice = Number(req.body?.maximum_buying_price);
 
-    if (!orderRecordId) return res.status(400).json({ error: "Missing order_record_id" });
-    if (!sku) return res.status(400).json({ error: "Missing SKU" });
-    if (!size) return res.status(400).json({ error: "Missing size" });
+    if (!orderRecordId) {
+      return res.status(400).json({
+        error: "Missing order_record_id"
+      });
+    }
 
-    const calculatedOfferPrice = calculateConsignmentOfferPrice(maximumBuyingPrice);
+    if (!sku) {
+      return res.status(400).json({
+        error: "Missing SKU"
+      });
+    }
+
+    if (!size) {
+      return res.status(400).json({
+        error: "Missing size"
+      });
+    }
+
+    const calculatedOfferPrice =
+      calculateConsignmentOfferPrice(maximumBuyingPrice);
 
     if (calculatedOfferPrice === null) {
-      return res.status(400).json({ error: "Invalid Maximum Buying Price" });
+      return res.status(400).json({
+        error: "Invalid Maximum Buying Price"
+      });
     }
 
     const { data: inventoryRows, error: inventoryError } = await supabase
@@ -961,16 +978,41 @@ app.post("/api/consignment/offers/create", async (req, res) => {
       .eq("size", size)
       .gt("quantity", 0);
 
-    if (inventoryError) throw inventoryError;
+    if (inventoryError) {
+      throw inventoryError;
+    }
 
     const results = [];
 
     for (const row of inventoryRows || []) {
       const sellerPrice = Number(row.selling_price_suggested);
+
       const offerPrice =
         sellerPrice <= calculatedOfferPrice
           ? sellerPrice
           : calculatedOfferPrice;
+
+      const { data: existingOffers, error: existingError } = await supabase
+        .from("consignment_offers")
+        .select("id")
+        .eq("order_record_id", orderRecordId)
+        .eq("seller_record_id", row.seller_record_id)
+        .eq("inventory_id", row.id)
+        .eq("status", "open")
+        .limit(1);
+
+      if (existingError) {
+        throw existingError;
+      }
+
+      if (existingOffers?.length) {
+        results.push({
+          mode: "skipped_existing",
+          offer_id: existingOffers[0].id
+        });
+
+        continue;
+      }
 
       const offerPayload = {
         order_record_id: orderRecordId,
@@ -987,31 +1029,21 @@ app.post("/api/consignment/offers/create", async (req, res) => {
         vat_type: row.vat_type,
         quantity_at_offer: Number(row.quantity || 0),
         status: "open",
-        updated_at: new Date().toISOString(),
         discord_channel_id: null,
         discord_message_id: null,
+        updated_at: new Date().toISOString()
       };
 
-      const { data: existingOffers, error: existingError } = await supabase
-        .from("consignment_offers")
-        .select("id")
-        .eq("order_record_id", orderRecordId)
-        .eq("seller_record_id", row.seller_record_id)
-        .eq("inventory_id", row.id)
-        .in("status", ["open"])
-        .limit(1);
-
-      if (existingError) throw existingError;
-
-      if (existingOffers?.length) {
-       const { data, error } = await supabase
+      const { data, error } = await supabase
         .from("consignment_offers")
         .insert(offerPayload)
         .select()
         .single();
-      
-      if (error) throw error;
-      
+
+      if (error) {
+        throw error;
+      }
+
       const { data: sellerRow, error: sellerError } = await supabase
         .from("sellers")
         .select(`
@@ -1021,16 +1053,18 @@ app.post("/api/consignment/offers/create", async (req, res) => {
         `)
         .eq("record_id", row.seller_record_id)
         .single();
-      
-      if (sellerError) throw sellerError;
-      
+
+      if (sellerError) {
+        throw sellerError;
+      }
+
       const discordResult =
         await sendConsignmentOfferDiscordMessage({
           seller: sellerRow,
           offer: data,
           calculatedOfferPrice
         });
-      
+
       await supabase
         .from("consignment_offers")
         .update({
@@ -1038,6 +1072,7 @@ app.post("/api/consignment/offers/create", async (req, res) => {
           discord_message_id: discordResult.messageId
         })
         .eq("id", data.id);
+
       results.push({
         mode: "created",
         offer: {
