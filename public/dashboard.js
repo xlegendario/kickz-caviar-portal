@@ -591,7 +591,7 @@ function getDuplicateCsvSkuSizeRows(rows) {
 
 function openConsignmentCsvDuplicateModal(duplicates) {
   consignmentCsvDuplicateList.innerHTML = duplicates
-    .map((duplicate) => `<div>${escapeHtml(duplicate)} is duplicated</div>`)
+    .map((duplicate) => `<div>${escapeHtml(duplicate)}</div>`)
     .join("");
 
   consignmentCsvDuplicateModal.classList.remove("hidden");
