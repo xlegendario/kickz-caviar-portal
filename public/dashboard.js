@@ -2831,9 +2831,11 @@ consignmentCsvForm?.addEventListener("submit", async (event) => {
         consignmentCsvMode.value === "replace"
           ? `${data.count || result.rows.length} rows replaced successfully.`
           : `${data.count || result.rows.length} rows uploaded successfully.`;
-    
+      
       await loadDashboardData();
       await loadDashboardCounts();
+      
+      closeConsignmentCsvModal();
     } finally {
       submitBtn.disabled = false;
       submitBtn.textContent = "Upload";
