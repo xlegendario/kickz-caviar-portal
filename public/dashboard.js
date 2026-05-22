@@ -136,6 +136,9 @@ const consignmentEditStockId = document.getElementById("consignmentEditStockId")
 const consignmentEditSellingPriceInput = document.getElementById("consignmentEditSellingPriceInput");
 const consignmentEditQuantityInput = document.getElementById("consignmentEditQuantityInput");
 const consignmentEditStockError = document.getElementById("consignmentEditStockError");
+const consignmentCsvDuplicateModal = document.getElementById("consignmentCsvDuplicateModal");
+const consignmentCsvDuplicateList = document.getElementById("consignmentCsvDuplicateList");
+const consignmentCsvDuplicateBackBtn = document.getElementById("consignmentCsvDuplicateBackBtn");
 
 let pendingLabelUrl = "";
 
@@ -567,6 +570,35 @@ function parseConsignmentCsv(text) {
     rows,
     errors
   };
+}
+
+function getDuplicateCsvSkuSizeRows(rows) {
+  const seen = new Set();
+  const duplicates = new Set();
+
+  rows.forEach((row) => {
+    const key = `${cleanSkuInput(row.sku)} / ${cleanSizeInput(row.size)}`;
+
+    if (seen.has(key)) {
+      duplicates.add(key);
+    }
+
+    seen.add(key);
+  });
+
+  return [...duplicates];
+}
+
+function openConsignmentCsvDuplicateModal(duplicates) {
+  consignmentCsvDuplicateList.innerHTML = duplicates
+    .map((duplicate) => `<div>${escapeHtml(duplicate)} is duplicated</div>`)
+    .join("");
+
+  consignmentCsvDuplicateModal.classList.remove("hidden");
+}
+
+function closeConsignmentCsvDuplicateModal() {
+  consignmentCsvDuplicateModal.classList.add("hidden");
 }
 
 function bindConsignmentInputCleaning() {
@@ -2789,6 +2821,15 @@ consignmentCsvForm?.addEventListener("submit", async (event) => {
   try {
     const text = await file.text();
     const result = parseConsignmentCsv(text);
+
+    if (consignmentCsvMode.value === "replace") {
+      const duplicates = getDuplicateCsvSkuSizeRows(result.rows);
+    
+      if (duplicates.length) {
+        openConsignmentCsvDuplicateModal(duplicates);
+        return;
+      }
+    }
 
     if (result.errors.length) {
       consignmentCsvError.innerHTML = result.errors
