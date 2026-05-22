@@ -60,6 +60,7 @@ const discordClient = new Client({
 });
 
 let discordReady = false;
+let discordButtonsBound = false;
 
 async function initDiscord() {
   if (discordReady) return;
@@ -67,6 +68,11 @@ async function initDiscord() {
   await discordClient.login(process.env.DISCORD_BOT_TOKEN);
 
   discordReady = true;
+
+  if (!discordButtonsBound) {
+    bindConsignmentDiscordButtons();
+    discordButtonsBound = true;
+  }
 
   console.log("✅ Discord bot logged in");
 }
@@ -211,6 +217,116 @@ async function sendConsignmentOfferDiscordMessage({
     channelId,
     messageId: message.id
   };
+}
+
+async function disableConsignmentDiscordButtons(channelId, messageId, note) {
+  const channel = await discordClient.channels.fetch(channelId);
+  const message = await channel.messages.fetch(messageId);
+
+  await message.edit({
+    content: note || message.content,
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 2,
+            label: "Confirmed",
+            custom_id: "consignment_confirmed_disabled",
+            disabled: true
+          },
+          {
+            type: 2,
+            style: 2,
+            label: "Denied",
+            custom_id: "consignment_denied_disabled",
+            disabled: true
+          }
+        ]
+      }
+    ]
+  });
+}
+
+function bindConsignmentDiscordButtons() {
+  discordClient.on(Events.InteractionCreate, async (interaction) => {
+    if (!interaction.isButton()) return;
+
+    const customId = String(interaction.customId || "");
+
+    if (
+      !customId.startsWith("confirm_offer:") &&
+      !customId.startsWith("deny_offer:")
+    ) {
+      return;
+    }
+
+    await interaction.deferUpdate().catch(() => {});
+
+    const [action, offerId] = customId.split(":");
+
+    try {
+      const { data: offer, error } = await supabase
+        .from("consignment_offers")
+        .select("*")
+        .eq("id", offerId)
+        .single();
+
+      if (error) throw error;
+
+      if (!offer || offer.status !== "open") {
+        await disableConsignmentDiscordButtons(
+          interaction.channelId,
+          interaction.message.id,
+          "✅ This offer is no longer available."
+        );
+        return;
+      }
+
+      if (action === "deny_offer") {
+        await supabase
+          .from("consignment_offers")
+          .update({
+            status: "denied",
+            denied_at: new Date().toISOString(),
+            closed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", offer.id);
+
+        await disableConsignmentDiscordButtons(
+          interaction.channelId,
+          interaction.message.id,
+          "❌ Offer denied."
+        );
+
+        return;
+      }
+
+      if (action === "confirm_offer") {
+        await supabase
+          .from("consignment_offers")
+          .update({
+            status: "accepted",
+            accepted_at: new Date().toISOString(),
+            closed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", offer.id);
+
+        await disableConsignmentDiscordButtons(
+          interaction.channelId,
+          interaction.message.id,
+          `✅ Confirmed by ${offer.seller_id}.`
+        );
+
+        return;
+      }
+    } catch (err) {
+      console.error("Consignment Discord button error:", err);
+    }
+  });
 }
 
 app.use(compression());
