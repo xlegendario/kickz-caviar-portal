@@ -403,6 +403,37 @@
     </div>
   </div>
 
+  <div class="dashboard-modal hidden" id="consignmentEditStockModal">
+    <div class="dashboard-modal-backdrop" data-consignment-edit-close></div>
+  
+    <div class="dashboard-modal-card">
+      <button class="dashboard-modal-close" type="button" data-consignment-edit-close>×</button>
+  
+      <h2>Edit Stock</h2>
+      <p>Update the selling price or quantity for this consignment item.</p>
+  
+      <form id="consignmentEditStockForm" class="dashboard-modal-form">
+        <input type="hidden" id="consignmentEditStockId" />
+  
+        <label>
+          Selling Price
+          <input id="consignmentEditSellingPriceInput" type="text" inputmode="numeric" required />
+        </label>
+  
+        <label>
+          Quantity
+          <input id="consignmentEditQuantityInput" type="text" inputmode="numeric" required />
+        </label>
+  
+        <button type="submit" class="dashboard-issue-submit-btn">
+          Save
+        </button>
+  
+        <div class="dashboard-form-error" id="consignmentEditStockError"></div>
+      </form>
+    </div>
+  </div>
+
   <script src="/dashboard.js"></script>
 </body>
 </html>
