@@ -130,6 +130,12 @@ const consignmentCsvMode = document.getElementById("consignmentCsvMode");
 const consignmentCsvFileInput = document.getElementById("consignmentCsvFileInput");
 const consignmentCsvPreview = document.getElementById("consignmentCsvPreview");
 const consignmentCsvError = document.getElementById("consignmentCsvError");
+const consignmentEditStockModal = document.getElementById("consignmentEditStockModal");
+const consignmentEditStockForm = document.getElementById("consignmentEditStockForm");
+const consignmentEditStockId = document.getElementById("consignmentEditStockId");
+const consignmentEditSellingPriceInput = document.getElementById("consignmentEditSellingPriceInput");
+const consignmentEditQuantityInput = document.getElementById("consignmentEditQuantityInput");
+const consignmentEditStockError = document.getElementById("consignmentEditStockError");
 
 let pendingLabelUrl = "";
 
@@ -588,6 +594,16 @@ function bindConsignmentInputCleaning() {
     if (quantityInput) {
       quantityInput.value = cleanWholeNumberInput(quantityInput.value);
     }
+    
+    consignmentEditSellingPriceInput?.addEventListener("input", () => {
+      consignmentEditSellingPriceInput.value =
+        cleanWholeNumberInput(consignmentEditSellingPriceInput.value);
+    });
+    
+    consignmentEditQuantityInput?.addEventListener("input", () => {
+      consignmentEditQuantityInput.value =
+        cleanWholeNumberInput(consignmentEditQuantityInput.value);
+    });
   });
 }
 
@@ -641,6 +657,16 @@ function renderConsignmentInventoryRows(items) {
       <td>${escapeHtml(item.quantity || "0")}</td>
       <td>
         <div class="dashboard-action-row">
+          <button
+            class="dashboard-edit-btn"
+            type="button"
+            data-consignment-edit-id="${escapeHtml(item.id || "")}"
+            data-current-price="${escapeHtml(item.selling_price_suggested || "")}"
+            data-current-quantity="${escapeHtml(item.quantity || "")}"
+          >
+            Edit
+          </button>
+        
           <button
             class="dashboard-delete-btn"
             type="button"
@@ -2183,6 +2209,24 @@ function closeConsignmentCsvModal() {
   consignmentCsvModal.classList.add("hidden");
 }
 
+function openConsignmentEditStockModal(button) {
+  consignmentEditStockError.textContent = "";
+  consignmentEditStockId.value = button.dataset.consignmentEditId || "";
+  consignmentEditSellingPriceInput.value = button.dataset.currentPrice || "";
+  consignmentEditQuantityInput.value = button.dataset.currentQuantity || "";
+
+  consignmentEditStockModal.classList.remove("hidden");
+
+  if (window.innerWidth > 768) {
+    consignmentEditSellingPriceInput.focus();
+    consignmentEditSellingPriceInput.select();
+  }
+}
+
+function closeConsignmentEditStockModal() {
+  consignmentEditStockModal.classList.add("hidden");
+}
+
 function getSelectedConsignmentVatType() {
   return document.querySelector('input[name="consignmentVatType"]:checked')?.value || "Margin";
 }
@@ -2370,6 +2414,13 @@ dashboardContent.addEventListener("click", (event) => {
 });
 
 dashboardTableBody.addEventListener("click", async (event) => {
+  const consignmentEditButton = event.target.closest("[data-consignment-edit-id]");
+
+  if (consignmentEditButton) {
+    openConsignmentEditStockModal(consignmentEditButton);
+    return;
+  }
+  
   const consignmentDeleteButton = event.target.closest("[data-consignment-delete-id]");
 
   if (consignmentDeleteButton) {
@@ -2509,6 +2560,10 @@ document.querySelectorAll("[data-consignment-add-close]").forEach((button) => {
 
 document.querySelectorAll("[data-consignment-csv-close]").forEach((button) => {
   button.addEventListener("click", closeConsignmentCsvModal);
+});
+
+document.querySelectorAll("[data-consignment-edit-close]").forEach((button) => {
+  button.addEventListener("click", closeConsignmentEditStockModal);
 });
 
 document.querySelectorAll("[data-issue-close]").forEach((button) => {
