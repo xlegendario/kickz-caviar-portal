@@ -2835,6 +2835,29 @@ dashboardLogoutBtn.addEventListener("click", () => {
   syncAuthUi();
 });
 
+document.addEventListener("click", async (event) => {
+  const inlineRefreshBtn = event.target.closest("#dashboardRefreshBtnInline");
+
+  if (!inlineRefreshBtn) return;
+
+  renderTableShell();
+
+  try {
+    await loadDashboardData();
+    await loadDashboardCounts();
+  } catch (err) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>${escapeHtml(err.message)}</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+});
+
 dashboardRefreshBtn.addEventListener("click", async () => {
   renderTableShell();
 
