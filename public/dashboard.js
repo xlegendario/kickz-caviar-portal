@@ -773,20 +773,23 @@ function renderConsignmentOfferRows(items) {
       <td>
         <div class="dashboard-action-row">
           <button
-            class="dashboard-edit-btn"
+            class="dashboard-confirm-btn"
             type="button"
             data-consignment-confirm-offer-id="${escapeHtml(item.id || "")}"
           >
-            Confirm
+            ${
+              Number(item.offer_price || 0) < Number(item.seller_price || 0)
+                ? "Accept"
+                : "Confirm"
+            }
           </button>
-
+        
           <button
-            class="dashboard-delete-btn"
+            class="dashboard-deny-btn"
             type="button"
             data-consignment-deny-offer-id="${escapeHtml(item.id || "")}"
-            title="Deny offer"
           >
-            ✕
+            Deny
           </button>
         </div>
       </td>
