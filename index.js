@@ -7,6 +7,11 @@ import compression from "compression";
 import crypto from "crypto";
 import sgMail from "@sendgrid/mail";
 import { createClient } from "@supabase/supabase-js";
+import {
+  Client,
+  GatewayIntentBits,
+  Events
+} from "discord.js";
 
 dotenv.config();
 
@@ -50,6 +55,22 @@ if (!SUPABASE_SERVICE_ROLE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+const discordClient = new Client({
+  intents: [GatewayIntentBits.Guilds]
+});
+
+let discordReady = false;
+
+async function initDiscord() {
+  if (discordReady) return;
+
+  await discordClient.login(process.env.DISCORD_BOT_TOKEN);
+
+  discordReady = true;
+
+  console.log("✅ Discord bot logged in");
+}
+
 if (!SENDGRID_API_KEY) {
   throw new Error("Missing SENDGRID_API_KEY");
 }
@@ -78,6 +99,118 @@ function asText(value) {
   }
 
   return String(value).trim();
+}
+
+function getSellerOfferChannelId(sellerRow, isConfirmation) {
+  if (!sellerRow) return null;
+
+  return isConfirmation
+    ? sellerRow.consignment_confirmation_channel_id
+    : sellerRow.consignment_offer_channel_id;
+}
+
+async function sendConsignmentOfferDiscordMessage({
+  seller,
+  offer,
+  calculatedOfferPrice
+}) {
+  await initDiscord();
+
+  const isConfirmation =
+    Number(offer.seller_price) <= Number(calculatedOfferPrice);
+
+  const channelId = getSellerOfferChannelId(
+    seller,
+    isConfirmation
+  );
+
+  if (!channelId) {
+    throw new Error(
+      `Missing Discord channel ID for seller ${seller.seller_id}`
+    );
+  }
+
+  const channel = await discordClient.channels.fetch(channelId);
+
+  if (!channel) {
+    throw new Error(`Discord channel not found: ${channelId}`);
+  }
+
+  const embed = {
+    title: isConfirmation
+      ? "🚀 Your Item Matched One Of Our Orders"
+      : "💸 We Got An Offer For Your Item",
+
+    description: [
+      "If you still have this pair, click **Confirm** below.",
+      "",
+      `**Product Name**`,
+      offer.product_name || "—",
+      "",
+      `**SKU**`,
+      offer.sku,
+      "",
+      `**Size**`,
+      offer.size,
+      "",
+      `**Order**`,
+      offer.order_id || offer.order_record_id
+    ].join("\n"),
+
+    color: isConfirmation ? 0x2ecc71 : 0xf1c40f,
+
+    fields: [
+      {
+        name: "Your Price",
+        value: `€${Number(offer.seller_price).toFixed(2)}`,
+        inline: true
+      },
+      {
+        name: isConfirmation ? "Matched At" : "Our Offer",
+        value: `€${Number(offer.offer_price).toFixed(2)}`,
+        inline: true
+      }
+    ],
+
+    footer: {
+      text: `SellerID: ${offer.seller_id}`
+    },
+
+    timestamp: new Date().toISOString()
+  };
+
+  const message = await channel.send({
+    content: isConfirmation
+      ? `📋 Match found for ${offer.sku} / ${offer.size}`
+      : `📑 Offer sent for ${offer.sku} / ${offer.size}`,
+
+    embeds: [embed],
+
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 3,
+            label: "Confirm",
+            custom_id: `confirm_offer:${offer.id}`
+          },
+          {
+            type: 2,
+            style: 4,
+            label: "Deny",
+            custom_id: `deny_offer:${offer.id}`
+          }
+        ]
+      }
+    ]
+  });
+
+  return {
+    channelId,
+    messageId: message.id
+  };
 }
 
 app.use(compression());
@@ -854,7 +987,9 @@ app.post("/api/consignment/offers/create", async (req, res) => {
         vat_type: row.vat_type,
         quantity_at_offer: Number(row.quantity || 0),
         status: "open",
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        discord_channel_id: null,
+        discord_message_id: null,
       };
 
       const { data: existingOffers, error: existingError } = await supabase
@@ -877,6 +1012,31 @@ app.post("/api/consignment/offers/create", async (req, res) => {
           .single();
 
         if (error) throw error;
+
+        const { data: sellerRow } = await supabase
+          .from("sellers")
+          .select(`
+            seller_id,
+            consignment_offer_channel_id,
+            consignment_confirmation_channel_id
+          `)
+          .eq("record_id", row.seller_record_id)
+          .single();
+        
+        const discordResult =
+          await sendConsignmentOfferDiscordMessage({
+            seller: sellerRow,
+            offer: data,
+            calculatedOfferPrice
+          });
+        
+        await supabase
+          .from("consignment_offers")
+          .update({
+            discord_channel_id: discordResult.channelId,
+            discord_message_id: discordResult.messageId
+          })
+          .eq("id", data.id);
 
         results.push({
           mode: "updated",
