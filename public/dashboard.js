@@ -123,6 +123,12 @@ const consignmentAddSizeRowBtn = document.getElementById("consignmentAddSizeRowB
 const consignmentAddAnotherProductBtn = document.getElementById("consignmentAddAnotherProductBtn");
 const consignmentAddStockError = document.getElementById("consignmentAddStockError");
 const consignmentAddStockSuccess = document.getElementById("consignmentAddStockSuccess");
+const consignmentCsvModal = document.getElementById("consignmentCsvModal");
+const consignmentCsvForm = document.getElementById("consignmentCsvForm");
+const consignmentCsvMode = document.getElementById("consignmentCsvMode");
+const consignmentCsvFileInput = document.getElementById("consignmentCsvFileInput");
+const consignmentCsvPreview = document.getElementById("consignmentCsvPreview");
+const consignmentCsvError = document.getElementById("consignmentCsvError");
 
 let pendingLabelUrl = "";
 
@@ -454,6 +460,106 @@ function cleanWholeNumberInput(value) {
   return String(value || "")
     .replace(/[^\d]/g, "")
     .replace(/^\s+|\s+$/g, "");
+}
+
+function parseCsvLine(line) {
+  const result = [];
+  let current = "";
+  let insideQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    const nextChar = line[i + 1];
+
+    if (char === '"' && insideQuotes && nextChar === '"') {
+      current += '"';
+      i += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      insideQuotes = !insideQuotes;
+      continue;
+    }
+
+    if (char === "," && !insideQuotes) {
+      result.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  result.push(current.trim());
+  return result;
+}
+
+function parseConsignmentCsv(text) {
+  const lines = String(text || "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) {
+    throw new Error("CSV must include a header row and at least one stock row.");
+  }
+
+  const headers = parseCsvLine(lines[0]).map((header) => header.trim());
+  const normalizedHeaders = headers.map((header) => header.toLowerCase());
+
+  const requiredColumns = [
+    "sku",
+    "size eu",
+    "vat type",
+    "selling price (suggested)",
+    "quantity"
+  ];
+
+  const missingColumns = requiredColumns.filter(
+    (column) => !normalizedHeaders.includes(column)
+  );
+
+  if (missingColumns.length) {
+    throw new Error(`Missing required columns: ${missingColumns.join(", ")}`);
+  }
+
+  const columnIndex = (name) => normalizedHeaders.indexOf(name);
+
+  const rows = lines.slice(1).map((line, index) => {
+    const values = parseCsvLine(line);
+
+    return {
+      row_number: index + 2,
+      sku: cleanSkuInput(values[columnIndex("sku")]),
+      size: cleanSizeInput(values[columnIndex("size eu")]),
+      vat_type: String(values[columnIndex("vat type")] || "").trim(),
+      selling_price_suggested: cleanWholeNumberInput(values[columnIndex("selling price (suggested)")]),
+      quantity: cleanWholeNumberInput(values[columnIndex("quantity")])
+    };
+  });
+
+  const errors = [];
+
+  rows.forEach((row) => {
+    if (!row.sku) errors.push(`Row ${row.row_number}: missing SKU`);
+    if (!row.size) errors.push(`Row ${row.row_number}: missing Size EU`);
+    if (!["Margin", "VAT0", "VAT21"].includes(row.vat_type)) {
+      errors.push(`Row ${row.row_number}: VAT Type must be Margin, VAT0 or VAT21`);
+    }
+    if (!row.selling_price_suggested) {
+      errors.push(`Row ${row.row_number}: missing Selling Price`);
+    }
+    if (!row.quantity) {
+      errors.push(`Row ${row.row_number}: missing Quantity`);
+    }
+  });
+
+  return {
+    rows,
+    errors
+  };
 }
 
 function bindConsignmentInputCleaning() {
@@ -1256,9 +1362,19 @@ async function loadDashboardData() {
 
   if (activeSection === "consignment" && activeTab === "inventory") {
     dashboardSubtabDescription.innerHTML = `
-      <button class="dashboard-issue-submit-btn" type="button" id="consignmentOpenAddStockBtn">
-        + Add Stock
-      </button>
+      <div class="consignment-inventory-actions">
+        <button class="dashboard-issue-submit-btn" type="button" id="consignmentOpenAddStockBtn">
+          + Add Stock
+        </button>
+    
+        <button class="dashboard-refresh-btn" type="button" data-consignment-csv-mode="add">
+          Add Stock through CSV
+        </button>
+    
+        <button class="dashboard-refresh-btn" type="button" data-consignment-csv-mode="replace">
+          Replace Inventory through CSV
+        </button>
+      </div>
     `;
     
     dashboardTableBody.innerHTML = `
@@ -2057,6 +2173,18 @@ function closeConsignmentAddStockModal() {
   consignmentAddStockModal.classList.add("hidden");
 }
 
+function openConsignmentCsvModal(mode) {
+  consignmentCsvMode.value = mode;
+  consignmentCsvFileInput.value = "";
+  consignmentCsvPreview.textContent = "";
+  consignmentCsvError.textContent = "";
+  consignmentCsvModal.classList.remove("hidden");
+}
+
+function closeConsignmentCsvModal() {
+  consignmentCsvModal.classList.add("hidden");
+}
+
 function getSelectedConsignmentVatType() {
   return document.querySelector('input[name="consignmentVatType"]:checked')?.value || "Margin";
 }
@@ -2235,6 +2363,12 @@ dashboardContent.addEventListener("click", (event) => {
   if (addStockButton) {
     openConsignmentAddStockModal();
   }
+
+  const csvButton = event.target.closest("[data-consignment-csv-mode]");
+  
+  if (csvButton) {
+    openConsignmentCsvModal(csvButton.dataset.consignmentCsvMode);
+  }
 });
 
 dashboardTableBody.addEventListener("click", async (event) => {
@@ -2373,6 +2507,10 @@ document.querySelectorAll("[data-edit-offer-close]").forEach((button) => {
 
 document.querySelectorAll("[data-consignment-add-close]").forEach((button) => {
   button.addEventListener("click", closeConsignmentAddStockModal);
+});
+
+document.querySelectorAll("[data-consignment-csv-close]").forEach((button) => {
+  button.addEventListener("click", closeConsignmentCsvModal);
 });
 
 document.querySelectorAll("[data-issue-close]").forEach((button) => {
@@ -2532,6 +2670,38 @@ consignmentAddAnotherProductBtn?.addEventListener("click", async () => {
   }
 });
 
+consignmentCsvForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  consignmentCsvPreview.textContent = "";
+  consignmentCsvError.textContent = "";
+
+  const file = consignmentCsvFileInput.files?.[0];
+
+  if (!file) {
+    consignmentCsvError.textContent = "Please choose a CSV file.";
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    const result = parseConsignmentCsv(text);
+
+    if (result.errors.length) {
+      consignmentCsvError.innerHTML = result.errors
+        .slice(0, 12)
+        .map((error) => `<div>${escapeHtml(error)}</div>`)
+        .join("");
+
+      return;
+    }
+
+    consignmentCsvPreview.textContent =
+      `${result.rows.length} valid rows found. Database write comes next.`;
+  } catch (err) {
+    consignmentCsvError.textContent = err.message;
+  }
+});
 
 issueForm.addEventListener("submit", async (event) => {
   event.preventDefault();
