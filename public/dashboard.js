@@ -65,7 +65,8 @@ const consignmentInventoryColumns = [
   "Brand",
   "VAT Type",
   "Suggested Price",
-  "Quantity"
+  "Quantity",
+  "Action"
 ];
 
 let dashboardSeller = JSON.parse(localStorage.getItem("kc_seller") || "null");
@@ -530,6 +531,25 @@ function renderConsignmentInventoryRows(items) {
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.selling_price_suggested || "-")}</td>
       <td>${escapeHtml(item.quantity || "0")}</td>
+      <td>
+        <div class="dashboard-action-row">
+          <button
+            class="dashboard-delete-btn"
+            type="button"
+            data-consignment-delete-id="${escapeHtml(item.id || "")}"
+            title="Delete inventory"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+              <path d="M3 6h18" stroke="currentColor"/>
+              <path d="M8 6V4h8v2" stroke="currentColor"/>
+              <path d="M19 6l-1 14H6L5 6" stroke="currentColor"/>
+              <path d="M10 11v6" stroke="currentColor"/>
+              <path d="M14 11v6" stroke="currentColor"/>
+            </svg>
+          </button>
+        </div>
+      </td>
+      </tr>
     </tr>
   `).join("");
 }
@@ -2211,6 +2231,40 @@ dashboardContent.addEventListener("click", (event) => {
 });
 
 dashboardTableBody.addEventListener("click", async (event) => {
+  const consignmentDeleteButton = event.target.closest("[data-consignment-delete-id]");
+
+  if (consignmentDeleteButton) {
+    const inventoryId = consignmentDeleteButton.dataset.consignmentDeleteId;
+
+    const confirmed = window.confirm(
+      "Are you sure you want to delete this inventory row?"
+    );
+
+    if (!confirmed) return;
+
+    consignmentDeleteButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/consignment/inventory/${inventoryId}`, {
+        method: "DELETE"
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to delete inventory");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      consignmentDeleteButton.disabled = false;
+    }
+
+    return;
+  }
   const issueButton = event.target.closest("[data-report-issue-id]");
   const labelButton = event.target.closest("[data-label-url]");
   const viewIssueButton = event.target.closest("[data-issue-note]");
