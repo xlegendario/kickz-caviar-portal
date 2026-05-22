@@ -94,7 +94,7 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     "Shipping Deduction": 0,
     "Purchase Date": new Date().toLocaleDateString("en-CA"),
 
-    "Seller ID": [{ id: offer.seller_record_id }],
+    "Seller ID": [offer.seller_record_id],
     "Ticket Number": offer.order_id,
 
     "Type": "Consignment",
@@ -106,7 +106,7 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     "Margin": "10%",
     "Base Costs": 0,
 
-    "Unfulfilled Orders Log": [{ id: offer.order_record_id }]
+    "Unfulfilled Orders Log": [offer.order_record_id]
   });
 
   return created;
