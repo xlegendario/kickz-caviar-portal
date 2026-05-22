@@ -636,7 +636,8 @@ function renderConsignmentInventoryRows(items) {
       <td>${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
-      <td>${escapeHtml(item.selling_price_suggested || "-")}</td>
+      <td>${item.selling_price_suggested ? `€${escapeHtml(item.selling_price_suggested)}` : "-"}</td>
+      <td>${item.lowest_suggested_price ? `€${escapeHtml(item.lowest_suggested_price)}` : "-"}</td>
       <td>${escapeHtml(item.quantity || "0")}</td>
       <td>
         <div class="dashboard-action-row">
