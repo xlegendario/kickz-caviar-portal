@@ -83,8 +83,11 @@ const consignmentOfferColumns = [
 ];
 
 let dashboardSeller = JSON.parse(localStorage.getItem("kc_seller") || "null");
-let activeSection = localStorage.getItem("kc_dashboard_section") || "quick";
-let activeTab = localStorage.getItem("kc_dashboard_tab") || "open_claims";
+let activeSection = "quick";
+let activeTab = "open_claims";
+
+localStorage.setItem("kc_dashboard_section", activeSection);
+localStorage.setItem("kc_dashboard_tab", activeTab);
 
 const dashboardTitle = document.getElementById("dashboardTitle");
 const dashboardSellerName = document.getElementById("dashboardSellerName");
