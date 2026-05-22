@@ -2599,6 +2599,10 @@ document.querySelectorAll("[data-consignment-edit-close]").forEach((button) => {
   button.addEventListener("click", closeConsignmentEditStockModal);
 });
 
+consignmentCsvDuplicateBackBtn?.addEventListener("click", () => {
+  closeConsignmentCsvDuplicateModal();
+});
+
 document.querySelectorAll("[data-issue-close]").forEach((button) => {
   button.addEventListener("click", closeIssueModal);
 });
