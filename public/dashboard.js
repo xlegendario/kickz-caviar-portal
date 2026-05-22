@@ -1389,8 +1389,11 @@ async function loadDashboardData() {
   if (!dashboardSeller) return;
 
   if (activeSection === "consignment" && activeTab === "inventory") {
-    dashboardSubtabDescription.innerHTML = `
-      <div class="consignment-inventory-actions">
+    document.getElementById("consignmentInventoryActions")?.remove();
+    
+    dashboardSubtabDescription.innerHTML = "";
+    dashboardRefreshBtn.insertAdjacentHTML("beforebegin", `
+      <div class="consignment-inventory-actions" id="consignmentInventoryActions">
         <button class="dashboard-issue-submit-btn" type="button" id="consignmentOpenAddStockBtn">
           + Add Stock
         </button>
@@ -1399,7 +1402,7 @@ async function loadDashboardData() {
           Upload Stock CSV
         </button>
       </div>
-    `;
+    `);
     
     dashboardTableBody.innerHTML = `
       <tr>
