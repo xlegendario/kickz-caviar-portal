@@ -114,7 +114,7 @@ app.get("/api/consignment/inventory", async (req, res) => {
       });
     }
 
-    const { data, error } = await supabase
+    const { data: inventoryRows, error: inventoryError } = await supabase
       .from("consignment_inventory")
       .select(`
         id,
@@ -131,11 +131,43 @@ app.get("/api/consignment/inventory", async (req, res) => {
       .order("sku", { ascending: true })
       .order("size", { ascending: true });
 
-    if (error) throw error;
+    if (inventoryError) throw inventoryError;
+
+    const stockKeys = [
+      ...new Set(
+        (inventoryRows || []).map((row) =>
+          getStockCounterKey(row.sku, row.size)
+        )
+      )
+    ];
+
+    let stockLevelMap = new Map();
+
+    if (stockKeys.length) {
+      const { data: stockLevels, error: stockLevelError } = await supabase
+        .from("consignment_stock_levels")
+        .select("stock_counter_key, lowest_suggested_price")
+        .in("stock_counter_key", stockKeys);
+
+      if (stockLevelError) throw stockLevelError;
+
+      stockLevelMap = new Map(
+        (stockLevels || []).map((row) => [
+          row.stock_counter_key,
+          row.lowest_suggested_price
+        ])
+      );
+    }
+
+    const items = (inventoryRows || []).map((row) => ({
+      ...row,
+      lowest_suggested_price:
+        stockLevelMap.get(getStockCounterKey(row.sku, row.size)) ?? null
+    }));
 
     res.json({
-      count: data.length,
-      items: data
+      count: items.length,
+      items
     });
   } catch (err) {
     console.error("Failed to load consignment inventory:", err);
