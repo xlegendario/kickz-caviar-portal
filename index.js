@@ -1054,9 +1054,38 @@ app.post("/api/consignment/offers/create", async (req, res) => {
 
       if (error) throw error;
 
+      const { data: sellerRow } = await supabase
+        .from("sellers")
+        .select(`
+          seller_id,
+          consignment_offer_channel_id,
+          consignment_confirmation_channel_id
+        `)
+        .eq("record_id", row.seller_record_id)
+        .single();
+      
+      const discordResult =
+        await sendConsignmentOfferDiscordMessage({
+          seller: sellerRow,
+          offer: data,
+          calculatedOfferPrice
+        });
+      
+      await supabase
+        .from("consignment_offers")
+        .update({
+          discord_channel_id: discordResult.channelId,
+          discord_message_id: discordResult.messageId
+        })
+        .eq("id", data.id);
+      
       results.push({
         mode: "created",
-        offer: data
+        offer: {
+          ...data,
+          discord_channel_id: discordResult.channelId,
+          discord_message_id: discordResult.messageId
+        }
       });
     }
 
