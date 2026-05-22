@@ -272,34 +272,20 @@ app.post("/api/consignment/inventory/manual", async (req, res) => {
     const sellingPriceSuggested = Number(req.body?.selling_price_suggested);
     const quantity = Number(req.body?.quantity);
 
-    if (!sellerRecordId) {
-      return res.status(400).json({ error: "Missing seller_record_id" });
-    }
-
-    if (!sku) {
-      return res.status(400).json({ error: "Missing SKU" });
-    }
-
-    if (!size) {
-      return res.status(400).json({ error: "Missing size" });
-    }
+    if (!sellerRecordId) return res.status(400).json({ error: "Missing seller_record_id" });
+    if (!sku) return res.status(400).json({ error: "Missing SKU" });
+    if (!size) return res.status(400).json({ error: "Missing size" });
 
     if (!["Margin", "VAT0", "VAT21"].includes(vatType)) {
-      return res.status(400).json({
-        error: "VAT Type must be Margin, VAT0 or VAT21"
-      });
+      return res.status(400).json({ error: "VAT Type must be Margin, VAT0 or VAT21" });
     }
 
     if (!Number.isFinite(sellingPriceSuggested) || sellingPriceSuggested <= 0) {
-      return res.status(400).json({
-        error: "Selling Price (Suggested) must be higher than 0"
-      });
+      return res.status(400).json({ error: "Selling Price must be higher than 0" });
     }
 
     if (!Number.isInteger(quantity) || quantity <= 0) {
-      return res.status(400).json({
-        error: "Quantity must be a positive whole number"
-      });
+      return res.status(400).json({ error: "Quantity must be a positive whole number" });
     }
 
     const result = await addConsignmentInventoryRow({
@@ -311,11 +297,12 @@ app.post("/api/consignment/inventory/manual", async (req, res) => {
       sellingPriceSuggested,
       quantity
     });
-    
+
     res.json({
       ok: true,
       ...result
     });
+  } catch (err) {
     console.error("Failed to manually add consignment inventory:", err);
 
     res.status(500).json({
