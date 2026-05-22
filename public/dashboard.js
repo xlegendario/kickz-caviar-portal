@@ -2723,6 +2723,52 @@ consignmentAddAnotherProductBtn?.addEventListener("click", async () => {
   }
 });
 
+consignmentEditStockForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  consignmentEditStockError.textContent = "";
+
+  const inventoryId = consignmentEditStockId.value;
+  const sellingPrice = cleanWholeNumberInput(consignmentEditSellingPriceInput.value);
+  const quantity = cleanWholeNumberInput(consignmentEditQuantityInput.value);
+
+  consignmentEditSellingPriceInput.value = sellingPrice;
+  consignmentEditQuantityInput.value = quantity;
+
+  const submitBtn = consignmentEditStockForm.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Saving...";
+
+  try {
+    const response = await fetch(`/api/consignment/inventory/${inventoryId}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        selling_price_suggested: sellingPrice,
+        quantity
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to update stock");
+    }
+
+    closeConsignmentEditStockModal();
+
+    await loadDashboardData();
+    await loadDashboardCounts();
+  } catch (err) {
+    consignmentEditStockError.textContent = err.message;
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Save";
+  }
+});
+
 consignmentCsvForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
 
