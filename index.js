@@ -81,24 +81,32 @@ async function initDiscord() {
 }
 
 async function createConsignmentInventoryUnitFromOffer(offer) {
-  const itemId = `CS-${Date.now()}`;
+  const purchasePrice = Number(offer.offer_price);
 
   const created = await airtable(AIRTABLE_INVENTORY_UNITS_TABLE).create({
-    "Item ID": itemId,
-    "Type": "Consignment",
-    "Availability Status": "Reserved",
-
     "Product Name": offer.product_name,
     "SKU": offer.sku,
     "Size": offer.size,
     "Brand": offer.brand,
 
-    "Seller ID": offer.seller_id,
-
-    "Purchase Price": Number(offer.offer_price),
     "VAT Type": offer.vat_type,
+    "Purchase Price": purchasePrice,
+    "Shipping Deduction": 0,
+    "Purchase Date": new Date().toISOString(),
 
-    "Selling Method": "Plug & Play"
+    "Seller ID": [{ id: offer.seller_record_id }],
+    "Ticket Number": offer.order_id,
+
+    "Type": "Consignment",
+    "Source": "Regular",
+    "Verification Status": "Consigned",
+    "Payment Note": `€${purchasePrice.toFixed(2)}`,
+    "Payment Status": "To Pay",
+    "Availability Status": "Sold",
+    "Margin": "10%",
+    "Base Costs": 0,
+
+    "Unfulfilled Orders Log": [{ id: offer.order_record_id }]
   });
 
   return created;
@@ -334,14 +342,6 @@ function bindConsignmentDiscordButtons() {
       if (action === "confirm_offer") {
         const inventoryUnit =
           await createConsignmentInventoryUnitFromOffer(offer);
-      
-        await airtable(AIRTABLE_ORDERS_TABLE).update(
-          offer.order_record_id,
-          {
-            "Linked Inventory Unit": [{ id: inventoryUnit.id }],
-            "Fulfillment Status": "Allocated"
-          }
-        );
       
         await supabase
           .from("consignment_offers")
