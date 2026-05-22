@@ -350,6 +350,73 @@ app.delete("/api/consignment/inventory/:id", async (req, res) => {
   }
 });
 
+app.patch("/api/consignment/inventory/:id", async (req, res) => {
+  try {
+    const inventoryId = asText(req.params.id);
+    const sellingPriceSuggested = Number(req.body?.selling_price_suggested);
+    const quantity = Number(req.body?.quantity);
+
+    if (!inventoryId) {
+      return res.status(400).json({ error: "Missing inventory id" });
+    }
+
+    if (!Number.isFinite(sellingPriceSuggested) || sellingPriceSuggested <= 0) {
+      return res.status(400).json({
+        error: "Selling Price must be higher than 0"
+      });
+    }
+
+    if (!Number.isInteger(quantity) || quantity < 0) {
+      return res.status(400).json({
+        error: "Quantity must be a whole number"
+      });
+    }
+
+    const { data: existingItem, error: existingError } = await supabase
+      .from("consignment_inventory")
+      .select("id, sku, size")
+      .eq("id", inventoryId)
+      .single();
+
+    if (existingError) {
+      throw existingError;
+    }
+
+    const { data, error } = await supabase
+      .from("consignment_inventory")
+      .update({
+        selling_price_suggested: sellingPriceSuggested,
+        quantity,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", inventoryId)
+      .select()
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    const stockLevel = await refreshConsignmentStockLevel(
+      existingItem.sku,
+      existingItem.size
+    );
+
+    res.json({
+      ok: true,
+      item: data,
+      stock_level: stockLevel
+    });
+  } catch (err) {
+    console.error("Failed to update consignment inventory:", err);
+
+    res.status(500).json({
+      error: "Failed to update consignment inventory",
+      details: err.message
+    });
+  }
+});
+
 const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
 const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
 const DISCORD_SERVER_ID = "922818998163361792";
