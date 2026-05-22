@@ -2799,18 +2799,17 @@ consignmentCsvForm?.addEventListener("submit", async (event) => {
       return;
     }
 
-    if (consignmentCsvMode.value !== "add") {
-      consignmentCsvPreview.textContent =
-        `${result.rows.length} valid rows found. Replace Stock write comes next.`;
-      return;
-    }
+    const endpoint =
+      consignmentCsvMode.value === "replace"
+        ? "/api/consignment/inventory/csv-replace"
+        : "/api/consignment/inventory/csv-add";
     
     const submitBtn = consignmentCsvForm.querySelector('button[type="submit"]');
     submitBtn.disabled = true;
     submitBtn.textContent = "Uploading...";
     
     try {
-      const response = await fetch("/api/consignment/inventory/csv-add", {
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -2829,7 +2828,9 @@ consignmentCsvForm?.addEventListener("submit", async (event) => {
       }
     
       consignmentCsvPreview.textContent =
-        `${data.count || result.rows.length} rows uploaded successfully.`;
+        consignmentCsvMode.value === "replace"
+          ? `${data.count || result.rows.length} rows replaced successfully.`
+          : `${data.count || result.rows.length} rows uploaded successfully.`;
     
       await loadDashboardData();
       await loadDashboardCounts();
