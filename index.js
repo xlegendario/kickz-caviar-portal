@@ -340,8 +340,55 @@ function bindConsignmentDiscordButtons() {
       }
 
       if (action === "confirm_offer") {
+        const { data: freshOffer } = await supabase
+          .from("consignment_offers")
+          .select("status")
+          .eq("id", offer.id)
+          .single();
+        
+        if (!freshOffer || freshOffer.status !== "open") {
+          await disableConsignmentDiscordButtons(
+            interaction.channelId,
+            interaction.message.id,
+            "❌ This offer is no longer available."
+          );
+        
+          return;
+        }
         const inventoryUnit =
           await createConsignmentInventoryUnitFromOffer(offer);
+
+        const { data: inventoryRow, error: inventoryFetchError } =
+          await supabase
+            .from("consignment_inventory")
+            .select("id, quantity, sku, size")
+            .eq("id", offer.inventory_id)
+            .single();
+        
+        if (inventoryFetchError) {
+          throw inventoryFetchError;
+        }
+        
+        const newQuantity =
+          Math.max(0, Number(inventoryRow.quantity || 0) - 1);
+        
+        const { error: inventoryUpdateError } =
+          await supabase
+            .from("consignment_inventory")
+            .update({
+              quantity: newQuantity,
+              updated_at: new Date().toISOString()
+            })
+            .eq("id", inventoryRow.id);
+        
+        if (inventoryUpdateError) {
+          throw inventoryUpdateError;
+        }
+        
+        await refreshConsignmentStockLevel(
+          inventoryRow.sku,
+          inventoryRow.size
+        );
       
         await supabase
           .from("consignment_offers")
@@ -352,6 +399,49 @@ function bindConsignmentDiscordButtons() {
             updated_at: new Date().toISOString()
           })
           .eq("id", offer.id);
+
+        const { data: competingOffers } = await supabase
+          .from("consignment_offers")
+          .select(`
+            id,
+            discord_channel_id,
+            discord_message_id
+          `)
+          .eq("order_record_id", offer.order_record_id)
+          .eq("status", "open");
+        
+        for (const competingOffer of competingOffers || []) {
+          if (competingOffer.id === offer.id) {
+            continue;
+          }
+        
+          await supabase
+            .from("consignment_offers")
+            .update({
+              status: "closed",
+              closed_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            })
+            .eq("id", competingOffer.id);
+        
+          try {
+            if (
+              competingOffer.discord_channel_id &&
+              competingOffer.discord_message_id
+            ) {
+              await disableConsignmentDiscordButtons(
+                competingOffer.discord_channel_id,
+                competingOffer.discord_message_id,
+                "❌ This order was matched with another seller."
+              );
+            }
+          } catch (err) {
+            console.error(
+              "Failed to disable competing offer:",
+              err
+            );
+          }
+        }
       
         await disableConsignmentDiscordButtons(
           interaction.channelId,
