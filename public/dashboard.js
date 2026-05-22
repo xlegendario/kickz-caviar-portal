@@ -1362,13 +1362,19 @@ async function loadDashboardData() {
 
   if (activeSection === "consignment" && activeTab === "inventory") {
     dashboardSubtabDescription.innerHTML = `
-      <div class="consignment-inventory-actions">
-        <button class="dashboard-issue-submit-btn" type="button" id="consignmentOpenAddStockBtn">
-          + Add Stock
-        </button>
+      <div class="dashboard-table-actions">
+        <div class="consignment-inventory-actions">
+          <button class="dashboard-issue-submit-btn" type="button" id="consignmentOpenAddStockBtn">
+            + Add Stock
+          </button>
     
-        <button class="dashboard-refresh-btn" type="button" id="consignmentOpenCsvUploadBtn">
-          Upload Stock CSV
+          <button class="dashboard-refresh-btn" type="button" id="consignmentOpenCsvUploadBtn">
+            Upload Stock CSV
+          </button>
+        </div>
+    
+        <button class="dashboard-refresh-btn" type="button" id="dashboardRefreshBtnInline">
+          Refresh
         </button>
       </div>
     `;
