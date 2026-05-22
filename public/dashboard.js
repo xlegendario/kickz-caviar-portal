@@ -2281,8 +2281,14 @@ function syncAuthUi() {
     document.querySelector(".dashboard-topbar")?.classList.remove("hidden");
     dashboardSellerName.textContent = dashboardSeller.discord || dashboardSeller.email || "Seller";
     dashboardSellerId.textContent = dashboardSeller.seller_id || dashboardSeller.id || "Seller account";
+    activeSection = "quick";
+    activeTab = "open_claims";
+    
+    localStorage.setItem("kc_dashboard_section", activeSection);
+    localStorage.setItem("kc_dashboard_tab", activeTab);
+    
     syncConsignmentAccess();
-    loadDashboardData().catch(console.error);
+    syncDashboardUi();
     loadDashboardCounts().catch(console.error);
   } else {
     dashboardLoginPanel.classList.remove("hidden");
