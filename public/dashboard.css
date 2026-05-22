@@ -2607,9 +2607,8 @@
 .consignment-inventory-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
   gap: 10px;
+  margin-left: auto;
 }
 
 .consignment-inventory-actions .dashboard-issue-submit-btn,
@@ -2684,4 +2683,10 @@
 
 .dashboard-table-actions .consignment-inventory-actions {
   margin-left: 0;
+}
+
+#dashboardSubtabDescription {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
 }
