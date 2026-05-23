@@ -717,6 +717,50 @@ function renderConsignmentInventoryRows(items) {
     return;
   }
 
+  if (isMobileDashboard()) {
+    renderMobileOrderCards(items, {
+      primaryLabel: "Selling",
+      primaryValue: (item) =>
+        item.selling_price_suggested
+          ? `€${item.selling_price_suggested}`
+          : "-",
+      secondaryLabel: "Lowest",
+      secondaryValue: (item) =>
+        item.lowest_suggested_price
+          ? `€${item.lowest_suggested_price}`
+          : "-",
+      thirdLabel: "Qty",
+      thirdValue: (item) => item.quantity || "0",
+      actions: (item) => `
+        <button
+          class="dashboard-mobile-btn dashboard-mobile-edit-btn"
+          type="button"
+          data-consignment-edit-id="${escapeHtml(item.id || "")}"
+          data-current-price="${escapeHtml(item.selling_price_suggested || "")}"
+          data-current-quantity="${escapeHtml(item.quantity || "")}"
+        >
+          Edit
+        </button>
+  
+        <button
+          class="dashboard-mobile-btn dashboard-mobile-delete-btn"
+          type="button"
+          data-consignment-delete-id="${escapeHtml(item.id || "")}"
+        >
+          Delete
+        </button>
+      `
+    });
+  
+    dashboardTableBody.querySelectorAll(".dashboard-mobile-product")
+      .forEach((el, index) => {
+        const item = items[index];
+        el.textContent = item.product_name || "-";
+      });
+  
+    return;
+  }
+
   setMobileTableMode(false);
 
   dashboardTableBody.innerHTML = items.map((item) => `
@@ -782,6 +826,48 @@ function renderConsignmentOfferRows(items) {
         </td>
       </tr>
     `;
+    return;
+  }
+
+  if (isMobileDashboard()) {
+    renderMobileOrderCards(items, {
+      primaryLabel: "Your Price",
+      primaryValue: (item) =>
+        item.seller_price ? `€${item.seller_price}` : "-",
+      secondaryLabel: (items[0] && Number(items[0].offer_price || 0) < Number(items[0].seller_price || 0))
+        ? "Our Offer"
+        : "Matched At",
+      secondaryValue: (item) =>
+        item.offer_price ? `€${item.offer_price}` : "-",
+      actions: (item) => `
+        <button
+          class="dashboard-mobile-btn dashboard-mobile-confirm-btn"
+          type="button"
+          data-consignment-confirm-offer-id="${escapeHtml(item.id || "")}"
+        >
+          ${
+            Number(item.offer_price || 0) < Number(item.seller_price || 0)
+              ? "Accept"
+              : "Confirm"
+          }
+        </button>
+  
+        <button
+          class="dashboard-mobile-btn dashboard-mobile-deny-btn"
+          type="button"
+          data-consignment-deny-offer-id="${escapeHtml(item.id || "")}"
+        >
+          Deny
+        </button>
+      `
+    });
+  
+    dashboardTableBody.querySelectorAll(".dashboard-mobile-product")
+      .forEach((el, index) => {
+        const item = items[index];
+        el.textContent = item.product_name || "-";
+      });
+  
     return;
   }
 
@@ -1536,7 +1622,7 @@ async function loadDashboardData() {
           + Add Stock
         </button>
     
-        <button class="dashboard-refresh-btn" type="button" id="consignmentOpenCsvUploadBtn">
+        <button class="dashboard-refresh-btn consignment-desktop-only" type="button" id="consignmentOpenCsvUploadBtn">
           + Upload CSV
         </button>
       </div>
