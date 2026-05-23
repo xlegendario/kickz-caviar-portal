@@ -3931,6 +3931,85 @@ app.get("/api/dashboard/open-claims", async (req, res) => {
   }
 });
 
+app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({ error: "Missing seller_record_id" });
+    }
+
+    const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Item ID",
+          "Type",
+          "Fulfillment Status (UOL)",
+          "Purchase Price",
+          "Unfulfilled Orders Log",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "VAT Type",
+          "Purchase Date"
+        ],
+        filterByFormula: `AND(
+          {Type} = 'Consignment',
+          {Fulfillment Status (UOL)} = 'Allocated'
+        )`
+      })
+      .all();
+
+    const filteredInventory = inventoryRecords.filter((record) =>
+      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+    );
+
+    const linkedOrderIds = [
+      ...new Set(
+        filteredInventory
+          .map((record) => firstLinkedRecordId(record.fields?.["Unfulfilled Orders Log"]))
+          .filter(Boolean)
+      )
+    ];
+
+    const orderMap = await loadOrderFieldsMap(linkedOrderIds);
+
+    const items = filteredInventory.map((record) => {
+      const f = record.fields || {};
+      const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
+      const orderFields = orderMap.get(linkedOrderId) || {};
+
+      return {
+        id: record.id,
+        order_id: displayValue(orderFields["Order ID"]),
+        order_record_id: linkedOrderId,
+        product: displayValue(f["Product Name"]),
+        sku: displayValue(f["SKU"]),
+        size: displayValue(f["Size"]),
+        brand: displayValue(f["Brand"]),
+        payout: moneyWholeValue(f["Purchase Price"]),
+        vat_type: displayValue(f["VAT Type"]),
+        date: formatDateEU(f["Purchase Date"]),
+        raw_date: f["Purchase Date"]
+      };
+    });
+
+    res.json({
+      count: items.length,
+      items: sortDashboardItemsNewestFirst(items)
+    });
+  } catch (err) {
+    console.error("Failed to load consignment confirmed:", err);
+
+    res.status(500).json({
+      error: "Failed to load consignment confirmed",
+      details: err.message
+    });
+  }
+});
+
 app.post("/api/login", async (req, res) => {
   try {
     const email = asText(req.body.email).toLowerCase();
