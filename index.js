@@ -3845,6 +3845,52 @@ app.get("/api/dashboard/counts", async (req, res) => {
       );
     }).length;
 
+    const { data: consignmentInventoryRows, error: consignmentInventoryError } =
+      await supabase
+        .from("consignment_inventory")
+        .select("quantity")
+        .eq("seller_record_id", sellerRecordId)
+        .gt("quantity", 0);
+    
+    if (consignmentInventoryError) throw consignmentInventoryError;
+    
+    const consignmentInventoryCount = (consignmentInventoryRows || [])
+      .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    
+    const { count: consignmentOffersCount, error: consignmentOffersError } =
+      await supabase
+        .from("consignment_offers")
+        .select("id", { count: "exact", head: true })
+        .eq("seller_record_id", sellerRecordId)
+        .eq("status", "open");
+    
+    if (consignmentOffersError) throw consignmentOffersError;
+    
+    const consignmentConfirmedCount = await loadInventoryCount(
+      `AND({Type} = 'Consignment', {Fulfillment Status (UOL)} = 'Allocated')`,
+      false
+    );
+    
+    const consignmentLabelRequestedCount = await loadInventoryCount(
+      `AND({Type} = 'Consignment', {Fulfillment Status (UOL)} = 'Requested Label')`,
+      false
+    );
+    
+    const consignmentReadyToShipCount = await loadInventoryCount(
+      `AND({Type} = 'Consignment', {Fulfillment Status (UOL)} = 'Ready to Ship')`,
+      false
+    );
+    
+    const consignmentShippedCount = await loadInventoryCount(
+      `AND({Type} = 'Consignment', {Shipping Status} = 'Shipped')`,
+      false
+    );
+    
+    const consignmentDeliveredCount = await loadInventoryCount(
+      `AND({Type} = 'Consignment', {Shipping Status} = 'Delivered', {Payment Status} = 'To Pay')`,
+      false
+    );
+
     res.json({
       quick: {
         open_claims: openClaims,
