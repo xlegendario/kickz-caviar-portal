@@ -1619,7 +1619,8 @@ async function loadDashboardData() {
     dashboardRefreshBtn.insertAdjacentHTML("beforebegin", `
       <div class="consignment-inventory-actions" id="consignmentInventoryActions">
         <button class="dashboard-issue-submit-btn" type="button" id="consignmentOpenAddStockBtn">
-          + Add Stock
+          <span class="desktop-only-inline">+ Add Stock</span>
+          <span class="mobile-only-inline">+ Add</span>
         </button>
     
         <button class="dashboard-refresh-btn consignment-desktop-only" type="button" id="consignmentOpenCsvUploadBtn">
