@@ -3863,6 +3863,17 @@ app.get("/api/dashboard/counts", async (req, res) => {
         shipped: wtbShipped,
         delivered: wtbDelivered
       },
+
+      consignment: {
+        inventory: consignmentInventoryCount,
+        offers: consignmentOffersCount,
+        confirmed: consignmentConfirmedCount,
+        label_requested: consignmentLabelRequestedCount,
+        ready_to_ship: consignmentReadyToShipCount,
+        shipped: consignmentShippedCount,
+        delivered: consignmentDeliveredCount
+      },
+      
       history: {
         completed: historyCompletedRecords.length,
         issues: historyIssues
