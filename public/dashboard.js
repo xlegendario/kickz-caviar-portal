@@ -342,6 +342,12 @@ async function loadDashboardCounts() {
     history: {},
     ...(data || {})
   };
+
+  Object.entries(dashboardCountsCache.consignment || {})
+  .forEach(([key, value]) => {
+    setConsignmentCount(key, value || 0);
+  });
+  
   quickCountsCache = dashboardCountsCache.quick || {};
 
   Object.entries(dashboardCountsCache).forEach(([section, counts]) => {
