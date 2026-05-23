@@ -2899,9 +2899,9 @@
   }
 
   .consignment-inventory-actions .dashboard-issue-submit-btn {
-    width: 132px !important;
-    min-width: 132px !important;
-    height: 52px !important;
+    width: 110px !important;
+    min-width: 110px !important;
+    height: 46px !important;
     min-height: 52px !important;
     padding: 0 12px !important;
     margin: 0 !important;
@@ -2910,14 +2910,13 @@
     white-space: nowrap !important;
   }
 
-  .dashboard-table-header > .dashboard-refresh-btn {
-    width: 132px !important;
-    min-width: 132px !important;
-    height: 52px !important;
-    min-height: 52px !important;
+  .consignment-inventory-actions + .dashboard-refresh-btn {
+    width: 110px !important;
+    min-width: 110px !important;
+    height: 46px !important;
+    min-height: 46px !important;
     padding: 0 12px !important;
-    margin: 0 !important;
-    border-radius: 18px !important;
+    border-radius: 16px !important;
     font-size: 13px !important;
   }
 }
