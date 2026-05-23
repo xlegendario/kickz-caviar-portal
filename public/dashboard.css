@@ -2879,3 +2879,45 @@
     font-size: 11px;
   }
 }
+
+@media (max-width: 768px) {
+  #consignmentOpenCsvUploadBtn,
+  .consignment-desktop-only {
+    display: none !important;
+  }
+
+  .dashboard-table-header {
+    align-items: center !important;
+    gap: 10px !important;
+  }
+
+  .consignment-inventory-actions {
+    margin-left: auto !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 10px !important;
+  }
+
+  .consignment-inventory-actions .dashboard-issue-submit-btn {
+    width: 132px !important;
+    min-width: 132px !important;
+    height: 52px !important;
+    min-height: 52px !important;
+    padding: 0 12px !important;
+    margin: 0 !important;
+    border-radius: 18px !important;
+    font-size: 13px !important;
+    white-space: nowrap !important;
+  }
+
+  .dashboard-table-header > .dashboard-refresh-btn {
+    width: 132px !important;
+    min-width: 132px !important;
+    height: 52px !important;
+    min-height: 52px !important;
+    padding: 0 12px !important;
+    margin: 0 !important;
+    border-radius: 18px !important;
+    font-size: 13px !important;
+  }
+}
