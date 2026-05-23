@@ -2801,59 +2801,81 @@
 }
 
 @media (max-width: 768px) {
-  .consignment-desktop-only {
-    display: none !important;
+  html,
+  body {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .dashboard-table-header {
+    align-items: center;
   }
 
   .consignment-inventory-actions {
     display: flex;
+    align-items: center;
     gap: 10px;
+    margin-left: auto;
   }
 
-  .consignment-inventory-actions .dashboard-issue-submit-btn {
+  .consignment-inventory-actions .dashboard-issue-submit-btn,
+  .dashboard-refresh-btn {
     height: 52px;
-    min-width: 150px;
-    font-size: 14px;
+    min-height: 52px;
+    width: 132px;
+    min-width: 132px;
+    padding: 0 14px;
     margin: 0;
-  }
-
-  .dashboard-mobile-confirm-btn {
-    background: linear-gradient(180deg, #58d86a, #2ca43c);
-    color: white;
-    border-color: rgba(255,255,255,0.10);
-  }
-
-  .dashboard-mobile-deny-btn,
-  .dashboard-mobile-delete-btn {
-    background: linear-gradient(180deg, #ff6767, #b91c1c);
-    color: white;
-    border-color: rgba(255,255,255,0.10);
+    border-radius: 18px;
+    font-size: 13px;
+    line-height: 1.05;
   }
 
   .dashboard-modal {
-    align-items: flex-start;
+    width: 100vw;
+    max-width: 100vw;
+    overflow-x: hidden;
     overflow-y: auto;
-    padding: 18px;
+    overscroll-behavior: contain;
   }
 
   .dashboard-modal-card {
-    max-height: none;
-    margin: 24px 0 80px;
-  }
-
-  #consignmentAddStockForm .consignment-vat-select {
-    grid-template-columns: 1fr;
-    gap: 8px;
-  }
-
-  #consignmentAddStockForm .consignment-vat-card {
-    height: 54px;
+    width: calc(100vw - 32px) !important;
+    max-width: calc(100vw - 32px) !important;
+    margin: 18px auto 90px;
+    overflow-x: hidden;
   }
 
   #consignmentAddStockForm .consignment-size-row,
   #consignmentAddStockForm .consignment-size-row:first-child,
   #consignmentAddStockForm .consignment-size-row.has-remove {
+    grid-template-columns: 1fr 1fr 0.82fr;
     gap: 8px;
     padding: 10px;
+  }
+
+  #consignmentAddStockForm .consignment-size-row.has-remove {
+    grid-template-columns: 1fr 1fr 0.82fr 34px;
+  }
+
+  #consignmentAddStockForm .consignment-size-row label {
+    min-width: 0;
+  }
+
+  #consignmentAddStockForm .consignment-size-row input {
+    height: 46px;
+    padding: 0 10px;
+    font-size: 16px !important;
+  }
+
+  #consignmentAddStockForm .consignment-remove-size-btn {
+    width: 34px;
+    height: 46px;
+    align-self: end;
+  }
+
+  #consignmentAddStockForm .dashboard-vat-title,
+  #consignmentAddStockForm .consignment-size-row label {
+    font-size: 11px;
   }
 }
