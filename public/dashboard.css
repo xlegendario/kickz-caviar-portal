@@ -2799,3 +2799,61 @@
   text-transform: none !important;
   letter-spacing: 0 !important;
 }
+
+@media (max-width: 768px) {
+  .consignment-desktop-only {
+    display: none !important;
+  }
+
+  .consignment-inventory-actions {
+    display: flex;
+    gap: 10px;
+  }
+
+  .consignment-inventory-actions .dashboard-issue-submit-btn {
+    height: 52px;
+    min-width: 150px;
+    font-size: 14px;
+    margin: 0;
+  }
+
+  .dashboard-mobile-confirm-btn {
+    background: linear-gradient(180deg, #58d86a, #2ca43c);
+    color: white;
+    border-color: rgba(255,255,255,0.10);
+  }
+
+  .dashboard-mobile-deny-btn,
+  .dashboard-mobile-delete-btn {
+    background: linear-gradient(180deg, #ff6767, #b91c1c);
+    color: white;
+    border-color: rgba(255,255,255,0.10);
+  }
+
+  .dashboard-modal {
+    align-items: flex-start;
+    overflow-y: auto;
+    padding: 18px;
+  }
+
+  .dashboard-modal-card {
+    max-height: none;
+    margin: 24px 0 80px;
+  }
+
+  #consignmentAddStockForm .consignment-vat-select {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  #consignmentAddStockForm .consignment-vat-card {
+    height: 54px;
+  }
+
+  #consignmentAddStockForm .consignment-size-row,
+  #consignmentAddStockForm .consignment-size-row:first-child,
+  #consignmentAddStockForm .consignment-size-row.has-remove {
+    gap: 8px;
+    padding: 10px;
+  }
+}
