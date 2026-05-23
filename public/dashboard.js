@@ -296,6 +296,30 @@ let dashboardCountsCache = {
 let quickCountsCache = {};
 let statsOpen = false;
 
+function setConsignmentCount(key, value) {
+  const count = Number(value || 0);
+
+  dashboardCountsCache.consignment = {
+    ...(dashboardCountsCache.consignment || {}),
+    [key]: count
+  };
+
+  document.querySelectorAll(`[data-count-key="consignment:${key}"]`)
+    .forEach((el) => {
+      el.textContent = count;
+    });
+
+  const total = Object.values(dashboardCountsCache.consignment || {})
+    .reduce((sum, item) => sum + Number(item || 0), 0);
+
+  document.querySelectorAll('[data-count-group="consignment"]')
+    .forEach((el) => {
+      el.textContent = total;
+    });
+
+  renderStats();
+}
+
 async function loadDashboardCounts() {
   if (!dashboardSeller) return;
 
@@ -1545,8 +1569,10 @@ async function loadDashboardData() {
   
     renderConsignmentInventoryRows(data.items || []);
   
-    dashboardCountsCache.consignment.inventory = data.count || 0;
-    renderStats();
+    const inventoryQuantityCount = (data.items || [])
+      .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    
+    setConsignmentCount("inventory", inventoryQuantityCount);
   
     return;
   }
@@ -1582,8 +1608,7 @@ async function loadDashboardData() {
   
     renderConsignmentOfferRows(data.items || []);
   
-    dashboardCountsCache.consignment.offers = data.count || 0;
-    renderStats();
+    setConsignmentCount("offers", data.count || 0);
   
     return;
   }
@@ -1619,8 +1644,7 @@ async function loadDashboardData() {
   
     renderConfirmedRows(data.items || []);
   
-    dashboardCountsCache.consignment.confirmed = data.count || 0;
-    renderStats();
+    setConsignmentCount("confirmed", data.count || 0);
   
     return;
   }
@@ -1680,10 +1704,7 @@ async function loadDashboardData() {
       renderOpenClaimsRows(data.items || []);
     }
   
-    dashboardCountsCache.consignment[activeTab] =
-      data.count || 0;
-  
-    renderStats();
+    setConsignmentCount(activeTab, data.count || 0);
   
     return;
   }
