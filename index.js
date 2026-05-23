@@ -4043,6 +4043,13 @@ async function normalizeConsignmentDashboardItems(records, sellerRecordId) {
     const orderFields =
       orderMap.get(linkedOrderId) || {};
 
+    const labelUrl =
+      displayValue(orderFields["Shipping Label URL (Permanent)"]) ||
+      displayValue(orderFields["Shipping Label"]);
+    
+    const trackingUrl =
+      displayValue(orderFields["Tracking URL"]);
+    
     return {
       id: record.id,
       order_id: displayValue(orderFields["Order ID"]),
@@ -4054,7 +4061,9 @@ async function normalizeConsignmentDashboardItems(records, sellerRecordId) {
       payout: moneyWholeValue(f["Purchase Price"]),
       vat_type: displayValue(f["VAT Type"]),
       date: formatDateEU(f["Purchase Date"]),
-      raw_date: f["Purchase Date"]
+      raw_date: f["Purchase Date"],
+      label_url: labelUrl,
+      tracking_url: trackingUrl
     };
   });
 
@@ -4175,7 +4184,29 @@ app.get("/api/dashboard/consignment-shipped", async (req, res) => {
     const sellerRecordId = asText(req.query.seller_record_id);
     if (!sellerRecordId) return res.status(400).json({ error: "Missing seller_record_id" });
 
-    const records = await loadConsignmentDashboardItemsByStatus("Shipped");
+    const records = await airtable(INVENTORY_UNITS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Type",
+          "Shipping Status",
+          "Payment Status",
+          "Purchase Price",
+          "Unfulfilled Orders Log",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "VAT Type",
+          "Purchase Date"
+        ],
+        filterByFormula: `AND(
+          {Type} = 'Consignment',
+          {Shipping Status} = 'Shipped'
+        )`
+      })
+      .all();
+
     const items = await normalizeConsignmentDashboardItems(records, sellerRecordId);
 
     res.json({ count: items.length, items });
@@ -4190,7 +4221,30 @@ app.get("/api/dashboard/consignment-delivered", async (req, res) => {
     const sellerRecordId = asText(req.query.seller_record_id);
     if (!sellerRecordId) return res.status(400).json({ error: "Missing seller_record_id" });
 
-    const records = await loadConsignmentDashboardItemsByStatus("Delivered");
+    const records = await airtable(INVENTORY_UNITS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Type",
+          "Shipping Status",
+          "Payment Status",
+          "Purchase Price",
+          "Unfulfilled Orders Log",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "VAT Type",
+          "Purchase Date"
+        ],
+        filterByFormula: `AND(
+          {Type} = 'Consignment',
+          {Shipping Status} = 'Delivered',
+          {Payment Status} = 'To Pay'
+        )`
+      })
+      .all();
+
     const items = await normalizeConsignmentDashboardItems(records, sellerRecordId);
 
     res.json({ count: items.length, items });
@@ -4199,7 +4253,6 @@ app.get("/api/dashboard/consignment-delivered", async (req, res) => {
     res.status(500).json({ error: "Failed to load consignment delivered", details: err.message });
   }
 });
-
 app.post("/api/login", async (req, res) => {
   try {
     const email = asText(req.body.email).toLowerCase();
