@@ -3931,6 +3931,78 @@ app.get("/api/dashboard/open-claims", async (req, res) => {
   }
 });
 
+async function loadConsignmentDashboardItemsByStatus(status) {
+  const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
+    .select({
+      fields: [
+        "Seller ID",
+        "Item ID",
+        "Type",
+        "Fulfillment Status (UOL)",
+        "Shipping Status",
+        "Payment Status",
+        "Purchase Price",
+        "Unfulfilled Orders Log",
+        "Product Name",
+        "SKU",
+        "Size",
+        "Brand",
+        "VAT Type",
+        "Purchase Date"
+      ],
+      filterByFormula: `AND(
+        {Type} = 'Consignment',
+        {Fulfillment Status (UOL)} = '${escapeFormulaValue(status)}'
+      )`
+    })
+    .all();
+
+  return inventoryRecords;
+}
+
+async function normalizeConsignmentDashboardItems(records, sellerRecordId) {
+  const filteredInventory = records.filter((record) =>
+    linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+  );
+
+  const linkedOrderIds = [
+    ...new Set(
+      filteredInventory
+        .map((record) =>
+          firstLinkedRecordId(record.fields?.["Unfulfilled Orders Log"])
+        )
+        .filter(Boolean)
+    )
+  ];
+
+  const orderMap = await loadOrderFieldsMap(linkedOrderIds);
+
+  const items = filteredInventory.map((record) => {
+    const f = record.fields || {};
+    const linkedOrderId =
+      firstLinkedRecordId(f["Unfulfilled Orders Log"]);
+
+    const orderFields =
+      orderMap.get(linkedOrderId) || {};
+
+    return {
+      id: record.id,
+      order_id: displayValue(orderFields["Order ID"]),
+      order_record_id: linkedOrderId,
+      product: displayValue(f["Product Name"]),
+      sku: displayValue(f["SKU"]),
+      size: displayValue(f["Size"]),
+      brand: displayValue(f["Brand"]),
+      payout: moneyWholeValue(f["Purchase Price"]),
+      vat_type: displayValue(f["VAT Type"]),
+      date: formatDateEU(f["Purchase Date"]),
+      raw_date: f["Purchase Date"]
+    };
+  });
+
+  return sortDashboardItemsNewestFirst(items);
+}
+
 app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
@@ -4007,6 +4079,66 @@ app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
       error: "Failed to load consignment confirmed",
       details: err.message
     });
+  }
+});
+
+app.get("/api/dashboard/consignment-label-requested", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+    if (!sellerRecordId) return res.status(400).json({ error: "Missing seller_record_id" });
+
+    const records = await loadConsignmentDashboardItemsByStatus("Requested Label");
+    const items = await normalizeConsignmentDashboardItems(records, sellerRecordId);
+
+    res.json({ count: items.length, items });
+  } catch (err) {
+    console.error("Failed to load consignment label requested:", err);
+    res.status(500).json({ error: "Failed to load consignment label requested", details: err.message });
+  }
+});
+
+app.get("/api/dashboard/consignment-ready-to-ship", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+    if (!sellerRecordId) return res.status(400).json({ error: "Missing seller_record_id" });
+
+    const records = await loadConsignmentDashboardItemsByStatus("Ready to Ship");
+    const items = await normalizeConsignmentDashboardItems(records, sellerRecordId);
+
+    res.json({ count: items.length, items });
+  } catch (err) {
+    console.error("Failed to load consignment ready to ship:", err);
+    res.status(500).json({ error: "Failed to load consignment ready to ship", details: err.message });
+  }
+});
+
+app.get("/api/dashboard/consignment-shipped", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+    if (!sellerRecordId) return res.status(400).json({ error: "Missing seller_record_id" });
+
+    const records = await loadConsignmentDashboardItemsByStatus("Shipped");
+    const items = await normalizeConsignmentDashboardItems(records, sellerRecordId);
+
+    res.json({ count: items.length, items });
+  } catch (err) {
+    console.error("Failed to load consignment shipped:", err);
+    res.status(500).json({ error: "Failed to load consignment shipped", details: err.message });
+  }
+});
+
+app.get("/api/dashboard/consignment-delivered", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+    if (!sellerRecordId) return res.status(400).json({ error: "Missing seller_record_id" });
+
+    const records = await loadConsignmentDashboardItemsByStatus("Delivered");
+    const items = await normalizeConsignmentDashboardItems(records, sellerRecordId);
+
+    res.json({ count: items.length, items });
+  } catch (err) {
+    console.error("Failed to load consignment delivered:", err);
+    res.status(500).json({ error: "Failed to load consignment delivered", details: err.message });
   }
 });
 
