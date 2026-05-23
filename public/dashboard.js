@@ -1624,6 +1624,69 @@ async function loadDashboardData() {
   
     return;
   }
+
+  const consignmentStatusEndpointMap = {
+    label_requested: "consignment-label-requested",
+    ready_to_ship: "consignment-ready-to-ship",
+    shipped: "consignment-shipped",
+    delivered: "consignment-delivered"
+  };
+  
+  if (
+    activeSection === "consignment" &&
+    consignmentStatusEndpointMap[activeTab]
+  ) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>
+              Loading consignment ${activeTab.replaceAll("_", " ")}...
+            </strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const endpoint =
+      consignmentStatusEndpointMap[activeTab];
+  
+    const response = await fetch(
+      `/api/dashboard/${endpoint}?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load consignment sales"
+      );
+    }
+  
+    if (activeTab === "ready_to_ship") {
+      renderReadyToShipRows(data.items || []);
+    } else if (
+      activeTab === "shipped" ||
+      activeTab === "delivered"
+    ) {
+      renderTrackingRows(data.items || []);
+    } else {
+      renderOpenClaimsRows(data.items || []);
+    }
+  
+    dashboardCountsCache.consignment[activeTab] =
+      data.count || 0;
+  
+    renderStats();
+  
+    return;
+  }
   
   if (activeSection === "consignment") {
     renderTableShell();
