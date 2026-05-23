@@ -2939,3 +2939,51 @@
     display: inline !important;
   }
 }
+
+@media (max-width: 768px) {
+  body:has(#consignmentAddStockModal:not(.hidden)) {
+    overflow: hidden !important;
+  }
+
+  #consignmentAddStockModal {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    align-items: flex-start !important;
+    place-items: start center !important;
+    padding: 18px 14px 90px !important;
+  }
+
+  #consignmentAddStockModal .dashboard-modal-card {
+    max-height: none !important;
+    margin: 0 auto !important;
+  }
+
+  #consignmentAddStockForm .consignment-vat-select {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  #consignmentAddStockForm .consignment-vat-card {
+    height: 52px !important;
+    min-height: 52px !important;
+    padding: 0 8px !important;
+    gap: 6px !important;
+  }
+
+  #consignmentAddStockForm .consignment-vat-card strong {
+    font-size: 12px !important;
+  }
+
+  #consignmentAddStockForm .consignment-vat-dot {
+    width: 18px !important;
+    height: 18px !important;
+  }
+
+  #consignmentAddStockForm .consignment-vat-card input:checked + .consignment-vat-dot::after {
+    width: 8px !important;
+    height: 8px !important;
+    top: 3px !important;
+    left: 3px !important;
+  }
+}
