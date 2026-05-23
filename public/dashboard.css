@@ -2793,3 +2793,9 @@
   transform: translateY(-1px);
   opacity: 0.92;
 }
+
+.dashboard-request-label-btn,
+.dashboard-mobile-request-label-btn {
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
