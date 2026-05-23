@@ -2921,3 +2921,21 @@
 .dashboard-sidebar::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 204, 0, 0.45);
 }
+
+.desktop-only-inline {
+  display: inline !important;
+}
+
+.mobile-only-inline {
+  display: none !important;
+}
+
+@media (max-width: 768px) {
+  .desktop-only-inline {
+    display: none !important;
+  }
+
+  .mobile-only-inline {
+    display: inline !important;
+  }
+}
