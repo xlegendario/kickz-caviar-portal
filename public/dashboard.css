@@ -2814,21 +2814,20 @@
   .consignment-inventory-actions {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     margin-left: auto;
   }
 
-  .consignment-inventory-actions .dashboard-issue-submit-btn,
-  .dashboard-refresh-btn {
-    height: 52px;
-    min-height: 52px;
-    width: 132px;
-    min-width: 132px;
-    padding: 0 14px;
+  .consignment-inventory-actions .dashboard-issue-submit-btn {
+    height: 40px;
+    min-height: 40px;
+    width: 82px;
+    min-width: 82px;
+    padding: 0 8px;
     margin: 0;
-    border-radius: 18px;
-    font-size: 13px;
-    line-height: 1.05;
+    border-radius: 13px;
+    font-size: 12px;
+    line-height: 1;
   }
 
   .dashboard-modal {
@@ -2886,38 +2885,18 @@
     display: none !important;
   }
 
-  .dashboard-table-header {
-    align-items: center !important;
-    gap: 10px !important;
-  }
-
-  .consignment-inventory-actions {
-    margin-left: auto !important;
-    display: flex !important;
-    align-items: center !important;
-    gap: 10px !important;
-  }
-
-  .consignment-inventory-actions .dashboard-issue-submit-btn {
-    width: 110px !important;
-    min-width: 110px !important;
-    height: 46px !important;
-    min-height: 52px !important;
-    padding: 0 12px !important;
+  .consignment-inventory-actions .dashboard-issue-submit-btn,
+  .dashboard-table-header > .dashboard-refresh-btn {
+    width: 82px !important;
+    min-width: 82px !important;
+    height: 40px !important;
+    min-height: 40px !important;
+    padding: 0 8px !important;
     margin: 0 !important;
-    border-radius: 18px !important;
-    font-size: 13px !important;
+    border-radius: 13px !important;
+    font-size: 12px !important;
+    line-height: 1 !important;
     white-space: nowrap !important;
-  }
-
-  .consignment-inventory-actions + .dashboard-refresh-btn {
-    width: 110px !important;
-    min-width: 110px !important;
-    height: 46px !important;
-    min-height: 46px !important;
-    padding: 0 12px !important;
-    border-radius: 16px !important;
-    font-size: 13px !important;
   }
 }
 
