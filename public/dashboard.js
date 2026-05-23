@@ -2420,11 +2420,14 @@ function syncAuthUi() {
     document.querySelector(".dashboard-topbar")?.classList.remove("hidden");
     dashboardSellerName.textContent = dashboardSeller.discord || dashboardSeller.email || "Seller";
     dashboardSellerId.textContent = dashboardSeller.seller_id || dashboardSeller.id || "Seller account";
-    activeSection = "quick";
-    activeTab = "open_claims";
+    activeSection = safeSection(
+      localStorage.getItem("kc_dashboard_section") || "quick"
+    );
     
-    localStorage.setItem("kc_dashboard_section", activeSection);
-    localStorage.setItem("kc_dashboard_tab", activeTab);
+    activeTab = safeTab(
+      activeSection,
+      localStorage.getItem("kc_dashboard_tab") || "open_claims"
+    );
     
     syncConsignmentAccess();
     syncDashboardUi();
