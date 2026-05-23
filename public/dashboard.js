@@ -1587,6 +1587,43 @@ async function loadDashboardData() {
   
     return;
   }
+
+  if (activeSection === "consignment" && activeTab === "confirmed") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading confirmed consignment sales...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/consignment-confirmed?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(
+        data.details ||
+        data.error ||
+        "Failed to load confirmed consignment sales"
+      );
+    }
+  
+    renderConfirmedRows(data.items || []);
+  
+    dashboardCountsCache.consignment.confirmed = data.count || 0;
+    renderStats();
+  
+    return;
+  }
   
   if (activeSection === "consignment") {
     renderTableShell();
