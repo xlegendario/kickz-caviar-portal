@@ -552,11 +552,21 @@ app.get("/api/consignment/inventory", async (req, res) => {
       );
     }
 
-    const items = (inventoryRows || []).map((row) => ({
-      ...row,
-      lowest_suggested_price:
-        stockLevelMap.get(getStockCounterKey(row.sku, row.size)) ?? null
-    }));
+    const items = (inventoryRows || []).map((row) => {
+      const lowestComparePrice =
+        stockLevelMap.get(getStockCounterKey(row.sku, row.size)) ?? null;
+    
+      return {
+        ...row,
+        lowest_suggested_price:
+          lowestComparePrice === null
+            ? null
+            : getConsignmentLowestDisplayPrice(
+                lowestComparePrice,
+                row.vat_type
+              )
+      };
+    });
 
     res.json({
       count: items.length,
@@ -1148,23 +1158,36 @@ app.post("/api/consignment/offers/preview", async (req, res) => {
 
     if (error) throw error;
 
-    const offers = (inventoryRows || []).map((row) => ({
-      inventory_id: row.id,
-      seller_record_id: row.seller_record_id,
-      seller_id: row.seller_id,
-      sku: row.sku,
-      size: row.size,
-      product_name: row.product_name,
-      brand: row.brand,
-      vat_type: row.vat_type,
-      seller_price: Number(row.selling_price_suggested),
-      calculated_offer_price: calculatedOfferPrice,
-      offer_price:
-        Number(row.selling_price_suggested) <= calculatedOfferPrice
-          ? Number(row.selling_price_suggested)
-          : calculatedOfferPrice,
-      quantity: Number(row.quantity || 0)
-    }));
+    const offers = (inventoryRows || []).map((row) => {
+      const sellerPrice = Number(row.selling_price_suggested);
+    
+      const sellerComparePrice =
+        getConsignmentComparePrice(sellerPrice, row.vat_type);
+    
+      const offerPrice =
+        sellerComparePrice <= calculatedOfferPrice
+          ? sellerPrice
+          : getConsignmentSellerOfferPrice(
+              calculatedOfferPrice,
+              row.vat_type
+            );
+    
+      return {
+        inventory_id: row.id,
+        seller_record_id: row.seller_record_id,
+        seller_id: row.seller_id,
+        sku: row.sku,
+        size: row.size,
+        product_name: row.product_name,
+        brand: row.brand,
+        vat_type: row.vat_type,
+        seller_price: sellerPrice,
+        seller_compare_price: sellerComparePrice,
+        calculated_offer_price: calculatedOfferPrice,
+        offer_price: offerPrice,
+        quantity: Number(row.quantity || 0)
+      };
+    });
 
     res.json({
       ok: true,
@@ -1247,10 +1270,16 @@ app.post("/api/consignment/offers/create", async (req, res) => {
     for (const row of inventoryRows || []) {
       const sellerPrice = Number(row.selling_price_suggested);
 
+      const sellerComparePrice =
+        getConsignmentComparePrice(sellerPrice, row.vat_type);
+      
       const offerPrice =
-        sellerPrice <= calculatedOfferPrice
+        sellerComparePrice <= calculatedOfferPrice
           ? sellerPrice
-          : calculatedOfferPrice;
+          : getConsignmentSellerOfferPrice(
+              calculatedOfferPrice,
+              row.vat_type
+            );
 
       const { data: existingOffers, error: existingError } = await supabase
         .from("consignment_offers")
@@ -1634,6 +1663,38 @@ function roundUpToStep(value, step = 2.5) {
   return Math.ceil(Number(value || 0) / step) * step;
 }
 
+function roundDownToStep(value, step = 2.5) {
+  return Math.floor(Number(value || 0) / step) * step;
+}
+
+function getConsignmentComparePrice(price, vatType) {
+  const amount = Number(price || 0);
+
+  return vatType === "VAT0"
+    ? amount * 1.21
+    : amount;
+}
+
+function getConsignmentSellerOfferPrice(calculatedOfferPrice, vatType) {
+  const amount = Number(calculatedOfferPrice || 0);
+
+  const rawOffer = vatType === "VAT0"
+    ? amount / 1.21
+    : amount;
+
+  return roundDownToStep(rawOffer, 2.5);
+}
+
+function getConsignmentLowestDisplayPrice(comparePrice, vatType) {
+  const amount = Number(comparePrice || 0);
+
+  const rawDisplay = vatType === "VAT0"
+    ? amount / 1.21
+    : amount;
+
+  return Math.round(rawDisplay);
+}
+
 function calculateConsignmentOfferPrice(maximumBuyingPrice) {
   const max = Number(maximumBuyingPrice);
 
@@ -1718,7 +1779,7 @@ async function refreshConsignmentStockLevel(sku, size) {
 
   const { data: rows, error: rowsError } = await supabase
     .from("consignment_inventory")
-    .select("product_name, sku, size, brand, quantity, selling_price_suggested")
+    .select("product_name, sku, size, brand, vat_type, quantity, selling_price_suggested")
     .eq("sku", cleanSku)
     .eq("size", cleanSize);
 
@@ -1733,13 +1794,22 @@ async function refreshConsignmentStockLevel(sku, size) {
     0
   );
 
-  const prices = activeRows
-    .map((row) => Number(row.selling_price_suggested))
+  const comparePrices = activeRows
+    .map((row) =>
+      getConsignmentComparePrice(
+        row.selling_price_suggested,
+        row.vat_type
+      )
+    )
     .filter((price) => Number.isFinite(price) && price > 0);
-
-  const lowestSuggestedPrice = prices.length
-    ? Math.min(...prices)
+  
+  const lowestComparePrice = comparePrices.length
+    ? Math.min(...comparePrices)
     : null;
+  
+  const lowestSuggestedPrice = lowestComparePrice === null
+    ? null
+    : lowestComparePrice;
 
   const { data: existingStockLevel } = await supabase
     .from("consignment_stock_levels")
