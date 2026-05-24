@@ -151,6 +151,7 @@ const consignmentEditStockError = document.getElementById("consignmentEditStockE
 const consignmentCsvDuplicateModal = document.getElementById("consignmentCsvDuplicateModal");
 const consignmentCsvDuplicateList = document.getElementById("consignmentCsvDuplicateList");
 const consignmentCsvDuplicateBackBtn = document.getElementById("consignmentCsvDuplicateBackBtn");
+const dashboardConsignorCta = document.getElementById("dashboardConsignorCta");
 
 let pendingLabelUrl = "";
 
@@ -162,6 +163,11 @@ function canAccessSection(section) {
 function syncConsignmentAccess() {
   const section = document.querySelector("[data-consignment-nav-section]");
   section?.classList.toggle("hidden", !canAccessSection("consignment"));
+
+  dashboardConsignorCta?.classList.toggle(
+    "hidden",
+    !dashboardSeller || dashboardSeller.consignor === true
+  );
 
   if (!canAccessSection(activeSection)) {
     activeSection = "quick";
