@@ -26,25 +26,34 @@
   </main>
 
   <script>
-    const AIRTABLE_CONSIGNOR_FORM_URL = "PASTE_AIRTABLE_FORM_URL_HERE";
-
     const state = document.getElementById("consignorApplicationState");
     const seller = JSON.parse(localStorage.getItem("kc_seller") || "null");
-
-    function openApplicationForm() {
-      const url = new URL(AIRTABLE_CONSIGNOR_FORM_URL);
-
-      url.searchParams.set("prefill_Seller", seller.id);
-      url.searchParams.set("prefill_Discord", seller.discord || "");
-      url.searchParams.set("hide_Seller", "true");
-      url.searchParams.set("hide_Discord", "true");
-
-      window.location.href = url.toString();
+  
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        if (!file) {
+          resolve(null);
+          return;
+        }
+  
+        const reader = new FileReader();
+  
+        reader.onload = () => {
+          resolve({
+            name: file.name,
+            type: file.type,
+            data: reader.result
+          });
+        };
+  
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
     }
-
+  
     if (!seller) {
       localStorage.setItem("kc_after_login_redirect", "/consignment-application");
-
+  
       state.innerHTML = `
         <div class="dashboard-empty-state">
           <strong>Login required</strong>
@@ -63,47 +72,95 @@
       `;
     } else {
       state.innerHTML = `
-        <div class="consignor-application-copy">
+        <form class="consignor-application-copy" id="consignorApplicationForm">
           <label>
-            <input type="checkbox" id="inventoryAgreement" />
+            <input type="checkbox" id="inventoryAgreement" required />
             I agree to keep my inventory as accurate and up to date as possible.
           </label>
-
+  
           <label>
-            <input type="checkbox" id="shippingAgreement" />
+            <input type="checkbox" id="shippingAgreement" required />
             I agree to ship sold items within 48 hours whenever possible.
           </label>
-
+  
           <label>
-            <input type="checkbox" id="removalAgreement" />
+            <input type="checkbox" id="removalAgreement" required />
             I understand repeated fulfillment failures may result in removal from the network.
           </label>
-
+  
+          <label>
+            Inventory Upload / Screenshots
+            <input type="file" id="inventoryFile" accept=".csv,.xlsx,.xls,.pdf,image/*" />
+          </label>
+  
+          <label>
+            Proof / References
+            <input type="file" id="proofFile" accept=".pdf,image/*" />
+          </label>
+  
+          <label>
+            Notes
+            <textarea id="applicationNotes" rows="4" placeholder="Optional notes..."></textarea>
+          </label>
+  
           <p class="consignor-application-note">
             Inventory uploads, store screenshots or references are optional, but may improve your chances of being approved.
           </p>
-
-          <button class="modal-submit" id="startApplicationBtn" type="button">
-            Continue Application
+  
+          <button class="modal-submit" id="startApplicationBtn" type="submit">
+            Submit Application
           </button>
-
+  
           <div class="dashboard-form-error" id="applicationError"></div>
-        </div>
+        </form>
       `;
-
-      document.getElementById("startApplicationBtn").addEventListener("click", () => {
-        const checked =
-          document.getElementById("inventoryAgreement").checked &&
-          document.getElementById("shippingAgreement").checked &&
-          document.getElementById("removalAgreement").checked;
-
-        if (!checked) {
-          document.getElementById("applicationError").textContent =
-            "Please confirm all requirements before continuing.";
-          return;
+  
+      document.getElementById("consignorApplicationForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+  
+        const button = document.getElementById("startApplicationBtn");
+        const error = document.getElementById("applicationError");
+  
+        error.textContent = "";
+        button.disabled = true;
+        button.textContent = "Submitting...";
+  
+        try {
+          const inventoryFile = document.getElementById("inventoryFile").files[0] || null;
+          const proofFile = document.getElementById("proofFile").files[0] || null;
+  
+          const response = await fetch("/api/consignment/application", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              seller_record_id: seller.id,
+              discord: seller.discord || "",
+              notes: document.getElementById("applicationNotes").value || "",
+              inventory_file: await fileToBase64(inventoryFile),
+              proof_file: await fileToBase64(proofFile)
+            })
+          });
+  
+          const data = await response.json();
+  
+          if (!response.ok) {
+            throw new Error(data.details || data.error || "Failed to submit application");
+          }
+  
+          state.innerHTML = `
+            <div class="dashboard-empty-state">
+              <strong>Application submitted.</strong>
+              <p>We’ll review your application and enable consignment access if approved.</p>
+              <a class="dashboard-back-link" href="/dashboard">Back to Dashboard</a>
+            </div>
+          `;
+        } catch (err) {
+          error.textContent = err.message;
+          button.disabled = false;
+          button.textContent = "Submit Application";
         }
-
-        openApplicationForm();
       });
     }
   </script>
