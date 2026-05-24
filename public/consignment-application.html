@@ -53,15 +53,7 @@
   
     if (!seller) {
       localStorage.setItem("kc_after_login_redirect", "/consignment-application");
-  
-      state.innerHTML = `
-        <div class="dashboard-empty-state">
-          <strong>Login required</strong>
-          <p>Please login first to apply as a consignor.</p>
-          <a class="dashboard-back-link" href="/dashboard">Login</a>
-          <a class="dashboard-refresh-btn" href="https://discord.com/channels/922818998163361792/1444130166703128676" target="_blank" rel="noopener">Sign Up</a>
-        </div>
-      `;
+      window.location.href = "/dashboard";
     } else if (seller.consignor === true) {
       state.innerHTML = `
         <div class="dashboard-empty-state">
