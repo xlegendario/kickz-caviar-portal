@@ -37,7 +37,13 @@ const {
 
 const AIRTABLE_ORDERS_TABLE = "Unfulfilled Orders Log";
 const AIRTABLE_INVENTORY_UNITS_TABLE = "Inventory Units";
-const AIRTABLE_CONSIGNMENT_APPLICATIONS_TABLE = "Consignment Applications";
+const AIRTABLE_CONSIGNMENT_INVENTORY_UPLOAD_FIELD_ID =
+  process.env.AIRTABLE_CONSIGNMENT_INVENTORY_UPLOAD_FIELD_ID ||
+  "https://airtable.com/appHoMBqKDPnVfWJY/tbl3SqIkkDXFAVw0y/viwHK4L9EQgq1W6Kj/fldqGYdLLIuc794jvE";
+
+const AIRTABLE_CONSIGNMENT_PROOF_REFERENCES_FIELD_ID =
+  process.env.AIRTABLE_CONSIGNMENT_PROOF_REFERENCES_FIELD_ID ||
+  "https://airtable.com/appHoMBqKDPnVfWJY/tbl3SqIkkDXFAVw0y/viwHK4L9EQgq1W6Kj/fldzk198hCDPr0it5";
 
 if (!AIRTABLE_TOKEN) {
   throw new Error("Missing AIRTABLE_TOKEN");
@@ -623,13 +629,13 @@ app.post("/api/consignment/application", async (req, res) => {
 
     await uploadAirtableAttachment(
       created.id,
-      "Inventory Upload",
+      AIRTABLE_CONSIGNMENT_INVENTORY_UPLOAD_FIELD_ID,
       req.body?.inventory_file
     );
-
+    
     await uploadAirtableAttachment(
       created.id,
-      "Proof / References",
+      AIRTABLE_CONSIGNMENT_PROOF_REFERENCES_FIELD_ID,
       req.body?.proof_file
     );
 
