@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Become a Consignor | Kickz Caviar</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/dashboard.css" />
+</head>
+<body class="dashboard-body">
+  <main class="consignor-application-page">
+    <section class="consignor-application-card">
+      <a class="dashboard-brand" href="/">
+        <img src="https://i.imgur.com/gRmfHif.png" alt="Kickz Caviar" class="dashboard-brand-logo" />
+      </a>
+
+      <div class="dashboard-eyebrow">Kickz Caviar Seller Network</div>
+      <h1>Become a Consignor</h1>
+
+      <p>
+        Apply to have your stock listed directly as In-Stock items across our partner stores.
+      </p>
+
+      <div id="consignorApplicationState"></div>
+    </section>
+  </main>
+
+  <script>
+    const AIRTABLE_CONSIGNOR_FORM_URL = "PASTE_AIRTABLE_FORM_URL_HERE";
+
+    const state = document.getElementById("consignorApplicationState");
+    const seller = JSON.parse(localStorage.getItem("kc_seller") || "null");
+
+    function openApplicationForm() {
+      const url = new URL(AIRTABLE_CONSIGNOR_FORM_URL);
+
+      url.searchParams.set("prefill_Seller", seller.id);
+      url.searchParams.set("prefill_Discord", seller.discord || "");
+      url.searchParams.set("hide_Seller", "true");
+      url.searchParams.set("hide_Discord", "true");
+
+      window.location.href = url.toString();
+    }
+
+    if (!seller) {
+      localStorage.setItem("kc_after_login_redirect", "/consignment-application");
+
+      state.innerHTML = `
+        <div class="dashboard-empty-state">
+          <strong>Login required</strong>
+          <p>Please login first to apply as a consignor.</p>
+          <a class="dashboard-back-link" href="/dashboard">Login</a>
+          <a class="dashboard-refresh-btn" href="https://discord.com/channels/922818998163361792/1444130166703128676" target="_blank" rel="noopener">Sign Up</a>
+        </div>
+      `;
+    } else if (seller.consignor === true) {
+      state.innerHTML = `
+        <div class="dashboard-empty-state">
+          <strong>You are already approved as a consignor.</strong>
+          <p>You can manage your consignment inventory from your dashboard.</p>
+          <a class="dashboard-back-link" href="/dashboard">Open Dashboard</a>
+        </div>
+      `;
+    } else {
+      state.innerHTML = `
+        <div class="consignor-application-copy">
+          <label>
+            <input type="checkbox" id="inventoryAgreement" />
+            I agree to keep my inventory as accurate and up to date as possible.
+          </label>
+
+          <label>
+            <input type="checkbox" id="shippingAgreement" />
+            I agree to ship sold items within 48 hours whenever possible.
+          </label>
+
+          <label>
+            <input type="checkbox" id="removalAgreement" />
+            I understand repeated fulfillment failures may result in removal from the network.
+          </label>
+
+          <p class="consignor-application-note">
+            Inventory uploads, store screenshots or references are optional, but may improve your chances of being approved.
+          </p>
+
+          <button class="modal-submit" id="startApplicationBtn" type="button">
+            Continue Application
+          </button>
+
+          <div class="dashboard-form-error" id="applicationError"></div>
+        </div>
+      `;
+
+      document.getElementById("startApplicationBtn").addEventListener("click", () => {
+        const checked =
+          document.getElementById("inventoryAgreement").checked &&
+          document.getElementById("shippingAgreement").checked &&
+          document.getElementById("removalAgreement").checked;
+
+        if (!checked) {
+          document.getElementById("applicationError").textContent =
+            "Please confirm all requirements before continuing.";
+          return;
+        }
+
+        openApplicationForm();
+      });
+    }
+  </script>
+</body>
+</html>
