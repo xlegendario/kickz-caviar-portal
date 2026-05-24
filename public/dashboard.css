@@ -2987,3 +2987,21 @@
     left: 3px !important;
   }
 }
+
+.dashboard-consignor-cta {
+  display: block;
+  margin-top: 18px;
+  padding: 15px 14px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255,204,0,0.16), rgba(255,204,0,0.06));
+  border: 1px solid rgba(255,204,0,0.28);
+  color: #ffcc00;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 900;
+  box-shadow: 0 0 28px rgba(255,204,0,0.08);
+}
+
+.dashboard-consignor-cta:hover {
+  background: linear-gradient(180deg, rgba(255,204,0,0.22), rgba(255,204,0,0.09));
+}
