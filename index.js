@@ -37,6 +37,8 @@ const {
 
 const AIRTABLE_ORDERS_TABLE = "Unfulfilled Orders Log";
 const AIRTABLE_INVENTORY_UNITS_TABLE = "Inventory Units";
+const AIRTABLE_CONSIGNMENT_APPLICATIONS_TABLE = "Consignment Applications";
+
 const AIRTABLE_CONSIGNMENT_INVENTORY_UPLOAD_FIELD_ID =
   process.env.AIRTABLE_CONSIGNMENT_INVENTORY_UPLOAD_FIELD_ID ||
   "https://airtable.com/appHoMBqKDPnVfWJY/tbl3SqIkkDXFAVw0y/viwHK4L9EQgq1W6Kj/fldqGYdLLIuc794jvE";
