@@ -37,6 +37,7 @@ const {
 
 const AIRTABLE_ORDERS_TABLE = "Unfulfilled Orders Log";
 const AIRTABLE_INVENTORY_UNITS_TABLE = "Inventory Units";
+const AIRTABLE_CONSIGNMENT_APPLICATIONS_TABLE = "Consignment Applications";
 
 if (!AIRTABLE_TOKEN) {
   throw new Error("Missing AIRTABLE_TOKEN");
@@ -527,7 +528,7 @@ function bindConsignmentDiscordButtons() {
 }
 
 app.use(compression());
-app.use(express.json());
+app.use(express.json({ limit: "25mb" }));
 
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -552,6 +553,98 @@ app.get("/api/health", (_req, res) => {
     ok: true,
     app: "Kickz Caviar Portal"
   });
+});
+
+function cleanUploadFile(file) {
+  if (!file?.data || !file?.name) return null;
+
+  const base64 = String(file.data).includes(",")
+    ? String(file.data).split(",").pop()
+    : String(file.data);
+
+  return {
+    file: base64,
+    filename: String(file.name).replace(/[^a-zA-Z0-9._-]/g, "-"),
+    contentType: file.type || "application/octet-stream"
+  };
+}
+
+async function uploadAirtableAttachment(recordId, fieldName, file) {
+  const cleanFile = cleanUploadFile(file);
+  if (!cleanFile) return null;
+
+  const url =
+    `https://content.airtable.com/v0/${AIRTABLE_BASE_ID}/${recordId}/${encodeURIComponent(fieldName)}/uploadAttachment`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${AIRTABLE_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(cleanFile)
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(`Airtable attachment upload failed: ${JSON.stringify(data)}`);
+  }
+
+  return data;
+}
+
+app.post("/api/consignment/application", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const discord = asText(req.body?.discord);
+    const notes = asText(req.body?.notes);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id"
+      });
+    }
+
+    const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId);
+    const seller = normalizeSeller(sellerRecord);
+
+    if (seller.consignor === true) {
+      return res.status(409).json({
+        error: "Seller is already approved as consignor"
+      });
+    }
+
+    const created = await airtable(AIRTABLE_CONSIGNMENT_APPLICATIONS_TABLE).create({
+      "Seller": [sellerRecordId],
+      "Discord": discord || seller.discord || "",
+      "Notes": notes || ""
+    });
+
+    await uploadAirtableAttachment(
+      created.id,
+      "Inventory Upload",
+      req.body?.inventory_file
+    );
+
+    await uploadAirtableAttachment(
+      created.id,
+      "Proof / References",
+      req.body?.proof_file
+    );
+
+    res.json({
+      success: true,
+      application_id: created.id
+    });
+  } catch (err) {
+    console.error("Failed to create consignment application:", err);
+
+    res.status(500).json({
+      error: "Failed to create consignment application",
+      details: err.message
+    });
+  }
 });
 
 app.get("/api/consignment/inventory", async (req, res) => {
