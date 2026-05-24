@@ -1665,3 +1665,9 @@ body {
   resize: vertical;
   min-height: 100px;
 }
+
+.required-indicator {
+  color: #ffcc00;
+  font-weight: 900;
+  margin-right: 4px;
+}
