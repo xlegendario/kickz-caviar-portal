@@ -1574,21 +1574,22 @@ body {
 }
 
 .hero-consignor-cta {
-  margin-top: 18px;
-  max-width: 880px;
+  margin-top: 26px;
+  max-width: 920px;
   color: #f2f2f2;
-  font-size: 18px;
-  line-height: 1.55;
+  font-size: 22px;
+  line-height: 1.5;
 }
 
 .hero-consignor-cta a {
   color: #ffcc00;
   font-weight: 900;
-  text-decoration: none;
+  text-decoration: underline;
+  text-underline-offset: 4px;
 }
 
 .hero-consignor-cta a:hover {
-  text-decoration: underline;
+  opacity: 0.9;
 }
 
 .consignor-application-page {
