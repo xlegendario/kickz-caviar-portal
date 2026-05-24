@@ -12,6 +12,8 @@ const forgotEmail = document.getElementById("forgotEmail");
 const forgotError = document.getElementById("forgotError");
 const backToLoginBtn = document.getElementById("backToLoginBtn");
 
+const heroConsignorCta = document.getElementById("heroConsignorCta");
+
 let searchQuery = "";
 let selectedBrand = "";
 let selectedSort = localStorage.getItem("kc_sort") || "newest";
@@ -571,6 +573,10 @@ function updateLoginState() {
     profileBtn.classList.add("hidden");
     loginBtn.textContent = "LOGIN";
   }
+  heroConsignorCta?.classList.toggle(
+    "hidden",
+    currentSeller?.consignor === true
+  );
 }
 
 function openLoginModal() {
