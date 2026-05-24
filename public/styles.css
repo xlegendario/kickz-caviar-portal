@@ -1647,3 +1647,20 @@ body {
   margin: 8px 0 0;
   font-size: 14px;
 }
+
+.consignor-application-copy input[type="file"],
+.consignor-application-copy textarea {
+  width: 100%;
+  margin-top: 8px;
+  border-radius: 14px;
+  border: 1px solid #2a2a2a;
+  background: #101010;
+  color: white;
+  padding: 12px;
+  font: inherit;
+}
+
+.consignor-application-copy textarea {
+  resize: vertical;
+  min-height: 100px;
+}
