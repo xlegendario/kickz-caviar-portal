@@ -3372,6 +3372,15 @@ dashboardLoginForm.addEventListener("submit", async (event) => {
 
     dashboardLoginEmail.value = "";
     dashboardLoginPassword.value = "";
+    
+    const afterLoginRedirect = localStorage.getItem("kc_after_login_redirect");
+    
+    if (afterLoginRedirect) {
+      localStorage.removeItem("kc_after_login_redirect");
+      window.location.href = afterLoginRedirect;
+      return;
+    }
+    
     syncAuthUi();
   } catch (err) {
     dashboardLoginError.textContent = err.message;
