@@ -83,7 +83,7 @@ async function initDiscord() {
 async function createConsignmentInventoryUnitFromOffer(offer) {
   const purchasePrice = Number(offer.offer_price);
 
-  const created = await airtable(AIRTABLE_INVENTORY_UNITS_TABLE).create({
+  const inventoryFields = {
     "Product Name": offer.product_name,
     "SKU": offer.sku,
     "Size": offer.size,
@@ -107,6 +107,51 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     "Base Costs": 0,
 
     "Unfulfilled Orders Log": [offer.order_record_id],
+  };
+
+  const created = await airtable(AIRTABLE_INVENTORY_UNITS_TABLE).create(
+    inventoryFields
+  );
+
+  await fetch("https://hook.eu2.make.com/cmq6wlbq5sa9spmwogy4pdordvjzuz4i", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      event: "consignment_inventory_unit_created",
+      inventory_unit_record_id: created.id,
+      offer_id: offer.id,
+
+      product_name: offer.product_name,
+      sku: offer.sku,
+      size: offer.size,
+      brand: offer.brand,
+      vat_type: offer.vat_type,
+
+      purchase_price: purchasePrice,
+      shipping_deduction: 0,
+      purchase_date: inventoryFields["Purchase Date"],
+
+      seller_record_id: offer.seller_record_id,
+      seller_id: offer.seller_id,
+
+      ticket_number: offer.order_id,
+      order_id: offer.order_id,
+      order_record_id: offer.order_record_id,
+
+      type: "Consignment",
+      source: "Regular",
+      verification_status: "Consigned",
+      payment_note: `€${purchasePrice.toFixed(2)}`,
+      payment_status: "To Pay",
+      availability_status: "Sold",
+      margin: "10%",
+      base_costs: 0,
+
+      airtable_fields: inventoryFields,
+      created_at: new Date().toISOString()
+    })
   });
 
   return created;
