@@ -647,11 +647,13 @@ app.post("/api/consignment/application", async (req, res) => {
     };
 
     if (inventoryUpload) {
-      fields["Inventory Upload"] = [inventoryUpload];
+      fields["Inventory Upload URL"] = inventoryUpload.url;
+      fields["Inventory Filename"] = inventoryUpload.filename;
     }
-
+    
     if (proofUpload) {
-      fields["Proof / References"] = [proofUpload];
+      fields["Proof / References URL"] = proofUpload.url;
+      fields["Proof Filename"] = proofUpload.filename;
     }
 
     const created = await airtable(AIRTABLE_CONSIGNMENT_APPLICATIONS_TABLE).create(fields);
