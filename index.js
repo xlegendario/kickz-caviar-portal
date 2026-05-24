@@ -1132,7 +1132,22 @@ app.post("/api/consignment/offers/preview", async (req, res) => {
     if (!sku) return res.status(400).json({ error: "Missing SKU" });
     if (!size) return res.status(400).json({ error: "Missing size" });
 
-    const calculatedOfferPrice = calculateConsignmentOfferPrice(maximumBuyingPrice);
+    const orderRecordId = asText(req.body?.order_record_id);
+
+    let orderFields = {};
+    
+    if (orderRecordId) {
+      const orderRecord =
+        await airtable(ORDERS_TABLE).find(orderRecordId);
+    
+      orderFields = orderRecord.fields || {};
+    }
+    
+    const calculatedOfferPrice =
+      calculateConsignmentOfferPrice(
+        maximumBuyingPrice,
+        orderFields
+      );
 
     if (calculatedOfferPrice === null) {
       return res.status(400).json({ error: "Invalid Maximum Buying Price" });
@@ -1234,8 +1249,14 @@ app.post("/api/consignment/offers/create", async (req, res) => {
       });
     }
 
+    const orderRecord =
+      await airtable(ORDERS_TABLE).find(orderRecordId);
+    
     const calculatedOfferPrice =
-      calculateConsignmentOfferPrice(maximumBuyingPrice);
+      calculateConsignmentOfferPrice(
+        maximumBuyingPrice,
+        orderRecord.fields || {}
+      );
 
     if (calculatedOfferPrice === null) {
       return res.status(400).json({
@@ -1695,14 +1716,43 @@ function getConsignmentLowestDisplayPrice(comparePrice, vatType) {
   return Math.round(rawDisplay);
 }
 
-function calculateConsignmentOfferPrice(maximumBuyingPrice) {
+function firstLookupValue(value) {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+
+  return value;
+}
+
+function calculateConsignmentOfferPrice(
+  maximumBuyingPrice,
+  orderFields = {}
+) {
   const max = Number(maximumBuyingPrice);
 
   if (!Number.isFinite(max) || max <= 0) {
     return null;
   }
 
-  const rawOffer = max - (max * 0.075) - 5;
+  const method = asText(
+    firstLookupValue(orderFields["Offer Method"])
+  );
+
+  const percentage = Number(
+    firstLookupValue(orderFields["Offer Percentage"])
+  );
+
+  const margin = Number(
+    firstLookupValue(orderFields["Offer Margin"])
+  );
+
+  let rawOffer;
+
+  if (method === "Firm Range") {
+    rawOffer = max - margin;
+  } else {
+    rawOffer = max * (1 - percentage) - 5;
+  }
 
   return roundUpToStep(rawOffer, 2.5);
 }
