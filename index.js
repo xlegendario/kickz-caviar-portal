@@ -39,13 +39,9 @@ const AIRTABLE_ORDERS_TABLE = "Unfulfilled Orders Log";
 const AIRTABLE_INVENTORY_UNITS_TABLE = "Inventory Units";
 const AIRTABLE_CONSIGNMENT_APPLICATIONS_TABLE = "Consignment Applications";
 
-const AIRTABLE_CONSIGNMENT_INVENTORY_UPLOAD_FIELD_ID =
-  process.env.AIRTABLE_CONSIGNMENT_INVENTORY_UPLOAD_FIELD_ID ||
-  "https://airtable.com/appHoMBqKDPnVfWJY/tbl3SqIkkDXFAVw0y/viwHK4L9EQgq1W6Kj/fldqGYdLLIuc794jvE";
-
-const AIRTABLE_CONSIGNMENT_PROOF_REFERENCES_FIELD_ID =
-  process.env.AIRTABLE_CONSIGNMENT_PROOF_REFERENCES_FIELD_ID ||
-  "https://airtable.com/appHoMBqKDPnVfWJY/tbl3SqIkkDXFAVw0y/viwHK4L9EQgq1W6Kj/fldzk198hCDPr0it5";
+const CONSIGNMENT_APPLICATIONS_BUCKET =
+  process.env.CONSIGNMENT_APPLICATIONS_BUCKET ||
+  "consignment-applications";
 
 if (!AIRTABLE_TOKEN) {
   throw new Error("Missing AIRTABLE_TOKEN");
@@ -563,43 +559,52 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
-function cleanUploadFile(file) {
-  if (!file?.data || !file?.name) return null;
+function sanitizeUploadFileName(filename) {
+  return String(filename || "upload")
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+    .slice(0, 140);
+}
+
+function getBase64Buffer(file) {
+  if (!file?.data) return null;
 
   const base64 = String(file.data).includes(",")
     ? String(file.data).split(",").pop()
     : String(file.data);
 
-  return {
-    file: base64,
-    filename: String(file.name).replace(/[^a-zA-Z0-9._-]/g, "-"),
-    contentType: file.type || "application/octet-stream"
-  };
+  return Buffer.from(base64, "base64");
 }
 
-async function uploadAirtableAttachment(recordId, fieldName, file) {
-  const cleanFile = cleanUploadFile(file);
-  if (!cleanFile) return null;
+async function uploadConsignmentApplicationFile({
+  sellerRecordId,
+  type,
+  file
+}) {
+  if (!file?.data || !file?.name) return null;
 
-  const url =
-    `https://content.airtable.com/v0/${AIRTABLE_BASE_ID}/${recordId}/${encodeURIComponent(fieldName)}/uploadAttachment`;
+  const buffer = getBase64Buffer(file);
+  const safeName = sanitizeUploadFileName(file.name);
+  const path = `${sellerRecordId}/${Date.now()}-${type}-${safeName}`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${AIRTABLE_TOKEN}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(cleanFile)
-  });
+  const { error } = await supabase.storage
+    .from(CONSIGNMENT_APPLICATIONS_BUCKET)
+    .upload(path, buffer, {
+      contentType: file.type || "application/octet-stream",
+      upsert: false
+    });
 
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(`Airtable attachment upload failed: ${JSON.stringify(data)}`);
+  if (error) {
+    throw new Error(`Failed to upload ${type}: ${error.message}`);
   }
 
-  return data;
+  const { data } = supabase.storage
+    .from(CONSIGNMENT_APPLICATIONS_BUCKET)
+    .getPublicUrl(path);
+
+  return {
+    url: data.publicUrl,
+    filename: safeName
+  };
 }
 
 app.post("/api/consignment/application", async (req, res) => {
@@ -623,23 +628,33 @@ app.post("/api/consignment/application", async (req, res) => {
       });
     }
 
-    const created = await airtable(AIRTABLE_CONSIGNMENT_APPLICATIONS_TABLE).create({
+    const inventoryUpload = await uploadConsignmentApplicationFile({
+      sellerRecordId,
+      type: "inventory",
+      file: req.body?.inventory_file
+    });
+
+    const proofUpload = await uploadConsignmentApplicationFile({
+      sellerRecordId,
+      type: "proof",
+      file: req.body?.proof_file
+    });
+
+    const fields = {
       "Seller": [sellerRecordId],
       "Discord": discord || seller.discord || "",
       "Notes": notes || ""
-    });
+    };
 
-    await uploadAirtableAttachment(
-      created.id,
-      AIRTABLE_CONSIGNMENT_INVENTORY_UPLOAD_FIELD_ID,
-      req.body?.inventory_file
-    );
-    
-    await uploadAirtableAttachment(
-      created.id,
-      AIRTABLE_CONSIGNMENT_PROOF_REFERENCES_FIELD_ID,
-      req.body?.proof_file
-    );
+    if (inventoryUpload) {
+      fields["Inventory Upload"] = [inventoryUpload];
+    }
+
+    if (proofUpload) {
+      fields["Proof / References"] = [proofUpload];
+    }
+
+    const created = await airtable(AIRTABLE_CONSIGNMENT_APPLICATIONS_TABLE).create(fields);
 
     res.json({
       success: true,
