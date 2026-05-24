@@ -157,8 +157,14 @@ async function sendConsignmentOfferDiscordMessage({
 }) {
   await initDiscord();
 
+  const sellerComparePrice =
+    getConsignmentComparePrice(
+      offer.seller_price,
+      offer.vat_type
+    );
+  
   const isConfirmation =
-    Number(offer.seller_price) <= Number(calculatedOfferPrice);
+    sellerComparePrice <= Number(calculatedOfferPrice);
 
   const channelId = getSellerOfferChannelId(
     seller,
