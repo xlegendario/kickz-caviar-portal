@@ -30,7 +30,9 @@ const {
   SELLER_SIGNUP_URL = "https://discord.com/channels/922818998163361792/1444130166703128676",
   DISCORD_BOT_BASE_URL,
   SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY
+  SUPABASE_SERVICE_ROLE_KEY,
+  RETAILED_STOCKX_SEARCH_URL,
+  RETAILED_API_KEY
 } = process.env;
 
 const AIRTABLE_ORDERS_TABLE = "Unfulfilled Orders Log";
@@ -1808,8 +1810,65 @@ function calculateConsignmentOfferPrice(
   return roundUpToStep(rawOffer, 2.5);
 }
 
+async function lookupProductFromRetailed(sku) {
+  if (!RETAILED_STOCKX_SEARCH_URL || !RETAILED_API_KEY) {
+    throw new Error("Missing Retailed API config");
+  }
+
+  const cleanSku = asText(sku).toUpperCase();
+
+  const url = new URL(RETAILED_STOCKX_SEARCH_URL);
+  url.searchParams.set("query", cleanSku);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+
+  try {
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        "x-api-key": RETAILED_API_KEY
+      },
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Retailed request failed: ${response.status} ${text}`);
+    }
+
+    const results = await response.json();
+
+    if (!Array.isArray(results) || !results.length) {
+      throw new Error(`No Retailed result found for SKU ${cleanSku}`);
+    }
+
+    const exactMatch = results.find(
+      (item) =>
+        asText(item.sku).toUpperCase() === cleanSku
+    );
+
+    const match = exactMatch || results[0];
+
+    const productName = [
+      asText(match.name),
+      asText(match.colorway)
+    ].filter(Boolean).join(" ");
+
+    return {
+      product_name: productName || cleanSku,
+      brand: asText(match.brand),
+      image: asText(match.image),
+      slug: asText(match.slug),
+      raw: match
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function lookupSkuMasterProduct(sku) {
-  const cleanSku = asText(sku);
+  const cleanSku = asText(sku).toUpperCase();
 
   if (!cleanSku) {
     return {
@@ -1828,16 +1887,28 @@ async function lookupSkuMasterProduct(sku) {
 
   const record = records[0];
 
-  if (!record) {
+  if (record) {
     return {
-      product_name: "",
-      brand: ""
+      product_name: displayValue(record.fields?.["Product Name"]),
+      brand: displayValue(record.fields?.["Brand"])
     };
   }
 
+  const retailedProduct = await lookupProductFromRetailed(cleanSku);
+
+  await airtable(SKU_MASTER_TABLE).create({
+    "SKU": cleanSku,
+    "Product Name": retailedProduct.product_name,
+    "Brand": retailedProduct.brand,
+    "Picture": retailedProduct.image
+      ? [{ url: retailedProduct.image }]
+      : [],
+    "Seller Generated?": true
+  });
+
   return {
-    product_name: displayValue(record.fields?.["Product Name"]),
-    brand: displayValue(record.fields?.["Brand"])
+    product_name: retailedProduct.product_name,
+    brand: retailedProduct.brand
   };
 }
 
