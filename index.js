@@ -66,7 +66,10 @@ if (!SUPABASE_SERVICE_ROLE_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 const discordClient = new Client({
-  intents: [GatewayIntentBits.Guilds]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.DirectMessages
+  ]
 });
 
 let discordReady = false;
@@ -325,33 +328,42 @@ async function sendConsignmentOfferDiscordMessage({
 }
 
 async function disableConsignmentDiscordButtons(channelId, messageId, note) {
-  const channel = await discordClient.channels.fetch(channelId);
-  const message = await channel.messages.fetch(messageId);
+  try {
+    const channel = await discordClient.channels.fetch(channelId);
 
-  await message.edit({
-    content: note || message.content,
-    components: [
-      {
-        type: 1,
-        components: [
-          {
-            type: 2,
-            style: 2,
-            label: "Confirmed",
-            custom_id: "consignment_confirmed_disabled",
-            disabled: true
-          },
-          {
-            type: 2,
-            style: 2,
-            label: "Denied",
-            custom_id: "consignment_denied_disabled",
-            disabled: true
-          }
-        ]
-      }
-    ]
-  });
+    if (!channel) return;
+
+    const message = await channel.messages.fetch(messageId);
+
+    if (!message) return;
+
+    await message.edit({
+      content: note || message.content,
+      components: [
+        {
+          type: 1,
+          components: [
+            {
+              type: 2,
+              style: 2,
+              label: "Confirmed",
+              custom_id: "consignment_confirmed_disabled",
+              disabled: true
+            },
+            {
+              type: 2,
+              style: 2,
+              label: "Denied",
+              custom_id: "consignment_denied_disabled",
+              disabled: true
+            }
+          ]
+        }
+      ]
+    });
+  } catch (err) {
+    console.error("Failed to disable consignment buttons:", err);
+  }
 }
 
 async function sendConsignmentDealUpdateDiscordMessage({
