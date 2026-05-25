@@ -504,6 +504,46 @@ async function sendConsignmentDealUpdateDiscordMessage({
   };
 }
 
+async function sendConsignorActivationDiscordDM(seller) {
+  await initDiscord();
+
+  const discordUserId = asText(seller?.discord_id);
+
+  if (!discordUserId) {
+    throw new Error(`Missing Discord ID for seller ${seller?.seller_id}`);
+  }
+
+  const user = await discordClient.users.fetch(discordUserId);
+  const dm = await user.createDM();
+
+  const message = await dm.send({
+    embeds: [
+      {
+        title: "✅ Consignment Activated",
+        description: [
+          "Your Kickz Caviar Consignment access has been activated.",
+          "",
+          "**Please log out and log back in** to unlock the Consignment section in your dashboard.",
+          "",
+          "**How it works:**",
+          "• Upload and manage your stock directly in the portal",
+          "• Track all offers, deals and updates in your dashboard",
+          "• Offers and matches will also be sent through Discord",
+          "• Confirm or deny offers directly in Discord or the portal",
+          "",
+          "You are now ready to start listing your pairs through Kickz Caviar. 💛"
+        ].join("\n"),
+        color: 0x2ecc71
+      }
+    ]
+  });
+
+  return {
+    channelId: message.channelId,
+    messageId: message.id
+  };
+}
+
 async function getOpenConsignmentOffer(offerId) {
   const { data: offer, error } = await supabase
     .from("consignment_offers")
@@ -884,6 +924,78 @@ app.post("/api/consignment/application", async (req, res) => {
 
     res.status(500).json({
       error: "Failed to create consignment application",
+      details: err.message
+    });
+  }
+});
+
+app.post("/api/make/consignor-activated", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (
+      !process.env.AIRTABLE_WEBHOOK_SECRET ||
+      secret !== process.env.AIRTABLE_WEBHOOK_SECRET
+    ) {
+      return res.status(401).json({
+        error: "Unauthorized"
+      });
+    }
+
+    const sellerRecordId = asText(req.body?.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id"
+      });
+    }
+
+    const sellerRecord =
+      await airtable(SELLERS_TABLE).find(sellerRecordId);
+
+    const seller = normalizeSeller(sellerRecord);
+
+    if (seller.consignor !== true) {
+      return res.status(409).json({
+        error: "Seller is not a consignor"
+      });
+    }
+
+    if (
+      asText(
+        sellerRecord.fields?.["Consignor Activation DM Sent At"]
+      )
+    ) {
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: "already_sent"
+      });
+    }
+
+    const discordResult =
+      await sendConsignorActivationDiscordDM(seller);
+
+    await airtable(SELLERS_TABLE).update(
+      sellerRecordId,
+      {
+        "Consignor Activation DM Sent At":
+          new Date().toISOString()
+      }
+    );
+
+    res.json({
+      ok: true,
+      discord: discordResult
+    });
+  } catch (err) {
+    console.error(
+      "Failed to send consignor activation DM:",
+      err
+    );
+
+    res.status(500).json({
+      error: "Failed to send consignor activation DM",
       details: err.message
     });
   }
