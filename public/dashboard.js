@@ -579,7 +579,13 @@ function parseConsignmentCsv(text) {
   }
 
   const delimiter = detectCsvDelimiter(lines[0]);
-  const headers = parseCsvLine(lines[0], delimiter).map((header) => header.trim());
+  const headers = parseCsvLine(lines[0], delimiter)
+    .map((header) =>
+      String(header || "")
+        .replace(/^\uFEFF/, "")
+        .trim()
+    )
+    .filter(Boolean);
   const normalizedHeaders = headers.map((header) => header.toLowerCase());
 
   const requiredColumns = [
@@ -602,6 +608,15 @@ function parseConsignmentCsv(text) {
 
   const rows = lines.slice(1).map((line, index) => {
     const values = parseCsvLine(line, delimiter);
+    while (values.length > headers.length) {
+      const lastValue = values[values.length - 1];
+    
+      if (String(lastValue || "").trim() === "") {
+        values.pop();
+      } else {
+        break;
+      }
+    }
 
     return {
       row_number: index + 2,
