@@ -40,6 +40,18 @@ const {
 const AIRTABLE_ORDERS_TABLE = "Unfulfilled Orders Log";
 const AIRTABLE_INVENTORY_UNITS_TABLE = "Inventory Units";
 const AIRTABLE_CONSIGNMENT_APPLICATIONS_TABLE = "Consignment Applications";
+const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
+const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
+const DISCORD_SERVER_ID = "922818998163361792";
+const KICKZ_DEAL_SERVER_ID = "922818998163361792";
+const CONSIGNMENT_DEAL_CATEGORY_ID = "1339532824000335883";
+const KICKZ_ADMIN_ROLE_ID = "942779423449579530";
+const AIRTABLE_CONSIGNMENT_CREATED_CHANNEL_ID_FIELD = "Consignment Created Channel ID";
+const INVENTORY_UNITS_TABLE = process.env.AIRTABLE_INVENTORY_UNITS_TABLE || "Inventory Units";
+const SELLER_OFFERS_TABLE = process.env.AIRTABLE_SELLER_OFFERS_TABLE || "Seller Offers";
+const SKU_MASTER_TABLE = process.env.AIRTABLE_SKU_MASTER_TABLE || "SKU Master";
+const STOCK_LEVELS_TABLE = process.env.AIRTABLE_STOCK_LEVELS_TABLE || "Stock Levels";
+const MERCHANTS_TABLE = process.env.AIRTABLE_MERCHANTS_TABLE || "Merchants";
 
 const CONSIGNMENT_APPLICATIONS_BUCKET =
   process.env.CONSIGNMENT_APPLICATIONS_BUCKET ||
@@ -99,7 +111,18 @@ async function initKickzDealDiscord() {
 }
 
 let discordReady = false;
-let discordButtonsBound = false;
+let consignmentButtonsBound = false;
+let kickzDealButtonsBound = false;
+
+if (!consignmentButtonsBound) {
+  bindConsignmentDiscordButtons(discordClient);
+  consignmentButtonsBound = true;
+}
+
+if (!kickzDealButtonsBound) {
+  bindConsignmentDiscordButtons(kickzDealDiscordClient);
+  kickzDealButtonsBound = true;
+}
 
 async function initDiscord() {
   if (discordReady) return;
@@ -109,7 +132,7 @@ async function initDiscord() {
   discordReady = true;
 
   if (!discordButtonsBound) {
-    bindConsignmentDiscordButtons();
+    bindConsignmentDiscordButtons(kickzDealDiscordClient);
     discordButtonsBound = true;
   }
 
@@ -920,8 +943,8 @@ async function requestConsignmentShippingLabel(orderRecordId) {
   };
 }
 
-function bindConsignmentDiscordButtons() {
-  discordClient.on(Events.InteractionCreate, async (interaction) => {
+function bindConsignmentDiscordButtons(client) {
+  client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton()) return;
 
     const customId = String(interaction.customId || "");
@@ -2277,19 +2300,6 @@ app.post("/api/consignment/offers/:id/confirm", async (req, res) => {
     });
   }
 });
-
-const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
-const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
-const DISCORD_SERVER_ID = "922818998163361792";
-const KICKZ_DEAL_SERVER_ID = "922818998163361792";
-const CONSIGNMENT_DEAL_CATEGORY_ID = "1339532824000335883";
-const KICKZ_ADMIN_ROLE_ID = "942779423449579530";
-const AIRTABLE_CONSIGNMENT_CREATED_CHANNEL_ID_FIELD = "Consignment Created Channel ID";
-const INVENTORY_UNITS_TABLE = process.env.AIRTABLE_INVENTORY_UNITS_TABLE || "Inventory Units";
-const SELLER_OFFERS_TABLE = process.env.AIRTABLE_SELLER_OFFERS_TABLE || "Seller Offers";
-const SKU_MASTER_TABLE = process.env.AIRTABLE_SKU_MASTER_TABLE || "SKU Master";
-const STOCK_LEVELS_TABLE = process.env.AIRTABLE_STOCK_LEVELS_TABLE || "Stock Levels";
-const MERCHANTS_TABLE = process.env.AIRTABLE_MERCHANTS_TABLE || "Merchants";
 
 function normalizeTempPassword(discord, sellerId) {
   const cleanDiscord = asText(discord).toLowerCase().replace(/\s+/g, "");
