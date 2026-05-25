@@ -342,6 +342,77 @@ async function disableConsignmentDiscordButtons(channelId, messageId, note) {
   });
 }
 
+async function sendConsignmentDealUpdateDiscordMessage({
+  seller,
+  offer,
+  inventoryUnitRecordId
+}) {
+  await initDiscord();
+
+  const channelId = asText(seller?.deal_updates_channel_id);
+
+  if (!channelId) {
+    console.log("Skipping deal update: no Deal Updates Channel ID", {
+      seller: offer.seller_id,
+      offerId: offer.id
+    });
+    return null;
+  }
+
+  const channel = await discordClient.channels.fetch(channelId);
+  if (!channel) throw new Error(`Deal Updates channel not found: ${channelId}`);
+
+  const price = Number(offer.offer_price || 0);
+
+  const message = await channel.send({
+    content: `✅ Your Deal For ${offer.sku} - ${offer.size} Has Been Confirmed!`,
+    embeds: [
+      {
+        title: "📦 Time To Ship Your Item!",
+        description: [
+          "**Item Details:**",
+          offer.product_name || "—",
+          "",
+          "**SKU**",
+          offer.sku || "—",
+          "",
+          "**Size**",
+          offer.size || "—",
+          "",
+          "**Order**",
+          offer.order_id || offer.order_record_id || "—",
+          "",
+          "**Price**",
+          `€${price.toFixed(2)} (${offer.vat_type || "—"})`,
+          "",
+          "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
+        ].join("\n"),
+        color: 0x2ecc71,
+        footer: { text: `SellerID: ${offer.seller_id}` },
+        timestamp: new Date().toISOString()
+      }
+    ],
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 3,
+            label: "Request Label",
+            custom_id: `request_consignment_label:${offer.order_record_id}:${inventoryUnitRecordId || ""}`
+          }
+        ]
+      }
+    ]
+  });
+
+  return {
+    channelId,
+    messageId: message.id
+  };
+}
+
 async function getOpenConsignmentOffer(offerId) {
   const { data: offer, error } = await supabase
     .from("consignment_offers")
@@ -403,7 +474,7 @@ async function confirmConsignmentOffer(offerId) {
     };
   }
 
-  await createConsignmentInventoryUnitFromOffer(lockedOffer);
+  const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer(lockedOffer);
 
   const { data: inventoryRow, error: inventoryFetchError } = await supabase
     .from("consignment_inventory")
@@ -439,6 +510,19 @@ async function confirmConsignmentOffer(offerId) {
       updated_at: new Date().toISOString()
     })
     .eq("id", lockedOffer.id);
+
+  try {
+    const sellerRecord = await airtable(SELLERS_TABLE).find(lockedOffer.seller_record_id);
+    const seller = normalizeSeller(sellerRecord);
+  
+    await sendConsignmentDealUpdateDiscordMessage({
+      seller,
+      offer: lockedOffer,
+      inventoryUnitRecordId: inventoryUnitRecord?.id
+    });
+  } catch (err) {
+    console.error("Failed to send consignment deal update:", err);
+  }
 
   const { data: competingOffers } = await supabase
     .from("consignment_offers")
@@ -1748,7 +1832,8 @@ function normalizeSeller(record) {
     discord_id: displayValue(f["Discord ID"]),
     portal_password: displayValue(f["Portal Password"]),
     portal_enabled: f["Portal Enabled"] !== false,
-    consignor: f["Consignor?"] === true
+    consignor: f["Consignor?"] === true,
+    deal_updates_channel_id: displayValue(f["Deal Updates Channel ID"])
   };
 }
 
