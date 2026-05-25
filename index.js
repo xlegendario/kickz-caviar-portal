@@ -564,6 +564,20 @@ async function confirmConsignmentOffer(offerId) {
   };
 }
 
+async function requestConsignmentShippingLabel(orderRecordId) {
+  if (!orderRecordId) {
+    throw new Error("Missing orderRecordId");
+  }
+
+  await airtable(ORDERS_TABLE).update(orderRecordId, {
+    "Fulfillment Status": "Label Requested"
+  });
+
+  return {
+    ok: true
+  };
+}
+
 function bindConsignmentDiscordButtons() {
   discordClient.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton()) return;
@@ -572,16 +586,44 @@ function bindConsignmentDiscordButtons() {
 
     if (
       !customId.startsWith("confirm_offer:") &&
-      !customId.startsWith("deny_offer:")
+      !customId.startsWith("deny_offer:") &&
+      !customId.startsWith("request_consignment_label:")
     ) {
       return;
     }
-
+    
     await interaction.deferUpdate().catch(() => {});
 
     const [action, offerId] = customId.split(":");
 
     try {
+      if (customId.startsWith("request_consignment_label:")) {
+        const [, orderRecordId] = customId.split(":");
+      
+        await requestConsignmentShippingLabel(orderRecordId);
+      
+        await interaction.message.edit({
+          content: interaction.message.content,
+          embeds: interaction.message.embeds,
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 2,
+                  label: "Label Requested",
+                  custom_id: "label_requested_disabled",
+                  disabled: true
+                }
+              ]
+            }
+          ]
+        });
+      
+        return;
+      }
+      
       if (action === "deny_offer") {
         const result = await denyConsignmentOffer(offerId);
 
