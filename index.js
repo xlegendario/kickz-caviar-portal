@@ -10,7 +10,9 @@ import { createClient } from "@supabase/supabase-js";
 import {
   Client,
   GatewayIntentBits,
-  Events
+  Events,
+  ChannelType,
+  PermissionFlagsBits
 } from "discord.js";
 
 dotenv.config();
@@ -413,74 +415,143 @@ async function disableConsignmentDiscordButtons(channelId, messageId, note) {
   }
 }
 
-async function sendConsignmentDealUpdateDiscordMessage({
+function sanitizeDiscordChannelName(value) {
+  return asText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 90);
+}
+
+async function createConsignmentDealChannelForDmSeller({
   seller,
   offer,
   inventoryUnitRecordId
 }) {
   await initDiscord();
 
-  const channelId = asText(seller?.deal_updates_channel_id);
+  const discordUserId = asText(seller?.discord_id);
 
-  let target = null;
-  let deliveryType = "private_channel";
-  
-  if (channelId) {
-    target = await discordClient.channels.fetch(channelId);
-  
-    if (!target) {
-      throw new Error(`Deal Updates channel not found: ${channelId}`);
-    }
-  } else {
-    const discordUserId = asText(seller?.discord_id);
-  
-    if (!discordUserId) {
-      console.log("Skipping deal update: no Deal Updates Channel ID or Discord ID", {
-        seller: offer.seller_id,
-        offerId: offer.id
-      });
-  
-      return null;
-    }
-  
-    const user = await discordClient.users.fetch(discordUserId);
-    target = await user.createDM();
-    deliveryType = "dm";
+  if (!discordUserId) {
+    throw new Error(`Missing Discord ID for seller ${seller?.seller_id || offer.seller_id}`);
   }
-  
+
+  const orderRecord = await airtable(ORDERS_TABLE).find(offer.order_record_id);
+  const orderFields = orderRecord.fields || {};
+
+  const existingChannelId = asText(
+    orderFields[AIRTABLE_CONSIGNMENT_CREATED_CHANNEL_ID_FIELD]
+  );
+
+  if (existingChannelId) {
+    const existingChannel = await discordClient.channels.fetch(existingChannelId).catch(() => null);
+
+    if (existingChannel) {
+      return {
+        channel: existingChannel,
+        channelId: existingChannel.id,
+        created: false
+      };
+    }
+  }
+
+  const orderId = asText(orderFields["Order ID"]) || asText(offer.order_id);
+  const shopifyOrderNumber = asText(orderFields["Shopify Order Number"]);
+
+  const channelName = sanitizeDiscordChannelName(
+    [orderId, shopifyOrderNumber].filter(Boolean).join("-")
+  );
+
+  if (!channelName) {
+    throw new Error(`Could not build channel name for order ${offer.order_record_id}`);
+  }
+
+  const guild = await discordClient.guilds.fetch(KICKZ_DEAL_SERVER_ID);
+
+  const channel = await guild.channels.create({
+    name: channelName,
+    type: ChannelType.GuildText,
+    parent: CONSIGNMENT_DEAL_CATEGORY_ID,
+    permissionOverwrites: [
+      {
+        id: guild.roles.everyone.id,
+        deny: [
+          PermissionFlagsBits.ViewChannel
+        ]
+      },
+      {
+        id: discordUserId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.AttachFiles,
+          PermissionFlagsBits.EmbedLinks
+        ]
+      },
+      {
+        id: KICKZ_ADMIN_ROLE_ID,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.ManageChannels,
+          PermissionFlagsBits.AttachFiles,
+          PermissionFlagsBits.EmbedLinks
+        ]
+      },
+      {
+        id: discordClient.user.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.ManageChannels,
+          PermissionFlagsBits.AttachFiles,
+          PermissionFlagsBits.EmbedLinks
+        ]
+      }
+    ],
+    reason: `Consignment deal channel for ${offer.seller_id} / ${orderId}`
+  });
+
+  await airtable(ORDERS_TABLE).update(offer.order_record_id, {
+    [AIRTABLE_CONSIGNMENT_CREATED_CHANNEL_ID_FIELD]: channel.id
+  });
+
   const price = Number(offer.offer_price || 0);
 
-  const message = await target.send({
-    content: deliveryType === "dm"
-      ? null
-      : `✅ Your Deal For ${offer.sku} - ${offer.size} Has Been Confirmed!`,
+  const message = await channel.send({
+    content: `<@${discordUserId}> your consignment deal channel has been created.`,
     embeds: [
-      deliveryType === "dm"
-        ? buildCompactConsignmentDealUpdateEmbed({ offer })
-        : {
-            title: "📦 Time To Ship Your Item!",
-            description: [
-              "**Item Details:**",
-              offer.product_name || "—",
-              "",
-              "**SKU**",
-              offer.sku || "—",
-              "",
-              "**Size**",
-              offer.size || "—",
-              "",
-              "**Order**",
-              offer.order_id || offer.order_record_id || "—",
-              "",
-              "**Price**",
-              `€${price.toFixed(2)} (${offer.vat_type || "—"})`,
-              "",
-              "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
-            ].join("\n"),
-            color: 0x2ecc71,
-            footer: { text: `SellerID: ${offer.seller_id}` },
-            timestamp: new Date().toISOString()
-          }
+      {
+        title: "📦 Consignment Deal Confirmed",
+        description: [
+          "**Item Details:**",
+          offer.product_name || "—",
+          "",
+          "**SKU**",
+          offer.sku || "—",
+          "",
+          "**Size**",
+          offer.size || "—",
+          "",
+          "**Order**",
+          orderId || offer.order_id || offer.order_record_id || "—",
+          "",
+          "**Shopify Order**",
+          shopifyOrderNumber || "—",
+          "",
+          "**Price**",
+          `€${price.toFixed(2)} (${offer.vat_type || "—"})`,
+          "",
+          "Please request your shipping label below. You can also use this channel for questions about this specific deal."
+        ].join("\n"),
+        color: 0x2ecc71,
+        footer: { text: `SellerID: ${offer.seller_id}` },
+        timestamp: new Date().toISOString()
+      }
     ],
     components: [
       {
@@ -498,9 +569,125 @@ async function sendConsignmentDealUpdateDiscordMessage({
   });
 
   return {
-    channelId: message.channelId,
+    channel,
+    channelId: channel.id,
     messageId: message.id,
-    deliveryType
+    created: true
+  };
+}
+
+async function notifySellerDealChannelCreatedDM({ seller, channelId }) {
+  await initDiscord();
+
+  const discordUserId = asText(seller?.discord_id);
+
+  if (!discordUserId) return null;
+
+  const user = await discordClient.users.fetch(discordUserId);
+  const dm = await user.createDM();
+
+  const message = await dm.send({
+    content: `Your deal channel has been created: <#${channelId}>`
+  });
+
+  return {
+    channelId: message.channelId,
+    messageId: message.id
+  };
+}
+
+async function sendConsignmentDealUpdateDiscordMessage({
+  seller,
+  offer,
+  inventoryUnitRecordId
+}) {
+  await initDiscord();
+
+  const wasOfferDeliveredByDm = offer.discord_delivery_type === "dm";
+
+  if (wasOfferDeliveredByDm) {
+    const dealChannelResult = await createConsignmentDealChannelForDmSeller({
+      seller,
+      offer,
+      inventoryUnitRecordId
+    });
+
+    await notifySellerDealChannelCreatedDM({
+      seller,
+      channelId: dealChannelResult.channelId
+    }).catch((err) => {
+      console.error("Failed to notify seller about deal channel DM:", err);
+    });
+
+    return {
+      channelId: dealChannelResult.channelId,
+      messageId: dealChannelResult.messageId || null,
+      deliveryType: "deal_channel"
+    };
+  }
+
+  const channelId = asText(seller?.deal_updates_channel_id);
+
+  if (!channelId) {
+    console.log("Skipping deal update: no Deal Updates Channel ID", {
+      seller: offer.seller_id,
+      offerId: offer.id
+    });
+    return null;
+  }
+
+  const channel = await discordClient.channels.fetch(channelId);
+  if (!channel) throw new Error(`Deal Updates channel not found: ${channelId}`);
+
+  const price = Number(offer.offer_price || 0);
+
+  const message = await channel.send({
+    content: `✅ Your Deal For ${offer.sku} - ${offer.size} Has Been Confirmed!`,
+    embeds: [
+      {
+        title: "📦 Time To Ship Your Item!",
+        description: [
+          "**Item Details:**",
+          offer.product_name || "—",
+          "",
+          "**SKU**",
+          offer.sku || "—",
+          "",
+          "**Size**",
+          offer.size || "—",
+          "",
+          "**Order**",
+          offer.order_id || offer.order_record_id || "—",
+          "",
+          "**Price**",
+          `€${price.toFixed(2)} (${offer.vat_type || "—"})`,
+          "",
+          "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
+        ].join("\n"),
+        color: 0x2ecc71,
+        footer: { text: `SellerID: ${offer.seller_id}` },
+        timestamp: new Date().toISOString()
+      }
+    ],
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 3,
+            label: "Request Label",
+            custom_id: `request_consignment_label:${offer.order_record_id}:${inventoryUnitRecordId || ""}`
+          }
+        ]
+      }
+    ]
+  });
+
+  return {
+    channelId,
+    messageId: message.id,
+    deliveryType: "private_channel"
   };
 }
 
@@ -2070,6 +2257,10 @@ app.post("/api/consignment/offers/:id/confirm", async (req, res) => {
 const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
 const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
 const DISCORD_SERVER_ID = "922818998163361792";
+const KICKZ_DEAL_SERVER_ID = "922818998163361792";
+const CONSIGNMENT_DEAL_CATEGORY_ID = "1339532824000335883";
+const KICKZ_ADMIN_ROLE_ID = "942779423449579530";
+const AIRTABLE_CONSIGNMENT_CREATED_CHANNEL_ID_FIELD = "Consignment Created Channel ID";
 const INVENTORY_UNITS_TABLE = process.env.AIRTABLE_INVENTORY_UNITS_TABLE || "Inventory Units";
 const SELLER_OFFERS_TABLE = process.env.AIRTABLE_SELLER_OFFERS_TABLE || "Seller Offers";
 const SKU_MASTER_TABLE = process.env.AIRTABLE_SKU_MASTER_TABLE || "SKU Master";
