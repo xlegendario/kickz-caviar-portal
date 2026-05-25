@@ -214,25 +214,36 @@ async function sendConsignmentOfferDiscordMessage({
       offer.seller_price,
       offer.vat_type
     );
-  
+
   const isConfirmation =
     sellerComparePrice <= Number(calculatedOfferPrice);
 
-  const channelId = getSellerOfferChannelId(
+  const privateChannelId = getSellerOfferChannelId(
     seller,
     isConfirmation
   );
 
-  if (!channelId) {
-    throw new Error(
-      `Missing Discord channel ID for seller ${seller.seller_id}`
-    );
-  }
+  let target = null;
+  let deliveryType = "private_channel";
 
-  const channel = await discordClient.channels.fetch(channelId);
+  if (privateChannelId) {
+    target = await discordClient.channels.fetch(privateChannelId);
 
-  if (!channel) {
-    throw new Error(`Discord channel not found: ${channelId}`);
+    if (!target) {
+      throw new Error(`Discord channel not found: ${privateChannelId}`);
+    }
+  } else {
+    const discordUserId = asText(seller?.discord_id);
+
+    if (!discordUserId) {
+      throw new Error(
+        `Missing Discord ID for seller ${seller?.seller_id || offer.seller_id}`
+      );
+    }
+
+    const user = await discordClient.users.fetch(discordUserId);
+    target = await user.createDM();
+    deliveryType = "dm";
   }
 
   const embed = {
@@ -243,17 +254,17 @@ async function sendConsignmentOfferDiscordMessage({
     description: [
       "If you still have this pair, click **Confirm** below.",
       "",
-      `**Product Name**`,
+      "**Product Name**",
       offer.product_name || "—",
       "",
-      `**SKU**`,
-      offer.sku,
+      "**SKU**",
+      offer.sku || "—",
       "",
-      `**Size**`,
-      offer.size,
+      "**Size**",
+      offer.size || "—",
       "",
-      `**Order**`,
-      offer.order_id || offer.order_record_id
+      "**Order**",
+      offer.order_id || offer.order_record_id || "—"
     ].join("\n"),
 
     color: isConfirmation ? 0x2ecc71 : 0xf1c40f,
@@ -278,7 +289,7 @@ async function sendConsignmentOfferDiscordMessage({
     timestamp: new Date().toISOString()
   };
 
-  const message = await channel.send({
+  const message = await target.send({
     content: isConfirmation
       ? `📋 Match found for ${offer.sku} / ${offer.size}`
       : `📑 Offer sent for ${offer.sku} / ${offer.size}`,
@@ -307,8 +318,9 @@ async function sendConsignmentOfferDiscordMessage({
   });
 
   return {
-    channelId,
-    messageId: message.id
+    channelId: message.channelId,
+    messageId: message.id,
+    deliveryType
   };
 }
 
@@ -526,7 +538,7 @@ async function confirmConsignmentOffer(offerId) {
 
   const { data: competingOffers } = await supabase
     .from("consignment_offers")
-    .select("id, discord_channel_id, discord_message_id")
+    .select("id, discord_channel_id, discord_message_id, discord_delivery_type")
     .eq("order_record_id", lockedOffer.order_record_id)
     .eq("status", "open");
 
@@ -1642,6 +1654,8 @@ app.post("/api/consignment/offers/create", async (req, res) => {
         status: "open",
         discord_channel_id: null,
         discord_message_id: null,
+        discord_delivery_type: null,
+        discord_delivery_error: null,
         updated_at: new Date().toISOString()
       };
 
@@ -1657,37 +1671,52 @@ app.post("/api/consignment/offers/create", async (req, res) => {
 
       const sellerRecord = await airtable(SELLERS_TABLE).find(row.seller_record_id);
       
-      const sellerRow = {
-        seller_id: displayValue(sellerRecord.fields?.["Seller ID"]),
-        consignment_offer_channel_id: displayValue(
-          sellerRecord.fields?.["Consignment Offer Channel ID"]
-        ),
-        consignment_confirmation_channel_id: displayValue(
-          sellerRecord.fields?.["Consignment Confirmation Channel ID"]
-        )
-      };
+      const sellerRow = normalizeSeller(sellerRecord);
 
-      const discordResult =
-        await sendConsignmentOfferDiscordMessage({
+      let discordResult = null;
+
+      try {
+        discordResult = await sendConsignmentOfferDiscordMessage({
           seller: sellerRow,
           offer: data,
           calculatedOfferPrice
         });
-
-      await supabase
-        .from("consignment_offers")
-        .update({
-          discord_channel_id: discordResult.channelId,
-          discord_message_id: discordResult.messageId
-        })
-        .eq("id", data.id);
+      
+        await supabase
+          .from("consignment_offers")
+          .update({
+            discord_channel_id: discordResult.channelId,
+            discord_message_id: discordResult.messageId,
+            discord_delivery_type: discordResult.deliveryType,
+            discord_delivery_error: null
+          })
+          .eq("id", data.id);
+      } catch (err) {
+        console.error("Failed to deliver consignment offer Discord message:", {
+          offerId: data.id,
+          sellerId: data.seller_id,
+          sellerRecordId: data.seller_record_id,
+          error: err.message
+        });
+      
+        await supabase
+          .from("consignment_offers")
+          .update({
+            discord_delivery_type: null,
+            discord_delivery_error: err.message,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", data.id);
+      }
 
       results.push({
         mode: "created",
         offer: {
           ...data,
-          discord_channel_id: discordResult.channelId,
-          discord_message_id: discordResult.messageId
+          discord_channel_id: discordResult?.channelId || null,
+          discord_message_id: discordResult?.messageId || null,
+          discord_delivery_type: discordResult?.deliveryType || null,
+          discord_delivery_error: discordResult ? null : "Discord delivery failed"
         }
       });
     }
@@ -1875,7 +1904,9 @@ function normalizeSeller(record) {
     portal_password: displayValue(f["Portal Password"]),
     portal_enabled: f["Portal Enabled"] !== false,
     consignor: f["Consignor?"] === true,
-    deal_updates_channel_id: displayValue(f["Deal Updates Channel ID"])
+    deal_updates_channel_id: displayValue(f["Deal Updates Channel ID"]),
+    consignment_offer_channel_id: displayValue(f["Consignment Offer Channel ID"]),
+    consignment_confirmation_channel_id: displayValue(f["Consignment Confirmation Channel ID"])
   };
 }
 
