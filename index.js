@@ -92,7 +92,29 @@ const kickzDealDiscordClient = new Client({
   ]
 });
 
+let discordReady = false;
 let kickzDealDiscordReady = false;
+let consignmentButtonsBound = false;
+let kickzDealButtonsBound = false;
+
+async function initDiscord() {
+  if (discordReady) return;
+
+  if (!process.env.DISCORD_BOT_TOKEN) {
+    throw new Error("Missing DISCORD_BOT_TOKEN");
+  }
+
+  await discordClient.login(process.env.DISCORD_BOT_TOKEN);
+
+  discordReady = true;
+
+  if (!consignmentButtonsBound) {
+    bindConsignmentDiscordButtons(discordClient);
+    consignmentButtonsBound = true;
+  }
+
+  console.log("✅ Discord bot logged in");
+}
 
 async function initKickzDealDiscord() {
   if (kickzDealDiscordReady) return;
@@ -107,36 +129,12 @@ async function initKickzDealDiscord() {
 
   kickzDealDiscordReady = true;
 
-  console.log("✅ Kickz deal Discord bot logged in");
-}
-
-let discordReady = false;
-let consignmentButtonsBound = false;
-let kickzDealButtonsBound = false;
-
-if (!consignmentButtonsBound) {
-  bindConsignmentDiscordButtons(discordClient);
-  consignmentButtonsBound = true;
-}
-
-if (!kickzDealButtonsBound) {
-  bindConsignmentDiscordButtons(kickzDealDiscordClient);
-  kickzDealButtonsBound = true;
-}
-
-async function initDiscord() {
-  if (discordReady) return;
-
-  await discordClient.login(process.env.DISCORD_BOT_TOKEN);
-
-  discordReady = true;
-
-  if (!discordButtonsBound) {
+  if (!kickzDealButtonsBound) {
     bindConsignmentDiscordButtons(kickzDealDiscordClient);
-    discordButtonsBound = true;
+    kickzDealButtonsBound = true;
   }
 
-  console.log("✅ Discord bot logged in");
+  console.log("✅ Kickz deal Discord bot logged in");
 }
 
 async function createConsignmentInventoryUnitFromOffer(offer) {
