@@ -423,43 +423,60 @@ async function sendConsignmentOfferDiscordMessage({
   };
 }
 
-async function disableConsignmentDiscordButtons(channelId, messageId, note) {
-  try {
-    const channel = await discordClient.channels.fetch(channelId);
+async function disableConsignmentDiscordButtons(channelId, messageId, note, preferredClient = null) {
+  const clients = preferredClient
+    ? [preferredClient]
+    : [discordClient, kickzDealDiscordClient];
 
-    if (!channel) return;
+  for (const client of clients) {
+    try {
+      if (!client?.isReady?.()) continue;
 
-    const message = await channel.messages.fetch(messageId);
+      const channel = await client.channels.fetch(channelId).catch(() => null);
 
-    if (!message) return;
+      if (!channel) continue;
 
-    await message.edit({
-      content: note || message.content,
-      components: [
-        {
-          type: 1,
-          components: [
-            {
-              type: 2,
-              style: 2,
-              label: "Confirmed",
-              custom_id: "consignment_confirmed_disabled",
-              disabled: true
-            },
-            {
-              type: 2,
-              style: 2,
-              label: "Denied",
-              custom_id: "consignment_denied_disabled",
-              disabled: true
-            }
-          ]
-        }
-      ]
-    });
-  } catch (err) {
-    console.error("Failed to disable consignment buttons:", err);
+      const message = await channel.messages.fetch(messageId).catch(() => null);
+
+      if (!message) continue;
+
+      await message.edit({
+        content: note || message.content,
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 2,
+                style: 2,
+                label: "Confirmed",
+                custom_id: "consignment_confirmed_disabled",
+                disabled: true
+              },
+              {
+                type: 2,
+                style: 2,
+                label: "Denied",
+                custom_id: "consignment_denied_disabled",
+                disabled: true
+              }
+            ]
+          }
+        ]
+      });
+
+      return true;
+    } catch (err) {
+      console.error("Failed to disable consignment buttons with client:", err);
+    }
   }
+
+  console.error("Failed to disable consignment buttons: message not found", {
+    channelId,
+    messageId
+  });
+
+  return false;
 }
 
 function sanitizeDiscordChannelName(value) {
@@ -1001,7 +1018,8 @@ function bindConsignmentDiscordButtons(client) {
           interaction.message.id,
           result.ok
             ? "❌ Offer denied."
-            : "❌ This offer is no longer available."
+            : "❌ This offer is no longer available.",
+          client
         );
 
         return;
@@ -1015,7 +1033,8 @@ function bindConsignmentDiscordButtons(client) {
           interaction.message.id,
           result.ok
             ? `✅ Confirmed by ${result.offer.seller_id}.`
-            : "❌ This offer is no longer available."
+            : "❌ This offer is no longer available.",
+          client
         );
 
         return;
