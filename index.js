@@ -110,8 +110,8 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     "Payment Note": `€${purchasePrice.toFixed(2)}`,
     "Payment Status": "To Pay",
     "Availability Status": "Sold",
-    "Margin %": "10%",
-    "Base Costs": 0,
+    "Margin %": "7.5%",
+    "Base Costs": 5,
 
     "Unfulfilled Orders Log": [offer.order_record_id],
   };
@@ -153,8 +153,8 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
       payment_note: `€${purchasePrice.toFixed(2)}`,
       payment_status: "To Pay",
       availability_status: "Sold",
-      margin: "10%",
-      base_costs: 0,
+      margin: "7.5%",
+      base_costs: 5,
 
       airtable_fields: inventoryFields,
       created_at: new Date().toISOString()
