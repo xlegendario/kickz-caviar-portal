@@ -521,7 +521,20 @@ function cleanWholeNumberInput(value) {
     .replace(/^\s+|\s+$/g, "");
 }
 
-function parseCsvLine(line) {
+function detectCsvDelimiter(headerLine) {
+  const line = String(headerLine || "");
+
+  const commaCount = (line.match(/,/g) || []).length;
+  const semicolonCount = (line.match(/;/g) || []).length;
+  const tabCount = (line.match(/\t/g) || []).length;
+
+  if (semicolonCount > commaCount && semicolonCount >= tabCount) return ";";
+  if (tabCount > commaCount && tabCount > semicolonCount) return "\t";
+
+  return ",";
+}
+
+function parseCsvLine(line, delimiter = ",") {
   const result = [];
   let current = "";
   let insideQuotes = false;
@@ -541,7 +554,7 @@ function parseCsvLine(line) {
       continue;
     }
 
-    if (char === "," && !insideQuotes) {
+    if (char === delimiter && !insideQuotes) {
       result.push(current.trim());
       current = "";
       continue;
@@ -565,7 +578,8 @@ function parseConsignmentCsv(text) {
     throw new Error("CSV must include a header row and at least one stock row.");
   }
 
-  const headers = parseCsvLine(lines[0]).map((header) => header.trim());
+  const delimiter = detectCsvDelimiter(lines[0]);
+  const headers = parseCsvLine(lines[0], delimiter).map((header) => header.trim());
   const normalizedHeaders = headers.map((header) => header.toLowerCase());
 
   const requiredColumns = [
@@ -587,7 +601,7 @@ function parseConsignmentCsv(text) {
   const columnIndex = (name) => normalizedHeaders.indexOf(name);
 
   const rows = lines.slice(1).map((line, index) => {
-    const values = parseCsvLine(line);
+    const values = parseCsvLine(line, delimiter);
 
     return {
       row_number: index + 2,
