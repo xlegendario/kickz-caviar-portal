@@ -74,6 +74,30 @@ const discordClient = new Client({
   ]
 });
 
+const kickzDealDiscordClient = new Client({
+  intents: [
+    GatewayIntentBits.Guilds
+  ]
+});
+
+let kickzDealDiscordReady = false;
+
+async function initKickzDealDiscord() {
+  if (kickzDealDiscordReady) return;
+
+  if (!process.env.KICKZ_DEAL_DISCORD_BOT_TOKEN) {
+    throw new Error("Missing KICKZ_DEAL_DISCORD_BOT_TOKEN");
+  }
+
+  await kickzDealDiscordClient.login(
+    process.env.KICKZ_DEAL_DISCORD_BOT_TOKEN
+  );
+
+  kickzDealDiscordReady = true;
+
+  console.log("✅ Kickz deal Discord bot logged in");
+}
+
 let discordReady = false;
 let discordButtonsBound = false;
 
@@ -429,7 +453,7 @@ async function createConsignmentDealChannelForDmSeller({
   offer,
   inventoryUnitRecordId
 }) {
-  await initDiscord();
+  await initKickzDealDiscord();
 
   const discordUserId = asText(seller?.discord_id);
 
@@ -445,7 +469,7 @@ async function createConsignmentDealChannelForDmSeller({
   );
 
   if (existingChannelId) {
-    const existingChannel = await discordClient.channels.fetch(existingChannelId).catch(() => null);
+    const existingChannel = await kickzDealDiscordClient.channels.fetch(existingChannelId).catch(() => null);
 
     if (existingChannel) {
       return {
@@ -467,7 +491,7 @@ async function createConsignmentDealChannelForDmSeller({
     throw new Error(`Could not build channel name for order ${offer.order_record_id}`);
   }
 
-  const guild = await discordClient.guilds.fetch(KICKZ_DEAL_SERVER_ID);
+  const guild = await kickzDealDiscordClient.guilds.fetch(KICKZ_DEAL_SERVER_ID);
 
   const channel = await guild.channels.create({
     name: channelName,
@@ -502,7 +526,7 @@ async function createConsignmentDealChannelForDmSeller({
         ]
       },
       {
-        id: discordClient.user.id,
+        id: kickzDealDiscordClient.user.id,
         allow: [
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,
