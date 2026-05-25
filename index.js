@@ -213,7 +213,7 @@ function buildCompactConsignmentOfferEmbed({ offer, isConfirmation }) {
 
     description: [
       `**${offer.product_name || "—"}**`,
-      `€${Number(offer.offer_price).toFixed(2)} · ${offer.vat_type || "—"}`,
+      `Your price: €${Number(offer.seller_price).toFixed(2)} → Offer: €${Number(offer.offer_price).toFixed(2)} · ${offer.vat_type || "—"}`,
       "",
       "Confirm if still available."
     ].join("\n"),
@@ -422,22 +422,35 @@ async function sendConsignmentDealUpdateDiscordMessage({
 
   const channelId = asText(seller?.deal_updates_channel_id);
 
-  if (!channelId) {
-    console.log("Skipping deal update: no Deal Updates Channel ID", {
-      seller: offer.seller_id,
-      offerId: offer.id
-    });
-    return null;
+  let target = null;
+  let deliveryType = "private_channel";
+  
+  if (channelId) {
+    target = await discordClient.channels.fetch(channelId);
+  
+    if (!target) {
+      throw new Error(`Deal Updates channel not found: ${channelId}`);
+    }
+  } else {
+    const discordUserId = asText(seller?.discord_id);
+  
+    if (!discordUserId) {
+      console.log("Skipping deal update: no Deal Updates Channel ID or Discord ID", {
+        seller: offer.seller_id,
+        offerId: offer.id
+      });
+  
+      return null;
+    }
+  
+    const user = await discordClient.users.fetch(discordUserId);
+    target = await user.createDM();
+    deliveryType = "dm";
   }
-
-  const channel = await discordClient.channels.fetch(channelId);
-  if (!channel) throw new Error(`Deal Updates channel not found: ${channelId}`);
-
+  
   const price = Number(offer.offer_price || 0);
 
-  const deliveryType = channel.type === 1 ? "dm" : "private_channel";
-
-  const message = await channel.send({
+  const message = await target.send({
     content: deliveryType === "dm"
       ? null
       : `✅ Your Deal For ${offer.sku} - ${offer.size} Has Been Confirmed!`,
@@ -485,8 +498,9 @@ async function sendConsignmentDealUpdateDiscordMessage({
   });
 
   return {
-    channelId,
-    messageId: message.id
+    channelId: message.channelId,
+    messageId: message.id,
+    deliveryType
   };
 }
 
