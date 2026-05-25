@@ -205,6 +205,46 @@ function getSellerOfferChannelId(sellerRow, isConfirmation) {
     : sellerRow.consignment_offer_channel_id;
 }
 
+function buildCompactConsignmentOfferEmbed({ offer, isConfirmation }) {
+  return {
+    title: isConfirmation
+      ? `🚀 Match: ${offer.sku} / ${offer.size}`
+      : `💸 Offer: ${offer.sku} / ${offer.size}`,
+
+    description: [
+      `**${offer.product_name || "—"}**`,
+      `€${Number(offer.offer_price).toFixed(2)} · ${offer.vat_type || "—"}`,
+      "",
+      "Confirm if still available."
+    ].join("\n"),
+
+    color: isConfirmation ? 0x2ecc71 : 0xf1c40f,
+
+    footer: {
+      text: `Order: ${offer.order_id || offer.order_record_id || "—"}`
+    }
+  };
+}
+
+function buildCompactConsignmentDealUpdateEmbed({ offer }) {
+  return {
+    title: `📦 Ship: ${offer.sku} / ${offer.size}`,
+
+    description: [
+      `**${offer.product_name || "—"}**`,
+      `€${Number(offer.offer_price || 0).toFixed(2)} · ${offer.vat_type || "—"}`,
+      "",
+      "Sale confirmed. Request your label below."
+    ].join("\n"),
+
+    color: 0x2ecc71,
+
+    footer: {
+      text: `Order: ${offer.order_id || offer.order_record_id || "—"}`
+    }
+  };
+}
+
 async function sendConsignmentOfferDiscordMessage({
   seller,
   offer,
@@ -249,53 +289,60 @@ async function sendConsignmentOfferDiscordMessage({
     deliveryType = "dm";
   }
 
-  const embed = {
-    title: isConfirmation
-      ? "🚀 Your Item Matched One Of Our Orders"
-      : "💸 We Got An Offer For Your Item",
-
-    description: [
-      "If you still have this pair, click **Confirm** below.",
-      "",
-      "**Product Name**",
-      offer.product_name || "—",
-      "",
-      "**SKU**",
-      offer.sku || "—",
-      "",
-      "**Size**",
-      offer.size || "—",
-      "",
-      "**Order**",
-      offer.order_id || offer.order_record_id || "—"
-    ].join("\n"),
-
-    color: isConfirmation ? 0x2ecc71 : 0xf1c40f,
-
-    fields: [
-      {
-        name: "Your Price",
-        value: `€${Number(offer.seller_price).toFixed(2)}`,
-        inline: true
-      },
-      {
-        name: isConfirmation ? "Matched At" : "Our Offer",
-        value: `€${Number(offer.offer_price).toFixed(2)}`,
-        inline: true
-      }
-    ],
-
-    footer: {
-      text: `SellerID: ${offer.seller_id}`
-    },
-
-    timestamp: new Date().toISOString()
-  };
+  const embed = deliveryType === "dm"
+    ? buildCompactConsignmentOfferEmbed({
+        offer,
+        isConfirmation
+      })
+    : {
+        title: isConfirmation
+          ? "🚀 Your Item Matched One Of Our Orders"
+          : "💸 We Got An Offer For Your Item",
+  
+        description: [
+          "If you still have this pair, click **Confirm** below.",
+          "",
+          "**Product Name**",
+          offer.product_name || "—",
+          "",
+          "**SKU**",
+          offer.sku || "—",
+          "",
+          "**Size**",
+          offer.size || "—",
+          "",
+          "**Order**",
+          offer.order_id || offer.order_record_id || "—"
+        ].join("\n"),
+  
+        color: isConfirmation ? 0x2ecc71 : 0xf1c40f,
+  
+        fields: [
+          {
+            name: "Your Price",
+            value: `€${Number(offer.seller_price).toFixed(2)}`,
+            inline: true
+          },
+          {
+            name: isConfirmation ? "Matched At" : "Our Offer",
+            value: `€${Number(offer.offer_price).toFixed(2)}`,
+            inline: true
+          }
+        ],
+  
+        footer: {
+          text: `SellerID: ${offer.seller_id}`
+        },
+  
+        timestamp: new Date().toISOString()
+      };
 
   const message = await target.send({
-    content: isConfirmation
-      ? `📋 Match found for ${offer.sku} / ${offer.size}`
-      : `📑 Offer sent for ${offer.sku} / ${offer.size}`,
+    content: deliveryType === "dm"
+      ? null
+      : isConfirmation
+        ? `📋 Match found for ${offer.sku} / ${offer.size}`
+        : `📑 Offer sent for ${offer.sku} / ${offer.size}`,
 
     embeds: [embed],
 
@@ -388,33 +435,39 @@ async function sendConsignmentDealUpdateDiscordMessage({
 
   const price = Number(offer.offer_price || 0);
 
+  const deliveryType = channel.type === 1 ? "dm" : "private_channel";
+
   const message = await channel.send({
-    content: `✅ Your Deal For ${offer.sku} - ${offer.size} Has Been Confirmed!`,
+    content: deliveryType === "dm"
+      ? null
+      : `✅ Your Deal For ${offer.sku} - ${offer.size} Has Been Confirmed!`,
     embeds: [
-      {
-        title: "📦 Time To Ship Your Item!",
-        description: [
-          "**Item Details:**",
-          offer.product_name || "—",
-          "",
-          "**SKU**",
-          offer.sku || "—",
-          "",
-          "**Size**",
-          offer.size || "—",
-          "",
-          "**Order**",
-          offer.order_id || offer.order_record_id || "—",
-          "",
-          "**Price**",
-          `€${price.toFixed(2)} (${offer.vat_type || "—"})`,
-          "",
-          "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
-        ].join("\n"),
-        color: 0x2ecc71,
-        footer: { text: `SellerID: ${offer.seller_id}` },
-        timestamp: new Date().toISOString()
-      }
+      deliveryType === "dm"
+        ? buildCompactConsignmentDealUpdateEmbed({ offer })
+        : {
+            title: "📦 Time To Ship Your Item!",
+            description: [
+              "**Item Details:**",
+              offer.product_name || "—",
+              "",
+              "**SKU**",
+              offer.sku || "—",
+              "",
+              "**Size**",
+              offer.size || "—",
+              "",
+              "**Order**",
+              offer.order_id || offer.order_record_id || "—",
+              "",
+              "**Price**",
+              `€${price.toFixed(2)} (${offer.vat_type || "—"})`,
+              "",
+              "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
+            ].join("\n"),
+            color: 0x2ecc71,
+            footer: { text: `SellerID: ${offer.seller_id}` },
+            timestamp: new Date().toISOString()
+          }
     ],
     components: [
       {
