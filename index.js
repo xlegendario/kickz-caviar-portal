@@ -323,15 +323,17 @@ async function sendConsignmentOfferDiscordMessage({
       throw new Error(`Discord channel not found: ${privateChannelId}`);
     }
   } else {
+    await initKickzDealDiscord();
+  
     const discordUserId = asText(seller?.discord_id);
-
+  
     if (!discordUserId) {
       throw new Error(
         `Missing Discord ID for seller ${seller?.seller_id || offer.seller_id}`
       );
     }
-
-    const user = await discordClient.users.fetch(discordUserId);
+  
+    const user = await kickzDealDiscordClient.users.fetch(discordUserId);
     target = await user.createDM();
     deliveryType = "dm";
   }
@@ -622,13 +624,13 @@ async function createConsignmentDealChannelForDmSeller({
 }
 
 async function notifySellerDealChannelCreatedDM({ seller, channelId }) {
-  await initDiscord();
+  await initKickzDealDiscord();
 
   const discordUserId = asText(seller?.discord_id);
 
   if (!discordUserId) return null;
 
-  const user = await discordClient.users.fetch(discordUserId);
+  const user = await kickzDealDiscordClient.users.fetch(discordUserId);
   const dm = await user.createDM();
 
   const message = await dm.send({
@@ -637,7 +639,9 @@ async function notifySellerDealChannelCreatedDM({ seller, channelId }) {
 
   return {
     channelId: message.channelId,
-    messageId: message.id
+    messageId: message.id,
+    deliveryType: "dm",
+    client: "kickz_deal_bot"
   };
 }
 
@@ -737,7 +741,7 @@ async function sendConsignmentDealUpdateDiscordMessage({
 }
 
 async function sendConsignorActivationDiscordDM(seller) {
-  await initDiscord();
+  await initKickzDealDiscord();
 
   const discordUserId = asText(seller?.discord_id);
 
@@ -745,7 +749,7 @@ async function sendConsignorActivationDiscordDM(seller) {
     throw new Error(`Missing Discord ID for seller ${seller?.seller_id}`);
   }
 
-  const user = await discordClient.users.fetch(discordUserId);
+  const user = await kickzDealDiscordClient.users.fetch(discordUserId);
   const dm = await user.createDM();
 
   const message = await dm.send({
@@ -772,7 +776,9 @@ async function sendConsignorActivationDiscordDM(seller) {
 
   return {
     channelId: message.channelId,
-    messageId: message.id
+    messageId: message.id,
+    deliveryType: "dm",
+    client: "kickz_deal_bot"
   };
 }
 
