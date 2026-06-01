@@ -29,6 +29,7 @@ const {
   SENDGRID_API_KEY,
   RESET_EMAIL_FROM,
   APP_PUBLIC_BASE_URL = "https://kickz-caviar-portal.onrender.com",
+  LOJIQ_WMS_BASE_URL = "https://lojiq-wms.onrender.com",
   SELLER_SIGNUP_URL = "https://discord.com/channels/922818998163361792/1444130166703128676",
   DISCORD_BOT_BASE_URL,
   SUPABASE_URL,
@@ -3156,7 +3157,7 @@ app.post("/api/dashboard/request-label", async (req, res) => {
       displayValue(mf["Label Request Channel ID"]) || "1506989427183058996";
 
     const labelRequestUrl =
-      `${APP_PUBLIC_BASE_URL.replace(/\/$/, "")}/label-request.html?record_id=${encodeURIComponent(orderRecord.id)}`;
+      `${LOJIQ_WMS_BASE_URL.replace(/\/$/, "")}/label-request.html?record_id=${encodeURIComponent(orderRecord.id)}`;
 
 
     const response = await fetch(
