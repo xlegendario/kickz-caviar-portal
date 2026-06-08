@@ -3304,6 +3304,9 @@ consignmentCsvForm?.addEventListener("submit", async (event) => {
     
     const submitBtn = consignmentCsvForm.querySelector('button[type="submit"]');
     submitBtn.disabled = true;
+    consignmentCsvFileInput.disabled = true;
+    consignmentCsvPreview.textContent =
+      `Uploading ${result.rows.length} rows. Large uploads may take several minutes. Please do not close this page or upload the file again.`;
     submitBtn.textContent = "Uploading...";
     
     try {
@@ -3336,6 +3339,7 @@ consignmentCsvForm?.addEventListener("submit", async (event) => {
       closeConsignmentCsvModal();
     } finally {
       submitBtn.disabled = false;
+      consignmentCsvFileInput.disabled = false;
       submitBtn.textContent = "Upload";
     }
   } catch (err) {
