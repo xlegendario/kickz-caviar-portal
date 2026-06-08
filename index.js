@@ -1566,12 +1566,6 @@ app.post("/api/consignment/inventory/csv-add", async (req, res) => {
       return res.status(400).json({ error: "No CSV rows provided" });
     }
 
-    if (rows.length > 500) {
-      return res.status(400).json({
-        error: "CSV upload is limited to 500 rows"
-      });
-    }
-
     const results = [];
 
     for (const row of rows) {
@@ -1645,12 +1639,6 @@ app.post("/api/consignment/inventory/csv-replace", async (req, res) => {
 
     if (!rows.length) {
       return res.status(400).json({ error: "No CSV rows provided" });
-    }
-
-    if (rows.length > 500) {
-      return res.status(400).json({
-        error: "CSV upload is limited to 500 rows"
-      });
     }
 
     const normalizedRows = rows.map((row) => ({
