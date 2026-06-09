@@ -3005,3 +3005,47 @@
 .dashboard-consignor-cta:hover {
   background: linear-gradient(180deg, rgba(255,204,0,0.22), rgba(255,204,0,0.09));
 }
+
+.csv-import-status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  margin-left: 14px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.045);
+  color: rgba(255,255,255,0.78);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.csv-import-status-pill.processing {
+  border-color: rgba(255,204,0,0.35);
+  background: rgba(255,204,0,0.10);
+  color: #ffcc00;
+}
+
+.csv-import-status-pill.completed {
+  border-color: rgba(46,204,113,0.35);
+  background: rgba(46,204,113,0.10);
+  color: #65e18e;
+}
+
+.csv-import-status-pill.failed {
+  border-color: rgba(255,90,90,0.35);
+  background: rgba(255,90,90,0.10);
+  color: #ff8a8a;
+}
+
+.csv-import-status-pill.hidden {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .csv-import-status-pill {
+    display: none !important;
+  }
+}
