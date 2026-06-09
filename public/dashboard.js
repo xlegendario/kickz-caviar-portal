@@ -1690,14 +1690,12 @@ function renderCsvImportStatus(job) {
   if (job.status === "completed") {
     el.textContent = `✅ CSV Import Completed: ${total} / ${total} rows`;
     el.classList.add("completed");
-
+  
     csvImportCompletedHideTimer = setTimeout(() => {
       el.classList.add("hidden");
       el.textContent = "";
     }, 15000);
-
-    loadDashboardData().catch(() => {});
-    loadDashboardCounts().catch(() => {});
+  
     return;
   }
 
@@ -1752,20 +1750,21 @@ function startCsvImportStatusPolling() {
 async function loadDashboardData() {
   if (!dashboardSeller) return;
 
-  document.getElementById("consignmentCsvImportStatus")?.remove();
-
-  dashboardSubtabTitle.insertAdjacentHTML("afterend", `
-    <div class="csv-import-status-pill hidden" id="consignmentCsvImportStatus"></div>
-  `);
-  
-  loadCsvImportStatus().catch(() => {});
-
   document.getElementById("consignmentInventoryActions")?.remove();
 
   if (activeSection === "consignment" && activeTab === "inventory") {
     document.getElementById("consignmentInventoryActions")?.remove();
     
     dashboardSubtabDescription.innerHTML = "";
+  
+    document.getElementById("consignmentCsvImportStatus")?.remove();
+  
+    dashboardSubtabTitle.insertAdjacentHTML("afterend", `
+      <div class="csv-import-status-pill hidden" id="consignmentCsvImportStatus"></div>
+    `);
+  
+    loadCsvImportStatus().catch(() => {});
+  
     dashboardRefreshBtn.insertAdjacentHTML("beforebegin", `
       <div class="consignment-inventory-actions" id="consignmentInventoryActions">
         <button class="dashboard-issue-submit-btn" type="button" id="consignmentOpenAddStockBtn">
@@ -3441,13 +3440,14 @@ consignmentCsvForm?.addEventListener("submit", async (event) => {
           
       consignmentCsvPreview.textContent =
         data.message ||
-        await loadCsvImportStatus();
-        startCsvImportStatusPolling();
         (
           consignmentCsvMode.value === "replace"
-            ? `${data.count || result.rows.length} rows received. Replacement processing has started. Please refresh your dashboard in a few minutes.`
-            : `${data.count || result.rows.length} rows received. Processing has started. Please refresh your dashboard in a few minutes.`
+            ? `${data.count || result.rows.length} rows received. Replacement processing has started.`
+            : `${data.count || result.rows.length} rows received. Processing has started.`
         );
+      
+      await loadCsvImportStatus();
+      startCsvImportStatusPolling();
       
       setTimeout(() => {
         closeConsignmentCsvModal();
