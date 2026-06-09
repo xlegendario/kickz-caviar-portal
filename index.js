@@ -79,6 +79,7 @@ if (!SUPABASE_SERVICE_ROLE_KEY) {
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const SUPABASE_CSV_IMPORT_JOBS_TABLE = "csv_import_jobs";
 
 const discordClient = new Client({
   intents: [
@@ -1615,144 +1616,284 @@ function validateConsignmentCsvReplaceRows(rows) {
   return csvKeys;
 }
 
-async function processConsignmentCsvAddInBackground({
-  sellerRecordId,
-  sellerId,
-  rows
-}) {
-  console.log("Starting background consignment CSV add", {
-    sellerRecordId,
-    sellerId,
-    rows: rows.length
-  });
+function normalizeConsignmentCsvRows(rows) {
+  return rows.map((row) => ({
+    row_number: row.row_number,
+    sku: asText(row.sku).toUpperCase(),
+    size: asText(row.size),
+    vat_type: asText(row.vat_type),
+    selling_price_suggested: Number(row.selling_price_suggested),
+    quantity: Number(row.quantity)
+  }));
+}
 
-  let processed = 0;
+function validateConsignmentCsvAddRows(rows) {
+  const csvKeys = new Set();
 
-  try {
-    for (const row of rows) {
-      await addConsignmentInventoryRow({
-        sellerRecordId,
-        sellerId,
-        sku: row.sku,
-        size: row.size,
-        vatType: row.vat_type,
-        sellingPriceSuggested: row.selling_price_suggested,
-        quantity: row.quantity
-      });
+  for (const row of rows) {
+    const key = getStockCounterKey(row.sku, row.size);
 
-      processed += 1;
-
-      if (processed % 100 === 0) {
-        console.log("Background consignment CSV add progress", {
-          sellerRecordId,
-          processed,
-          total: rows.length
-        });
-      }
+    if (!row.sku || !row.size) {
+      throw new Error(`Invalid row ${row.row_number || ""}: missing SKU or Size`);
     }
 
-    console.log("Finished background consignment CSV add", {
-      sellerRecordId,
-      processed,
-      total: rows.length
-    });
-  } catch (err) {
-    console.error("Background consignment CSV add failed:", {
-      sellerRecordId,
-      sellerId,
-      processed,
-      total: rows.length,
-      error: err.message
-    });
+    if (csvKeys.has(key)) {
+      throw new Error(`Duplicate SKU + Size in CSV: ${row.sku} / ${row.size}`);
+    }
+
+    csvKeys.add(key);
+
+    if (!["Margin", "VAT0", "VAT21"].includes(row.vat_type)) {
+      throw new Error(`Invalid row ${row.row_number || ""}: invalid VAT Type`);
+    }
+
+    if (!Number.isFinite(row.selling_price_suggested) || row.selling_price_suggested <= 0) {
+      throw new Error(`Invalid row ${row.row_number || ""}: invalid Selling Price`);
+    }
+
+    if (!Number.isInteger(row.quantity) || row.quantity <= 0) {
+      throw new Error(`Invalid row ${row.row_number || ""}: invalid Quantity`);
+    }
   }
 }
 
-async function processConsignmentCsvReplaceInBackground({
+function validateConsignmentCsvReplaceRows(rows) {
+  const csvKeys = new Set();
+
+  for (const row of rows) {
+    const key = getStockCounterKey(row.sku, row.size);
+
+    if (!row.sku || !row.size) {
+      throw new Error(`Invalid row ${row.row_number || ""}: missing SKU or Size`);
+    }
+
+    if (csvKeys.has(key)) {
+      throw new Error(`Duplicate SKU + Size in CSV: ${row.sku} / ${row.size}`);
+    }
+
+    csvKeys.add(key);
+
+    if (!["Margin", "VAT0", "VAT21"].includes(row.vat_type)) {
+      throw new Error(`Invalid row ${row.row_number || ""}: invalid VAT Type`);
+    }
+
+    if (!Number.isFinite(row.selling_price_suggested) || row.selling_price_suggested <= 0) {
+      throw new Error(`Invalid row ${row.row_number || ""}: invalid Selling Price`);
+    }
+
+    if (!Number.isInteger(row.quantity) || row.quantity < 0) {
+      throw new Error(`Invalid row ${row.row_number || ""}: invalid Quantity`);
+    }
+  }
+
+  return csvKeys;
+}
+
+async function getActiveCsvImportJobForSeller(sellerRecordId) {
+  const { data, error } = await supabase
+    .from(SUPABASE_CSV_IMPORT_JOBS_TABLE)
+    .select("id, status, total_rows, processed_rows, import_type, created_at")
+    .eq("seller_record_id", sellerRecordId)
+    .in("status", ["queued", "processing"])
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (error) throw error;
+
+  return data?.[0] || null;
+}
+
+async function createCsvImportJob({
   sellerRecordId,
   sellerId,
-  rows,
-  csvKeys
+  importType,
+  rows
 }) {
-  console.log("Starting background consignment CSV replace", {
-    sellerRecordId,
-    sellerId,
-    rows: rows.length
-  });
+  const activeJob = await getActiveCsvImportJobForSeller(sellerRecordId);
 
-  let processed = 0;
+  if (activeJob) {
+    return {
+      existing: true,
+      job: activeJob
+    };
+  }
+
+  const { data, error } = await supabase
+    .from(SUPABASE_CSV_IMPORT_JOBS_TABLE)
+    .insert({
+      seller_record_id: sellerRecordId,
+      seller_id: sellerId,
+      import_type: importType,
+      status: "queued",
+      total_rows: rows.length,
+      processed_rows: 0,
+      rows_json: rows
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  return {
+    existing: false,
+    job: data
+  };
+}
+
+async function updateCsvImportJob(jobId, fields) {
+  const { error } = await supabase
+    .from(SUPABASE_CSV_IMPORT_JOBS_TABLE)
+    .update({
+      ...fields,
+      heartbeat_at: new Date().toISOString()
+    })
+    .eq("id", jobId);
+
+  if (error) throw error;
+}
+
+async function getNextCsvImportJob() {
+  const staleIso = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+
+  const queued = await supabase
+    .from(SUPABASE_CSV_IMPORT_JOBS_TABLE)
+    .select("*")
+    .eq("status", "queued")
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  if (queued.error) throw queued.error;
+  if (queued.data?.length) return queued.data[0];
+
+  const stale = await supabase
+    .from(SUPABASE_CSV_IMPORT_JOBS_TABLE)
+    .select("*")
+    .eq("status", "processing")
+    .lt("heartbeat_at", staleIso)
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  if (stale.error) throw stale.error;
+
+  return stale.data?.[0] || null;
+}
+
+let csvImportWorkerRunning = false;
+
+async function processCsvImportQueue() {
+  if (csvImportWorkerRunning) return;
+
+  csvImportWorkerRunning = true;
 
   try {
-    const { data: existingRows, error: existingError } = await supabase
-      .from("consignment_inventory")
-      .select("id, sku, size, quantity")
-      .eq("seller_record_id", sellerRecordId);
+    while (true) {
+      const job = await getNextCsvImportJob();
+      if (!job) return;
 
-    if (existingError) throw existingError;
+      await processCsvImportJob(job);
+    }
+  } finally {
+    csvImportWorkerRunning = false;
+  }
+}
 
-    const touchedItems = new Map();
+async function processCsvImportJob(job) {
+  const rows = Array.isArray(job.rows_json) ? job.rows_json : [];
+  let processed = Number(job.processed_rows || 0);
 
-    for (const existing of existingRows || []) {
-      const key = getStockCounterKey(existing.sku, existing.size);
+  await updateCsvImportJob(job.id, {
+    status: "processing",
+    started_at: job.started_at || new Date().toISOString()
+  });
 
-      if (!csvKeys.has(key) && Number(existing.quantity || 0) !== 0) {
-        const { error } = await supabase
-          .from("consignment_inventory")
-          .update({
-            quantity: 0,
-            updated_at: new Date().toISOString()
-          })
-          .eq("id", existing.id);
+  try {
+    if (job.import_type === "replace" && processed === 0) {
+      const csvKeys = new Set(
+        rows.map((row) => getStockCounterKey(row.sku, row.size))
+      );
 
-        if (error) throw error;
+      const { data: existingRows, error: existingError } = await supabase
+        .from("consignment_inventory")
+        .select("id, sku, size, quantity")
+        .eq("seller_record_id", job.seller_record_id);
 
-        touchedItems.set(key, {
-          sku: existing.sku,
-          size: existing.size
-        });
+      if (existingError) throw existingError;
+
+      for (const existing of existingRows || []) {
+        const key = getStockCounterKey(existing.sku, existing.size);
+
+        if (!csvKeys.has(key) && Number(existing.quantity || 0) !== 0) {
+          const { error } = await supabase
+            .from("consignment_inventory")
+            .update({
+              quantity: 0,
+              updated_at: new Date().toISOString()
+            })
+            .eq("id", existing.id);
+
+          if (error) throw error;
+
+          await refreshConsignmentStockLevel(existing.sku, existing.size);
+        }
       }
     }
 
-    for (const row of rows) {
-      await setConsignmentInventoryRow({
-        sellerRecordId,
-        sellerId,
-        sku: row.sku,
-        size: row.size,
-        vatType: row.vat_type,
-        sellingPriceSuggested: row.selling_price_suggested,
-        quantity: row.quantity
+    for (let i = processed; i < rows.length; i += 1) {
+      const row = rows[i];
+
+      await updateCsvImportJob(job.id, {
+        current_row_number: row.row_number || i + 1
       });
 
-      touchedItems.set(getStockCounterKey(row.sku, row.size), {
-        sku: row.sku,
-        size: row.size
-      });
+      if (job.import_type === "replace") {
+        await setConsignmentInventoryRow({
+          sellerRecordId: job.seller_record_id,
+          sellerId: job.seller_id,
+          sku: row.sku,
+          size: row.size,
+          vatType: row.vat_type,
+          sellingPriceSuggested: row.selling_price_suggested,
+          quantity: row.quantity
+        });
 
-      processed += 1;
-
-      if (processed % 100 === 0) {
-        console.log("Background consignment CSV replace progress", {
-          sellerRecordId,
-          processed,
-          total: rows.length
+        await refreshConsignmentStockLevel(row.sku, row.size);
+      } else {
+        await addConsignmentInventoryRow({
+          sellerRecordId: job.seller_record_id,
+          sellerId: job.seller_id,
+          sku: row.sku,
+          size: row.size,
+          vatType: row.vat_type,
+          sellingPriceSuggested: row.selling_price_suggested,
+          quantity: row.quantity
         });
       }
+
+      processed = i + 1;
+
+      await updateCsvImportJob(job.id, {
+        processed_rows: processed
+      });
     }
 
-    for (const item of touchedItems.values()) {
-      await refreshConsignmentStockLevel(item.sku, item.size);
-    }
-
-    console.log("Finished background consignment CSV replace", {
-      sellerRecordId,
-      processed,
-      total: rows.length,
-      touched: touchedItems.size
+    await updateCsvImportJob(job.id, {
+      status: "completed",
+      processed_rows: rows.length,
+      completed_at: new Date().toISOString(),
+      current_row_number: null,
+      error_message: null
     });
   } catch (err) {
-    console.error("Background consignment CSV replace failed:", {
-      sellerRecordId,
-      sellerId,
+    await updateCsvImportJob(job.id, {
+      status: "failed",
+      processed_rows: processed,
+      failed_at: new Date().toISOString(),
+      error_message: err.message
+    });
+
+    console.error("CSV import job failed:", {
+      jobId: job.id,
+      sellerRecordId: job.seller_record_id,
       processed,
       total: rows.length,
       error: err.message
@@ -1779,23 +1920,35 @@ app.post("/api/consignment/inventory/csv-add", async (req, res) => {
     try {
       validateConsignmentCsvAddRows(normalizedRows);
     } catch (validationError) {
-      return res.status(400).json({
-        error: validationError.message
+      return res.status(400).json({ error: validationError.message });
+    }
+
+    const result = await createCsvImportJob({
+      sellerRecordId,
+      sellerId,
+      importType: "add",
+      rows: normalizedRows
+    });
+
+    if (result.existing) {
+      return res.status(409).json({
+        error: "CSV import already in progress",
+        job: result.job,
+        message: `CSV Import already in progress: ${result.job.processed_rows || 0} / ${result.job.total_rows || 0} rows processed.`
       });
     }
 
     res.json({
       ok: true,
       queued: true,
+      job_id: result.job.id,
       count: normalizedRows.length,
-      message: `${normalizedRows.length} rows received. Processing has started. This may take a few minutes.`
+      message: `${normalizedRows.length} rows received. Processing has started.`
     });
 
     setImmediate(() => {
-      processConsignmentCsvAddInBackground({
-        sellerRecordId,
-        sellerId,
-        rows: normalizedRows
+      processCsvImportQueue().catch((err) => {
+        console.error("CSV import queue failed:", err);
       });
     });
   } catch (err) {
@@ -1824,29 +1977,38 @@ app.post("/api/consignment/inventory/csv-replace", async (req, res) => {
 
     const normalizedRows = normalizeConsignmentCsvRows(rows);
 
-    let csvKeys;
-
     try {
-      csvKeys = validateConsignmentCsvReplaceRows(normalizedRows);
+      validateConsignmentCsvReplaceRows(normalizedRows);
     } catch (validationError) {
-      return res.status(400).json({
-        error: validationError.message
+      return res.status(400).json({ error: validationError.message });
+    }
+
+    const result = await createCsvImportJob({
+      sellerRecordId,
+      sellerId,
+      importType: "replace",
+      rows: normalizedRows
+    });
+
+    if (result.existing) {
+      return res.status(409).json({
+        error: "CSV import already in progress",
+        job: result.job,
+        message: `CSV Import already in progress: ${result.job.processed_rows || 0} / ${result.job.total_rows || 0} rows processed.`
       });
     }
 
     res.json({
       ok: true,
       queued: true,
+      job_id: result.job.id,
       count: normalizedRows.length,
-      message: `${normalizedRows.length} rows received. Replacement processing has started. This may take a few minutes.`
+      message: `${normalizedRows.length} rows received. Replacement processing has started.`
     });
 
     setImmediate(() => {
-      processConsignmentCsvReplaceInBackground({
-        sellerRecordId,
-        sellerId,
-        rows: normalizedRows,
-        csvKeys
+      processCsvImportQueue().catch((err) => {
+        console.error("CSV import queue failed:", err);
       });
     });
   } catch (err) {
@@ -1854,6 +2016,40 @@ app.post("/api/consignment/inventory/csv-replace", async (req, res) => {
 
     res.status(500).json({
       error: "Failed to queue consignment CSV replace",
+      details: err.message
+    });
+  }
+});
+
+app.get("/api/consignment/csv-import/latest", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({ error: "Missing seller_record_id" });
+    }
+
+    const { data, error } = await supabase
+      .from(SUPABASE_CSV_IMPORT_JOBS_TABLE)
+      .select("id, import_type, status, total_rows, processed_rows, error_message, created_at, started_at, completed_at, failed_at")
+      .eq("seller_record_id", sellerRecordId)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (error) throw error;
+
+    setImmediate(() => {
+      processCsvImportQueue().catch((err) => {
+        console.error("CSV import queue resume failed:", err);
+      });
+    });
+
+    res.json({
+      job: data?.[0] || null
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: "Failed to load CSV import status",
       details: err.message
     });
   }
