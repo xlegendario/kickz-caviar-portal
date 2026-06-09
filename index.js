@@ -1565,69 +1565,6 @@ function normalizeConsignmentCsvRows(rows) {
 }
 
 function validateConsignmentCsvAddRows(rows) {
-  for (const row of rows) {
-    if (!row.sku || !row.size) {
-      throw new Error(`Invalid row ${row.row_number || ""}: missing SKU or Size`);
-    }
-
-    if (!["Margin", "VAT0", "VAT21"].includes(row.vat_type)) {
-      throw new Error(`Invalid row ${row.row_number || ""}: invalid VAT Type`);
-    }
-
-    if (!Number.isFinite(row.selling_price_suggested) || row.selling_price_suggested <= 0) {
-      throw new Error(`Invalid row ${row.row_number || ""}: invalid Selling Price`);
-    }
-
-    if (!Number.isInteger(row.quantity) || row.quantity <= 0) {
-      throw new Error(`Invalid row ${row.row_number || ""}: invalid Quantity`);
-    }
-  }
-}
-
-function validateConsignmentCsvReplaceRows(rows) {
-  const csvKeys = new Set();
-
-  for (const row of rows) {
-    const key = getStockCounterKey(row.sku, row.size);
-
-    if (!row.sku || !row.size) {
-      throw new Error(`Invalid row ${row.row_number || ""}: missing SKU or Size`);
-    }
-
-    if (csvKeys.has(key)) {
-      throw new Error(`Duplicate SKU + Size in CSV: ${row.sku} / ${row.size}`);
-    }
-
-    csvKeys.add(key);
-
-    if (!["Margin", "VAT0", "VAT21"].includes(row.vat_type)) {
-      throw new Error(`Invalid row ${row.row_number || ""}: invalid VAT Type`);
-    }
-
-    if (!Number.isFinite(row.selling_price_suggested) || row.selling_price_suggested <= 0) {
-      throw new Error(`Invalid row ${row.row_number || ""}: invalid Selling Price`);
-    }
-
-    if (!Number.isInteger(row.quantity) || row.quantity < 0) {
-      throw new Error(`Invalid row ${row.row_number || ""}: invalid Quantity`);
-    }
-  }
-
-  return csvKeys;
-}
-
-function normalizeConsignmentCsvRows(rows) {
-  return rows.map((row) => ({
-    row_number: row.row_number,
-    sku: asText(row.sku).toUpperCase(),
-    size: asText(row.size),
-    vat_type: asText(row.vat_type),
-    selling_price_suggested: Number(row.selling_price_suggested),
-    quantity: Number(row.quantity)
-  }));
-}
-
-function validateConsignmentCsvAddRows(rows) {
   const csvKeys = new Set();
 
   for (const row of rows) {
