@@ -3329,14 +3329,16 @@ consignmentCsvForm?.addEventListener("submit", async (event) => {
       }
     
       consignmentCsvPreview.textContent =
-        consignmentCsvMode.value === "replace"
-          ? `${data.count || result.rows.length} rows replaced successfully.`
-          : `${data.count || result.rows.length} rows uploaded successfully.`;
+        data.message ||
+        (
+          consignmentCsvMode.value === "replace"
+            ? `${data.count || result.rows.length} rows received. Replacement processing has started. Please refresh your dashboard in a few minutes.`
+            : `${data.count || result.rows.length} rows received. Processing has started. Please refresh your dashboard in a few minutes.`
+        );
       
-      await loadDashboardData();
-      await loadDashboardCounts();
-      
-      closeConsignmentCsvModal();
+      setTimeout(() => {
+        closeConsignmentCsvModal();
+      }, 2500);
     } finally {
       submitBtn.disabled = false;
       consignmentCsvFileInput.disabled = false;
