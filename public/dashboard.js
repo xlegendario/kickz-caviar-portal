@@ -1653,8 +1653,112 @@ function renderConfirmedRows(items) {
   });
 }
 
+let csvImportStatusTimer = null;
+let csvImportCompletedHideTimer = null;
+
+function getCsvImportStatusEl() {
+  return document.getElementById("consignmentCsvImportStatus");
+}
+
+function renderCsvImportStatus(job) {
+  const el = getCsvImportStatusEl();
+  if (!el) return;
+
+  clearTimeout(csvImportCompletedHideTimer);
+
+  if (!job) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    return;
+  }
+
+  const processed = Number(job.processed_rows || 0);
+  const total = Number(job.total_rows || 0);
+
+  el.className = "csv-import-status-pill";
+
+  if (job.status === "processing" || job.status === "queued") {
+    el.textContent =
+      job.status === "queued"
+        ? `⏳ CSV Import Queued: 0 / ${total} rows`
+        : `⏳ CSV Import In Progress: ${processed} / ${total} rows`;
+
+    el.classList.add("processing");
+    return;
+  }
+
+  if (job.status === "completed") {
+    el.textContent = `✅ CSV Import Completed: ${total} / ${total} rows`;
+    el.classList.add("completed");
+
+    csvImportCompletedHideTimer = setTimeout(() => {
+      el.classList.add("hidden");
+      el.textContent = "";
+    }, 15000);
+
+    loadDashboardData().catch(() => {});
+    loadDashboardCounts().catch(() => {});
+    return;
+  }
+
+  if (job.status === "failed") {
+    el.textContent =
+      `❌ CSV Import Failed: ${processed} / ${total} rows processed` +
+      (job.error_message ? ` — ${job.error_message}` : "");
+
+    el.classList.add("failed");
+    return;
+  }
+
+  el.classList.add("hidden");
+}
+
+async function loadCsvImportStatus() {
+  if (!dashboardSeller?.id) return;
+
+  const params = new URLSearchParams({
+    seller_record_id: dashboardSeller.id
+  });
+
+  const response = await fetch(`/api/consignment/csv-import/latest?${params.toString()}`);
+  const data = await response.json();
+
+  if (!response.ok) return;
+
+  renderCsvImportStatus(data.job);
+
+  if (
+    data.job &&
+    ["queued", "processing"].includes(data.job.status)
+  ) {
+    startCsvImportStatusPolling();
+  }
+}
+
+function startCsvImportStatusPolling() {
+  clearInterval(csvImportStatusTimer);
+
+  csvImportStatusTimer = setInterval(async () => {
+    if (activeSection !== "consignment" || activeTab !== "inventory") {
+      clearInterval(csvImportStatusTimer);
+      csvImportStatusTimer = null;
+      return;
+    }
+
+    await loadCsvImportStatus();
+  }, 5000);
+}
+
 async function loadDashboardData() {
   if (!dashboardSeller) return;
+
+  document.getElementById("consignmentCsvImportStatus")?.remove();
+
+  dashboardSubtabTitle.insertAdjacentHTML("afterend", `
+    <div class="csv-import-status-pill hidden" id="consignmentCsvImportStatus"></div>
+  `);
+  
+  loadCsvImportStatus().catch(() => {});
 
   document.getElementById("consignmentInventoryActions")?.remove();
 
@@ -3325,11 +3429,20 @@ consignmentCsvForm?.addEventListener("submit", async (event) => {
       const data = await response.json();
     
       if (!response.ok) {
-        throw new Error(data.details || data.error || "Failed to upload CSV");
+        if (response.status === 409 && data.job) {
+          closeConsignmentCsvModal();
+          await loadCsvImportStatus();
+          startCsvImportStatusPolling();
+          return;
+        }
+      
+        throw new Error(data.details || data.message || data.error || "Failed to upload CSV");
       }
-    
+          
       consignmentCsvPreview.textContent =
         data.message ||
+        await loadCsvImportStatus();
+        startCsvImportStatusPolling();
         (
           consignmentCsvMode.value === "replace"
             ? `${data.count || result.rows.length} rows received. Replacement processing has started. Please refresh your dashboard in a few minutes.`
