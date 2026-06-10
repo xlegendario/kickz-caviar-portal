@@ -2206,6 +2206,133 @@ app.post("/api/consignment/offers/preview", async (req, res) => {
   }
 });
 
+app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
+  try {
+    const orderRecordId = asText(req.body?.order_record_id);
+    const sku = asText(req.body?.sku).toUpperCase();
+    const size = asText(req.body?.size);
+
+    if (!orderRecordId) {
+      return res.status(400).json({ error: "Missing order_record_id" });
+    }
+
+    if (!sku) {
+      return res.status(400).json({ error: "Missing SKU" });
+    }
+
+    if (!size) {
+      return res.status(400).json({ error: "Missing size" });
+    }
+
+    const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
+    const orderFields = orderRecord.fields || {};
+    const clientCountry = asText(orderFields["Client Country"]);
+
+    const { data: inventoryRows, error: inventoryError } = await supabase
+      .from("consignment_inventory")
+      .select(`
+        id,
+        product_name,
+        sku,
+        size,
+        brand,
+        vat_type,
+        selling_price_suggested,
+        quantity,
+        seller_id,
+        seller_record_id
+      `)
+      .eq("sku", sku)
+      .eq("size", size)
+      .gt("quantity", 0);
+
+    if (inventoryError) throw inventoryError;
+
+    const validRows = (inventoryRows || [])
+      .map((row) => {
+        const sellerPrice = Number(row.selling_price_suggested);
+        const sellerComparePrice = getConsignmentComparePrice(
+          sellerPrice,
+          row.vat_type
+        );
+
+        const storeBasePrice = convertConsignorPriceToStoreBasePrice(
+          sellerPrice,
+          row.vat_type,
+          clientCountry
+        );
+
+        const storeOfferVatType = getStoreOfferVatTypeFromConsignmentVat(
+          row.vat_type,
+          clientCountry
+        );
+
+        const customOffer = calculateStoreCustomOfferFromConsignmentBase(
+          storeBasePrice,
+          orderFields
+        );
+
+        return {
+          row,
+          sellerPrice,
+          sellerComparePrice,
+          storeBasePrice,
+          storeOfferVatType,
+          customOffer
+        };
+      })
+      .filter((item) =>
+        Number.isFinite(item.sellerPrice) &&
+        item.sellerPrice > 0 &&
+        Number.isFinite(item.sellerComparePrice) &&
+        Number.isFinite(item.storeBasePrice) &&
+        Number.isFinite(item.customOffer)
+      )
+      .sort((a, b) => a.sellerComparePrice - b.sellerComparePrice);
+
+    const best = validRows[0];
+
+    if (!best) {
+      return res.status(404).json({
+        error: "No valid consignment stock found"
+      });
+    }
+
+    res.json({
+      ok: true,
+      order_record_id: orderRecordId,
+      sku,
+      size,
+
+      custom_offer: best.customOffer,
+      offer_vat_type: best.storeOfferVatType,
+      estimated_time: 2,
+
+      consignment_offer_price: best.sellerComparePrice,
+
+      best_inventory: {
+        inventory_id: best.row.id,
+        seller_record_id: best.row.seller_record_id,
+        seller_id: best.row.seller_id,
+        product_name: best.row.product_name,
+        brand: best.row.brand,
+        vat_type: best.row.vat_type,
+        seller_price: best.sellerPrice,
+        seller_compare_price: best.sellerComparePrice,
+        store_base_price: best.storeBasePrice,
+        quantity: Number(best.row.quantity || 0)
+      }
+    });
+  } catch (err) {
+    console.error("Failed to calculate consignment pre-offer:", err);
+
+    res.status(500).json({
+      error: "Failed to calculate consignment pre-offer",
+      details: err.message
+    });
+  }
+});
+
 app.post("/api/consignment/offers/create", async (req, res) => {
   try {
     const orderRecordId = asText(req.body?.order_record_id);
@@ -2213,6 +2340,7 @@ app.post("/api/consignment/offers/create", async (req, res) => {
     const sku = asText(req.body?.sku).toUpperCase();
     const size = asText(req.body?.size);
     const maximumBuyingPrice = Number(req.body?.maximum_buying_price);
+    const directSellerOfferPrice = Number(req.body?.direct_seller_offer_price);
 
     if (!orderRecordId) {
       return res.status(400).json({
@@ -2236,10 +2364,12 @@ app.post("/api/consignment/offers/create", async (req, res) => {
       await airtable(ORDERS_TABLE).find(orderRecordId);
     
     const calculatedOfferPrice =
-      calculateConsignmentOfferPrice(
-        maximumBuyingPrice,
-        orderRecord.fields || {}
-      );
+      Number.isFinite(directSellerOfferPrice) && directSellerOfferPrice > 0
+        ? directSellerOfferPrice
+        : calculateConsignmentOfferPrice(
+            maximumBuyingPrice,
+            orderRecord.fields || {}
+          );
 
     if (calculatedOfferPrice === null) {
       return res.status(400).json({
@@ -2680,6 +2810,68 @@ function roundUpToStep(value, step = 2.5) {
 
 function roundDownToStep(value, step = 2.5) {
   return Math.floor(Number(value || 0) / step) * step;
+}
+
+function isDutchClientCountry(country) {
+  const value = asText(country).toLowerCase();
+
+  return [
+    "nl",
+    "nederland",
+    "netherlands",
+    "the netherlands"
+  ].includes(value);
+}
+
+function getStoreOfferVatTypeFromConsignmentVat(consignorVatType, clientCountry) {
+  const vatType = asText(consignorVatType);
+  const isDutch = isDutchClientCountry(clientCountry);
+
+  if (vatType === "Margin") return "Margin";
+
+  return isDutch ? "VAT21" : "VAT0";
+}
+
+function convertConsignorPriceToStoreBasePrice(consignorPrice, consignorVatType, clientCountry) {
+  const price = Number(consignorPrice);
+  const vatType = asText(consignorVatType);
+  const isDutch = isDutchClientCountry(clientCountry);
+
+  if (!Number.isFinite(price) || price <= 0) return null;
+
+  if (vatType === "Margin") return price;
+
+  if (vatType === "VAT0" && isDutch) {
+    return price * 1.21;
+  }
+
+  if (vatType === "VAT21" && !isDutch) {
+    return price / 1.21;
+  }
+
+  return price;
+}
+
+function calculateStoreCustomOfferFromConsignmentBase(basePrice, orderFields = {}) {
+  const base = Number(basePrice);
+
+  if (!Number.isFinite(base) || base <= 0) return null;
+
+  const method = asText(firstLookupValue(orderFields["Offer Method"]));
+  const percentage = Number(firstLookupValue(orderFields["Offer Percentage"]));
+  const margin = Number(firstLookupValue(orderFields["Offer Margin"]));
+
+  let rawOffer;
+
+  if (method === "Firm Range") {
+    if (!Number.isFinite(margin)) return null;
+    rawOffer = base + margin;
+  } else {
+    if (!Number.isFinite(percentage) || percentage >= 1) return null;
+    rawOffer = (base + 5) / (1 - percentage);
+  }
+
+  return roundUpToStep(rawOffer, 2.5);
 }
 
 function getConsignmentComparePrice(price, vatType) {
