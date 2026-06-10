@@ -1680,15 +1680,15 @@ function renderCsvImportStatus(job) {
   if (job.status === "processing" || job.status === "queued") {
     el.textContent =
       job.status === "queued"
-        ? `⏳ CSV Import Queued: 0 / ${total} rows`
-        : `⏳ CSV Import In Progress: ${processed} / ${total} rows`;
-
+        ? `⏳ Import queued`
+        : `⏳ Importing ${processed}/${total}`;
+  
     el.classList.add("processing");
     return;
   }
 
   if (job.status === "completed") {
-    el.textContent = `✅ CSV Import Completed: ${total} / ${total} rows`;
+    el.textContent = `✅ Import completed`;
     el.classList.add("completed");
   
     csvImportCompletedHideTimer = setTimeout(() => {
@@ -1700,9 +1700,7 @@ function renderCsvImportStatus(job) {
   }
 
   if (job.status === "failed") {
-    el.textContent =
-      `❌ CSV Import Failed: ${processed} / ${total} rows processed` +
-      (job.error_message ? ` — ${job.error_message}` : "");
+    el.textContent = `❌ Import failed (${processed}/${total})`;
 
     el.classList.add("failed");
     return;
