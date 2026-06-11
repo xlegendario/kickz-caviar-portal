@@ -1804,7 +1804,32 @@ async function loadDashboardData() {
       );
     }
   
-    renderConsignmentInventoryRows(data.items || []);
+    const searchTerm = String(dashboardSearchInput?.value || "")
+      .trim()
+      .toLowerCase();
+    
+    const inventoryItems = data.items || [];
+    
+    const filteredInventoryItems = searchTerm
+      ? inventoryItems.filter((item) => {
+          const searchable = [
+            item.product_name,
+            item.sku,
+            item.size,
+            item.brand,
+            item.vat_type,
+            item.selling_price_suggested,
+            item.lowest_suggested_price,
+            item.quantity
+          ]
+            .map((value) => String(value || "").toLowerCase())
+            .join(" ");
+    
+          return searchable.includes(searchTerm);
+        })
+      : inventoryItems;
+    
+    renderConsignmentInventoryRows(filteredInventoryItems);
   
     const inventoryQuantityCount = (data.items || [])
       .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
@@ -3616,7 +3641,17 @@ dashboardRefreshBtn.addEventListener("click", async () => {
 });
 
 dashboardSearchInput.addEventListener("input", () => {
-  renderTableShell();
+  loadDashboardData().catch((err) => {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>${escapeHtml(err.message)}</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  });
 });
 
 renderSubnav();
