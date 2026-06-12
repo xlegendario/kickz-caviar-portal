@@ -50,6 +50,8 @@ const KICKZ_ADMIN_ROLE_ID = "942779423449579530";
 const AIRTABLE_CONSIGNMENT_CREATED_CHANNEL_ID_FIELD = "Consignment Created Channel ID";
 const INVENTORY_UNITS_TABLE = process.env.AIRTABLE_INVENTORY_UNITS_TABLE || "Inventory Units";
 const SELLER_OFFERS_TABLE = process.env.AIRTABLE_SELLER_OFFERS_TABLE || "Seller Offers";
+const COUNTER_OFFERS_TABLE =
+  process.env.AIRTABLE_COUNTER_OFFERS_TABLE || "Counter Offers";
 const SKU_MASTER_TABLE = process.env.AIRTABLE_SKU_MASTER_TABLE || "SKU Master";
 const STOCK_LEVELS_TABLE = process.env.AIRTABLE_STOCK_LEVELS_TABLE || "Stock Levels";
 const MERCHANTS_TABLE = process.env.AIRTABLE_MERCHANTS_TABLE || "Merchants";
@@ -2333,6 +2335,240 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
   }
 });
 
+app.post("/api/counter-offers/create", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (
+      !process.env.COUNTER_OFFERS_SECRET ||
+      secret !== process.env.COUNTER_OFFERS_SECRET
+    ) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const orderRecordId = asText(req.body?.order_record_id);
+    const storeCounterPrice = Number(req.body?.store_counter_price);
+
+    if (!orderRecordId) {
+      return res.status(400).json({ error: "Missing order_record_id" });
+    }
+
+    if (!Number.isFinite(storeCounterPrice) || storeCounterPrice <= 0) {
+      return res.status(400).json({ error: "Invalid store_counter_price" });
+    }
+
+    const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
+    const orderFields = orderRecord.fields || {};
+
+    const orderId = asText(orderFields["Order ID"]);
+    const productName =
+      asText(orderFields["Shopify Product Name"]) ||
+      asText(orderFields["Product Name"]);
+
+    const sku = asText(orderFields["SKU"]).toUpperCase();
+    const size = asText(orderFields["Size"]);
+    const brand = asText(orderFields["Brand"]);
+
+    if (!sku || !size) {
+      return res.status(400).json({ error: "Order missing SKU or Size" });
+    }
+
+    const nowIso = new Date().toISOString();
+
+    let createdSellerCounters = 0;
+    let createdConsignmentOffers = 0;
+    let dmErrors = 0;
+
+    const linkedOrderNeedle = escapeFormulaValue(orderId || orderRecordId);
+
+    const sellerOfferRecords = await fetchAllAirtableRecords(SELLER_OFFERS_TABLE, {
+      filterByFormula: `AND(
+        FIND('${linkedOrderNeedle}', ARRAYJOIN({Linked Orders})),
+        {Seller Offer} > 0
+      )`
+    });
+
+    for (const sellerOfferRecord of sellerOfferRecords) {
+      const f = sellerOfferRecord.fields || {};
+
+      const sellerRecordId = firstLinkedRecordId(f["Seller ID"]);
+      const sellerId = asText(f["Seller ID (Lookup)"]);
+      const sellerDiscordId = asText(f["Seller Discord ID"]);
+      const sellerOriginalPrice = numberValue(f["Seller Offer"]);
+      const sellerVatType = asText(f["Offer VAT Type"]);
+
+      if (!sellerRecordId || !sellerOriginalPrice || !sellerVatType) continue;
+
+      const counterPayout = calculateCounterPayoutForVatType(
+        storeCounterPrice,
+        sellerVatType,
+        orderFields
+      );
+
+      if (!Number.isFinite(counterPayout) || counterPayout <= 0) continue;
+
+      const createdCounter = await airtable(COUNTER_OFFERS_TABLE).create({
+        "Order": [orderRecordId],
+        "Seller ID": [sellerRecordId],
+        "Source Type": "Seller Offer",
+        "Seller Offer Record ID": sellerOfferRecord.id,
+
+        "Seller Original Price": sellerOriginalPrice,
+        "Seller Original VAT Type": sellerVatType,
+
+        "Store Counter Price": storeCounterPrice,
+
+        "Counter Payout": counterPayout,
+        "Counter Payout VAT Type": sellerVatType,
+
+        "Status": "Open",
+        "Created At": nowIso
+      });
+
+      createdSellerCounters++;
+
+      try {
+        const discordResult = await sendCounterOfferDiscordDM({
+          counterOfferRecordId: createdCounter.id,
+          sellerDiscordId,
+          productName,
+          sku,
+          size,
+          orderId,
+          payout: counterPayout,
+          vatType: sellerVatType
+        });
+
+        await airtable(COUNTER_OFFERS_TABLE).update(createdCounter.id, {
+          "Discord Channel ID": discordResult.channelId,
+          "Discord Message ID": discordResult.messageId,
+          "Discord Delivery Type": discordResult.deliveryType
+        });
+      } catch (err) {
+        dmErrors++;
+        console.error("Failed to send seller counter offer DM:", {
+          counterOfferRecordId: createdCounter.id,
+          sellerId,
+          error: err.message
+        });
+      }
+    }
+
+    const { data: consignmentRows, error: consignmentError } = await supabase
+      .from("consignment_inventory")
+      .select(`
+        id,
+        product_name,
+        sku,
+        size,
+        brand,
+        vat_type,
+        selling_price_suggested,
+        quantity,
+        seller_id,
+        seller_record_id
+      `)
+      .eq("sku", sku)
+      .eq("size", size)
+      .gt("quantity", 0);
+
+    if (consignmentError) throw consignmentError;
+
+    for (const row of consignmentRows || []) {
+      const sellerVatType = asText(row.vat_type);
+      const sellerOriginalPrice = Number(row.selling_price_suggested);
+
+      if (!sellerVatType || !Number.isFinite(sellerOriginalPrice)) continue;
+
+      const counterPayout = calculateCounterPayoutForVatType(
+        storeCounterPrice,
+        sellerVatType,
+        orderFields
+      );
+
+      if (!Number.isFinite(counterPayout) || counterPayout <= 0) continue;
+
+      const { data: createdOffer, error: offerError } = await supabase
+        .from("consignment_offers")
+        .insert({
+          order_record_id: orderRecordId,
+          order_id: orderId,
+          inventory_id: row.id,
+
+          seller_record_id: row.seller_record_id,
+          seller_id: row.seller_id,
+
+          product_name: row.product_name || productName,
+          sku,
+          size,
+          brand: row.brand || brand,
+
+          vat_type: sellerVatType,
+          seller_price: sellerOriginalPrice,
+          offer_price: counterPayout,
+
+          status: "open",
+          created_at: nowIso,
+          updated_at: nowIso
+        })
+        .select()
+        .single();
+
+      if (offerError) throw offerError;
+
+      createdConsignmentOffers++;
+
+      try {
+        const sellerRecord = await airtable(SELLERS_TABLE).find(row.seller_record_id);
+        const seller = normalizeSeller(sellerRecord);
+
+        const calculatedComparePrice = getConsignmentComparePrice(
+          counterPayout,
+          sellerVatType
+        );
+
+        const discordResult = await sendConsignmentOfferDiscordMessage({
+          seller,
+          offer: createdOffer,
+          calculatedOfferPrice: calculatedComparePrice
+        });
+
+        await supabase
+          .from("consignment_offers")
+          .update({
+            discord_channel_id: discordResult.channelId,
+            discord_message_id: discordResult.messageId,
+            discord_delivery_type: discordResult.deliveryType,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", createdOffer.id);
+      } catch (err) {
+        dmErrors++;
+        console.error("Failed to send consignment counter offer:", {
+          offerId: createdOffer.id,
+          sellerId: row.seller_id,
+          error: err.message
+        });
+      }
+    }
+
+    res.json({
+      ok: true,
+      count: createdSellerCounters + createdConsignmentOffers,
+      seller_counter_offers: createdSellerCounters,
+      consignment_offers: createdConsignmentOffers,
+      dm_errors: dmErrors
+    });
+  } catch (err) {
+    console.error("Failed to create counter offers:", err);
+
+    res.status(500).json({
+      error: "Failed to create counter offers",
+      details: err.message
+    });
+  }
+});
+
 app.post("/api/consignment/offers/create", async (req, res) => {
   try {
     const orderRecordId = asText(req.body?.order_record_id);
@@ -2802,6 +3038,118 @@ function sortDashboardItemsNewestFirst(items) {
 
 function getStockCounterKey(sku, size) {
   return `${asText(sku).toUpperCase()}-${asText(size).toUpperCase()}`;
+}
+
+function roundDownToStep(value, step = 2.5) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.floor(n / step) * step;
+}
+
+function getCounterEquivalentPriceForVatType(storeCounterAllInPrice, vatType) {
+  const price = Number(storeCounterAllInPrice);
+  const type = asText(vatType);
+
+  if (!Number.isFinite(price) || price <= 0) return null;
+
+  if (type === "VAT0") {
+    return price / 1.21;
+  }
+
+  return price;
+}
+
+function calculateCounterPayoutForVatType(storeCounterAllInPrice, vatType, orderFields = {}) {
+  const converted = getCounterEquivalentPriceForVatType(storeCounterAllInPrice, vatType);
+
+  if (!Number.isFinite(converted) || converted <= 0) return null;
+
+  const margin = numberValue(orderFields["Offer Margin"]);
+  const percentage = numberValue(orderFields["Offer Percentage"]);
+  const method = asText(orderFields["Offer Method"]);
+
+  let payout;
+
+  if (method === "Firm Range" && Number.isFinite(margin) && margin > 0) {
+    payout = converted - margin;
+  } else if (Number.isFinite(percentage) && percentage > 0) {
+    payout = Math.min(
+      converted - 10,
+      converted / (1 + percentage)
+    );
+  } else if (Number.isFinite(margin) && margin > 0) {
+    payout = converted - margin;
+  } else {
+    return null;
+  }
+
+  return roundDownToStep(payout, 2.5);
+}
+
+async function sendCounterOfferDiscordDM({
+  counterOfferRecordId,
+  sellerDiscordId,
+  productName,
+  sku,
+  size,
+  orderId,
+  payout,
+  vatType
+}) {
+  await initKickzDealDiscord();
+
+  if (!sellerDiscordId) {
+    throw new Error("Missing seller Discord ID");
+  }
+
+  const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
+  const dm = await user.createDM();
+
+  const message = await dm.send({
+    embeds: [
+      {
+        title: `🔁 Counter Offer: ${sku} / ${size}`,
+        description: [
+          `**${productName || "—"}**`,
+          "",
+          `Order: ${orderId || "—"}`,
+          "",
+          `The store sent a counter offer.`,
+          "",
+          `**Your payout**`,
+          `€${Number(payout).toFixed(2)} · ${vatType || "—"}`,
+          "",
+          "Accept if you can fulfill this order at the counter price."
+        ].join("\n"),
+        color: 0xf1c40f
+      }
+    ],
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 3,
+            label: "Accept",
+            custom_id: `counter_offer_accept:${counterOfferRecordId}`
+          },
+          {
+            type: 2,
+            style: 4,
+            label: "Deny",
+            custom_id: `counter_offer_deny:${counterOfferRecordId}`
+          }
+        ]
+      }
+    ]
+  });
+
+  return {
+    channelId: message.channelId,
+    messageId: message.id,
+    deliveryType: "dm"
+  };
 }
 
 function roundUpToStep(value, step = 2.5) {
