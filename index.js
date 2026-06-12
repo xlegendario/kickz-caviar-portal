@@ -2575,12 +2575,14 @@ app.post("/api/counter-offers/create", async (req, res) => {
 
     const linkedOrderNeedle = escapeFormulaValue(orderId || orderRecordId);
 
-    const sellerOfferRecords = await fetchAllAirtableRecords(SELLER_OFFERS_TABLE, {
-      filterByFormula: `AND(
-        FIND('${linkedOrderNeedle}', ARRAYJOIN({Linked Orders})),
-        {Seller Offer} > 0
-      )`
-    });
+    const sellerOfferRecords = await airtable(SELLER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `AND(
+          FIND('${linkedOrderNeedle}', ARRAYJOIN({Linked Orders})),
+          {Seller Offer} > 0
+        )`
+      })
+      .all();
 
     for (const sellerOfferRecord of sellerOfferRecords) {
       const f = sellerOfferRecord.fields || {};
