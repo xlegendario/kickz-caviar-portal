@@ -1146,12 +1146,11 @@ function bindConsignmentDiscordButtons(client) {
         "✅ Counter offer accepted."
       );
     
-      const competingCounters = await fetchAllAirtableRecords(COUNTER_OFFERS_TABLE, {
-        filterByFormula: `AND(
-          FIND('${escapeFormulaValue(linkedOrderId)}', ARRAYJOIN({Order})),
-          {Status} = 'Open'
-        )`
-      });
+      const competingCounters = await airtable(COUNTER_OFFERS_TABLE)
+        .select({
+          filterByFormula: `{Status} = 'Open'`
+        })
+        .all();
     
       for (const competing of competingCounters) {
         if (competing.id === counterOfferRecordId) continue;
