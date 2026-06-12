@@ -427,6 +427,44 @@ async function sendConsignmentOfferDiscordMessage({
   };
 }
 
+async function disableCounterOfferDiscordButtons(channelId, messageId, note) {
+  await initKickzDealDiscord();
+
+  const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
+  if (!channel) return false;
+
+  const message = await channel.messages.fetch(messageId).catch(() => null);
+  if (!message) return false;
+
+  await message.edit({
+    content: note || message.content,
+    embeds: message.embeds,
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 2,
+            label: "Accepted",
+            custom_id: "counter_offer_accepted_disabled",
+            disabled: true
+          },
+          {
+            type: 2,
+            style: 2,
+            label: "Denied",
+            custom_id: "counter_offer_denied_disabled",
+            disabled: true
+          }
+        ]
+      }
+    ]
+  });
+
+  return true;
+}
+
 async function disableConsignmentDiscordButtons(channelId, messageId, note, preferredClient = null) {
   const clients = preferredClient
     ? [preferredClient]
@@ -977,12 +1015,116 @@ function bindConsignmentDiscordButtons(client) {
     if (
       !customId.startsWith("confirm_offer:") &&
       !customId.startsWith("deny_offer:") &&
-      !customId.startsWith("request_consignment_label:")
+      !customId.startsWith("request_consignment_label:") &&
+      !customId.startsWith("counter_offer_accept:") &&
+      !customId.startsWith("counter_offer_deny:")
     ) {
       return;
     }
     
     await interaction.deferUpdate().catch(() => {});
+
+    if (customId.startsWith("counter_offer_deny:")) {
+      const counterOfferRecordId = customId.split(":")[1];
+    
+      await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+        "Status": "Denied",
+        "Denied At": new Date().toISOString(),
+        "Closed At": new Date().toISOString()
+      });
+    
+      await disableCounterOfferDiscordButtons(
+        interaction.channelId,
+        interaction.message.id,
+        "❌ Counter offer denied."
+      );
+    
+      return;
+    }
+    
+    if (customId.startsWith("counter_offer_accept:")) {
+      const counterOfferRecordId = customId.split(":")[1];
+    
+      const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
+      const f = counterOffer.fields || {};
+    
+      if (asText(f["Status"]) !== "Open") {
+        await disableCounterOfferDiscordButtons(
+          interaction.channelId,
+          interaction.message.id,
+          "❌ This counter offer is no longer available."
+        );
+        return;
+      }
+    
+      const linkedOrderId = firstLinkedRecordId(f["Order"]);
+    
+      if (!linkedOrderId) {
+        throw new Error("Counter Offer missing linked Order");
+      }
+    
+      const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
+      const orderStatus = asText(orderRecord.fields?.["Fulfillment Status"]);
+    
+      if (orderStatus !== "Outsource") {
+        await disableCounterOfferDiscordButtons(
+          interaction.channelId,
+          interaction.message.id,
+          "❌ This order is already no longer available."
+        );
+        return;
+      }
+    
+      await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+        "Status": "Accepted",
+        "Accepted At": new Date().toISOString(),
+        "Closed At": new Date().toISOString()
+      });
+    
+      await airtable(ORDERS_TABLE).update(linkedOrderId, {
+        "Fulfillment Status": "Confirmed",
+        "Custom Offer": "",
+        "Consignment Pre-Offer?": false,
+        "Consignment Offer Price": null,
+        "Consignment Offer Triggered?": false
+      });
+    
+      await disableCounterOfferDiscordButtons(
+        interaction.channelId,
+        interaction.message.id,
+        "✅ Counter offer accepted."
+      );
+    
+      const competingCounters = await fetchAllAirtableRecords(COUNTER_OFFERS_TABLE, {
+        filterByFormula: `AND(
+          FIND('${escapeFormulaValue(linkedOrderId)}', ARRAYJOIN({Order})),
+          {Status} = 'Open'
+        )`
+      });
+    
+      for (const competing of competingCounters) {
+        if (competing.id === counterOfferRecordId) continue;
+    
+        await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
+          "Status": "Closed",
+          "Closed At": new Date().toISOString()
+        });
+    
+        const cf = competing.fields || {};
+        const channelId = asText(cf["Discord Channel ID"]);
+        const messageId = asText(cf["Discord Message ID"]);
+    
+        if (channelId && messageId) {
+          await disableCounterOfferDiscordButtons(
+            channelId,
+            messageId,
+            "❌ Counter offer closed — another seller accepted."
+          );
+        }
+      }
+    
+      return;
+    }
 
     const [action, offerId] = customId.split(":");
 
