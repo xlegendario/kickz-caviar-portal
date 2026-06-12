@@ -3366,10 +3366,6 @@ function roundUpToStep(value, step = 2.5) {
   return Math.ceil(Number(value || 0) / step) * step;
 }
 
-function roundDownToStep(value, step = 2.5) {
-  return Math.floor(Number(value || 0) / step) * step;
-}
-
 function isDutchClientCountry(country) {
   const value = asText(country).toLowerCase();
 
