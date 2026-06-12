@@ -2549,6 +2549,11 @@ app.post("/api/counter-offers/create", async (req, res) => {
 
       if (!Number.isFinite(counterPayout) || counterPayout <= 0) continue;
 
+      const finalSellerCounterPayout =
+        sellerOriginalPrice <= counterPayout
+          ? sellerOriginalPrice
+          : counterPayout;
+
       const createdCounter = await airtable(COUNTER_OFFERS_TABLE).create({
         "Order": [orderRecordId],
         "Seller ID": [sellerRecordId],
@@ -2560,7 +2565,7 @@ app.post("/api/counter-offers/create", async (req, res) => {
 
         "Store Counter Price": storeCounterPrice,
 
-        "Counter Payout": counterPayout,
+        "Counter Payout": finalSellerCounterPayout,
         "Counter Payout VAT Type": sellerVatType,
 
         "Status": "Open",
@@ -2577,7 +2582,7 @@ app.post("/api/counter-offers/create", async (req, res) => {
           sku,
           size,
           orderId,
-          payout: counterPayout,
+          payout: finalSellerCounterPayout,
           vatType: sellerVatType
         });
 
@@ -2630,6 +2635,11 @@ app.post("/api/counter-offers/create", async (req, res) => {
 
       if (!Number.isFinite(counterPayout) || counterPayout <= 0) continue;
 
+      const finalConsignmentOfferPrice =
+        sellerOriginalPrice <= counterPayout
+          ? sellerOriginalPrice
+          : counterPayout;
+
       const { data: createdOffer, error: offerError } = await supabase
         .from("consignment_offers")
         .insert({
@@ -2647,7 +2657,7 @@ app.post("/api/counter-offers/create", async (req, res) => {
 
           vat_type: sellerVatType,
           seller_price: sellerOriginalPrice,
-          offer_price: counterPayout,
+          offer_price: finalConsignmentOfferPrice,
 
           status: "open",
           created_at: nowIso,
