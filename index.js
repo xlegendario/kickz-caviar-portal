@@ -906,6 +906,30 @@ async function confirmConsignmentOffer(offerId) {
 
   const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer(lockedOffer);
 
+  if (lockedOffer.is_counter_offer) {
+    const storeCounterPrice = Number(lockedOffer.store_counter_price);
+    const storeCounterPriceExclVat = Number(lockedOffer.store_counter_price_excl_vat);
+  
+    const isMargin = asText(lockedOffer.vat_type) === "Margin";
+  
+    const customOffer = isMargin
+      ? storeCounterPrice
+      : storeCounterPriceExclVat;
+  
+    const offerVatType = isMargin
+      ? "Margin"
+      : "VAT0";
+  
+    if (Number.isFinite(customOffer) && customOffer > 0) {
+      await airtable(ORDERS_TABLE).update(lockedOffer.order_record_id, {
+        "Custom Offer": customOffer,
+        "Offer VAT Type": offerVatType,
+        "Offer Accepted?": true,
+        "Offer Sent?": false
+      });
+    }
+  }
+
   const { data: inventoryRow, error: inventoryFetchError } = await supabase
     .from("consignment_inventory")
     .select("id, quantity, sku, size")
@@ -2685,7 +2709,14 @@ app.post("/api/counter-offers/create", async (req, res) => {
           vat_type: sellerVatType,
           seller_price: sellerOriginalPrice,
           offer_price: finalConsignmentOfferPrice,
-
+          
+          is_counter_offer: true,
+          store_counter_price: storeCounterPrice,
+          store_counter_price_excl_vat:
+            numberValue(orderFields["Client VAT Rate"]) > 0
+              ? storeCounterPrice / (1 + numberValue(orderFields["Client VAT Rate"]))
+              : storeCounterPrice,
+          
           status: "open",
           created_at: nowIso,
           updated_at: nowIso
