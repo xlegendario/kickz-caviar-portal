@@ -904,8 +904,6 @@ async function confirmConsignmentOffer(offerId) {
     };
   }
 
-  const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer(lockedOffer);
-
   if (lockedOffer.is_counter_offer) {
     const storeCounterPrice = Number(lockedOffer.store_counter_price);
     const storeCounterPriceExclVat = Number(lockedOffer.store_counter_price_excl_vat);
@@ -929,6 +927,8 @@ async function confirmConsignmentOffer(offerId) {
       });
     }
   }
+
+  const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer(lockedOffer);
 
   const { data: inventoryRow, error: inventoryFetchError } = await supabase
     .from("consignment_inventory")
