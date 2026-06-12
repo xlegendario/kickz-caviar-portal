@@ -1148,22 +1148,24 @@ function bindConsignmentDiscordButtons(client) {
     
       const competingCounters = await airtable(COUNTER_OFFERS_TABLE)
         .select({
-          filterByFormula: `{Status} = 'Open'`
+          filterByFormula: `AND(
+            {Status} = 'Open',
+            RECORD_ID() != '${counterOfferRecordId}',
+            FIND('${linkedOrderId}', ARRAYJOIN({Order}))
+          )`
         })
         .all();
-    
+      
       for (const competing of competingCounters) {
-        if (competing.id === counterOfferRecordId) continue;
-    
         await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
           "Status": "Closed",
           "Closed At": new Date().toISOString()
         });
-    
+      
         const cf = competing.fields || {};
         const channelId = asText(cf["Discord Channel ID"]);
         const messageId = asText(cf["Discord Message ID"]);
-    
+      
         if (channelId && messageId) {
           await disableCounterOfferDiscordButtons(
             channelId,
