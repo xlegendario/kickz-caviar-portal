@@ -52,6 +52,8 @@ const INVENTORY_UNITS_TABLE = process.env.AIRTABLE_INVENTORY_UNITS_TABLE || "Inv
 const SELLER_OFFERS_TABLE = process.env.AIRTABLE_SELLER_OFFERS_TABLE || "Seller Offers";
 const COUNTER_OFFERS_TABLE =
   process.env.AIRTABLE_COUNTER_OFFERS_TABLE || "Counter Offers";
+const COUNTER_OFFER_ACCEPT_WEBHOOK_URL =
+  process.env.COUNTER_OFFER_ACCEPT_WEBHOOK_URL || "";
 const SKU_MASTER_TABLE = process.env.AIRTABLE_SKU_MASTER_TABLE || "SKU Master";
 const STOCK_LEVELS_TABLE = process.env.AIRTABLE_STOCK_LEVELS_TABLE || "Stock Levels";
 const MERCHANTS_TABLE = process.env.AIRTABLE_MERCHANTS_TABLE || "Merchants";
@@ -1080,13 +1082,38 @@ function bindConsignmentDiscordButtons(client) {
         "Accepted At": new Date().toISOString(),
         "Closed At": new Date().toISOString()
       });
-    
-      await airtable(ORDERS_TABLE).update(linkedOrderId, {
-        "Fulfillment Status": "Confirmed",
-        "Custom Offer": "",
-        "Consignment Pre-Offer?": false,
-        "Consignment Offer Price": null,
-        "Consignment Offer Triggered?": false
+
+      if (!COUNTER_OFFER_ACCEPT_WEBHOOK_URL) {
+        throw new Error("Missing COUNTER_OFFER_ACCEPT_WEBHOOK_URL");
+      }
+      
+      await fetch(COUNTER_OFFER_ACCEPT_WEBHOOK_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          trigger_type: "counter-offer-accepted",
+      
+          counter_offer_record_id: counterOfferRecordId,
+          order_record_id: linkedOrderId,
+      
+          seller_record_id: firstLinkedRecordId(f["Seller ID"]),
+          seller_offer_record_id: asText(f["Seller Offer Record ID"]),
+      
+          source_type: asText(f["Source Type"]),
+      
+          store_counter_price: numberValue(f["Store Counter Price"]),
+          store_counter_price_excl_vat: numberValue(f["Store Counter Price Excl VAT"]),
+      
+          counter_payout: numberValue(f["Counter Payout"]),
+          counter_payout_vat_type: asText(f["Counter Payout VAT Type"]),
+      
+          seller_original_price: numberValue(f["Seller Original Price"]),
+          seller_original_vat_type: asText(f["Seller Original VAT Type"]),
+      
+          accepted_at_iso: new Date().toISOString()
+        })
       });
     
       await disableCounterOfferDiscordButtons(
