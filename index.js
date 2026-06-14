@@ -3838,6 +3838,58 @@ function normalizeDeal(record) {
   };
 }
 
+app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({ error: "Missing seller_record_id" });
+    }
+
+    const records = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `AND(
+          {Status} = 'Open',
+          {Source Type} = 'Seller Offer'
+        )`
+      })
+      .all();
+
+    const items = records
+      .filter((record) =>
+        linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+      )
+      .map((record) => {
+        const f = record.fields || {};
+
+        return {
+          id: record.id,
+          order_id: displayValue(f["Order ID"]) || displayValue(f["Order"]),
+          product: displayValue(f["Product Name"]),
+          sku: displayValue(f["SKU"]),
+          size: displayValue(f["Size"]),
+          brand: displayValue(f["Brand"]),
+          original_offer: moneyValue(f["Seller Original Price"]),
+          counter_payout: moneyValue(f["Counter Payout"]),
+          vat_type: displayValue(f["Counter Payout VAT Type"]),
+          raw_date: displayValue(f["Created At"])
+        };
+      });
+
+    res.json({
+      count: items.length,
+      items: sortDashboardItemsNewestFirst(items)
+    });
+  } catch (err) {
+    console.error("Failed to load WTB counter offers:", err);
+
+    res.status(500).json({
+      error: "Failed to load WTB counter offers",
+      details: err.message
+    });
+  }
+});
+
 app.get("/api/dashboard/wtb-accepted", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
@@ -3927,6 +3979,180 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
 
     res.status(500).json({
       error: "Failed to load accepted offers",
+      details: err.message
+    });
+  }
+});
+
+app.post("/api/dashboard/wtb-counter-offers/:id/deny", async (req, res) => {
+  try {
+    const counterOfferId = asText(req.params.id);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+
+    const record = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferId);
+    const f = record.fields || {};
+
+    if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    if (displayValue(f["Status"]) !== "Open") {
+      return res.status(409).json({ error: "Counter offer is no longer open" });
+    }
+
+    await airtable(COUNTER_OFFERS_TABLE).update(counterOfferId, {
+      "Status": "Denied",
+      "Denied At": new Date().toISOString(),
+      "Closed At": new Date().toISOString()
+    });
+
+    const channelId = displayValue(f["Discord Channel ID"]);
+    const messageId = displayValue(f["Discord Message ID"]);
+
+    if (channelId && messageId) {
+      await disableCounterOfferDiscordButtons(
+        channelId,
+        messageId,
+        "❌ Counter offer denied."
+      ).catch(() => {});
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to deny counter offer:", err);
+
+    res.status(500).json({
+      error: "Failed to deny counter offer",
+      details: err.message
+    });
+  }
+});
+
+app.post("/api/dashboard/wtb-counter-offers/:id/accept", async (req, res) => {
+  try {
+    const counterOfferId = asText(req.params.id);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+
+    const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferId);
+    const f = counterOffer.fields || {};
+
+    if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    if (displayValue(f["Status"]) !== "Open") {
+      return res.status(409).json({ error: "Counter offer is no longer open" });
+    }
+
+    const linkedOrderId = firstLinkedRecordId(f["Order"]);
+
+    if (!linkedOrderId) {
+      return res.status(400).json({ error: "Counter offer missing linked order" });
+    }
+
+    const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
+    const orderStatus = displayValue(orderRecord.fields?.["Fulfillment Status"]);
+
+    if (orderStatus !== "Outsource") {
+      await airtable(COUNTER_OFFERS_TABLE).update(counterOfferId, {
+        "Status": "Closed",
+        "Closed At": new Date().toISOString()
+      });
+
+      return res.status(409).json({
+        error: "This order is already no longer available"
+      });
+    }
+
+    await airtable(COUNTER_OFFERS_TABLE).update(counterOfferId, {
+      "Status": "Accepted",
+      "Accepted At": new Date().toISOString(),
+      "Closed At": new Date().toISOString()
+    });
+
+    if (!COUNTER_OFFER_ACCEPT_WEBHOOK_URL) {
+      throw new Error("Missing COUNTER_OFFER_ACCEPT_WEBHOOK_URL");
+    }
+
+    await fetch(COUNTER_OFFER_ACCEPT_WEBHOOK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        trigger_type: "counter-offer-accepted",
+
+        counter_offer_record_id: counterOfferId,
+        order_record_id: linkedOrderId,
+
+        seller_record_id: firstLinkedRecordId(f["Seller ID"]),
+        seller_offer_record_id: displayValue(f["Seller Offer Record ID"]),
+
+        source_type: displayValue(f["Source Type"]),
+
+        store_counter_price: numberValue(f["Store Counter Price"]),
+        store_counter_price_excl_vat: numberValue(f["Store Counter Price Excl VAT"]),
+
+        counter_payout: numberValue(f["Counter Payout"]),
+        counter_payout_vat_type: displayValue(f["Counter Payout VAT Type"]),
+
+        seller_original_price: numberValue(f["Seller Original Price"]),
+        seller_original_vat_type: displayValue(f["Seller Original VAT Type"]),
+
+        accepted_at_iso: new Date().toISOString()
+      })
+    });
+
+    const channelId = displayValue(f["Discord Channel ID"]);
+    const messageId = displayValue(f["Discord Message ID"]);
+
+    if (channelId && messageId) {
+      await disableCounterOfferDiscordButtons(
+        channelId,
+        messageId,
+        "✅ Counter offer accepted."
+      ).catch(() => {});
+    }
+
+    const competingCounters = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `AND(
+          {Status} = 'Open',
+          {Source Type} = 'Seller Offer'
+        )`
+      })
+      .all();
+
+    for (const competing of competingCounters) {
+      if (competing.id === counterOfferId) continue;
+
+      const cf = competing.fields || {};
+
+      if (!linkedRecordIncludes(cf["Order"], linkedOrderId)) continue;
+
+      await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
+        "Status": "Closed",
+        "Closed At": new Date().toISOString()
+      });
+
+      const competingChannelId = displayValue(cf["Discord Channel ID"]);
+      const competingMessageId = displayValue(cf["Discord Message ID"]);
+
+      if (competingChannelId && competingMessageId) {
+        await disableCounterOfferDiscordButtons(
+          competingChannelId,
+          competingMessageId,
+          "❌ Counter offer closed — another seller accepted."
+        ).catch(() => {});
+      }
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to accept counter offer:", err);
+
+    res.status(500).json({
+      error: "Failed to accept counter offer",
       details: err.message
     });
   }
