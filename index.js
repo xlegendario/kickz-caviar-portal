@@ -5790,6 +5790,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
       quickShipped,
       quickDelivered,
       wtbOpenOffersRecords,
+      wtbCounterOffersRecords,
       wtbAcceptedRecords,
       wtbConfirmedRecords,
       wtbLabelRequestedRecords,
@@ -5816,6 +5817,16 @@ app.get("/api/dashboard/counts", async (req, res) => {
         .select({
           fields: ["Seller ID"],
           filterByFormula: `{Fulfillment Status} = 'Outsource'`
+        })
+        .all(),
+
+      airtable(COUNTER_OFFERS_TABLE)
+        .select({
+          fields: ["Seller ID", "Status", "Source Type"],
+          filterByFormula: `AND(
+            {Status} = 'Open',
+            {Source Type} = 'Seller Offer'
+          )`
         })
         .all(),
       
@@ -5927,6 +5938,10 @@ app.get("/api/dashboard/counts", async (req, res) => {
     ).length;
 
     const wtbOpenOffers = wtbOpenOffersRecords.filter((record) =>
+      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+    ).length;
+
+    const wtbCounterOffers = wtbCounterOffersRecords.filter((record) =>
       linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
     ).length;
 
@@ -6060,6 +6075,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
       },
       wtb: {
         open_offers: wtbOpenOffers,
+        counter_offers: wtbCounterOffers,
         accepted: wtbAccepted,
         confirmed: wtbConfirmed,
         label_requested: wtbLabelRequested,
