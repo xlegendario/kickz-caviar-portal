@@ -1024,7 +1024,7 @@ async function requestConsignmentShippingLabel(orderRecordId) {
   }
 
   await airtable(ORDERS_TABLE).update(orderRecordId, {
-    "Fulfillment Status": "Label Requested"
+    "Fulfillment Status": "Requested Label"
   });
 
   return {
