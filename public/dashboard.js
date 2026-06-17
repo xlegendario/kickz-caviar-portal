@@ -887,6 +887,20 @@ function renderConsignmentOfferRows(items) {
               : "Confirm"
           }
         </button>
+
+        ${
+          Number(item.offer_price || 0) < Number(item.seller_price || 0)
+            ? `
+              <button
+                class="dashboard-mobile-btn dashboard-mobile-discord-btn"
+                type="button"
+                data-consignment-counter-offer-id="${escapeHtml(item.id || "")}"
+              >
+                Counter
+              </button>
+            `
+            : ""
+        }
   
         <button
           class="dashboard-mobile-btn dashboard-mobile-deny-btn"
