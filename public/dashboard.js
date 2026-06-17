@@ -933,6 +933,20 @@ function renderConsignmentOfferRows(items) {
             }
           </button>
         
+          ${
+            Number(item.offer_price || 0) < Number(item.seller_price || 0)
+              ? `
+                <button
+                  class="dashboard-action-btn"
+                  type="button"
+                  data-consignment-counter-offer-id="${escapeHtml(item.id || "")}"
+                >
+                  Counter
+                </button>
+              `
+              : ""
+          }
+          
           <button
             class="dashboard-deny-btn"
             type="button"
@@ -3135,6 +3149,61 @@ dashboardTableBody.addEventListener("click", async (event) => {
         alert(err.message);
       } finally {
         counterDenyButton.disabled = false;
+      }
+    
+      return;
+    }
+
+    const consignmentCounterOfferButton = event.target.closest("[data-consignment-counter-offer-id]");
+
+    if (consignmentCounterOfferButton) {
+      const offerId = consignmentCounterOfferButton.dataset.consignmentCounterOfferId;
+    
+      const raw = window.prompt("Enter your requested payout. Example: 250");
+    
+      if (!raw) return;
+    
+      const counterPrice = Number(
+        String(raw)
+          .replace(/[^\d.,-]/g, "")
+          .replace(",", ".")
+      );
+    
+      if (!Number.isFinite(counterPrice) || counterPrice <= 0) {
+        alert("Please enter a valid counter price. Example: 250");
+        return;
+      }
+    
+      consignmentCounterOfferButton.disabled = true;
+      consignmentCounterOfferButton.textContent = "Sending...";
+    
+      try {
+        const response = await fetch(`/api/consignment/offers/${offerId}/counter`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            seller_record_id: dashboardSeller.id,
+            counter_price: counterPrice
+          })
+        });
+    
+        const data = await response.json();
+    
+        if (!response.ok) {
+          throw new Error(data.details || data.error || "Failed to submit counter offer");
+        }
+    
+        alert(`Counter offer sent to store. Store offer: €${Number(data.store_offer_price).toFixed(2)} (${data.store_offer_vat_type})`);
+    
+        await loadDashboardData();
+        await loadDashboardCounts();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        consignmentCounterOfferButton.disabled = false;
+        consignmentCounterOfferButton.textContent = "Counter";
       }
     
       return;
