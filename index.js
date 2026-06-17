@@ -1071,7 +1071,6 @@ function bindConsignmentDiscordButtons(client) {
       return;
     }
     
-    await interaction.deferUpdate().catch(() => {});
     if (customId.startsWith("counter_consignment_offer:")) {
       const offerId = customId.split(":")[1];
     
@@ -1144,6 +1143,8 @@ function bindConsignmentDiscordButtons(client) {
     
       return;
     }
+
+    await interaction.deferUpdate().catch(() => {});
 
     if (customId.startsWith("counter_offer_deny:")) {
       const counterOfferRecordId = customId.split(":")[1];
@@ -3375,6 +3376,7 @@ app.post("/api/consignment/offers/:id/store-accept", async (req, res) => {
       .from("consignment_offers")
       .update({
         status: "open",
+        offer_price: Number(offer.consignor_counter_price),
         store_response_status: "accepted",
         store_response_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
