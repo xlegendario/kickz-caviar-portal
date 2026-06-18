@@ -131,7 +131,11 @@ function renderBuyingProductCard(product) {
       <div class="deal-image-wrap">
         ${
           product.image_url
-            ? `<img src="${escapeHtml(product.image_url)}" class="deal-image" />`
+            ? `<img
+                src="${escapeHtml(product.image_url)}"
+                class="deal-image"
+                onerror="this.closest('.deal-image-wrap').innerHTML = '<div class=&quot;image-placeholder&quot;><div class=&quot;placeholder-icon&quot;><span></span></div></div>'"
+              />`
             : `
               <div class="image-placeholder">
                 <div class="placeholder-icon"><span></span></div>
@@ -205,7 +209,11 @@ function openBuyingProductModal(productKey) {
       <div class="buying-modal-image-wrap">
         ${
           product.image_url
-            ? `<img src="${escapeHtml(product.image_url)}" class="buying-modal-image" />`
+            ? `<img
+                src="${escapeHtml(product.image_url)}"
+                class="buying-modal-image"
+                onerror="this.closest('.buying-modal-image-wrap').innerHTML = '<div class=&quot;table-image-placeholder&quot;></div>'"
+              />`
             : `<div class="table-image-placeholder"></div>`
         }
       </div>
