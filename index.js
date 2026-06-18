@@ -7422,7 +7422,9 @@ function getBuyingConsignmentProduct(row, imageMap = new Map()) {
     sku,
     size: asText(row.size),
     brand: asText(row.brand),
-    image_url: asText(row.image_url) || imageMap.get(sku) || "",
+    image_url: asText(row.image_url).includes("airtableusercontent.com")
+      ? imageMap.get(sku) || ""
+      : asText(row.image_url) || imageMap.get(sku) || "",
     price: Number(row.selling_price_suggested || 0) + 10,
     seller_price: Number(row.selling_price_suggested || 0),
     kc_markup: 10,
@@ -7701,7 +7703,10 @@ async function buildConsignmentImageMap(consignmentRows) {
   const missingImageSkus = [
     ...new Set(
       (consignmentRows || [])
-        .filter((row) => !asText(row.image_url))
+        .filter((row) => {
+          const imageUrl = asText(row.image_url);
+          return !imageUrl || imageUrl.includes("airtableusercontent.com");
+        })
         .map((row) => normalizeSku(row.sku))
         .filter(Boolean)
     )
