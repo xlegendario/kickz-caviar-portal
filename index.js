@@ -7407,16 +7407,18 @@ function getBuyingInventoryProduct(record) {
   };
 }
 
-function getBuyingConsignmentProduct(row) {
+function getBuyingConsignmentProduct(row, imageMap = new Map()) {
+  const sku = asText(row.sku).toUpperCase();
+
   return {
     source_type: "consignment",
     source_label: "Consignment",
     source_id: row.id,
     product_name: asText(row.product_name),
-    sku: asText(row.sku),
+    sku,
     size: asText(row.size),
     brand: asText(row.brand),
-    image_url: asText(row.image_url || row.image || row.picture_url),
+    image_url: asText(row.image_url) || imageMap.get(sku) || "",
     price: Number(row.selling_price_suggested || 0),
     delivery_time: BUYING_CONSIGNMENT_DELIVERY_TIME,
     quantity: Number(row.quantity || 0)
@@ -7509,6 +7511,171 @@ function normalizeBuyingProducts(productMap) {
   });
 }
 
+function normalizeSku(value) {
+  return asText(value).toUpperCase().trim();
+}
+
+async function getSkuMasterImageMap(skus) {
+  const cleanSkus = [...new Set(skus.map(normalizeSku).filter(Boolean))];
+  const imageMap = new Map();
+
+  if (!cleanSkus.length) return imageMap;
+
+  for (let i = 0; i < cleanSkus.length; i += 50) {
+    const batch = cleanSkus.slice(i, i + 50);
+
+    const formula = `OR(${batch
+      .map((sku) => `{SKU} = '${sku.replaceAll("'", "\\'")}'`)
+      .join(",")})`;
+
+    const records = await airtable(SKU_MASTER_TABLE)
+      .select({
+        fields: ["SKU", "Picture"],
+        filterByFormula: formula,
+        maxRecords: 50
+      })
+      .all()
+      .catch(() => []);
+
+    for (const record of records) {
+      const sku = normalizeSku(record.fields?.["SKU"]);
+      const image = getImageUrl(record.fields?.["Picture"]);
+
+      if (sku && image && !imageMap.has(sku)) {
+        imageMap.set(sku, image);
+      }
+    }
+  }
+
+  return imageMap;
+}
+
+async function getStoreListingsImageMap(skus) {
+  const cleanSkus = [...new Set(skus.map(normalizeSku).filter(Boolean))];
+  const imageMap = new Map();
+
+  if (!cleanSkus.length) return imageMap;
+
+  const { data, error } = await supabase
+    .from("store_listings")
+    .select("sku, picture_url")
+    .in("sku", cleanSkus);
+
+  if (error) {
+    console.error("Store listings image lookup failed:", error);
+    return imageMap;
+  }
+
+  for (const row of data || []) {
+    const sku = normalizeSku(row.sku);
+    const image = asText(row.picture_url);
+
+    if (sku && image && !imageMap.has(sku)) {
+      imageMap.set(sku, image);
+    }
+  }
+
+  return imageMap;
+}
+
+async function getUolImageMap(skus) {
+  const cleanSkus = [...new Set(skus.map(normalizeSku).filter(Boolean))];
+  const imageMap = new Map();
+
+  if (!cleanSkus.length) return imageMap;
+
+  for (let i = 0; i < cleanSkus.length; i += 50) {
+    const batch = cleanSkus.slice(i, i + 50);
+
+    const formula = `AND(
+      OR(${batch.map((sku) => `{SKU} = '${sku.replaceAll("'", "\\'")}'`).join(",")}),
+      {Picture} != ''
+    )`;
+
+    const records = await airtable(ORDERS_TABLE)
+      .select({
+        fields: ["SKU", "Picture"],
+        filterByFormula: formula,
+        maxRecords: 50
+      })
+      .all()
+      .catch(() => []);
+
+    for (const record of records) {
+      const sku = normalizeSku(record.fields?.["SKU"]);
+      const image = getImageUrl(record.fields?.["Picture"]);
+
+      if (sku && image && !imageMap.has(sku)) {
+        imageMap.set(sku, image);
+      }
+    }
+  }
+
+  return imageMap;
+}
+
+async function buildConsignmentImageMap(consignmentRows) {
+  const missingImageSkus = [
+    ...new Set(
+      (consignmentRows || [])
+        .filter((row) => !asText(row.image_url))
+        .map((row) => normalizeSku(row.sku))
+        .filter(Boolean)
+    )
+  ];
+
+  const imageMap = new Map();
+
+  if (!missingImageSkus.length) return imageMap;
+
+  const skuMasterMap = await getSkuMasterImageMap(missingImageSkus);
+
+  for (const [sku, image] of skuMasterMap.entries()) {
+    imageMap.set(sku, image);
+  }
+
+  const stillMissingAfterSkuMaster = missingImageSkus.filter((sku) => !imageMap.has(sku));
+  const storeListingsMap = await getStoreListingsImageMap(stillMissingAfterSkuMaster);
+
+  for (const [sku, image] of storeListingsMap.entries()) {
+    imageMap.set(sku, image);
+  }
+
+  const stillMissingAfterStoreListings = missingImageSkus.filter((sku) => !imageMap.has(sku));
+  const uolMap = await getUolImageMap(stillMissingAfterStoreListings);
+
+  for (const [sku, image] of uolMap.entries()) {
+    imageMap.set(sku, image);
+  }
+
+  return imageMap;
+}
+
+async function cacheConsignmentImages(consignmentRows, imageMap) {
+  const rowsToUpdate = (consignmentRows || []).filter((row) => {
+    const sku = normalizeSku(row.sku);
+    return row.id && !asText(row.image_url) && imageMap.has(sku);
+  });
+
+  for (const row of rowsToUpdate) {
+    const sku = normalizeSku(row.sku);
+    const imageUrl = imageMap.get(sku);
+
+    supabase
+      .from("consignment_inventory")
+      .update({
+        image_url: imageUrl,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", row.id)
+      .then(({ error }) => {
+        if (error) {
+          console.error("Failed to cache consignment image:", error);
+        }
+      });
+  }
+}
+
 app.get("/api/buying/products", async (req, res) => {
   try {
     const search = asText(req.query.search).toLowerCase();
@@ -7552,14 +7719,19 @@ app.get("/api/buying/products", async (req, res) => {
         brand,
         vat_type,
         selling_price_suggested,
-        quantity
+        quantity,
+        image_url
       `)
       .gt("quantity", 0);
 
     if (consignmentError) throw consignmentError;
 
+    const consignmentImageMap = await buildConsignmentImageMap(consignmentRows || []);
+
+    await cacheConsignmentImages(consignmentRows || [], consignmentImageMap);
+    
     (consignmentRows || [])
-      .map(getBuyingConsignmentProduct)
+      .map((row) => getBuyingConsignmentProduct(row, consignmentImageMap))
       .forEach((source) => addBuyingSourceToProductMap(productMap, source));
 
     let products = normalizeBuyingProducts(productMap);
