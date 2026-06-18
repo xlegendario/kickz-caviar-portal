@@ -3054,3 +3054,19 @@
     display: none !important;
   }
 }
+
+.dashboard-counter-btn {
+  border: none;
+  background: #5865F2;
+  color: #fff;
+  border-radius: 14px;
+  padding: 10px 18px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.dashboard-counter-btn:hover {
+  transform: translateY(-1px);
+  opacity: 0.92;
+}
