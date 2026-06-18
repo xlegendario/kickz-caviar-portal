@@ -7410,7 +7410,9 @@ function getBuyingInventoryProduct(record) {
 }
 
 function getBuyingConsignmentProduct(row, imageMap = new Map()) {
-  const sku = asText(row.sku).toUpperCase();
+  const sku = normalizeSku(row.sku);
+  const rowImageUrl = asText(row.image_url);
+  const fallbackImageUrl = imageMap.get(sku) || "";
 
   return {
     source_type: "consignment",
@@ -7422,9 +7424,9 @@ function getBuyingConsignmentProduct(row, imageMap = new Map()) {
     sku,
     size: asText(row.size),
     brand: asText(row.brand),
-    image_url: asText(row.image_url).includes("airtableusercontent.com")
-      ? imageMap.get(sku) || ""
-      : asText(row.image_url) || imageMap.get(sku) || "",
+    image_url: isUnstableImageUrl(rowImageUrl)
+      ? fallbackImageUrl
+      : rowImageUrl,
     price: Number(row.selling_price_suggested || 0) + 10,
     seller_price: Number(row.selling_price_suggested || 0),
     kc_markup: 10,
@@ -7600,6 +7602,16 @@ function normalizeSku(value) {
   return asText(value).toUpperCase().trim();
 }
 
+function isUnstableImageUrl(value) {
+  const url = asText(value).toLowerCase();
+
+  return (
+    !url ||
+    url.includes("airtableusercontent.com") ||
+    url.includes("dl.airtable.com")
+  );
+}
+
 async function getSkuMasterImageMap(skus) {
   const cleanSkus = [...new Set(skus.map(normalizeSku).filter(Boolean))];
   const imageMap = new Map();
@@ -7703,10 +7715,7 @@ async function buildConsignmentImageMap(consignmentRows) {
   const missingImageSkus = [
     ...new Set(
       (consignmentRows || [])
-        .filter((row) => {
-          const imageUrl = asText(row.image_url);
-          return !imageUrl || imageUrl.includes("airtableusercontent.com");
-        })
+        .filter((row) => isUnstableImageUrl(row.image_url))
         .map((row) => normalizeSku(row.sku))
         .filter(Boolean)
     )
@@ -7716,24 +7725,30 @@ async function buildConsignmentImageMap(consignmentRows) {
 
   if (!missingImageSkus.length) return imageMap;
 
-  const skuMasterMap = await getSkuMasterImageMap(missingImageSkus);
-
-  for (const [sku, image] of skuMasterMap.entries()) {
-    imageMap.set(sku, image);
-  }
-
-  const stillMissingAfterSkuMaster = missingImageSkus.filter((sku) => !imageMap.has(sku));
-  const storeListingsMap = await getStoreListingsImageMap(stillMissingAfterSkuMaster);
+  const storeListingsMap = await getStoreListingsImageMap(missingImageSkus);
 
   for (const [sku, image] of storeListingsMap.entries()) {
-    imageMap.set(sku, image);
+    if (!isUnstableImageUrl(image)) {
+      imageMap.set(sku, image);
+    }
   }
 
   const stillMissingAfterStoreListings = missingImageSkus.filter((sku) => !imageMap.has(sku));
-  const uolMap = await getUolImageMap(stillMissingAfterStoreListings);
+  const skuMasterMap = await getSkuMasterImageMap(stillMissingAfterStoreListings);
+
+  for (const [sku, image] of skuMasterMap.entries()) {
+    if (!isUnstableImageUrl(image)) {
+      imageMap.set(sku, image);
+    }
+  }
+
+  const stillMissingAfterSkuMaster = missingImageSkus.filter((sku) => !imageMap.has(sku));
+  const uolMap = await getUolImageMap(stillMissingAfterSkuMaster);
 
   for (const [sku, image] of uolMap.entries()) {
-    imageMap.set(sku, image);
+    if (!isUnstableImageUrl(image)) {
+      imageMap.set(sku, image);
+    }
   }
 
   return imageMap;
@@ -7742,7 +7757,7 @@ async function buildConsignmentImageMap(consignmentRows) {
 async function cacheConsignmentImages(consignmentRows, imageMap) {
   const rowsToUpdate = (consignmentRows || []).filter((row) => {
     const sku = normalizeSku(row.sku);
-    return row.id && !asText(row.image_url) && imageMap.has(sku);
+    return row.id && isUnstableImageUrl(row.image_url) && imageMap.has(sku);
   });
 
   for (const row of rowsToUpdate) {
