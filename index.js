@@ -7709,7 +7709,7 @@ app.get("/api/buying/products", async (req, res) => {
       .map(getBuyingInventoryProduct)
       .forEach((source) => addBuyingSourceToProductMap(productMap, source));
 
-    const { data: consignmentRows, error: consignmentError } = await supabase
+    const { data: rawConsignmentRows, error: consignmentError } = await supabase
       .from("consignment_inventory")
       .select(`
         id,
@@ -7720,13 +7720,49 @@ app.get("/api/buying/products", async (req, res) => {
         vat_type,
         selling_price_suggested,
         quantity,
-        stock_level,
         image_url
       `)
-      .gt("stock_level", 0)
+      .gt("quantity", 0)
       .gt("selling_price_suggested", 0);
-
+    
     if (consignmentError) throw consignmentError;
+    
+    const consignmentStockKeys = [
+      ...new Set(
+        (rawConsignmentRows || [])
+          .map((row) => getStockCounterKey(row.sku, row.size))
+          .filter(Boolean)
+      )
+    ];
+    
+    let consignmentStockLevelMap = new Map();
+    
+    if (consignmentStockKeys.length) {
+      const { data: consignmentStockLevels, error: consignmentStockLevelError } =
+        await supabase
+          .from("consignment_stock_levels")
+          .select("stock_counter_key, stock_level, lowest_suggested_price")
+          .in("stock_counter_key", consignmentStockKeys);
+    
+      if (consignmentStockLevelError) throw consignmentStockLevelError;
+    
+      consignmentStockLevelMap = new Map(
+        (consignmentStockLevels || []).map((row) => [
+          row.stock_counter_key,
+          {
+            stock_level: Number(row.stock_level || 0),
+            lowest_suggested_price: Number(row.lowest_suggested_price || 0)
+          }
+        ])
+      );
+    }
+    
+    const consignmentRows = (rawConsignmentRows || []).filter((row) => {
+      const stockKey = getStockCounterKey(row.sku, row.size);
+      const stockInfo = consignmentStockLevelMap.get(stockKey);
+    
+      return Number(stockInfo?.stock_level || 0) > 0;
+    });
 
     const consignmentImageMap = await buildConsignmentImageMap(consignmentRows || []);
 
