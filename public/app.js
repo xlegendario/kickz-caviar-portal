@@ -19,7 +19,7 @@ const backToLoginBtn = document.getElementById("backToLoginBtn");
 
 const heroConsignorCta = document.getElementById("heroConsignorCta");
 
-let searchQuery = "";
+let searchQuery = searchInput?.value?.trim() || "";
 let selectedBrand = "";
 let selectedSort = localStorage.getItem("kc_sort") || "newest";
 sortFilter.value = selectedSort;
@@ -607,6 +607,8 @@ mainToggleButtons.forEach((button) => {
 
     selectedBrand = "";
     brandFilter.value = "";
+    searchQuery = "";
+    searchInput.value = "";
 
     syncMarketUi();
 
