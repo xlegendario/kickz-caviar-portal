@@ -1,5 +1,10 @@
 const dealsGrid = document.getElementById("dealsGrid");
 
+const mainToggleButtons = document.querySelectorAll("[data-main-mode]");
+const buyingProductModal = document.getElementById("buyingProductModal");
+const closeBuyingProductModal = document.getElementById("closeBuyingProductModal");
+const buyingProductModalContent = document.getElementById("buyingProductModalContent");
+
 const marketTabs = document.querySelectorAll(".market-tab");
 const priceViewButtons = document.querySelectorAll(".price-view-btn");
 
@@ -19,6 +24,9 @@ let selectedBrand = "";
 let selectedSort = localStorage.getItem("kc_sort") || "newest";
 sortFilter.value = selectedSort;
 
+let currentMainMode = localStorage.getItem("kc_main_mode") || "selling";
+let currentBuyingProducts = [];
+
 let currentType = localStorage.getItem("kc_market_type") || "quick";
 let priceView = localStorage.getItem("kc_price_view") || "margin";
 let layoutView = localStorage.getItem("kc_layout_view") || "cards";
@@ -34,6 +42,197 @@ let currentDeals = [];
 let nextOffset = "";
 let hasMore = false;
 let isLoading = false;
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+async function loadBuyingProducts() {
+  if (isLoading) return;
+
+  try {
+    isLoading = true;
+
+    currentBuyingProducts = [];
+
+    dealsGrid.innerHTML = `
+      <div class="loading-state">
+        <span>Searching<br>stock...</span>
+      </div>
+    `;
+
+    const params = new URLSearchParams();
+
+    if (searchQuery) params.set("search", searchQuery);
+    if (selectedBrand) params.set("brand", selectedBrand);
+
+    if (selectedSort === "az" || selectedSort === "za") {
+      params.set("sort", selectedSort);
+    } else if (selectedSort === "payout_high") {
+      params.set("sort", "price_high");
+    } else {
+      params.set("sort", "price_low");
+    }
+
+    const response = await fetch(`/api/buying/products?${params.toString()}`);
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to load buying products");
+    }
+
+    currentBuyingProducts = data.products || [];
+
+    renderBuyingProducts();
+  } catch (err) {
+    console.error(err);
+
+    dealsGrid.innerHTML = `
+      <div class="empty-state">
+        Failed to load buying stock.
+      </div>
+    `;
+  } finally {
+    isLoading = false;
+    document.getElementById("loadingMore")?.remove();
+  }
+}
+
+function renderBuyingProductCard(product) {
+  return `
+    <article class="deal-card buying-card">
+      <div class="deal-image-wrap">
+        ${
+          product.image_url
+            ? `<img src="${escapeHtml(product.image_url)}" class="deal-image" />`
+            : `
+              <div class="image-placeholder">
+                <div class="placeholder-icon"><span></span></div>
+              </div>
+            `
+        }
+      </div>
+
+      <div class="deal-body">
+        <div class="deal-top">
+          <span class="deal-badge buying">Buy Stock</span>
+          <span class="deal-time">${escapeHtml(product.fastest_delivery_time || "-")}</span>
+        </div>
+
+        <h3 class="deal-title">${escapeHtml(product.product_name || "-")}</h3>
+
+        <div class="deal-meta">
+          ${escapeHtml(product.sku || "-")} ${product.brand ? `• ${escapeHtml(product.brand)}` : ""}
+        </div>
+
+        <div class="deal-payouts">
+          <div class="payout-box">
+            <span class="payout-label">From</span>
+            <span class="payout-value">${escapeHtml(product.from_price_display || "-")}</span>
+          </div>
+
+          <div class="payout-box">
+            <span class="payout-label">Sizes</span>
+            <span class="payout-value">${Number(product.size_count || 0)}</span>
+          </div>
+        </div>
+
+        <button
+          class="deal-btn"
+          type="button"
+          onclick="openBuyingProductModal('${escapeHtml(product.key)}')"
+        >
+          View Sizes
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function renderBuyingProducts() {
+  if (!currentBuyingProducts.length) {
+    dealsGrid.innerHTML = `
+      <div class="empty-state">
+        No buying stock found.
+      </div>
+    `;
+    return;
+  }
+
+  dealsGrid.innerHTML = currentBuyingProducts.map(renderBuyingProductCard).join("");
+}
+
+function openBuyingProductModal(productKey) {
+  const product = currentBuyingProducts.find((item) => item.key === productKey);
+
+  if (!product) {
+    alert("Product not found. Please refresh and try again.");
+    return;
+  }
+
+  buyingProductModalContent.innerHTML = `
+    <div class="buying-modal-header">
+      <div class="buying-modal-image-wrap">
+        ${
+          product.image_url
+            ? `<img src="${escapeHtml(product.image_url)}" class="buying-modal-image" />`
+            : `<div class="table-image-placeholder"></div>`
+        }
+      </div>
+
+      <div>
+        <div class="dashboard-eyebrow">Available Stock</div>
+        <h2>${escapeHtml(product.product_name || "-")}</h2>
+        <p>${escapeHtml(product.sku || "-")} ${product.brand ? `• ${escapeHtml(product.brand)}` : ""}</p>
+      </div>
+    </div>
+
+    <div class="buying-size-list">
+      ${(product.sizes || []).map((size) => `
+        <div class="buying-size-row">
+          <div>
+            <div class="buying-size-main">Size ${escapeHtml(size.size || "-")}</div>
+            <div class="buying-size-sub">
+              ${Number(size.source_count || 0)} source${Number(size.source_count || 0) === 1 ? "" : "s"} available
+            </div>
+          </div>
+
+          <div>
+            <div class="buying-size-price">${escapeHtml(size.lowest_price_display || "-")}</div>
+            <div class="buying-size-sub">${escapeHtml(size.fastest_delivery_time || "-")}</div>
+          </div>
+
+          <div class="buying-size-actions">
+            <button class="table-btn disabled-btn" type="button" disabled>Buy Now</button>
+            <button class="table-btn offer-btn disabled-btn" type="button" disabled>Offer</button>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+
+  buyingProductModal.classList.remove("hidden");
+}
+
+function closeBuyingProductFlow() {
+  buyingProductModal.classList.add("hidden");
+  buyingProductModalContent.innerHTML = "";
+}
+
+window.openBuyingProductModal = openBuyingProductModal;
+
+closeBuyingProductModal?.addEventListener("click", closeBuyingProductFlow);
+
+buyingProductModal?.addEventListener("click", (event) => {
+  if (event.target === buyingProductModal) {
+    closeBuyingProductFlow();
+  }
+});
 
 async function loadDeals(type = "quick", reset = true) {
   if (isLoading) return;
@@ -368,6 +567,23 @@ function renderLoadingMore() {
 }
 
 function syncMarketUi() {
+  mainToggleButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.mainMode === currentMainMode);
+  });
+
+  document.querySelector(".hero h2").textContent =
+    currentMainMode === "buying"
+      ? "Buy stock directly from the Kickz Caviar network"
+      : "Sell inventory directly to Kickz Caviar";
+
+  document.querySelector(".hero p").textContent =
+    currentMainMode === "buying"
+      ? "Browse available stock, view sizes and source inventory for your business."
+      : "Claim Quick Deals instantly or place offers on active Want To Buys.";
+
+  document.querySelector(".market-top-row").classList.toggle("hidden", currentMainMode === "buying");
+  document.querySelector(".view-toggle").classList.toggle("hidden", currentMainMode === "buying");
+  
   marketTabs.forEach((tab) => {
     const tabType = tab.getAttribute("data-market-type");
     tab.classList.toggle("active", tabType === currentType);
@@ -383,6 +599,25 @@ function syncMarketUi() {
     button.classList.toggle("active", view === layoutView);
   });
 }
+
+mainToggleButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    currentMainMode = button.dataset.mainMode || "selling";
+    localStorage.setItem("kc_main_mode", currentMainMode);
+
+    selectedBrand = "";
+    brandFilter.value = "";
+
+    syncMarketUi();
+
+    if (currentMainMode === "buying") {
+      loadBuyingProducts();
+    } else {
+      loadBrands();
+      loadDeals(currentType, true);
+    }
+  });
+});
 
 marketTabs.forEach((tab) => {
   tab.addEventListener("click", () => {
@@ -426,7 +661,12 @@ document.querySelectorAll(".view-btn").forEach((button) => {
 });
 
 syncMarketUi();
-loadDeals(currentType);
+
+if (currentMainMode === "buying") {
+  loadBuyingProducts();
+} else {
+  loadDeals(currentType);
+}
 
 async function loadBrands() {
   try {
@@ -454,13 +694,23 @@ loadBrands();
 
 brandFilter.addEventListener("change", () => {
   selectedBrand = brandFilter.value;
-  loadDeals(currentType, true);
+
+  if (currentMainMode === "buying") {
+    loadBuyingProducts();
+  } else {
+    loadDeals(currentType, true);
+  }
 });
 
 sortFilter.addEventListener("change", () => {
   selectedSort = sortFilter.value;
   localStorage.setItem("kc_sort", selectedSort);
-  loadDeals(currentType, true);
+
+  if (currentMainMode === "buying") {
+    loadBuyingProducts();
+  } else {
+    loadDeals(currentType, true);
+  }
 });
 
 function editDistance(a, b) {
@@ -510,11 +760,16 @@ searchInput.addEventListener("input", () => {
 
   searchTimer = setTimeout(() => {
     searchQuery = getForgivingSearchQuery(searchInput.value.trim());
-    loadDeals(currentType, true);
+    if (currentMainMode === "buying") {
+      loadBuyingProducts();
+    } else {
+      loadDeals(currentType, true);
+    }
   }, 350);
 });
 
 window.addEventListener("scroll", () => {
+  if (currentMainMode === "buying") return;
   if (!hasMore || isLoading) return;
 
   const distanceFromBottom =
