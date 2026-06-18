@@ -26,6 +26,11 @@ sortFilter.value = selectedSort;
 
 let currentMainMode = localStorage.getItem("kc_main_mode") || "selling";
 let currentBuyingProducts = [];
+let buyingInventoryType = localStorage.getItem("kc_buying_inventory_type") || "all";
+
+if (!["all", "b2b", "private"].includes(buyingInventoryType)) {
+  buyingInventoryType = "all";
+}
 
 let currentType = localStorage.getItem("kc_market_type") || "quick";
 let priceView = localStorage.getItem("kc_price_view") || "margin";
@@ -52,6 +57,22 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function renderBuyingInventoryTypeFilter() {
+  return `
+    <div class="buying-inventory-filter">
+      <button class="buying-inventory-filter-btn ${buyingInventoryType === "all" ? "active" : ""}" type="button" data-buying-inventory-type="all">
+        All Inventory
+      </button>
+      <button class="buying-inventory-filter-btn ${buyingInventoryType === "b2b" ? "active" : ""}" type="button" data-buying-inventory-type="b2b">
+        B2B Only
+      </button>
+      <button class="buying-inventory-filter-btn ${buyingInventoryType === "private" ? "active" : ""}" type="button" data-buying-inventory-type="private">
+        Private Only
+      </button>
+    </div>
+  `;
+}
+
 async function loadBuyingProducts() {
   if (isLoading) return;
 
@@ -70,6 +91,7 @@ async function loadBuyingProducts() {
 
     if (searchQuery) params.set("search", searchQuery);
     if (selectedBrand) params.set("brand", selectedBrand);
+    params.set("inventory_type", buyingInventoryType);
 
     if (selectedSort === "az" || selectedSort === "za") {
       params.set("sort", selectedSort);
@@ -164,7 +186,10 @@ function renderBuyingProducts() {
     return;
   }
 
-  dealsGrid.innerHTML = currentBuyingProducts.map(renderBuyingProductCard).join("");
+  dealsGrid.innerHTML = `
+    ${renderBuyingInventoryTypeFilter()}
+    ${currentBuyingProducts.map(renderBuyingProductCard).join("")}
+  `;
 }
 
 function openBuyingProductModal(productKey) {
@@ -192,31 +217,38 @@ function openBuyingProductModal(productKey) {
       </div>
     </div>
 
-    <div class="buying-size-list">
+    <div class="buying-size-table">
+      <div class="buying-size-table-head">
+        <div>Size</div>
+        <div>Lowest Price</div>
+        <div>ETA</div>
+        <div>Sources</div>
+        <div>Available Qty</div>
+        <div>Actions</div>
+      </div>
+    
       ${(product.sizes || []).map((size) => `
-        <div class="buying-size-row">
-          <div>
-            <div class="buying-size-main">Size ${escapeHtml(size.size || "-")}</div>
-            <div class="buying-size-sub">
-              ${Number(size.source_count || 0)} source${Number(size.source_count || 0) === 1 ? "" : "s"} available
-            </div>
+        <div class="buying-size-table-row">
+          <div class="buying-size-main">
+            ${escapeHtml(size.size || "-")}
           </div>
-
-          <div>
-            <div class="buying-size-price">
-              ${escapeHtml(size.lowest_price_display || "-")}
-              <span class="buying-vat-pill">${escapeHtml(size.lowest_vat_type || "Margin")}</span>
-            </div>
-            <div class="buying-size-sub">
-              ${escapeHtml(size.fastest_delivery_time || "-")}
-              ${
-                size.lowest_vat_type === "VAT0"
-                  ? ` · Compare: ${escapeHtml(size.sources?.[0]?.compare_price_display || "")} incl. VAT`
-                  : ""
-              }
-            </div>
+    
+          <div class="buying-size-price">
+            ${escapeHtml(size.lowest_price_display || "-")}
           </div>
-
+    
+          <div class="buying-size-sub">
+            ${escapeHtml(size.fastest_delivery_time || "-")}
+          </div>
+    
+          <div class="buying-size-sub">
+            ${Number(size.source_count || 0)}
+          </div>
+    
+          <div class="buying-size-sub">
+            ${Number(size.available_qty || 0)}
+          </div>
+    
           <div class="buying-size-actions">
             <button class="table-btn disabled-btn" type="button" disabled>Buy Now</button>
             <button class="table-btn offer-btn disabled-btn" type="button" disabled>Offer</button>
@@ -237,6 +269,15 @@ function closeBuyingProductFlow() {
 window.openBuyingProductModal = openBuyingProductModal;
 
 dealsGrid.addEventListener("click", (event) => {
+  const inventoryTypeButton = event.target.closest("[data-buying-inventory-type]");
+
+  if (inventoryTypeButton) {
+    buyingInventoryType = inventoryTypeButton.dataset.buyingInventoryType || "all";
+    localStorage.setItem("kc_buying_inventory_type", buyingInventoryType);
+    loadBuyingProducts();
+    return;
+  }
+
   const button = event.target.closest(".buying-view-sizes-btn");
 
   if (!button) return;
