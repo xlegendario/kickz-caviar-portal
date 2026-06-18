@@ -666,6 +666,9 @@ document.querySelectorAll(".view-btn").forEach((button) => {
   });
 });
 
+searchQuery = "";
+searchInput.value = "";
+
 syncMarketUi();
 
 if (currentMainMode === "buying") {
