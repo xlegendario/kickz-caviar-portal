@@ -143,7 +143,7 @@ function renderBuyingProductCard(product) {
         </div>
 
         <button
-          class="deal-btn"
+          class="deal-btn buying-view-sizes-btn"
           type="button"
           data-product-key="${escapeHtml(product.key)}"
         >
@@ -165,12 +165,6 @@ function renderBuyingProducts() {
   }
 
   dealsGrid.innerHTML = currentBuyingProducts.map(renderBuyingProductCard).join("");
-
-  dealsGrid.querySelectorAll(".buying-view-sizes-btn").forEach((button) => {
-    button.addEventListener("click", () => {
-      openBuyingProductModal(button.dataset.productKey);
-    });
-  });
 }
 
 function openBuyingProductModal(productKey) {
@@ -231,6 +225,14 @@ function closeBuyingProductFlow() {
 }
 
 window.openBuyingProductModal = openBuyingProductModal;
+
+dealsGrid.addEventListener("click", (event) => {
+  const button = event.target.closest(".buying-view-sizes-btn");
+
+  if (!button) return;
+
+  openBuyingProductModal(button.dataset.productKey);
+});
 
 closeBuyingProductModal?.addEventListener("click", closeBuyingProductFlow);
 
