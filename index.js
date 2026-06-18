@@ -7508,7 +7508,7 @@ function addBuyingSourceToProductMap(productMap, source, inventoryType = "all") 
 
   const product = productMap.get(productKey);
 
-  if (!product.image_url && source.image_url) {
+  if (source.image_url && (!product.image_url || source.source_type === "consignment")) {
     product.image_url = source.image_url;
   }
 
