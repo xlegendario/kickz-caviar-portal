@@ -21,10 +21,13 @@ const heroConsignorCta = document.getElementById("heroConsignorCta");
 
 let searchQuery = searchInput?.value?.trim() || "";
 let selectedBrand = "";
-let selectedSort = localStorage.getItem("kc_sort") || "newest";
-sortFilter.value = selectedSort;
-
 let currentMainMode = localStorage.getItem("kc_main_mode") || "selling";
+
+let sellingSort = localStorage.getItem("kc_selling_sort") || "newest";
+let buyingSort = localStorage.getItem("kc_buying_sort") || "az";
+let selectedSort = currentMainMode === "buying" ? buyingSort : sellingSort;
+
+sortFilter.value = selectedSort;
 let currentBuyingProducts = [];
 let buyingInventoryType = localStorage.getItem("kc_buying_inventory_type") || "all";
 
@@ -73,8 +76,13 @@ function renderBuyingInventoryTypeFilter() {
   `;
 }
 
-async function loadBuyingProducts() {
-  if (isLoading) return;
+let pendingBuyingReload = false;
+
+async function loadBuyingProducts(options = {}) {
+  if (isLoading) {
+    if (options.force) pendingBuyingReload = true;
+    return;
+  }
 
   try {
     isLoading = true;
@@ -122,6 +130,11 @@ async function loadBuyingProducts() {
   } finally {
     isLoading = false;
     document.getElementById("loadingMore")?.remove();
+    
+    if (pendingBuyingReload) {
+      pendingBuyingReload = false;
+      loadBuyingProducts({ force: true });
+    }
   }
 }
 
@@ -282,7 +295,7 @@ dealsGrid.addEventListener("click", (event) => {
   if (inventoryTypeButton) {
     buyingInventoryType = inventoryTypeButton.dataset.buyingInventoryType || "all";
     localStorage.setItem("kc_buying_inventory_type", buyingInventoryType);
-    loadBuyingProducts();
+    loadBuyingProducts({ force: true });
     return;
   }
 
@@ -676,11 +689,13 @@ mainToggleButtons.forEach((button) => {
     brandFilter.value = "";
     searchQuery = "";
     searchInput.value = "";
+    selectedSort = currentMainMode === "buying" ? buyingSort : sellingSort;
+    sortFilter.value = selectedSort;
 
     syncMarketUi();
 
     if (currentMainMode === "buying") {
-      loadBuyingProducts();
+      loadBuyingProducts({ force: true });
     } else {
       loadBrands();
       loadDeals(currentType, true);
@@ -739,7 +754,7 @@ searchInput.value = "";
 syncMarketUi();
 
 if (currentMainMode === "buying") {
-  loadBuyingProducts();
+  loadBuyingProducts({ force: true });
 } else {
   loadDeals(currentType);
 }
@@ -772,7 +787,7 @@ brandFilter.addEventListener("change", () => {
   selectedBrand = brandFilter.value;
 
   if (currentMainMode === "buying") {
-    loadBuyingProducts();
+    loadBuyingProducts({ force: true });
   } else {
     loadDeals(currentType, true);
   }
@@ -780,11 +795,14 @@ brandFilter.addEventListener("change", () => {
 
 sortFilter.addEventListener("change", () => {
   selectedSort = sortFilter.value;
-  localStorage.setItem("kc_sort", selectedSort);
 
   if (currentMainMode === "buying") {
-    loadBuyingProducts();
+    buyingSort = selectedSort;
+    localStorage.setItem("kc_buying_sort", buyingSort);
+    loadBuyingProducts({ force: true });
   } else {
+    sellingSort = selectedSort;
+    localStorage.setItem("kc_selling_sort", sellingSort);
     loadDeals(currentType, true);
   }
 });
@@ -837,7 +855,7 @@ searchInput.addEventListener("input", () => {
   searchTimer = setTimeout(() => {
     searchQuery = getForgivingSearchQuery(searchInput.value.trim());
     if (currentMainMode === "buying") {
-      loadBuyingProducts();
+      loadBuyingProducts({ force: true });
     } else {
       loadDeals(currentType, true);
     }
