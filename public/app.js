@@ -78,12 +78,15 @@ function renderBuyingInventoryTypeFilter() {
 }
 
 let pendingBuyingReload = false;
+let buyingRequestSeq = 0;
 
 async function loadBuyingProducts(options = {}) {
   if (isBuyingLoading) {
     if (options.force) pendingBuyingReload = true;
     return;
   }
+
+  const requestSeq = ++buyingRequestSeq;
 
   try {
     isBuyingLoading = true;
@@ -117,8 +120,12 @@ async function loadBuyingProducts(options = {}) {
       throw new Error(data.details || data.error || "Failed to load buying products");
     }
 
+    if (requestSeq !== buyingRequestSeq || pendingBuyingReload) {
+      return;
+    }
+    
     currentBuyingProducts = data.products || [];
-
+    
     renderBuyingProducts();
   } catch (err) {
     console.error(err);
@@ -132,7 +139,7 @@ async function loadBuyingProducts(options = {}) {
     isBuyingLoading = false;
     document.getElementById("loadingMore")?.remove();
     
-    if (pendingBuyingReload) {
+    if (requestSeq === buyingRequestSeq && pendingBuyingReload) {
       pendingBuyingReload = false;
       loadBuyingProducts({ force: true });
     }
