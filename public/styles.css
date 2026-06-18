@@ -1771,3 +1771,15 @@ body {
     flex: 1;
   }
 }
+
+.buying-vat-pill {
+  display: inline-flex;
+  margin-left: 6px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #242424;
+  color: #f5c542;
+  font-size: 10px;
+  font-weight: 900;
+  vertical-align: middle;
+}
