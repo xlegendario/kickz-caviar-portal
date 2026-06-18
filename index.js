@@ -7537,7 +7537,6 @@ app.get("/api/buying/products", async (req, res) => {
         maxRecords: 500
       })
       .all();
-      });
 
     inventoryRecords
       .map(getBuyingInventoryProduct)
