@@ -59,6 +59,10 @@ const COUNTER_OFFER_ACCEPT_WEBHOOK_URL =
 const SKU_MASTER_TABLE = process.env.AIRTABLE_SKU_MASTER_TABLE || "SKU Master";
 const STOCK_LEVELS_TABLE = process.env.AIRTABLE_STOCK_LEVELS_TABLE || "Stock Levels";
 const MERCHANTS_TABLE = process.env.AIRTABLE_MERCHANTS_TABLE || "Merchants";
+const MEMBER_WTBS_TABLE = process.env.AIRTABLE_MEMBER_WTBS_TABLE || "Member WTB's";
+
+const BUYING_KC_DELIVERY_TIME = "1-2 business days";
+const BUYING_CONSIGNMENT_DELIVERY_TIME = "1-2 business days";
 
 const CONSIGNMENT_APPLICATIONS_BUCKET =
   process.env.CONSIGNMENT_APPLICATIONS_BUCKET ||
@@ -7352,6 +7356,271 @@ app.get("/api/deals", async (req, res) => {
 
     res.status(500).json({
       error: "Failed to load deals",
+      details: err.message
+    });
+  }
+});
+
+function buyingMoneyValue(value) {
+  const n = Number(value);
+
+  if (!Number.isFinite(n) || n <= 0) return "";
+
+  return new Intl.NumberFormat("nl-NL", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: 0,
+    minimumFractionDigits: 0
+  }).format(Math.ceil(n));
+}
+
+function getBuyingProductKey(source) {
+  return [
+    asText(source.sku).toUpperCase(),
+    asText(source.product_name).toLowerCase()
+  ].filter(Boolean).join("::");
+}
+
+function getBuyingSizeKey(size) {
+  return asText(size).toUpperCase();
+}
+
+function getBuyingInventoryPrice(fields) {
+  return (
+    numberValue(fields["Selling Price"]) ||
+    numberValue(fields["Listed Price"]) ||
+    numberValue(fields["Shopify Selling Price"]) ||
+    numberValue(fields["Price"]) ||
+    numberValue(fields["Purchase Price"])
+  );
+}
+
+function getBuyingInventoryProduct(record) {
+  const f = record.fields || {};
+
+  return {
+    source_type: "kc_owned",
+    source_label: "KC Owned",
+    source_id: record.id,
+    product_name: displayValue(f["Product Name"]),
+    sku: displayValue(f["SKU"]),
+    size: displayValue(f["Size"]),
+    brand: displayValue(f["Brand"]),
+    image_url: getImageUrl(f["Picture"]) || getImageUrl(f["Image"]),
+    price: getBuyingInventoryPrice(f),
+    delivery_time: BUYING_KC_DELIVERY_TIME,
+    quantity: 1
+  };
+}
+
+function getBuyingConsignmentProduct(row) {
+  return {
+    source_type: "consignment",
+    source_label: "Consignment",
+    source_id: row.id,
+    product_name: asText(row.product_name),
+    sku: asText(row.sku),
+    size: asText(row.size),
+    brand: asText(row.brand),
+    image_url: asText(row.image_url || row.image || row.picture_url),
+    price: Number(row.selling_price_suggested || row.selling_price || 0),
+    delivery_time: BUYING_CONSIGNMENT_DELIVERY_TIME,
+    quantity: Number(row.quantity || 0)
+  };
+}
+
+function addBuyingSourceToProductMap(productMap, source) {
+  if (!source.sku || !source.size || !source.price) return;
+
+  const productKey = getBuyingProductKey(source);
+  const sizeKey = getBuyingSizeKey(source.size);
+
+  if (!productMap.has(productKey)) {
+    productMap.set(productKey, {
+      key: productKey,
+      product_name: source.product_name || source.sku,
+      sku: source.sku,
+      brand: source.brand,
+      image_url: source.image_url,
+      sizes: new Map(),
+      all_sources: []
+    });
+  }
+
+  const product = productMap.get(productKey);
+
+  if (!product.image_url && source.image_url) {
+    product.image_url = source.image_url;
+  }
+
+  if (!product.brand && source.brand) {
+    product.brand = source.brand;
+  }
+
+  if (!product.sizes.has(sizeKey)) {
+    product.sizes.set(sizeKey, {
+      size: source.size,
+      lowest_price: source.price,
+      lowest_price_display: buyingMoneyValue(source.price),
+      fastest_delivery_time: source.delivery_time,
+      source_count: 0,
+      sources: []
+    });
+  }
+
+  const size = product.sizes.get(sizeKey);
+
+  size.sources.push(source);
+  size.source_count = size.sources.length;
+
+  if (source.price < size.lowest_price) {
+    size.lowest_price = source.price;
+    size.lowest_price_display = buyingMoneyValue(source.price);
+    size.fastest_delivery_time = source.delivery_time;
+  }
+
+  product.all_sources.push(source);
+}
+
+function normalizeBuyingProducts(productMap) {
+  return [...productMap.values()].map((product) => {
+    const sizes = [...product.sizes.values()]
+      .map((size) => ({
+        ...size,
+        sources: size.sources
+          .sort((a, b) => Number(a.price || 0) - Number(b.price || 0))
+          .map((source) => ({
+            ...source,
+            price_display: buyingMoneyValue(source.price)
+          }))
+      }))
+      .sort((a, b) => String(a.size).localeCompare(String(b.size), undefined, { numeric: true }));
+
+    const lowestPrice = Math.min(...sizes.map((size) => Number(size.lowest_price || 0)).filter(Boolean));
+
+    return {
+      key: product.key,
+      product_name: product.product_name,
+      sku: product.sku,
+      brand: product.brand,
+      image_url: product.image_url,
+      from_price: Number.isFinite(lowestPrice) ? lowestPrice : 0,
+      from_price_display: buyingMoneyValue(lowestPrice),
+      size_count: sizes.length,
+      fastest_delivery_time: sizes.some((size) => size.fastest_delivery_time === BUYING_KC_DELIVERY_TIME)
+        ? BUYING_KC_DELIVERY_TIME
+        : BUYING_CONSIGNMENT_DELIVERY_TIME,
+      sizes
+    };
+  });
+}
+
+app.get("/api/buying/products", async (req, res) => {
+  try {
+    const search = asText(req.query.search).toLowerCase();
+    const brand = asText(req.query.brand);
+    const sort = asText(req.query.sort) || "price_low";
+
+    const productMap = new Map();
+
+    const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
+      .select({
+        fields: [
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "Picture",
+          "Image",
+          "Selling Price",
+          "Listed Price",
+          "Shopify Selling Price",
+          "Price",
+          "Purchase Price",
+          "Availability Status",
+          "Verification Status"
+        ],
+        filterByFormula: `AND(
+          OR(
+            {Availability Status} = 'Available',
+            {Availability Status} = 'In Stock',
+            {Availability Status} = 'Available Stock'
+          ),
+          {SKU} != '',
+          {Size} != ''
+        )`,
+        maxRecords: 500
+      })
+      .all()
+      .catch(async () => {
+        return airtable(INVENTORY_UNITS_TABLE)
+          .select({
+            maxRecords: 500
+          })
+          .all();
+      });
+
+    inventoryRecords
+      .map(getBuyingInventoryProduct)
+      .forEach((source) => addBuyingSourceToProductMap(productMap, source));
+
+    const { data: consignmentRows, error: consignmentError } = await supabase
+      .from("consignment_inventory")
+      .select(`
+        id,
+        product_name,
+        sku,
+        size,
+        brand,
+        vat_type,
+        selling_price_suggested,
+        selling_price,
+        quantity
+      `)
+      .gt("quantity", 0);
+
+    if (consignmentError) throw consignmentError;
+
+    (consignmentRows || [])
+      .map(getBuyingConsignmentProduct)
+      .forEach((source) => addBuyingSourceToProductMap(productMap, source));
+
+    let products = normalizeBuyingProducts(productMap);
+
+    if (brand) {
+      products = products.filter((product) => product.brand === brand);
+    }
+
+    if (search) {
+      products = products.filter((product) =>
+        [
+          product.product_name,
+          product.sku,
+          product.brand,
+          ...product.sizes.map((size) => size.size)
+        ].join(" ").toLowerCase().includes(search)
+      );
+    }
+
+    if (sort === "az") {
+      products.sort((a, b) => a.product_name.localeCompare(b.product_name));
+    } else if (sort === "za") {
+      products.sort((a, b) => b.product_name.localeCompare(a.product_name));
+    } else if (sort === "price_high") {
+      products.sort((a, b) => Number(b.from_price || 0) - Number(a.from_price || 0));
+    } else {
+      products.sort((a, b) => Number(a.from_price || 0) - Number(b.from_price || 0));
+    }
+
+    res.json({
+      count: products.length,
+      products
+    });
+  } catch (err) {
+    console.error("Failed to load buying products:", err);
+
+    res.status(500).json({
+      error: "Failed to load buying products",
       details: err.message
     });
   }
