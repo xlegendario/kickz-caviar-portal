@@ -7720,9 +7720,11 @@ app.get("/api/buying/products", async (req, res) => {
         vat_type,
         selling_price_suggested,
         quantity,
+        stock_level,
         image_url
       `)
-      .gt("quantity", 0);
+      .gt("stock_level", 0)
+      .gt("selling_price_suggested", 0);
 
     if (consignmentError) throw consignmentError;
 
