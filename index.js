@@ -7421,9 +7421,11 @@ function getBuyingConsignmentProduct(row, imageMap = new Map()) {
     size: asText(row.size),
     brand: asText(row.brand),
     image_url: asText(row.image_url) || imageMap.get(sku) || "",
-    price: Number(row.selling_price_suggested || 0),
+    price: Number(row.selling_price_suggested || 0) + 10,
+    seller_price: Number(row.selling_price_suggested || 0),
+    kc_markup: 10,
     vat_type: normalizeBuyingVatType(row.vat_type),
-    compare_price: getBuyingComparePrice(row.selling_price_suggested, row.vat_type),
+    compare_price: getBuyingComparePrice(Number(row.selling_price_suggested || 0) + 10, row.vat_type),
     delivery_time: BUYING_CONSIGNMENT_DELIVERY_TIME,
     quantity: Number(row.quantity || 0)
   };
