@@ -1783,3 +1783,125 @@ body {
   font-weight: 900;
   vertical-align: middle;
 }
+
+.buying-inventory-filter {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px;
+  margin-bottom: 4px;
+  border-radius: 14px;
+  background: #151515;
+  border: 1px solid #262626;
+}
+
+.buying-inventory-filter-btn {
+  height: 42px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: #999;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.buying-inventory-filter-btn.active {
+  background: linear-gradient(180deg, #fff27a, #f0a500);
+  color: black;
+}
+
+.buying-size-table {
+  display: grid;
+  gap: 8px;
+}
+
+.buying-size-table-head,
+.buying-size-table-row {
+  display: grid;
+  grid-template-columns: 90px 150px 120px 90px 120px 190px;
+  gap: 12px;
+  align-items: center;
+}
+
+.buying-size-table-head {
+  padding: 0 14px 8px;
+  color: #777;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.buying-size-table-row {
+  padding: 14px;
+  border-radius: 18px;
+  background: #101010;
+  border: 1px solid #242424;
+}
+
+.buying-size-main {
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.buying-size-price {
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.buying-size-sub {
+  color: #aaa;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.buying-size-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 840px) {
+  .buying-inventory-filter {
+    width: 100%;
+  }
+
+  .buying-inventory-filter-btn {
+    flex: 1;
+    padding: 0 10px;
+  }
+
+  .buying-size-table-head {
+    display: none;
+  }
+
+  .buying-size-table-row {
+    grid-template-columns: 1fr;
+  }
+
+  .buying-size-table-row > div::before {
+    display: block;
+    margin-bottom: 4px;
+    color: #777;
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+  }
+
+  .buying-size-table-row > div:nth-child(1)::before { content: "Size"; }
+  .buying-size-table-row > div:nth-child(2)::before { content: "Lowest Price"; }
+  .buying-size-table-row > div:nth-child(3)::before { content: "ETA"; }
+  .buying-size-table-row > div:nth-child(4)::before { content: "Sources"; }
+  .buying-size-table-row > div:nth-child(5)::before { content: "Available Qty"; }
+
+  .buying-size-actions {
+    justify-content: stretch;
+  }
+
+  .buying-size-actions button {
+    flex: 1;
+  }
+}
