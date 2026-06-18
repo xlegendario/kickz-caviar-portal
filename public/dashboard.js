@@ -951,7 +951,7 @@ function renderConsignmentOfferRows(items) {
             Number(item.offer_price || 0) < Number(item.seller_price || 0)
               ? `
                 <button
-                  class="dashboard-action-btn"
+                  class="dashboard-counter-btn"
                   type="button"
                   data-consignment-counter-offer-id="${escapeHtml(item.id || "")}"
                 >
@@ -3214,7 +3214,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
         await loadDashboardData();
         await loadDashboardCounts();
       } catch (err) {
-        alert(err.message);
+        alert("Could not submit counter offer. Please try again or contact support.");
       } finally {
         consignmentCounterOfferButton.disabled = false;
         consignmentCounterOfferButton.textContent = "Counter";
