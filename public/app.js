@@ -145,7 +145,7 @@ function renderBuyingProductCard(product) {
         <button
           class="deal-btn"
           type="button"
-          onclick="openBuyingProductModal('${escapeHtml(product.key)}')"
+          data-product-key="${escapeHtml(product.key)}"
         >
           View Sizes
         </button>
@@ -165,6 +165,12 @@ function renderBuyingProducts() {
   }
 
   dealsGrid.innerHTML = currentBuyingProducts.map(renderBuyingProductCard).join("");
+
+  dealsGrid.querySelectorAll(".buying-view-sizes-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      openBuyingProductModal(button.dataset.productKey);
+    });
+  });
 }
 
 function openBuyingProductModal(productKey) {
