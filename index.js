@@ -63,7 +63,7 @@ const MEMBER_WTBS_TABLE = process.env.AIRTABLE_MEMBER_WTBS_TABLE || "Member WTB'
 
 const BUYING_KC_DELIVERY_TIME = "1-2 business days";
 const BUYING_CONSIGNMENT_DELIVERY_TIME = "1-2 business days";
-const BUYING_PRODUCTS_CACHE_TTL_MS = 30 * 1000;
+const BUYING_PRODUCTS_CACHE_TTL_MS = 2 * 60 * 1000;
 const buyingProductsCache = new Map();
 
 const CONSIGNMENT_APPLICATIONS_BUCKET =
