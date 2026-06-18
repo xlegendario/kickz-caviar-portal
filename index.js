@@ -7416,6 +7416,8 @@ function getBuyingConsignmentProduct(row, imageMap = new Map()) {
     source_type: "consignment",
     source_label: "Consignment",
     source_id: row.id,
+    seller_record_id: asText(row.seller_record_id),
+    seller_id: asText(row.seller_id),
     product_name: asText(row.product_name),
     sku,
     size: asText(row.size),
@@ -7497,7 +7499,15 @@ function addBuyingSourceToProductMap(productMap, source) {
   const size = product.sizes.get(sizeKey);
 
   size.sources.push(source);
-  size.source_count = size.sources.length;
+
+  const sourceGroups = new Set(
+    size.sources.map((item) => {
+      if (item.source_type === "kc_owned") return "kc_owned";
+      return `${item.source_type}:${item.seller_record_id || item.source_id}`;
+    })
+  );
+  
+  size.source_count = sourceGroups.size;
 
   if (source.compare_price < size.lowest_compare_price) {
     size.lowest_price = source.price;
@@ -7748,6 +7758,8 @@ app.get("/api/buying/products", async (req, res) => {
       .from("consignment_inventory")
       .select(`
         id,
+        seller_record_id,
+        seller_id,
         product_name,
         sku,
         size,
