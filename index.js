@@ -7403,7 +7403,6 @@ function getBuyingInventoryProduct(record) {
     image_url: getImageUrl(f["Picture"]) || getImageUrl(f["Image"]),
     price: getBuyingInventoryPrice(f),
     vat_type: normalizeBuyingVatType(f["VAT Type"]),
-    price: getBuyingInventoryPrice(f),
     compare_price: getBuyingComparePrice(getBuyingInventoryPrice(f), f["VAT Type"]),
     delivery_time: BUYING_KC_DELIVERY_TIME,
     quantity: 1
@@ -7424,7 +7423,6 @@ function getBuyingConsignmentProduct(row, imageMap = new Map()) {
     image_url: asText(row.image_url) || imageMap.get(sku) || "",
     price: Number(row.selling_price_suggested || 0),
     vat_type: normalizeBuyingVatType(row.vat_type),
-    price: Number(row.selling_price_suggested || 0),
     compare_price: getBuyingComparePrice(row.selling_price_suggested, row.vat_type),
     delivery_time: BUYING_CONSIGNMENT_DELIVERY_TIME,
     quantity: Number(row.quantity || 0)
@@ -7727,6 +7725,7 @@ app.get("/api/buying/products", async (req, res) => {
           "Brand",
           "Picture",
           "Ideal Selling Price",
+          "VAT Type",
           "Availability Status"
         ],
         filterByFormula: `AND(
