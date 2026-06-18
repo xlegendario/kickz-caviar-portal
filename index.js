@@ -7868,7 +7868,11 @@ app.get("/api/buying/products", async (req, res) => {
       const stockKey = getStockCounterKey(row.sku, row.size);
       const stockInfo = consignmentStockLevelMap.get(stockKey);
     
-      return Number(stockInfo?.stock_level || 0) > 0;
+      return (
+        Number(row.quantity || 0) > 0 &&
+        Number(row.selling_price_suggested || 0) > 0 &&
+        Number(stockInfo?.stock_level || 0) > 0
+      );
     });
 
     const consignmentImageMap = await buildConsignmentImageMap(consignmentRows || []);
