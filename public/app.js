@@ -640,6 +640,8 @@ marketTabs.forEach((tab) => {
 
 priceViewButtons.forEach((button) => {
   button.addEventListener("click", () => {
+    if (currentMainMode === "buying") return;
+
     priceView = button.dataset.priceView;
 
     localStorage.setItem("kc_price_view", priceView);
@@ -651,6 +653,8 @@ priceViewButtons.forEach((button) => {
 
 document.querySelectorAll(".view-btn").forEach((button) => {
   button.addEventListener("click", () => {
+    if (currentMainMode === "buying") return;
+
     layoutView = button.dataset.view;
 
     localStorage.setItem("kc_layout_view", layoutView);
