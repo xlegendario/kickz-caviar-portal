@@ -7877,7 +7877,9 @@ app.get("/api/buying/products", async (req, res) => {
 
     const consignmentImageMap = await buildConsignmentImageMap(consignmentRows || []);
 
-    await cacheConsignmentImages(consignmentRows || [], consignmentImageMap);
+    cacheConsignmentImages(consignmentRows || [], consignmentImageMap).catch((err) => {
+      console.error("Failed to cache consignment images:", err);
+    });
     
     (consignmentRows || [])
       .map((row) => getBuyingConsignmentProduct(row, consignmentImageMap))
