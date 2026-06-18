@@ -7452,8 +7452,41 @@ function getBuyingComparePrice(price, vatType) {
   return cleanVatType === "VAT0" ? n * 1.21 : n;
 }
 
-function addBuyingSourceToProductMap(productMap, source) {
+function isBuyingB2BSource(source) {
+  const vatType = normalizeBuyingVatType(source.vat_type);
+  return vatType === "VAT0" || vatType === "VAT21";
+}
+
+function isBuyingPrivateSource(source) {
+  return normalizeBuyingVatType(source.vat_type) === "Margin";
+}
+
+function sourceMatchesBuyingInventoryType(source, inventoryType) {
+  if (inventoryType === "b2b") return isBuyingB2BSource(source);
+  if (inventoryType === "private") return isBuyingPrivateSource(source);
+  return true;
+}
+
+function getBuyingDisplayPrice(price, vatType, inventoryType) {
+  const n = Number(price || 0);
+  const cleanVatType = normalizeBuyingVatType(vatType);
+
+  if (!Number.isFinite(n) || n <= 0) return 0;
+
+  if (inventoryType === "all" && cleanVatType === "VAT0") {
+    return n * 1.21;
+  }
+
+  return n;
+}
+
+function addBuyingSourceToProductMap(productMap, source, inventoryType = "all") {
   if (!source.sku || !source.size || !source.price) return;
+  if (!sourceMatchesBuyingInventoryType(source, inventoryType)) return;
+
+  source.display_price = getBuyingDisplayPrice(source.price, source.vat_type, inventoryType);
+  source.compare_price = source.display_price;
+  source.vat_type = normalizeBuyingVatType(source.vat_type);
 
   source.compare_price = source.compare_price || getBuyingComparePrice(source.price, source.vat_type);
   source.vat_type = normalizeBuyingVatType(source.vat_type);
@@ -7486,10 +7519,11 @@ function addBuyingSourceToProductMap(productMap, source) {
   if (!product.sizes.has(sizeKey)) {
     product.sizes.set(sizeKey, {
       size: source.size,
-      lowest_price: source.price,
+      lowest_price: source.display_price,
       lowest_compare_price: source.compare_price,
-      lowest_price_display: buyingMoneyValue(source.price),
+      lowest_price_display: buyingMoneyValue(source.display_price),
       lowest_vat_type: source.vat_type,
+      available_qty: Number(source.quantity || 1),
       fastest_delivery_time: source.delivery_time,
       source_count: 0,
       sources: []
@@ -7510,12 +7544,17 @@ function addBuyingSourceToProductMap(productMap, source) {
   size.source_count = sourceGroups.size;
 
   if (source.compare_price < size.lowest_compare_price) {
-    size.lowest_price = source.price;
+    size.lowest_price = source.display_price;
     size.lowest_compare_price = source.compare_price;
-    size.lowest_price_display = buyingMoneyValue(source.price);
+    size.lowest_price_display = buyingMoneyValue(source.display_price);
     size.lowest_vat_type = source.vat_type;
     size.fastest_delivery_time = source.delivery_time;
   }
+
+  size.available_qty = size.sources.reduce(
+    (sum, item) => sum + Number(item.quantity || 1),
+    0
+  );
 
   product.all_sources.push(source);
 }
@@ -7725,6 +7764,7 @@ app.get("/api/buying/products", async (req, res) => {
     const search = asText(req.query.search).toLowerCase();
     const brand = asText(req.query.brand);
     const sort = asText(req.query.sort) || "price_low";
+    const inventoryType = asText(req.query.inventory_type) || "all";
 
     const productMap = new Map();
 
@@ -7752,7 +7792,7 @@ app.get("/api/buying/products", async (req, res) => {
 
     inventoryRecords
       .map(getBuyingInventoryProduct)
-      .forEach((source) => addBuyingSourceToProductMap(productMap, source));
+      .forEach((source) => addBuyingSourceToProductMap(productMap, source, inventoryType));
 
     const { data: rawConsignmentRows, error: consignmentError } = await supabase
       .from("consignment_inventory")
@@ -7817,7 +7857,7 @@ app.get("/api/buying/products", async (req, res) => {
     
     (consignmentRows || [])
       .map((row) => getBuyingConsignmentProduct(row, consignmentImageMap))
-      .forEach((source) => addBuyingSourceToProductMap(productMap, source));
+      .forEach((source) => addBuyingSourceToProductMap(productMap, source, inventoryType));
 
     let products = normalizeBuyingProducts(productMap);
 
