@@ -7386,13 +7386,7 @@ function getBuyingSizeKey(size) {
 }
 
 function getBuyingInventoryPrice(fields) {
-  return (
-    numberValue(fields["Selling Price"]) ||
-    numberValue(fields["Listed Price"]) ||
-    numberValue(fields["Shopify Selling Price"]) ||
-    numberValue(fields["Price"]) ||
-    numberValue(fields["Purchase Price"])
-  );
+  return numberValue(fields["Ideal Selling Price"]);
 }
 
 function getBuyingInventoryProduct(record) {
@@ -7423,7 +7417,7 @@ function getBuyingConsignmentProduct(row) {
     size: asText(row.size),
     brand: asText(row.brand),
     image_url: asText(row.image_url || row.image || row.picture_url),
-    price: Number(row.selling_price_suggested || row.selling_price || 0),
+    price: Number(row.selling_price_suggested || 0),
     delivery_time: BUYING_CONSIGNMENT_DELIVERY_TIME,
     quantity: Number(row.quantity || 0)
   };
@@ -7531,33 +7525,18 @@ app.get("/api/buying/products", async (req, res) => {
           "Size",
           "Brand",
           "Picture",
-          "Image",
-          "Selling Price",
-          "Listed Price",
-          "Shopify Selling Price",
-          "Price",
-          "Purchase Price",
-          "Availability Status",
-          "Verification Status"
+          "Ideal Selling Price",
+          "Availability Status"
         ],
         filterByFormula: `AND(
-          OR(
-            {Availability Status} = 'Available',
-            {Availability Status} = 'In Stock',
-            {Availability Status} = 'Available Stock'
-          ),
+          {Availability Status} = 'Available',
           {SKU} != '',
-          {Size} != ''
+          {Size} != '',
+          {Ideal Selling Price} > 0
         )`,
         maxRecords: 500
       })
-      .all()
-      .catch(async () => {
-        return airtable(INVENTORY_UNITS_TABLE)
-          .select({
-            maxRecords: 500
-          })
-          .all();
+      .all();
       });
 
     inventoryRecords
@@ -7574,7 +7553,6 @@ app.get("/api/buying/products", async (req, res) => {
         brand,
         vat_type,
         selling_price_suggested,
-        selling_price,
         quantity
       `)
       .gt("quantity", 0);
