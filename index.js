@@ -63,6 +63,8 @@ const MEMBER_WTBS_TABLE = process.env.AIRTABLE_MEMBER_WTBS_TABLE || "Member WTB'
 
 const BUYING_KC_DELIVERY_TIME = "1-2 business days";
 const BUYING_CONSIGNMENT_DELIVERY_TIME = "1-2 business days";
+const BUYING_PRODUCTS_CACHE_TTL_MS = 30 * 1000;
+const buyingProductsCache = new Map();
 
 const CONSIGNMENT_APPLICATIONS_BUCKET =
   process.env.CONSIGNMENT_APPLICATIONS_BUCKET ||
@@ -7785,6 +7787,18 @@ app.get("/api/buying/products", async (req, res) => {
     const brand = asText(req.query.brand);
     const sort = asText(req.query.sort) || "price_low";
     const inventoryType = asText(req.query.inventory_type) || "all";
+    const cacheKey = JSON.stringify({
+      search,
+      brand,
+      sort,
+      inventoryType
+    });
+    
+    const cached = buyingProductsCache.get(cacheKey);
+    
+    if (cached && Date.now() - cached.createdAt < BUYING_PRODUCTS_CACHE_TTL_MS) {
+      return res.json(cached.payload);
+    }
 
     const productMap = new Map();
 
@@ -7912,10 +7926,17 @@ app.get("/api/buying/products", async (req, res) => {
       products.sort((a, b) => Number(a.from_price || 0) - Number(b.from_price || 0));
     }
 
-    res.json({
+    const payload = {
       count: products.length,
       products
+    };
+    
+    buyingProductsCache.set(cacheKey, {
+      createdAt: Date.now(),
+      payload
     });
+    
+    res.json(payload);
   } catch (err) {
     console.error("Failed to load buying products:", err);
 
