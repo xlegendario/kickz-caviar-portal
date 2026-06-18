@@ -7402,6 +7402,9 @@ function getBuyingInventoryProduct(record) {
     brand: displayValue(f["Brand"]),
     image_url: getImageUrl(f["Picture"]) || getImageUrl(f["Image"]),
     price: getBuyingInventoryPrice(f),
+    vat_type: normalizeBuyingVatType(f["VAT Type"]),
+    price: getBuyingInventoryPrice(f),
+    compare_price: getBuyingComparePrice(getBuyingInventoryPrice(f), f["VAT Type"]),
     delivery_time: BUYING_KC_DELIVERY_TIME,
     quantity: 1
   };
@@ -7420,13 +7423,38 @@ function getBuyingConsignmentProduct(row, imageMap = new Map()) {
     brand: asText(row.brand),
     image_url: asText(row.image_url) || imageMap.get(sku) || "",
     price: Number(row.selling_price_suggested || 0),
+    vat_type: normalizeBuyingVatType(row.vat_type),
+    price: Number(row.selling_price_suggested || 0),
+    compare_price: getBuyingComparePrice(row.selling_price_suggested, row.vat_type),
     delivery_time: BUYING_CONSIGNMENT_DELIVERY_TIME,
     quantity: Number(row.quantity || 0)
   };
 }
 
+function normalizeBuyingVatType(value) {
+  const vatType = asText(value);
+
+  if (vatType.toUpperCase() === "VAT0") return "VAT0";
+  if (vatType.toUpperCase() === "VAT21") return "VAT21";
+  if (vatType.toLowerCase() === "margin") return "Margin";
+
+  return vatType || "Margin";
+}
+
+function getBuyingComparePrice(price, vatType) {
+  const n = Number(price || 0);
+  const cleanVatType = normalizeBuyingVatType(vatType);
+
+  if (!Number.isFinite(n) || n <= 0) return 0;
+
+  return cleanVatType === "VAT0" ? n * 1.21 : n;
+}
+
 function addBuyingSourceToProductMap(productMap, source) {
   if (!source.sku || !source.size || !source.price) return;
+
+  source.compare_price = source.compare_price || getBuyingComparePrice(source.price, source.vat_type);
+  source.vat_type = normalizeBuyingVatType(source.vat_type);
 
   const productKey = getBuyingProductKey(source);
   const sizeKey = getBuyingSizeKey(source.size);
@@ -7457,7 +7485,9 @@ function addBuyingSourceToProductMap(productMap, source) {
     product.sizes.set(sizeKey, {
       size: source.size,
       lowest_price: source.price,
+      lowest_compare_price: source.compare_price,
       lowest_price_display: buyingMoneyValue(source.price),
+      lowest_vat_type: source.vat_type,
       fastest_delivery_time: source.delivery_time,
       source_count: 0,
       sources: []
@@ -7469,9 +7499,11 @@ function addBuyingSourceToProductMap(productMap, source) {
   size.sources.push(source);
   size.source_count = size.sources.length;
 
-  if (source.price < size.lowest_price) {
+  if (source.compare_price < size.lowest_compare_price) {
     size.lowest_price = source.price;
+    size.lowest_compare_price = source.compare_price;
     size.lowest_price_display = buyingMoneyValue(source.price);
+    size.lowest_vat_type = source.vat_type;
     size.fastest_delivery_time = source.delivery_time;
   }
 
@@ -7487,7 +7519,9 @@ function normalizeBuyingProducts(productMap) {
           .sort((a, b) => Number(a.price || 0) - Number(b.price || 0))
           .map((source) => ({
             ...source,
-            price_display: buyingMoneyValue(source.price)
+            price_display: buyingMoneyValue(source.price),
+            compare_price_display: buyingMoneyValue(source.compare_price),
+            vat_type: source.vat_type
           }))
       }))
       .sort((a, b) => String(a.size).localeCompare(String(b.size), undefined, { numeric: true }));
