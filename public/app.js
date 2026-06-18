@@ -50,6 +50,7 @@ let currentDeals = [];
 let nextOffset = "";
 let hasMore = false;
 let isLoading = false;
+let isBuyingLoading = false;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -79,13 +80,13 @@ function renderBuyingInventoryTypeFilter() {
 let pendingBuyingReload = false;
 
 async function loadBuyingProducts(options = {}) {
-  if (isLoading) {
+  if (isBuyingLoading) {
     if (options.force) pendingBuyingReload = true;
     return;
   }
 
   try {
-    isLoading = true;
+    isBuyingLoading = true;
 
     currentBuyingProducts = [];
 
@@ -128,7 +129,7 @@ async function loadBuyingProducts(options = {}) {
       </div>
     `;
   } finally {
-    isLoading = false;
+    isBuyingLoading = false;
     document.getElementById("loadingMore")?.remove();
     
     if (pendingBuyingReload) {
