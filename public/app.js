@@ -67,7 +67,7 @@ function renderBuyingInventoryTypeFilter() {
         B2B Only
       </button>
       <button class="buying-inventory-filter-btn ${buyingInventoryType === "private" ? "active" : ""}" type="button" data-buying-inventory-type="private">
-        Private Only
+        Margin Only
       </button>
     </div>
   `;
