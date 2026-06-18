@@ -203,8 +203,18 @@ function openBuyingProductModal(productKey) {
           </div>
 
           <div>
-            <div class="buying-size-price">${escapeHtml(size.lowest_price_display || "-")}</div>
-            <div class="buying-size-sub">${escapeHtml(size.fastest_delivery_time || "-")}</div>
+            <div class="buying-size-price">
+              ${escapeHtml(size.lowest_price_display || "-")}
+              <span class="buying-vat-pill">${escapeHtml(size.lowest_vat_type || "Margin")}</span>
+            </div>
+            <div class="buying-size-sub">
+              ${escapeHtml(size.fastest_delivery_time || "-")}
+              ${
+                size.lowest_vat_type === "VAT0"
+                  ? ` · Compare: ${escapeHtml(size.sources?.[0]?.compare_price_display || "")} incl. VAT`
+                  : ""
+              }
+            </div>
           </div>
 
           <div class="buying-size-actions">
