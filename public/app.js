@@ -86,7 +86,7 @@ function renderBuyingInventoryTypeFilter() {
 }
 
 let selectedBuyingAction = null;
-let pendingBuyingAction = null;
+let pendingBuyingProductKey = null;
 let pendingBuyingReload = false;
 let buyingRequestSeq = 0;
 
@@ -343,11 +343,7 @@ function getBuyingInventoryTypeLabel() {
 
 function openBuyingActionFlow(action, productKey, sizeValue) {
   if (!currentSeller) {
-    pendingBuyingAction = {
-      action,
-      productKey,
-      sizeValue
-    };
+    pendingBuyingProductKey = productKey;
   
     closeBuyingProductFlow();
     openLoginModal();
@@ -1191,16 +1187,12 @@ loginForm.addEventListener("submit", async (event) => {
     updateLoginState();
     closeModal();
     
-    if (pendingBuyingAction) {
-      const pending = pendingBuyingAction;
-      pendingBuyingAction = null;
+    if (pendingBuyingProductKey) {
+      const productKey = pendingBuyingProductKey;
+      pendingBuyingProductKey = null;
     
       setTimeout(() => {
-        openBuyingActionFlow(
-          pending.action,
-          pending.productKey,
-          pending.sizeValue
-        );
+        openBuyingProductModal(productKey);
       }, 250);
     }
     
