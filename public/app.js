@@ -369,7 +369,18 @@ function openBuyingActionFlow(action, productKey, sizeValue) {
   buyingActionTitle.textContent = action === "buy" ? "Purchase Summary" : "Make Offer";
 
   const priceNote = buyingInventoryType === "b2b" ? " excl. VAT" : "";
-
+  const sourceCount = Number(size.source_count || 0);
+  
+  const buyNote =
+    sourceCount > 1
+      ? "Final seller confirmation is required before the purchase is completed. If the lowest source is no longer available, we may contact other available sources for confirmation or provide an updated price before anything is finalized."
+      : "Final seller confirmation is required before the purchase is completed.";
+  
+  const offerNote =
+    sourceCount > 1
+      ? "Your offer will be sent to all matching available sources for this size. If a source accepts, we'll confirm the purchase before anything is finalized."
+      : "Your offer will be sent to the available source for this size. If accepted, we'll confirm the purchase before anything is finalized.";
+  
   buyingActionContent.innerHTML = `
     <div class="buying-action-summary">
       <div>
@@ -406,6 +417,10 @@ function openBuyingActionFlow(action, productKey, sizeValue) {
     ${
       action === "offer"
         ? `
+          <p class="buying-action-note">
+            ${escapeHtml(offerNote)}
+          </p>
+    
           <label class="buying-offer-label">
             Your Offer
             <input id="buyingOfferAmountInput" class="offer-input" type="text" inputmode="numeric" placeholder="Enter your offer" />
@@ -413,7 +428,7 @@ function openBuyingActionFlow(action, productKey, sizeValue) {
         `
         : `
           <p class="buying-action-note">
-            Final seller confirmation is required before the purchase is completed.
+            ${escapeHtml(buyNote)}
           </p>
         `
     }
