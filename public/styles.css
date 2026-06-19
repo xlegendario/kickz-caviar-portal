@@ -1905,3 +1905,40 @@ body {
     flex: 1;
   }
 }
+
+.buying-b2b-notice {
+  grid-column: 1 / -1;
+  margin: -8px 0 4px;
+  padding: 12px 16px;
+  border: 1px solid rgba(255, 204, 0, 0.22);
+  background: rgba(255, 204, 0, 0.08);
+  color: rgba(255, 255, 255, 0.78);
+  border-radius: 14px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.buying-modal-header {
+  align-items: flex-start;
+}
+
+.buying-modal-image-wrap {
+  position: relative;
+  top: -8px;
+  left: -8px;
+}
+
+.buying-modal-title-block h2 {
+  margin-top: 0;
+}
+
+.buying-price-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.52);
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+}
