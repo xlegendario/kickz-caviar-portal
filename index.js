@@ -8238,7 +8238,7 @@ app.post("/api/buying/requests", async (req, res) => {
     }
 
     const created = await airtable(MEMBER_WTBS_TABLE).create(fields);
-    
+
     let wtbPost = null;
     
     if (purchaseStatus === "Offers Sent") {
