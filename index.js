@@ -37,7 +37,9 @@ const {
   RETAILED_STOCKX_SEARCH_URL,
   RETAILED_API_KEY,
   AIRTABLE_DISCORD_UPDATES_URL = "https://airtable-discord-updates.onrender.com",
-  COUNTER_OFFERS_SECRET
+  COUNTER_OFFERS_SECRET,
+  BUYING_KC_CONFIRMATION_CHANNEL_ID,
+  BUYING_KC_OFFER_REQUESTS_CHANNEL_ID
 } = process.env;
 
 const AIRTABLE_ORDERS_TABLE = "Unfulfilled Orders Log";
@@ -1077,7 +1079,9 @@ function bindConsignmentDiscordButtons(client) {
       !customId.startsWith("counter_offer_accept:") &&
       !customId.startsWith("counter_offer_deny:") &&
       !customId.startsWith("counter_consignment_offer:") &&
-      !customId.startsWith("counter_consignment_offer_modal:")
+      !customId.startsWith("counter_consignment_offer_modal:") &&
+      !customId.startsWith("confirm_member_wtb_kc:") &&
+      !customId.startsWith("deny_member_wtb_kc:")
     ) {
       return;
     }
@@ -1156,6 +1160,115 @@ function bindConsignmentDiscordButtons(client) {
     }
 
     await interaction.deferUpdate().catch(() => {});
+
+    if (customId.startsWith("confirm_member_wtb_kc:")) {
+      const memberWtbRecordId = customId.split(":")[1];
+    
+      const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+      const f = memberWtb.fields || {};
+    
+      if (asText(f["Purchase Status"]) !== "KC Pending") {
+        await interaction.message.edit({
+          content: "❌ This KC confirmation is no longer available.",
+          embeds: interaction.message.embeds,
+          components: []
+        });
+        return;
+      }
+    
+      const inventoryUnitId = asText(f["Buying Selected Source ID"]);
+      const maxPrice = Number(f["Max Price"] || 0);
+    
+      if (!inventoryUnitId) {
+        await interaction.message.edit({
+          content: "❌ Missing selected KC Inventory Unit.",
+          embeds: interaction.message.embeds,
+          components: []
+        });
+        return;
+      }
+    
+      const inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).find(inventoryUnitId);
+      const inventoryStatus = asText(inventoryUnit.fields?.["Availability Status"]);
+    
+      if (inventoryStatus !== "Available") {
+        await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+          "Purchase Status": "Out Of Stock"
+        });
+    
+        await interaction.message.edit({
+          content: "❌ KC stock is no longer available.",
+          embeds: interaction.message.embeds,
+          components: []
+        });
+        return;
+      }
+    
+      await airtable(INVENTORY_UNITS_TABLE).update(inventoryUnitId, {
+        "Availability Status": "Reserved",
+        "Selling Method": "Kickz Caviar",
+        "Selling Price": maxPrice
+      });
+    
+      await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+        "Purchase Status": "Confirmed",
+        "Fulfillment Status": "Allocated",
+        "Linked Inventory Unit": [inventoryUnitId],
+        "Final Buying Price": maxPrice
+      });
+    
+      await interaction.message.edit({
+        content: "✅ KC stock confirmed and allocated.",
+        embeds: interaction.message.embeds,
+        components: []
+      });
+    
+      return;
+    }
+    
+    if (customId.startsWith("deny_member_wtb_kc:")) {
+      const memberWtbRecordId = customId.split(":")[1];
+    
+      const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+      const f = memberWtb.fields || {};
+    
+      if (asText(f["Purchase Status"]) !== "KC Pending") {
+        await interaction.message.edit({
+          content: "❌ This KC confirmation is no longer available.",
+          embeds: interaction.message.embeds,
+          components: []
+        });
+        return;
+      }
+    
+      await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+        "Purchase Status": "Offers Sent",
+        "Fulfillment Status": "Outsource"
+      });
+    
+      try {
+        await postMemberWtbToWtbBot({
+          recordId: memberWtbRecordId,
+          productName: asText(f["Product Name"]),
+          sku: asText(f["SKU"]),
+          size: asText(f["Size"]),
+          brand: asText(f["Brand"]),
+          imageUrl: Array.isArray(f["Picture"]) && f["Picture"][0]?.url
+            ? f["Picture"][0].url
+            : ""
+        });
+      } catch (err) {
+        console.error("Failed to post denied KC Member WTB to WTB bot:", err);
+      }
+    
+      await interaction.message.edit({
+        content: "❌ KC denied. WTB flow started.",
+        embeds: interaction.message.embeds,
+        components: []
+      });
+    
+      return;
+    }
 
     if (customId.startsWith("counter_offer_deny:")) {
       const counterOfferRecordId = customId.split(":")[1];
@@ -8113,6 +8226,63 @@ app.get("/api/buying/products", async (req, res) => {
   }
 });
 
+async function sendBuyingKcConfirmationRequest({ memberWtbRecordId, fields }) {
+  if (!BUYING_KC_CONFIRMATION_CHANNEL_ID) {
+    console.warn("Skipping KC confirmation: missing BUYING_KC_CONFIRMATION_CHANNEL_ID");
+    return null;
+  }
+
+  await initKickzDealDiscord();
+
+  const channel = await kickzDealDiscordClient.channels.fetch(BUYING_KC_CONFIRMATION_CHANNEL_ID);
+
+  const maxPrice = Number(fields["Max Price"] || 0);
+
+  const message = await channel.send({
+    embeds: [{
+      title: "🟡 KC Stock Confirmation Needed",
+      description: [
+        `**${asText(fields["Product Name"]) || "—"}**`,
+        "",
+        `**SKU:** ${asText(fields["SKU"]) || "—"}`,
+        `**Size:** ${asText(fields["Size"]) || "—"}`,
+        `**Brand:** ${asText(fields["Brand"]) || "—"}`,
+        `**Buy Now Price:** €${maxPrice.toFixed(2)}`,
+        "",
+        "Confirm only if KC stock is still available."
+      ].join("\n"),
+      color: 0xf1c40f,
+      footer: {
+        text: `Member WTB: ${memberWtbRecordId}`
+      },
+      timestamp: new Date().toISOString()
+    }],
+    components: [{
+      type: 1,
+      components: [
+        {
+          type: 2,
+          style: 3,
+          label: "Confirm",
+          custom_id: `confirm_member_wtb_kc:${memberWtbRecordId}`
+        },
+        {
+          type: 2,
+          style: 4,
+          label: "Deny",
+          custom_id: `deny_member_wtb_kc:${memberWtbRecordId}`
+        }
+      ]
+    }]
+  });
+
+  return {
+    channelId: message.channelId,
+    messageId: message.id,
+    url: message.url
+  };
+}
+
 async function postMemberWtbToWtbBot({
   recordId,
   productName,
@@ -8240,6 +8410,18 @@ app.post("/api/buying/requests", async (req, res) => {
     const created = await airtable(MEMBER_WTBS_TABLE).create(fields);
 
     let wtbPost = null;
+    let kcConfirmation = null;
+    
+    if (purchaseStatus === "KC Pending") {
+      try {
+        kcConfirmation = await sendBuyingKcConfirmationRequest({
+          memberWtbRecordId: created.id,
+          fields
+        });
+      } catch (err) {
+        console.error("Failed to send KC confirmation request:", err);
+      }
+    }
     
     if (purchaseStatus === "Offers Sent") {
       try {
@@ -8263,7 +8445,9 @@ app.post("/api/buying/requests", async (req, res) => {
       max_price: maxPrice,
       max_price_display: buyingMoneyValue(maxPrice),
       wtb_posted: !!wtbPost,
-      wtb_post: wtbPost
+      wtb_post: wtbPost,
+      kc_confirmation_sent: !!kcConfirmation,
+      kc_confirmation: kcConfirmation
     });
   } catch (err) {
     console.error("Failed to create buying request:", err);
