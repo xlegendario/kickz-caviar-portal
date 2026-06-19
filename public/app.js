@@ -373,8 +373,8 @@ function openBuyingActionFlow(action, productKey, sizeValue) {
   
   const buyNote =
     sourceCount > 1
-      ? "Seller confirmation required. Other matching sources may be contacted if needed."
-      : "Seller confirmation required.";
+      ? "The seller must confirm availability before the purchase is finalized. Other matching sources may be contacted if needed."
+      : "The seller must confirm availability before the purchase is finalized.";
   
   const offerNote =
     sourceCount > 1
