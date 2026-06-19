@@ -211,8 +211,17 @@ function renderBuyingProducts() {
     return;
   }
 
+  const b2bNotice = buyingInventoryType === "b2b"
+    ? `
+      <div class="buying-b2b-notice">
+        B2B Only selected — prices shown excl. VAT.
+      </div>
+    `
+    : "";
+
   dealsGrid.innerHTML = `
     ${renderBuyingInventoryTypeFilter()}
+    ${b2bNotice}
     ${currentBuyingProducts.map(renderBuyingProductCard).join("")}
   `;
 }
@@ -239,8 +248,7 @@ function openBuyingProductModal(productKey) {
         }
       </div>
 
-      <div>
-        <div class="dashboard-eyebrow">Available Stock</div>
+      <div class="buying-modal-title-block">
         <h2>${escapeHtml(product.product_name || "-")}</h2>
         <p>${escapeHtml(product.sku || "-")} ${product.brand ? `• ${escapeHtml(product.brand)}` : ""}</p>
       </div>
@@ -264,6 +272,11 @@ function openBuyingProductModal(productKey) {
     
           <div class="buying-size-price">
             ${escapeHtml(size.lowest_price_display || "-")}
+            ${
+              buyingInventoryType === "b2b"
+                ? `<span class="buying-price-note">excl. VAT</span>`
+                : ""
+            }
           </div>
     
           <div class="buying-size-sub">
