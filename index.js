@@ -7838,6 +7838,81 @@ function buildBuyingProductsFromSources(sources, inventoryType = "all") {
   return normalizeBuyingProducts(productMap);
 }
 
+function normalizeBuyingInventoryType(value) {
+  const clean = asText(value).toLowerCase();
+
+  if (clean === "b2b") return "b2b";
+  if (clean === "private") return "private";
+  return "all";
+}
+
+async function getLiveBuyingSources({ force = false } = {}) {
+  if (force) {
+    buyingMasterCache.sources = null;
+    buyingMasterCache.createdAt = 0;
+    buyingMasterCache.refreshPromise = null;
+  }
+
+  return refreshBuyingMasterCache();
+}
+
+function selectBuyingSourceFromLiveSources({ sources, sku, size, inventoryType }) {
+  const cleanSku = normalizeSku(sku);
+  const cleanSize = getBuyingSizeKey(size);
+  const cleanInventoryType = normalizeBuyingInventoryType(inventoryType);
+
+  const productMap = new Map();
+
+  (sources || [])
+    .filter((source) =>
+      normalizeSku(source.sku) === cleanSku &&
+      getBuyingSizeKey(source.size) === cleanSize
+    )
+    .forEach((source) => {
+      addBuyingSourceToProductMap(productMap, { ...source }, cleanInventoryType);
+    });
+
+  const products = normalizeBuyingProducts(productMap);
+
+  const selectedSize = products
+    .flatMap((product) => product.sizes || [])
+    .find((item) => getBuyingSizeKey(item.size) === cleanSize);
+
+  const matchingSources = [...(selectedSize?.sources || [])].sort(
+    (a, b) => Number(a.compare_price || 0) - Number(b.compare_price || 0)
+  );
+
+  return {
+    selectedSource: matchingSources[0] || null,
+    matchingSources,
+    product: products[0] || null
+  };
+}
+
+function getBuyingPurchaseStatusForSource(source) {
+  return source?.source_type === "kc_owned" ? "KC Pending" : "Offers Sent";
+}
+
+function buildBuyingSourceSnapshot(sources) {
+  return JSON.stringify(
+    (sources || []).map((source) => ({
+      source_type: source.source_type,
+      source_id: source.source_id,
+      seller_id: source.seller_id || "",
+      seller_record_id: source.seller_record_id || "",
+      sku: source.sku,
+      size: source.size,
+      vat_type: source.vat_type,
+      price: Number(source.price || 0),
+      display_price: Number(source.display_price || 0),
+      compare_price: Number(source.compare_price || 0),
+      quantity: Number(source.quantity || 0)
+    })),
+    null,
+    2
+  );
+}
+
 async function refreshBuyingMasterCache() {
   if (buyingMasterCache.refreshPromise) {
     return buyingMasterCache.refreshPromise;
@@ -8020,6 +8095,104 @@ app.get("/api/buying/products", async (req, res) => {
     });
   }
 });
+
+app.post("/api/buying/requests", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const sellerId = asText(req.body?.seller_id);
+    const sku = normalizeSku(req.body?.sku);
+    const size = getBuyingSizeKey(req.body?.size);
+    const inventoryType = normalizeBuyingInventoryType(req.body?.inventory_type);
+
+    if (!sellerRecordId || !sellerId || !sku || !size) {
+      return res.status(400).json({
+        error: "Missing buyer, SKU or size"
+      });
+    }
+
+    const liveSources = await getLiveBuyingSources({ force: true });
+
+    const {
+      selectedSource,
+      matchingSources,
+      product
+    } = selectBuyingSourceFromLiveSources({
+      sources: liveSources,
+      sku,
+      size,
+      inventoryType
+    });
+
+    if (!selectedSource) {
+      return res.status(409).json({
+        error: "Out Of Stock"
+      });
+    }
+
+    const maxPrice = Number(selectedSource.display_price || 0);
+    const purchaseStatus = getBuyingPurchaseStatusForSource(selectedSource);
+
+    const imageUrl =
+      selectedSource.image_url ||
+      product?.image_url ||
+      "";
+
+    const internalNotes = [
+      "Buying Portal Request",
+      "",
+      `Filter: ${inventoryType}`,
+      `Selected Source: ${selectedSource.source_type}`,
+      `Selected Source ID: ${selectedSource.source_id}`,
+      `Selected Seller: ${selectedSource.seller_id || "KC"}`,
+      `Matching Sources: ${matchingSources.length}`,
+      `Buy Now Price: ${buyingMoneyValue(maxPrice)}`
+    ].join("\n");
+
+    const fields = {
+      "Product Name": selectedSource.product_name || product?.product_name || sku,
+      "SKU": selectedSource.sku || sku,
+      "Size": selectedSource.size || size,
+      "Brand": selectedSource.brand || product?.brand || "",
+      "Date": new Date().toLocaleDateString("en-CA"),
+
+      "Max Price": maxPrice,
+      "Fulfillment Status": "Outsource",
+      "Purchase Status": purchaseStatus,
+      "Payment Status": "Pending",
+
+      "Buyer Seller ID": [sellerRecordId],
+
+      "Buying Inventory Filter": inventoryType,
+      "Buying Selected Source Type": selectedSource.source_type,
+      "Buying Selected Source ID": selectedSource.source_id,
+      "Buying Source Snapshot": buildBuyingSourceSnapshot(matchingSources),
+
+      "Internal Notes": internalNotes
+    };
+
+    if (imageUrl) {
+      fields["Picture"] = [{ url: imageUrl }];
+    }
+
+    const created = await airtable(MEMBER_WTBS_TABLE).create(fields);
+
+    res.json({
+      success: true,
+      member_wtb_record_id: created.id,
+      purchase_status: purchaseStatus,
+      max_price: maxPrice,
+      max_price_display: buyingMoneyValue(maxPrice)
+    });
+  } catch (err) {
+    console.error("Failed to create buying request:", err);
+
+    res.status(500).json({
+      error: "Failed to create buying request",
+      details: err.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Kickz Caviar Portal running on port ${PORT}`);
 });
