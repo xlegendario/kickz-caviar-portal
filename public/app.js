@@ -467,14 +467,6 @@ buyingProductModal?.addEventListener("click", (event) => {
   }
 });
 
-closeBuyingProductModal?.addEventListener("click", closeBuyingProductFlow);
-
-buyingProductModal?.addEventListener("click", (event) => {
-  if (event.target === buyingProductModal) {
-    closeBuyingProductFlow();
-  }
-});
-
 closeBuyingActionModal?.addEventListener("click", closeBuyingActionFlow);
 cancelBuyingActionBtn?.addEventListener("click", closeBuyingActionFlow);
 
