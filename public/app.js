@@ -86,6 +86,7 @@ function renderBuyingInventoryTypeFilter() {
 }
 
 let selectedBuyingAction = null;
+let pendingBuyingAction = null;
 let pendingBuyingReload = false;
 let buyingRequestSeq = 0;
 
@@ -342,6 +343,13 @@ function getBuyingInventoryTypeLabel() {
 
 function openBuyingActionFlow(action, productKey, sizeValue) {
   if (!currentSeller) {
+    pendingBuyingAction = {
+      action,
+      productKey,
+      sizeValue
+    };
+  
+    closeBuyingProductFlow();
     openLoginModal();
     return;
   }
@@ -1179,10 +1187,23 @@ loginForm.addEventListener("submit", async (event) => {
     currentSeller = data.seller;
 
     localStorage.setItem("kc_seller", JSON.stringify(currentSeller));
-
+    
     updateLoginState();
     closeModal();
-
+    
+    if (pendingBuyingAction) {
+      const pending = pendingBuyingAction;
+      pendingBuyingAction = null;
+    
+      setTimeout(() => {
+        openBuyingActionFlow(
+          pending.action,
+          pending.productKey,
+          pending.sizeValue
+        );
+      }, 250);
+    }
+    
     loginEmail.value = "";
     loginPassword.value = "";
   } catch (err) {
