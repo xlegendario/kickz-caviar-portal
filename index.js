@@ -7410,7 +7410,11 @@ function getBuyingInventoryProduct(record) {
     image_url: getImageUrl(f["Picture"]) || getImageUrl(f["Image"]),
     price: getBuyingInventoryPrice(f),
     vat_type: normalizeBuyingVatType(f["VAT Type"]),
-    compare_price: getBuyingComparePrice(getBuyingInventoryPrice(f), f["VAT Type"]),
+    compare_price: getBuyingComparePrice(
+      getBuyingInventoryPrice(f),
+      f["VAT Type"],
+      "kc_owned"
+    ),
     delivery_time: BUYING_KC_DELIVERY_TIME,
     quantity: 1
   };
@@ -7438,7 +7442,11 @@ function getBuyingConsignmentProduct(row, imageMap = new Map()) {
     seller_price: Number(row.selling_price_suggested || 0),
     kc_markup: 10,
     vat_type: normalizeBuyingVatType(row.vat_type),
-    compare_price: getBuyingComparePrice(Number(row.selling_price_suggested || 0) + 10, row.vat_type),
+    compare_price: getBuyingComparePrice(
+      Number(row.selling_price_suggested || 0) + 10,
+      row.vat_type,
+      "consignment"
+    ),
     delivery_time: BUYING_CONSIGNMENT_DELIVERY_TIME,
     quantity: Number(row.quantity || 0)
   };
@@ -7454,13 +7462,25 @@ function normalizeBuyingVatType(value) {
   return vatType || "Margin";
 }
 
-function getBuyingComparePrice(price, vatType) {
+function getBuyingComparePrice(price, vatType, sourceType = "") {
   const n = Number(price || 0);
   const cleanVatType = normalizeBuyingVatType(vatType);
+  const cleanSourceType = asText(sourceType);
 
   if (!Number.isFinite(n) || n <= 0) return 0;
 
-  return cleanVatType === "VAT0" ? n * 1.21 : n;
+  if (
+    cleanSourceType === "kc_owned" &&
+    (cleanVatType === "VAT0" || cleanVatType === "VAT21")
+  ) {
+    return n * 1.21;
+  }
+
+  if (cleanVatType === "VAT0") {
+    return n * 1.21;
+  }
+
+  return n;
 }
 
 function isBuyingB2BSource(source) {
@@ -7478,13 +7498,25 @@ function sourceMatchesBuyingInventoryType(source, inventoryType) {
   return true;
 }
 
-function getBuyingDisplayPrice(price, vatType, inventoryType) {
+function getBuyingDisplayPrice(price, vatType, inventoryType, sourceType = "") {
   const n = Number(price || 0);
   const cleanVatType = normalizeBuyingVatType(vatType);
+  const cleanSourceType = asText(sourceType);
 
   if (!Number.isFinite(n) || n <= 0) return 0;
 
-  if (inventoryType === "all" && cleanVatType === "VAT0") {
+  if (inventoryType !== "all") {
+    return n;
+  }
+
+  if (
+    cleanSourceType === "kc_owned" &&
+    (cleanVatType === "VAT0" || cleanVatType === "VAT21")
+  ) {
+    return n * 1.21;
+  }
+
+  if (cleanVatType === "VAT0") {
     return n * 1.21;
   }
 
@@ -7495,11 +7527,21 @@ function addBuyingSourceToProductMap(productMap, source, inventoryType = "all") 
   if (!source.sku || !source.size || !source.price) return;
   if (!sourceMatchesBuyingInventoryType(source, inventoryType)) return;
 
-  source.display_price = getBuyingDisplayPrice(source.price, source.vat_type, inventoryType);
+  source.display_price = getBuyingDisplayPrice(
+    source.price,
+    source.vat_type,
+    inventoryType,
+    source.source_type
+  );
+  
   source.compare_price = source.display_price;
   source.vat_type = normalizeBuyingVatType(source.vat_type);
 
-  source.compare_price = source.compare_price || getBuyingComparePrice(source.price, source.vat_type);
+  source.compare_price = source.compare_price || getBuyingComparePrice(
+    source.price,
+    source.vat_type,
+    source.source_type
+  );
   source.vat_type = normalizeBuyingVatType(source.vat_type);
 
   const productKey = getBuyingProductKey(source);
