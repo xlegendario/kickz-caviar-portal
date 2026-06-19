@@ -59,7 +59,7 @@ const COUNTER_OFFER_ACCEPT_WEBHOOK_URL =
 const SKU_MASTER_TABLE = process.env.AIRTABLE_SKU_MASTER_TABLE || "SKU Master";
 const STOCK_LEVELS_TABLE = process.env.AIRTABLE_STOCK_LEVELS_TABLE || "Stock Levels";
 const MERCHANTS_TABLE = process.env.AIRTABLE_MERCHANTS_TABLE || "Merchants";
-const MEMBER_WTBS_TABLE = process.env.AIRTABLE_MEMBER_WTBS_TABLE || "Member WTB's";
+const MEMBER_WTBS_TABLE = process.env.AIRTABLE_MEMBER_WTBS_TABLE || "Member WTBs";
 
 const BUYING_KC_DELIVERY_TIME = "1-2 business days";
 const BUYING_CONSIGNMENT_DELIVERY_TIME = "1-2 business days";
