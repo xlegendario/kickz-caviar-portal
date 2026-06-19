@@ -373,13 +373,13 @@ function openBuyingActionFlow(action, productKey, sizeValue) {
   
   const buyNote =
     sourceCount > 1
-      ? "Final seller confirmation is required before the purchase is completed. If the lowest source is no longer available, we may contact other available sources for confirmation or provide an updated price before anything is finalized."
-      : "Final seller confirmation is required before the purchase is completed.";
+      ? "Seller confirmation required. Other matching sources may be contacted if needed."
+      : "Seller confirmation required.";
   
   const offerNote =
     sourceCount > 1
-      ? "Your offer will be sent to all matching available sources for this size. If a source accepts, we'll confirm the purchase before anything is finalized."
-      : "Your offer will be sent to the available source for this size. If accepted, we'll confirm the purchase before anything is finalized.";
+      ? "Offer sent to all matching sources."
+      : "Offer sent to matching source.";
   
   buyingActionContent.innerHTML = `
     <div class="buying-action-summary">
