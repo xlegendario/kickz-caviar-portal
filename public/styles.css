@@ -1944,3 +1944,66 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.2px;
 }
+
+.buying-action-modal {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.buying-action-summary {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.buying-action-summary > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.buying-action-summary span {
+  color: rgba(255,255,255,0.52);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.buying-action-summary strong {
+  color: white;
+  font-size: 14px;
+  font-weight: 900;
+  text-align: right;
+}
+
+.buying-action-note {
+  margin: 18px 0 0;
+  padding: 13px 14px;
+  border-radius: 14px;
+  background: rgba(255, 204, 0, 0.08);
+  border: 1px solid rgba(255, 204, 0, 0.18);
+  color: rgba(255,255,255,0.72);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.buying-offer-label {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  color: rgba(255,255,255,0.72);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.buying-action-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.buying-action-buttons .table-btn {
+  height: 50px;
+}
