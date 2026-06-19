@@ -496,7 +496,7 @@ buyingActionModal?.addEventListener("click", (event) => {
   }
 });
 
-submitBuyingActionBtn?.addEventListener("click", () => {
+submitBuyingActionBtn?.addEventListener("click", async () => {
   if (!selectedBuyingAction || !currentSeller) return;
 
   const offerInput = document.getElementById("buyingOfferAmountInput");
@@ -516,25 +516,49 @@ submitBuyingActionBtn?.addEventListener("click", () => {
     return;
   }
 
-  console.log("Buying action submitted:", {
-    action: selectedBuyingAction.action,
-    sellerRecordId: currentSeller.id,
-    sellerId: currentSeller.seller_id,
-    sku: selectedBuyingAction.product.sku,
-    productName: selectedBuyingAction.product.product_name,
-    size: selectedBuyingAction.size.size,
-    inventoryType: selectedBuyingAction.inventoryType,
-    displayedPrice: selectedBuyingAction.size.lowest_price_display,
-    offerAmount
-  });
+  if (selectedBuyingAction.action !== "buy") {
+    buyingActionError.textContent = "Offer flow is not active yet.";
+    return;
+  }
 
-  closeBuyingActionFlow();
+  submitBuyingActionBtn.disabled = true;
+  submitBuyingActionBtn.textContent = "Submitting...";
 
-  showSuccessToast(
-    selectedBuyingAction.action === "buy"
-      ? "Purchase request prepared"
-      : "Offer prepared"
-  );
+  try {
+    const response = await fetch("/api/buying/requests", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        seller_record_id: currentSeller.id,
+        seller_id: currentSeller.seller_id,
+        sku: selectedBuyingAction.product.sku,
+        size: selectedBuyingAction.size.size,
+        inventory_type: selectedBuyingAction.inventoryType
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || data.details || "Failed to submit purchase request");
+    }
+
+    closeBuyingActionFlow();
+    closeBuyingProductFlow();
+
+    showSuccessToast("Purchase request submitted");
+
+    if (currentMainMode === "buying") {
+      loadBuyingProducts({ force: true });
+    }
+  } catch (err) {
+    buyingActionError.textContent = err.message;
+  } finally {
+    submitBuyingActionBtn.disabled = false;
+    submitBuyingActionBtn.textContent = "Submit";
+  }
 });
 
 async function loadDeals(type = "quick", reset = true) {
