@@ -7846,6 +7846,23 @@ function normalizeBuyingInventoryType(value) {
   return "all";
 }
 
+function getBuyingInventoryFilterLabel(value) {
+  const clean = normalizeBuyingInventoryType(value);
+
+  if (clean === "b2b") return "B2B Only";
+  if (clean === "private") return "Margin Only";
+  return "All Inventory";
+}
+
+function getBuyingSourceTypeLabel(value) {
+  const clean = asText(value);
+
+  if (clean === "kc_owned") return "KC Owned";
+  if (clean === "consignment") return "Consignment";
+
+  return clean;
+}
+
 async function getLiveBuyingSources({ force = false } = {}) {
   if (force) {
     buyingMasterCache.sources = null;
@@ -8162,8 +8179,8 @@ app.post("/api/buying/requests", async (req, res) => {
 
       "Buyer Seller ID": [sellerRecordId],
 
-      "Buying Inventory Filter": inventoryType,
-      "Buying Selected Source Type": selectedSource.source_type,
+      "Buying Inventory Filter": getBuyingInventoryFilterLabel(inventoryType),
+      "Buying Selected Source Type": getBuyingSourceTypeLabel(selectedSource.source_type),
       "Buying Selected Source ID": selectedSource.source_id,
       "Buying Source Snapshot": buildBuyingSourceSnapshot(matchingSources),
 
