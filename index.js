@@ -8157,7 +8157,7 @@ app.post("/api/buying/requests", async (req, res) => {
     const internalNotes = [
       "Buying Portal Request",
       "",
-      `Filter: ${inventoryType}`,
+      `Filter: ${getBuyingInventoryFilterLabel(inventoryType)}`,
       `Selected Source: ${selectedSource.source_type}`,
       `Selected Source ID: ${selectedSource.source_id}`,
       `Selected Seller: ${selectedSource.seller_id || "KC"}`,
@@ -8173,7 +8173,9 @@ app.post("/api/buying/requests", async (req, res) => {
       "Date": new Date().toLocaleDateString("en-CA"),
 
       "Max Price": maxPrice,
-      "Fulfillment Status": "Outsource",
+      "Fulfillment Status": purchaseStatus === "KC Pending"
+        ? "Pending"
+        : "Outsource",
       "Purchase Status": purchaseStatus,
       "Payment Status": "Pending",
 
