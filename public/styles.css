@@ -1691,22 +1691,30 @@ body {
 }
 
 .buying-modal-image-wrap {
-  width: 120px;
-  height: 120px;
-  border-radius: 22px;
+  width: 132px;
+  height: 96px;
+  border-radius: 18px;
   background: #1b1b1b;
   border: 1px solid #242424;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
+
+  position: relative;
+  top: -8px;
+  left: -8px;
 }
 
 .buying-modal-image {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  padding: 12px;
+
+  padding: 8px;
+  border-radius: 14px;
+
+  background: #fff;
 }
 
 .buying-size-list {
@@ -1920,12 +1928,6 @@ body {
 
 .buying-modal-header {
   align-items: flex-start;
-}
-
-.buying-modal-image-wrap {
-  position: relative;
-  top: -8px;
-  left: -8px;
 }
 
 .buying-modal-title-block h2 {
