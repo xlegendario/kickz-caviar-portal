@@ -432,17 +432,6 @@ function closeBuyingActionFlow() {
 window.openBuyingProductModal = openBuyingProductModal;
 
 dealsGrid.addEventListener("click", (event) => {
-  const buyingActionButton = event.target.closest(".buying-action-btn");
-
-  if (buyingActionButton) {
-    openBuyingActionFlow(
-      buyingActionButton.dataset.buyingAction,
-      buyingActionButton.dataset.productKey,
-      buyingActionButton.dataset.size
-    );
-    return;
-  }
-  
   const inventoryTypeButton = event.target.closest("[data-buying-inventory-type]");
 
   if (inventoryTypeButton) {
