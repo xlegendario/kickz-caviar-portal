@@ -526,8 +526,6 @@ submitBuyingActionBtn?.addEventListener("click", () => {
 });
 
 async function loadDeals(type = "quick", reset = true) {
-
-async function loadDeals(type = "quick", reset = true) {
   if (isLoading) return;
 
   try {
