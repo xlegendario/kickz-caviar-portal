@@ -5,6 +5,14 @@ const buyingProductModal = document.getElementById("buyingProductModal");
 const closeBuyingProductModal = document.getElementById("closeBuyingProductModal");
 const buyingProductModalContent = document.getElementById("buyingProductModalContent");
 
+const buyingActionModal = document.getElementById("buyingActionModal");
+const closeBuyingActionModal = document.getElementById("closeBuyingActionModal");
+const cancelBuyingActionBtn = document.getElementById("cancelBuyingActionBtn");
+const submitBuyingActionBtn = document.getElementById("submitBuyingActionBtn");
+const buyingActionTitle = document.getElementById("buyingActionTitle");
+const buyingActionContent = document.getElementById("buyingActionContent");
+const buyingActionError = document.getElementById("buyingActionError");
+
 const marketTabs = document.querySelectorAll(".market-tab");
 const priceViewButtons = document.querySelectorAll(".price-view-btn");
 
@@ -77,6 +85,7 @@ function renderBuyingInventoryTypeFilter() {
   `;
 }
 
+let selectedBuyingAction = null;
 let pendingBuyingReload = false;
 let buyingRequestSeq = 0;
 
@@ -292,8 +301,25 @@ function openBuyingProductModal(productKey) {
           </div>
     
           <div class="buying-size-actions">
-            <button class="table-btn disabled-btn" type="button" disabled>Buy Now</button>
-            <button class="table-btn offer-btn disabled-btn" type="button" disabled>Offer</button>
+            <button
+              class="table-btn buying-action-btn"
+              type="button"
+              data-buying-action="buy"
+              data-product-key="${escapeHtml(product.key)}"
+              data-size="${escapeHtml(size.size || "")}"
+            >
+              Buy
+            </button>
+            
+            <button
+              class="table-btn offer-btn buying-action-btn"
+              type="button"
+              data-buying-action="offer"
+              data-product-key="${escapeHtml(product.key)}"
+              data-size="${escapeHtml(size.size || "")}"
+            >
+              Offer
+            </button>
           </div>
         </div>
       `).join("")}
@@ -308,9 +334,115 @@ function closeBuyingProductFlow() {
   buyingProductModalContent.innerHTML = "";
 }
 
+function getBuyingInventoryTypeLabel() {
+  if (buyingInventoryType === "b2b") return "B2B Only";
+  if (buyingInventoryType === "private") return "Margin Only";
+  return "All Inventory";
+}
+
+function openBuyingActionFlow(action, productKey, sizeValue) {
+  if (!currentSeller) {
+    openLoginModal();
+    return;
+  }
+
+  const product = currentBuyingProducts.find((item) => item.key === productKey);
+  const size = product?.sizes?.find((item) => String(item.size) === String(sizeValue));
+
+  if (!product || !size) {
+    alert("Product or size not found. Please refresh and try again.");
+    return;
+  }
+
+  selectedBuyingAction = {
+    action,
+    product,
+    size,
+    inventoryType: buyingInventoryType
+  };
+
+  buyingActionError.textContent = "";
+  buyingActionTitle.textContent = action === "buy" ? "Purchase Summary" : "Make Offer";
+
+  const priceNote = buyingInventoryType === "b2b" ? " excl. VAT" : "";
+
+  buyingActionContent.innerHTML = `
+    <div class="buying-action-summary">
+      <div>
+        <span>Product</span>
+        <strong>${escapeHtml(product.product_name || "-")}</strong>
+      </div>
+
+      <div>
+        <span>SKU</span>
+        <strong>${escapeHtml(product.sku || "-")}</strong>
+      </div>
+
+      <div>
+        <span>Size</span>
+        <strong>${escapeHtml(size.size || "-")}</strong>
+      </div>
+
+      <div>
+        <span>${action === "buy" ? "Estimated Purchase Price" : "Current Lowest Price"}</span>
+        <strong>${escapeHtml(size.lowest_price_display || "-")}${priceNote}</strong>
+      </div>
+
+      <div>
+        <span>Inventory Type</span>
+        <strong>${escapeHtml(getBuyingInventoryTypeLabel())}</strong>
+      </div>
+
+      <div>
+        <span>Available Sources</span>
+        <strong>${Number(size.source_count || 0)}</strong>
+      </div>
+    </div>
+
+    ${
+      action === "offer"
+        ? `
+          <label class="buying-offer-label">
+            Your Offer
+            <input id="buyingOfferAmountInput" class="offer-input" type="text" inputmode="numeric" placeholder="Enter your offer" />
+          </label>
+        `
+        : `
+          <p class="buying-action-note">
+            Final seller confirmation is required before the purchase is completed.
+          </p>
+        `
+    }
+  `;
+
+  buyingActionModal.classList.remove("hidden");
+
+  document.getElementById("buyingOfferAmountInput")?.addEventListener("input", (event) => {
+    event.target.value = event.target.value.replace(/\D/g, "");
+  });
+}
+
+function closeBuyingActionFlow() {
+  buyingActionModal.classList.add("hidden");
+  buyingActionContent.innerHTML = "";
+  buyingActionError.textContent = "";
+  selectedBuyingAction = null;
+}
+
 window.openBuyingProductModal = openBuyingProductModal;
 
 dealsGrid.addEventListener("click", (event) => {
+  const buyingActionButton = event.target.closest(".buying-action-btn");
+
+  if (buyingActionButton) {
+    openBuyingActionFlow(
+      buyingActionButton.dataset.buyingAction,
+      buyingActionButton.dataset.productKey,
+      buyingActionButton.dataset.size
+    );
+    return;
+  }
+  
   const inventoryTypeButton = event.target.closest("[data-buying-inventory-type]");
 
   if (inventoryTypeButton) {
@@ -334,6 +466,66 @@ buyingProductModal?.addEventListener("click", (event) => {
     closeBuyingProductFlow();
   }
 });
+
+closeBuyingProductModal?.addEventListener("click", closeBuyingProductFlow);
+
+buyingProductModal?.addEventListener("click", (event) => {
+  if (event.target === buyingProductModal) {
+    closeBuyingProductFlow();
+  }
+});
+
+closeBuyingActionModal?.addEventListener("click", closeBuyingActionFlow);
+cancelBuyingActionBtn?.addEventListener("click", closeBuyingActionFlow);
+
+buyingActionModal?.addEventListener("click", (event) => {
+  if (event.target === buyingActionModal) {
+    closeBuyingActionFlow();
+  }
+});
+
+submitBuyingActionBtn?.addEventListener("click", () => {
+  if (!selectedBuyingAction || !currentSeller) return;
+
+  const offerInput = document.getElementById("buyingOfferAmountInput");
+
+  const offerAmount =
+    selectedBuyingAction.action === "offer"
+      ? Number(offerInput?.value || 0)
+      : null;
+
+  buyingActionError.textContent = "";
+
+  if (
+    selectedBuyingAction.action === "offer" &&
+    (!Number.isInteger(offerAmount) || offerAmount <= 0)
+  ) {
+    buyingActionError.textContent = "Enter a valid whole euro amount.";
+    return;
+  }
+
+  console.log("Buying action submitted:", {
+    action: selectedBuyingAction.action,
+    sellerRecordId: currentSeller.id,
+    sellerId: currentSeller.seller_id,
+    sku: selectedBuyingAction.product.sku,
+    productName: selectedBuyingAction.product.product_name,
+    size: selectedBuyingAction.size.size,
+    inventoryType: selectedBuyingAction.inventoryType,
+    displayedPrice: selectedBuyingAction.size.lowest_price_display,
+    offerAmount
+  });
+
+  closeBuyingActionFlow();
+
+  showSuccessToast(
+    selectedBuyingAction.action === "buy"
+      ? "Purchase request prepared"
+      : "Offer prepared"
+  );
+});
+
+async function loadDeals(type = "quick", reset = true) {
 
 async function loadDeals(type = "quick", reset = true) {
   if (isLoading) return;
