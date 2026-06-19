@@ -459,6 +459,18 @@ dealsGrid.addEventListener("click", (event) => {
   openBuyingProductModal(button.dataset.productKey);
 });
 
+buyingProductModalContent?.addEventListener("click", (event) => {
+  const buyingActionButton = event.target.closest(".buying-action-btn");
+
+  if (!buyingActionButton) return;
+
+  openBuyingActionFlow(
+    buyingActionButton.dataset.buyingAction,
+    buyingActionButton.dataset.productKey,
+    buyingActionButton.dataset.size
+  );
+});
+
 closeBuyingProductModal?.addEventListener("click", closeBuyingProductFlow);
 
 buyingProductModal?.addEventListener("click", (event) => {
