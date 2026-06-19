@@ -8113,6 +8113,46 @@ app.get("/api/buying/products", async (req, res) => {
   }
 });
 
+async function postMemberWtbToWtbBot({
+  recordId,
+  productName,
+  sku,
+  size,
+  brand,
+  imageUrl
+}) {
+  const wtbBotBaseUrl = process.env.KICKZ_WTB_BOT_BASE_URL;
+
+  if (!wtbBotBaseUrl) {
+    console.warn("Skipping Member WTB Discord post: missing KICKZ_WTB_BOT_BASE_URL");
+    return null;
+  }
+
+  const response = await fetch(`${wtbBotBaseUrl.replace(/\/$/, "")}/partner-offer-deal`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      sourceType: "member_wtb",
+      recordId,
+      productName,
+      sku,
+      size,
+      brand,
+      imageUrl
+    })
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || data.details || "WTB bot post failed");
+  }
+
+  return data;
+}
+
 app.post("/api/buying/requests", async (req, res) => {
   try {
     const sellerRecordId = asText(req.body?.seller_record_id);
@@ -8194,13 +8234,32 @@ app.post("/api/buying/requests", async (req, res) => {
     }
 
     const created = await airtable(MEMBER_WTBS_TABLE).create(fields);
-
+    
+    let wtbPost = null;
+    
+    if (purchaseStatus === "Offers Sent") {
+      try {
+        wtbPost = await postMemberWtbToWtbBot({
+          recordId: created.id,
+          productName: selectedSource.product_name || product?.product_name || sku,
+          sku: selectedSource.sku || sku,
+          size: selectedSource.size || size,
+          brand: selectedSource.brand || product?.brand || "",
+          imageUrl
+        });
+      } catch (err) {
+        console.error("Failed to post Member WTB to WTB bot:", err);
+      }
+    }
+    
     res.json({
       success: true,
       member_wtb_record_id: created.id,
       purchase_status: purchaseStatus,
       max_price: maxPrice,
-      max_price_display: buyingMoneyValue(maxPrice)
+      max_price_display: buyingMoneyValue(maxPrice),
+      wtb_posted: !!wtbPost,
+      wtb_post: wtbPost
     });
   } catch (err) {
     console.error("Failed to create buying request:", err);
