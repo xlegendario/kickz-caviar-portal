@@ -63,8 +63,13 @@ const MEMBER_WTBS_TABLE = process.env.AIRTABLE_MEMBER_WTBS_TABLE || "Member WTB'
 
 const BUYING_KC_DELIVERY_TIME = "1-2 business days";
 const BUYING_CONSIGNMENT_DELIVERY_TIME = "1-2 business days";
-const BUYING_PRODUCTS_CACHE_TTL_MS = 2 * 60 * 1000;
-const buyingProductsCache = new Map();
+const BUYING_MASTER_CACHE_TTL_MS = 2 * 60 * 1000;
+
+const buyingMasterCache = {
+  createdAt: 0,
+  sources: null,
+  refreshPromise: null
+};
 
 const CONSIGNMENT_APPLICATIONS_BUCKET =
   process.env.CONSIGNMENT_APPLICATIONS_BUCKET ||
@@ -7781,27 +7786,22 @@ async function cacheConsignmentImages(consignmentRows, imageMap) {
   }
 }
 
-app.get("/api/buying/products", async (req, res) => {
-  try {
-    const search = asText(req.query.search).toLowerCase();
-    const brand = asText(req.query.brand);
-    const sort = asText(req.query.sort) || "price_low";
-    const inventoryType = asText(req.query.inventory_type) || "all";
-    const cacheKey = JSON.stringify({
-      search,
-      brand,
-      sort,
-      inventoryType
-    });
-    
-    const cached = buyingProductsCache.get(cacheKey);
-    
-    if (cached && Date.now() - cached.createdAt < BUYING_PRODUCTS_CACHE_TTL_MS) {
-      return res.json(cached.payload);
-    }
+function buildBuyingProductsFromSources(sources, inventoryType = "all") {
+  const productMap = new Map();
 
-    const productMap = new Map();
+  (sources || []).forEach((source) => {
+    addBuyingSourceToProductMap(productMap, { ...source }, inventoryType);
+  });
 
+  return normalizeBuyingProducts(productMap);
+}
+
+async function refreshBuyingMasterCache() {
+  if (buyingMasterCache.refreshPromise) {
+    return buyingMasterCache.refreshPromise;
+  }
+
+  buyingMasterCache.refreshPromise = (async () => {
     const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
       .select({
         fields: [
@@ -7824,9 +7824,7 @@ app.get("/api/buying/products", async (req, res) => {
       })
       .all();
 
-    inventoryRecords
-      .map(getBuyingInventoryProduct)
-      .forEach((source) => addBuyingSourceToProductMap(productMap, source, inventoryType));
+    const inventorySources = inventoryRecords.map(getBuyingInventoryProduct);
 
     const { data: rawConsignmentRows, error: consignmentError } = await supabase
       .from("consignment_inventory")
@@ -7845,9 +7843,9 @@ app.get("/api/buying/products", async (req, res) => {
       `)
       .gt("quantity", 0)
       .gt("selling_price_suggested", 0);
-    
+
     if (consignmentError) throw consignmentError;
-    
+
     const consignmentStockKeys = [
       ...new Set(
         (rawConsignmentRows || [])
@@ -7855,18 +7853,18 @@ app.get("/api/buying/products", async (req, res) => {
           .filter(Boolean)
       )
     ];
-    
+
     let consignmentStockLevelMap = new Map();
-    
+
     if (consignmentStockKeys.length) {
       const { data: consignmentStockLevels, error: consignmentStockLevelError } =
         await supabase
           .from("consignment_stock_levels")
           .select("stock_counter_key, stock_level, lowest_suggested_price")
           .in("stock_counter_key", consignmentStockKeys);
-    
+
       if (consignmentStockLevelError) throw consignmentStockLevelError;
-    
+
       consignmentStockLevelMap = new Map(
         (consignmentStockLevels || []).map((row) => [
           row.stock_counter_key,
@@ -7877,11 +7875,11 @@ app.get("/api/buying/products", async (req, res) => {
         ])
       );
     }
-    
+
     const consignmentRows = (rawConsignmentRows || []).filter((row) => {
       const stockKey = getStockCounterKey(row.sku, row.size);
       const stockInfo = consignmentStockLevelMap.get(stockKey);
-    
+
       return (
         Number(row.quantity || 0) > 0 &&
         Number(row.selling_price_suggested || 0) > 0 &&
@@ -7894,12 +7892,53 @@ app.get("/api/buying/products", async (req, res) => {
     cacheConsignmentImages(consignmentRows || [], consignmentImageMap).catch((err) => {
       console.error("Failed to cache consignment images:", err);
     });
-    
-    (consignmentRows || [])
-      .map((row) => getBuyingConsignmentProduct(row, consignmentImageMap))
-      .forEach((source) => addBuyingSourceToProductMap(productMap, source, inventoryType));
 
-    let products = normalizeBuyingProducts(productMap);
+    const consignmentSources = (consignmentRows || []).map((row) =>
+      getBuyingConsignmentProduct(row, consignmentImageMap)
+    );
+
+    const sources = [...inventorySources, ...consignmentSources];
+
+    buyingMasterCache.sources = sources;
+    buyingMasterCache.createdAt = Date.now();
+
+    return sources;
+  })();app.get("/api/buying/products", async (req, res) => {
+
+  try {
+    return await buyingMasterCache.refreshPromise;
+  } finally {
+    buyingMasterCache.refreshPromise = null;
+  }
+}
+
+async function getBuyingMasterSources() {
+  const hasCache = Array.isArray(buyingMasterCache.sources);
+  const isStale = Date.now() - buyingMasterCache.createdAt > BUYING_MASTER_CACHE_TTL_MS;
+
+  if (hasCache) {
+    if (isStale && !buyingMasterCache.refreshPromise) {
+      refreshBuyingMasterCache().catch((err) => {
+        console.error("Failed to refresh buying master cache:", err);
+      });
+    }
+
+    return buyingMasterCache.sources;
+  }
+
+  return refreshBuyingMasterCache();
+}
+
+app.get("/api/buying/products", async (req, res) => {
+  try {
+    const search = asText(req.query.search).toLowerCase();
+    const brand = asText(req.query.brand);
+    const sort = asText(req.query.sort) || "price_low";
+    const inventoryType = asText(req.query.inventory_type) || "all";
+
+    const sources = await getBuyingMasterSources();
+
+    let products = buildBuyingProductsFromSources(sources, inventoryType);
 
     if (brand) {
       products = products.filter((product) => product.brand === brand);
@@ -7926,17 +7965,10 @@ app.get("/api/buying/products", async (req, res) => {
       products.sort((a, b) => Number(a.from_price || 0) - Number(b.from_price || 0));
     }
 
-    const payload = {
+    res.json({
       count: products.length,
       products
-    };
-    
-    buyingProductsCache.set(cacheKey, {
-      createdAt: Date.now(),
-      payload
     });
-    
-    res.json(payload);
   } catch (err) {
     console.error("Failed to load buying products:", err);
 
@@ -7946,7 +7978,6 @@ app.get("/api/buying/products", async (req, res) => {
     });
   }
 });
-
 app.listen(PORT, () => {
   console.log(`Kickz Caviar Portal running on port ${PORT}`);
 });
