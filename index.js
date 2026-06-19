@@ -8213,6 +8213,10 @@ app.post("/api/buying/requests", async (req, res) => {
       "Date": new Date().toLocaleDateString("en-CA"),
 
       "Max Price": maxPrice,
+      "Current Lowest Source Price":
+        selectedSource.source_type === "consignment"
+          ? Number(selectedSource.seller_price || 0)
+          : Number(selectedSource.display_price || selectedSource.price || 0),
       "Fulfillment Status": purchaseStatus === "KC Pending"
         ? "Pending"
         : "Outsource",
