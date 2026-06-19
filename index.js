@@ -7903,7 +7903,7 @@ async function refreshBuyingMasterCache() {
     buyingMasterCache.createdAt = Date.now();
 
     return sources;
-  })();app.get("/api/buying/products", async (req, res) => {
+  })();
 
   try {
     return await buyingMasterCache.refreshPromise;
