@@ -166,15 +166,15 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     "SKU": offer.sku,
     "Size": offer.size,
     "Brand": offer.brand,
-
+  
     "VAT Type": offer.vat_type,
     "Purchase Price": purchasePrice,
     "Shipping Deduction": 0,
     "Purchase Date": new Date().toLocaleDateString("en-CA"),
-
+  
     "Seller ID": [offer.seller_record_id],
     "Ticket Number": offer.order_id,
-
+  
     "Type": "Consignment",
     "Source": "Regular",
     "Verification Status": "Consigned",
@@ -182,10 +182,22 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     "Payment Status": "To Pay",
     "Availability Status": "Sold",
     "Margin %": "7.5%",
-    "Base Costs": 5,
-
-    "Unfulfilled Orders Log": [offer.order_record_id],
+    "Base Costs": 5
   };
+
+  if (Number(offer.selling_price || 0) > 0) {
+    inventoryFields["Selling Price"] = Number(offer.selling_price);
+  }
+  
+  if (offer.selling_method) {
+    inventoryFields["Selling Method"] = offer.selling_method;
+  }
+  
+  if (asText(offer.source_type) === "member_wtb") {
+    inventoryFields["Member WTBs"] = [offer.member_wtb_record_id];
+  } else if (offer.order_record_id) {
+    inventoryFields["Unfulfilled Orders Log"] = [offer.order_record_id];
+  }
 
   const created = await airtable(AIRTABLE_INVENTORY_UNITS_TABLE).create(
     inventoryFields
@@ -217,6 +229,8 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
       ticket_number: offer.order_id,
       order_id: offer.order_id,
       order_record_id: offer.order_record_id,
+      source_type: asText(offer.source_type) || "order",
+      member_wtb_record_id: asText(offer.member_wtb_record_id),
 
       type: "Consignment",
       source: "Regular",
@@ -426,7 +440,7 @@ async function sendConsignmentOfferDiscordMessage({
             label: isConfirmation ? "Confirm" : "Accept",
             custom_id: `confirm_offer:${offer.id}`
           },
-          ...(!isConfirmation
+          ...(!isConfirmation && asText(offer.source_type) !== "member_wtb"
             ? [
                 {
                   type: 2,
@@ -910,6 +924,36 @@ async function denyConsignmentOffer(offerId) {
   };
 }
 
+async function closeCompetingMemberWtbOffers(memberWtbRecordId, winningOfferId) {
+  const { data: competingOffers } = await supabase
+    .from("consignment_offers")
+    .select("id, discord_channel_id, discord_message_id, discord_delivery_type")
+    .eq("source_type", "member_wtb")
+    .eq("member_wtb_record_id", memberWtbRecordId)
+    .eq("status", "open");
+
+  for (const offer of competingOffers || []) {
+    if (offer.id === winningOfferId) continue;
+
+    await supabase
+      .from("consignment_offers")
+      .update({
+        status: "closed",
+        closed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", offer.id);
+
+    if (offer.discord_channel_id && offer.discord_message_id) {
+      await disableConsignmentDiscordButtons(
+        offer.discord_channel_id,
+        offer.discord_message_id,
+        "❌ This request was closed — another seller confirmed first."
+      );
+    }
+  }
+}
+
 async function confirmConsignmentOffer(offerId) {
   const { data: lockedOffer, error: lockError } = await supabase
     .from("consignment_offers")
@@ -926,6 +970,91 @@ async function confirmConsignmentOffer(offerId) {
     return {
       ok: false,
       reason: "not_open"
+    };
+  }
+
+  if (asText(lockedOffer.source_type) === "member_wtb") {
+    const memberWtbRecordId = asText(lockedOffer.member_wtb_record_id);
+  
+    if (!memberWtbRecordId) {
+      throw new Error("Member WTB consignment offer missing member_wtb_record_id");
+    }
+  
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+    const memberFields = memberWtb.fields || {};
+  
+    if (!memberWtbAllowsConsignmentRequests(memberFields)) {
+      await supabase
+        .from("consignment_offers")
+        .update({
+          status: "closed",
+          closed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", lockedOffer.id);
+  
+      return {
+        ok: false,
+        reason: "member_wtb_not_open"
+      };
+    }
+  
+    const maxPrice = Number(memberFields["Max Price"] || 0);
+
+    const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer({
+      ...lockedOffer,
+      order_record_id: null,
+      order_id: memberWtbRecordId,
+      source_type: "member_wtb",
+      member_wtb_record_id: memberWtbRecordId,
+      selling_price: maxPrice,
+      selling_method: "Kickz Caviar"
+    });
+  
+    const { data: inventoryRow, error: inventoryFetchError } = await supabase
+      .from("consignment_inventory")
+      .select("id, quantity, sku, size")
+      .eq("id", lockedOffer.inventory_id)
+      .single();
+  
+    if (inventoryFetchError) throw inventoryFetchError;
+  
+    const newQuantity = Math.max(0, Number(inventoryRow.quantity || 0) - 1);
+  
+    const { error: inventoryUpdateError } = await supabase
+      .from("consignment_inventory")
+      .update({
+        quantity: newQuantity,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", inventoryRow.id);
+  
+    if (inventoryUpdateError) throw inventoryUpdateError;
+  
+    await refreshConsignmentStockLevel(inventoryRow.sku, inventoryRow.size);
+  
+    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+      "Purchase Status": "Confirmed",
+      "Fulfillment Status": "Allocated",
+      "Linked Inventory Unit": [inventoryUnitRecord.id],
+      "Final Buying Price": maxPrice
+    });
+  
+    await supabase
+      .from("consignment_offers")
+      .update({
+        status: "accepted",
+        accepted_at: new Date().toISOString(),
+        closed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", lockedOffer.id);
+  
+    await closeCompetingMemberWtbOffers(memberWtbRecordId, lockedOffer.id);
+  
+    return {
+      ok: true,
+      offer: lockedOffer
     };
   }
 
@@ -1257,6 +1386,9 @@ function bindConsignmentDiscordButtons(client) {
             ? f["Picture"][0].url
             : ""
         });
+        
+        await sendMemberWtbConsignmentRequests(memberWtbRecordId);
+        
       } catch (err) {
         console.error("Failed to post denied KC Member WTB to WTB bot:", err);
       }
@@ -8323,6 +8455,189 @@ async function postMemberWtbToWtbBot({
   return data;
 }
 
+function memberWtbAllowsConsignmentRequests(recordFields) {
+  return (
+    asText(recordFields["Purchase Status"]) === "Offers Sent" &&
+    asText(recordFields["Fulfillment Status"]) === "Outsource"
+  );
+}
+
+function getAllowedBuyingVatTypesFromLabel(label) {
+  const clean = asText(label);
+
+  if (clean === "B2B Only") return ["VAT0", "VAT21"];
+  if (clean === "Margin Only") return ["Margin"];
+
+  return ["Margin", "VAT0", "VAT21"];
+}
+
+async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
+  const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+  const f = memberWtb.fields || {};
+
+  if (!memberWtbAllowsConsignmentRequests(f)) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "member_wtb_not_open"
+    };
+  }
+
+  const sku = normalizeSku(f["SKU"]);
+  const size = getBuyingSizeKey(f["Size"]);
+  const offerPrice = Number(f["Current Lowest Source Price"] || 0);
+  const allowedVatTypes = getAllowedBuyingVatTypesFromLabel(f["Buying Inventory Filter"]);
+
+  if (!sku || !size || !Number.isFinite(offerPrice) || offerPrice <= 0) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "missing_sku_size_or_offer_price"
+    };
+  }
+
+  const { data: inventoryRows, error: inventoryError } = await supabase
+    .from("consignment_inventory")
+    .select(`
+      id,
+      product_name,
+      sku,
+      size,
+      brand,
+      vat_type,
+      selling_price_suggested,
+      quantity,
+      seller_id,
+      seller_record_id
+    `)
+    .eq("sku", sku)
+    .eq("size", size)
+    .gt("quantity", 0)
+    .in("vat_type", allowedVatTypes);
+
+  if (inventoryError) throw inventoryError;
+
+  const results = [];
+
+  for (const row of inventoryRows || []) {
+    const sellerPrice = Number(row.selling_price_suggested || 0);
+
+    if (!Number.isFinite(sellerPrice) || sellerPrice <= 0) {
+      continue;
+    }
+
+    const { data: existingOffers, error: existingError } = await supabase
+      .from("consignment_offers")
+      .select("id")
+      .eq("source_type", "member_wtb")
+      .eq("member_wtb_record_id", memberWtbRecordId)
+      .eq("seller_record_id", row.seller_record_id)
+      .eq("inventory_id", row.id)
+      .eq("status", "open")
+      .limit(1);
+
+    if (existingError) throw existingError;
+
+    if (existingOffers?.length) {
+      results.push({
+        mode: "skipped_existing",
+        offer_id: existingOffers[0].id
+      });
+
+      continue;
+    }
+
+    const offerPayload = {
+      source_type: "member_wtb",
+      member_wtb_record_id: memberWtbRecordId,
+
+      order_record_id: null,
+      order_id: memberWtbRecordId,
+
+      sku: row.sku,
+      size: row.size,
+      product_name: row.product_name || asText(f["Product Name"]),
+      brand: row.brand || asText(f["Brand"]),
+
+      seller_record_id: row.seller_record_id,
+      seller_id: row.seller_id,
+      inventory_id: row.id,
+
+      seller_price: sellerPrice,
+      offer_price: offerPrice,
+      vat_type: row.vat_type,
+      quantity_at_offer: Number(row.quantity || 0),
+
+      status: "open",
+      discord_channel_id: null,
+      discord_message_id: null,
+      discord_delivery_type: null,
+      discord_delivery_error: null,
+      updated_at: new Date().toISOString()
+    };
+
+    const { data: createdOffer, error: createError } = await supabase
+      .from("consignment_offers")
+      .insert(offerPayload)
+      .select()
+      .single();
+
+    if (createError) throw createError;
+
+    const sellerRecord = await airtable(SELLERS_TABLE).find(row.seller_record_id);
+    const sellerRow = normalizeSeller(sellerRecord);
+
+    let discordResult = null;
+
+    try {
+      discordResult = await sendConsignmentOfferDiscordMessage({
+        seller: sellerRow,
+        offer: createdOffer,
+        calculatedOfferPrice: offerPrice
+      });
+
+      await supabase
+        .from("consignment_offers")
+        .update({
+          discord_channel_id: discordResult.channelId,
+          discord_message_id: discordResult.messageId,
+          discord_delivery_type: discordResult.deliveryType,
+          discord_delivery_error: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", createdOffer.id);
+    } catch (err) {
+      console.error("Failed to deliver Member WTB consignment request:", {
+        offerId: createdOffer.id,
+        sellerId: createdOffer.seller_id,
+        sellerRecordId: createdOffer.seller_record_id,
+        error: err.message
+      });
+
+      await supabase
+        .from("consignment_offers")
+        .update({
+          discord_delivery_error: err.message,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", createdOffer.id);
+    }
+
+    results.push({
+      mode: "created",
+      offer_id: createdOffer.id,
+      discord_channel_id: discordResult?.channelId || null,
+      discord_message_id: discordResult?.messageId || null
+    });
+  }
+
+  return {
+    ok: true,
+    count: results.length,
+    results
+  };
+}
+
 app.post("/api/buying/requests", async (req, res) => {
   try {
     const sellerRecordId = asText(req.body?.seller_record_id);
@@ -8386,7 +8701,7 @@ app.post("/api/buying/requests", async (req, res) => {
       "Current Lowest Source Price":
         selectedSource.source_type === "consignment"
           ? Number(selectedSource.seller_price || 0)
-          : Number(selectedSource.display_price || selectedSource.price || 0),
+          : Math.max(0, Number(maxPrice || 0) - 10),
       "Fulfillment Status": purchaseStatus === "KC Pending"
         ? "Pending"
         : "Outsource",
@@ -8411,6 +8726,7 @@ app.post("/api/buying/requests", async (req, res) => {
 
     let wtbPost = null;
     let kcConfirmation = null;
+    let consignmentRequests = null;
     
     if (purchaseStatus === "KC Pending") {
       try {
@@ -8436,6 +8752,12 @@ app.post("/api/buying/requests", async (req, res) => {
       } catch (err) {
         console.error("Failed to post Member WTB to WTB bot:", err);
       }
+    
+      try {
+        consignmentRequests = await sendMemberWtbConsignmentRequests(created.id);
+      } catch (err) {
+        console.error("Failed to send Member WTB consignment requests:", err);
+      }
     }
     
     res.json({
@@ -8447,7 +8769,9 @@ app.post("/api/buying/requests", async (req, res) => {
       wtb_posted: !!wtbPost,
       wtb_post: wtbPost,
       kc_confirmation_sent: !!kcConfirmation,
-      kc_confirmation: kcConfirmation
+      kc_confirmation: kcConfirmation,
+      consignment_requests_sent: !!consignmentRequests?.ok,
+      consignment_requests: consignmentRequests
     });
   } catch (err) {
     console.error("Failed to create buying request:", err);
