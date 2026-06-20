@@ -8479,6 +8479,38 @@ function getAllowedBuyingVatTypesFromLabel(label) {
   return ["Margin", "VAT0", "VAT21"];
 }
 
+function calculateMemberWtbConsignorOfferPrice({
+  currentLowestSourcePrice,
+  buyingInventoryFilter,
+  consignorVatType
+}) {
+  const basePrice = Number(currentLowestSourcePrice || 0);
+  const filter = asText(buyingInventoryFilter);
+  const vatType = asText(consignorVatType);
+
+  if (!Number.isFinite(basePrice) || basePrice <= 0) {
+    return 0;
+  }
+
+  if (filter === "All Inventory") {
+    if (vatType === "VAT0") {
+      return Math.round(basePrice / 1.21);
+    }
+
+    return Math.round(basePrice);
+  }
+
+  if (filter === "B2B Only") {
+    if (vatType === "VAT21") {
+      return Math.round(basePrice * 1.21);
+    }
+
+    return Math.round(basePrice);
+  }
+
+  return Math.round(basePrice);
+}
+
 async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
   const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
   const f = memberWtb.fields || {};
@@ -8493,10 +8525,11 @@ async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
 
   const sku = normalizeSku(f["SKU"]);
   const size = getBuyingSizeKey(f["Size"]);
-  const offerPrice = Number(f["Current Lowest Source Price"] || 0);
+  const currentLowestSourcePrice = Number(f["Current Lowest Source Price"] || 0);
+  const buyingInventoryFilter = asText(f["Buying Inventory Filter"]);
   const allowedVatTypes = getAllowedBuyingVatTypesFromLabel(f["Buying Inventory Filter"]);
 
-  if (!sku || !size || !Number.isFinite(offerPrice) || offerPrice <= 0) {
+  if (!sku || !size || !Number.isFinite(currentLowestSourcePrice) || currentLowestSourcePrice <= 0) {
     return {
       ok: false,
       skipped: true,
@@ -8529,6 +8562,11 @@ async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
 
   for (const row of inventoryRows || []) {
     const sellerPrice = Number(row.selling_price_suggested || 0);
+    const rowOfferPrice = calculateMemberWtbConsignorOfferPrice({
+      currentLowestSourcePrice,
+      buyingInventoryFilter,
+      consignorVatType: row.vat_type
+    });
 
     if (!Number.isFinite(sellerPrice) || sellerPrice <= 0) {
       continue;
@@ -8572,7 +8610,7 @@ async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
       inventory_id: row.id,
 
       seller_price: sellerPrice,
-      offer_price: offerPrice,
+      offer_price: rowOfferPrice,
       vat_type: row.vat_type,
       quantity_at_offer: Number(row.quantity || 0),
 
