@@ -8893,6 +8893,7 @@ app.post("/api/buying/requests", async (req, res) => {
 
       "Buyer Seller ID": [sellerRecordId],
 
+      "Auto Accept Seller Offers?": true,
       "Buying Inventory Filter": getBuyingInventoryFilterLabel(inventoryType),
       "Buying Selected Source Type": getBuyingSourceTypeLabel(selectedSource.source_type),
       "Buying Selected Source ID": selectedSource.source_id,
