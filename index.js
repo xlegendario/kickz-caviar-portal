@@ -3287,8 +3287,8 @@ app.post("/api/consignment/offers/create", async (req, res) => {
       try {
         discordResult = await sendConsignmentOfferDiscordMessage({
           seller: sellerRow,
-          offer: data,
-          calculatedOfferPrice
+          offer: createdOffer,
+          calculatedOfferPrice: rowOfferPrice
         });
       
         await supabase
