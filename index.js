@@ -8784,9 +8784,9 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       'Seller ID': [sellerRecordId],
       'Ticket Number': memberWtbId,
 
-      'Type': 'WTB',
-      'Source': 'Regular',
-      'Verification Status': 'Consigned',
+      'Type': 'Custom',
+      'Source': 'Outsourced',
+      'Verification Status': 'Verified',
       'Payment Note': `€${purchasePrice.toFixed(2)}`,
       'Payment Status': 'To Pay',
       'Availability Status': 'Sold',
