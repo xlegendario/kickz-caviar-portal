@@ -1001,10 +1001,15 @@ async function confirmConsignmentOffer(offerId) {
   
     const maxPrice = Number(memberFields["Max Price"] || 0);
 
+    const memberWtbId =
+      asText(memberFields["Member WTB ID"]) ||
+      asText(memberFields["WTB ID"]) ||
+      memberWtbRecordId;
+
     const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer({
       ...lockedOffer,
       order_record_id: null,
-      order_id: memberWtbRecordId,
+      order_id: memberWtbId,
       source_type: "member_wtb",
       member_wtb_record_id: memberWtbRecordId,
       selling_price: maxPrice,
@@ -1386,11 +1391,14 @@ function bindConsignmentDiscordButtons(client) {
             ? f["Picture"][0].url
             : ""
         });
-        
-        await sendMemberWtbConsignmentRequests(memberWtbRecordId);
-        
       } catch (err) {
         console.error("Failed to post denied KC Member WTB to WTB bot:", err);
+      }
+      
+      try {
+        await sendMemberWtbConsignmentRequests(memberWtbRecordId);
+      } catch (err) {
+        console.error("Failed to send consignment requests after KC deny:", err);
       }
     
       await interaction.message.edit({
