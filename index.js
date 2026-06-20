@@ -8720,6 +8720,106 @@ function getBuyingCurrentLowestSourcePriceForMemberWtb({
   return Math.round(sellerPrice || displayPrice);
 }
 
+app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
+  try {
+    const secret = asText(req.headers['x-kc-secret']);
+
+    if (!process.env.KC_PORTAL_SECRET || secret !== process.env.KC_PORTAL_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+    const sellerOfferRecordId = asText(req.body?.seller_offer_record_id);
+
+    if (!memberWtbRecordId) {
+      return res.status(400).json({ error: 'Missing member_wtb_record_id' });
+    }
+
+    if (!sellerOfferRecordId) {
+      return res.status(400).json({ error: 'Missing seller_offer_record_id' });
+    }
+
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+    const memberFields = memberWtb.fields || {};
+
+    if (asText(memberFields['Fulfillment Status']) === 'Allocated') {
+      return res.status(409).json({ error: 'Member WTB already allocated' });
+    }
+
+    const sellerOffer = await airtable(SELLER_OFFERS_TABLE).find(sellerOfferRecordId);
+    const offerFields = sellerOffer.fields || {};
+
+    const sellerRecordId = Array.isArray(offerFields['Seller ID'])
+      ? offerFields['Seller ID'][0]
+      : '';
+
+    if (!sellerRecordId) {
+      return res.status(400).json({ error: 'Seller Offer missing Seller ID' });
+    }
+
+    const purchasePrice = Number(offerFields['Seller Offer'] || 0);
+    const vatType = asText(offerFields['Offer VAT Type']);
+    const maxPrice = Number(memberFields['Max Price'] || 0);
+
+    if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) {
+      return res.status(400).json({ error: 'Invalid seller offer price' });
+    }
+
+    const memberWtbId =
+      asText(memberFields['Member WTB ID']) ||
+      asText(memberFields['WTB ID']) ||
+      memberWtbRecordId;
+
+    const inventoryFields = {
+      'Product Name': asText(memberFields['Product Name']),
+      'SKU': asText(memberFields['SKU']),
+      'Size': asText(memberFields['Size']),
+      'Brand': asText(memberFields['Brand']),
+
+      'VAT Type': vatType,
+      'Purchase Price': purchasePrice,
+      'Shipping Deduction': 0,
+      'Purchase Date': new Date().toLocaleDateString('en-CA'),
+
+      'Seller ID': [sellerRecordId],
+      'Ticket Number': memberWtbId,
+
+      'Type': 'WTB',
+      'Source': 'Regular',
+      'Verification Status': 'Consigned',
+      'Payment Note': `€${purchasePrice.toFixed(2)}`,
+      'Payment Status': 'To Pay',
+      'Availability Status': 'Sold',
+      'Selling Price': maxPrice,
+      'Selling Method': 'Kickz Caviar',
+      'Member WTBs': [memberWtbRecordId]
+    };
+
+    const inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).create(inventoryFields);
+
+    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+      'Purchase Status': 'Confirmed',
+      'Fulfillment Status': 'Allocated',
+      'Linked Inventory Unit': [inventoryUnit.id],
+      'Final Buying Price': maxPrice
+    });
+
+    return res.json({
+      ok: true,
+      inventory_unit_record_id: inventoryUnit.id,
+      member_wtb_record_id: memberWtbRecordId,
+      seller_offer_record_id: sellerOfferRecordId
+    });
+  } catch (err) {
+    console.error('Failed to process Member WTB seller offer:', err);
+
+    return res.status(500).json({
+      error: 'Failed to process Member WTB seller offer',
+      details: err.message
+    });
+  }
+});
+
 app.post("/api/buying/requests", async (req, res) => {
   try {
     const sellerRecordId = asText(req.body?.seller_record_id);
