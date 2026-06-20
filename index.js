@@ -8690,6 +8690,36 @@ async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
   };
 }
 
+function getBuyingCurrentLowestSourcePriceForMemberWtb({
+  selectedSource,
+  inventoryType,
+  maxPrice
+}) {
+  const sourceType = asText(selectedSource?.source_type);
+  const vatType = asText(selectedSource?.vat_type);
+  const sellerPrice = Number(selectedSource?.seller_price || 0);
+  const displayPrice = Number(selectedSource?.display_price || 0);
+  const filterLabel = getBuyingInventoryFilterLabel(inventoryType);
+
+  if (sourceType !== "consignment") {
+    return Math.round(Math.max(0, Number(maxPrice || 0) - 10));
+  }
+
+  if (filterLabel === "All Inventory") {
+    if (vatType === "VAT0") {
+      return Math.round(sellerPrice * 1.21);
+    }
+
+    return Math.round(sellerPrice);
+  }
+
+  if (filterLabel === "B2B Only") {
+    return Math.round(sellerPrice);
+  }
+
+  return Math.round(sellerPrice || displayPrice);
+}
+
 app.post("/api/buying/requests", async (req, res) => {
   try {
     const sellerRecordId = asText(req.body?.seller_record_id);
@@ -8750,10 +8780,11 @@ app.post("/api/buying/requests", async (req, res) => {
       "Date": new Date().toLocaleDateString("en-CA"),
 
       "Max Price": maxPrice,
-      "Current Lowest Source Price":
-        selectedSource.source_type === "consignment"
-          ? Number(selectedSource.seller_price || 0)
-          : Math.max(0, Number(maxPrice || 0) - 10),
+      "Current Lowest Source Price": getBuyingCurrentLowestSourcePriceForMemberWtb({
+        selectedSource,
+        inventoryType,
+        maxPrice
+      }),
       "Fulfillment Status": purchaseStatus === "KC Pending"
         ? "Pending"
         : "Outsource",
