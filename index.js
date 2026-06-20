@@ -3287,8 +3287,8 @@ app.post("/api/consignment/offers/create", async (req, res) => {
       try {
         discordResult = await sendConsignmentOfferDiscordMessage({
           seller: sellerRow,
-          offer: createdOffer,
-          calculatedOfferPrice: rowOfferPrice
+          offer: data,
+          calculatedOfferPrice
         });
       
         await supabase
@@ -8598,7 +8598,10 @@ async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
       member_wtb_record_id: memberWtbRecordId,
 
       order_record_id: null,
-      order_id: memberWtbRecordId,
+      order_id:
+        asText(f["Member WTB ID"]) ||
+        asText(f["WTB ID"]) ||
+        memberWtbRecordId,
 
       sku: row.sku,
       size: row.size,
@@ -8639,7 +8642,7 @@ async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
       discordResult = await sendConsignmentOfferDiscordMessage({
         seller: sellerRow,
         offer: createdOffer,
-        calculatedOfferPrice: offerPrice
+        calculatedOfferPrice: rowOfferPrice
       });
 
       await supabase
