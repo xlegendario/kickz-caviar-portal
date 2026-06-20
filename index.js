@@ -334,11 +334,14 @@ async function sendConsignmentOfferDiscordMessage({
 }) {
   await initDiscord();
 
-  const sellerComparePrice =
-    getConsignmentComparePrice(
-      offer.seller_price,
-      offer.vat_type
-    );
+  const isMemberWtbOffer = asText(offer.source_type) === "member_wtb";
+
+  const sellerComparePrice = isMemberWtbOffer
+    ? Number(offer.seller_price || 0)
+    : getConsignmentComparePrice(
+        offer.seller_price,
+        offer.vat_type
+      );
 
   const isConfirmation =
     sellerComparePrice <= Number(calculatedOfferPrice);
