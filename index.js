@@ -9164,6 +9164,45 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
 
     const inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).create(inventoryFields);
 
+    await fetch("https://hook.eu2.make.com/cmq6wlbq5sa9spmwogy4pdordvjzuz4i", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        event: "member_wtb_seller_inventory_unit_created",
+        inventory_unit_record_id: inventoryUnit.id,
+        seller_offer_record_id: sellerOfferRecordId,
+        member_wtb_record_id: memberWtbRecordId,
+    
+        product_name: inventoryFields["Product Name"],
+        sku: inventoryFields["SKU"],
+        size: inventoryFields["Size"],
+        brand: inventoryFields["Brand"],
+        vat_type: vatType,
+    
+        purchase_price: purchasePrice,
+        shipping_deduction: 0,
+        purchase_date: inventoryFields["Purchase Date"],
+    
+        seller_record_id: sellerRecordId,
+        ticket_number: memberWtbId,
+        order_id: memberWtbId,
+    
+        type: "Custom",
+        source: "Outsourced",
+        verification_status: "Verified",
+        payment_note: `€${purchasePrice.toFixed(2)}`,
+        payment_status: "To Pay",
+        availability_status: "Sold",
+        selling_price: maxPrice,
+        selling_method: "Kickz Caviar",
+    
+        airtable_fields: inventoryFields,
+        created_at: new Date().toISOString()
+      })
+    });
+
     await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
       'Purchase Status': 'Confirmed',
       'Fulfillment Status': 'Allocated',
