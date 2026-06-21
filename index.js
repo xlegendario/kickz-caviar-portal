@@ -646,7 +646,9 @@ async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buye
         "Name: Kickz Caviar",
         "IBAN: NL21INGB0109644271",
         `Reference: ${memberWtbId}`,
-        ""OR"",
+        "",
+        "OR",
+        "",
         "Paypal: financial@payoutbykickzcaviar.com",
         `Reference: ${memberWtbId}`,
         "",
@@ -681,6 +683,19 @@ async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buye
 async function handleMemberWtbPaymentGate(memberWtbRecordId) {
   const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
   const f = memberWtb.fields || {};
+
+  const currentPaymentStatus = asText(f["Payment Status"]);
+
+  if (
+    currentPaymentStatus === "Requested" ||
+    currentPaymentStatus === "Paid" ||
+    currentPaymentStatus === "Trusted"
+  ) {
+    return {
+      status: "already_processed",
+      payment_status: currentPaymentStatus
+    };
+  }
 
   const buyerRecordId = Array.isArray(f["Buyer Seller ID"])
     ? f["Buyer Seller ID"][0]
