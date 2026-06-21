@@ -612,7 +612,8 @@ async function sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId) {
   return true;
 }
 
-async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buyerSeller) {
+async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buyerSeller, options = {}) {
+  const trusted = options.trusted === true;
   await initKickzDealDiscord();
 
   const discordUserId = asText(buyerSeller.discord_id || buyerSeller.discord_user_id || buyerSeller.discord_id_raw);
@@ -634,13 +635,25 @@ async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buye
     embeds: [{
       title: "💳 Payment Required",
       description: [
-        `**Member WTB:** ${memberWtbId}`,
+        `**We succesfully matched a seller to your Want To Buy!`,
+        "",
+        `**Order Number:** ${memberWtbId}`,
         "",
         `**Product:** ${asText(memberFields["Product Name"]) || "—"}`,
         `**SKU:** ${asText(memberFields["SKU"]) || "—"}`,
         `**Size:** ${asText(memberFields["Size"]) || "—"}`,
         "",
         `**Amount:** €${amount.toFixed(2)}`,
+        "",
+        ...(trusted
+          ? [
+              "Please complete the payment using one of the methods below.",
+              "This deal has already moved forward because your account is trusted, but fast payment is highly appreciated :pray:"
+            ]
+          : [
+              "Please complete the payment using one of the methods below.",
+              "**The order will not be processed until payment is confirmed.**"
+            ]),
         "",
         "**Payment details**",
         "Name: Kickz Caviar",
@@ -669,7 +682,7 @@ async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buye
   });
 
   await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
-    "Payment Status": "Requested",
+    "Payment Status": trusted ? "Trusted" : "Requested",
     "Payment Request Channel ID": message.channelId,
     "Payment Request Message ID": message.id
   });
@@ -712,13 +725,12 @@ async function handleMemberWtbPaymentGate(memberWtbRecordId) {
   const trustedBuyer = buyerFields["Trusted Buyer?"] === true;
 
   if (trustedBuyer) {
-    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
-      "Payment Status": "Trusted",
-      "Payment Confirmed At": new Date().toISOString()
+    await sendMemberWtbPaymentRequest(memberWtbRecordId, f, buyer, {
+      trusted: true
     });
-
+  
     await sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId);
-
+  
     return {
       status: "trusted"
     };
@@ -1480,7 +1492,7 @@ function bindConsignmentDiscordButtons(client) {
       const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
       const f = memberWtb.fields || {};
     
-      if (!["Requested", "Pending"].includes(asText(f["Payment Status"]))) {
+      if (!["Requested", "Pending", "Trusted"].includes(asText(f["Payment Status"]))) {
         await interaction.message.edit({
           content: "❌ Payment is already processed or this request is no longer active.",
           embeds: interaction.message.embeds,
@@ -9215,13 +9227,14 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       "❌ This Member WTB was already allocated to another seller."
     );
 
-    await handleMemberWtbPaymentGate(memberWtbRecordId);
+    const paymentGate = await handleMemberWtbPaymentGate(memberWtbRecordId);
 
     return res.json({
       ok: true,
       inventory_unit_record_id: inventoryUnit.id,
       member_wtb_record_id: memberWtbRecordId,
-      seller_offer_record_id: sellerOfferRecordId
+      seller_offer_record_id: sellerOfferRecordId,
+      payment_gate: paymentGate
     });
   } catch (err) {
     console.error('Failed to process Member WTB seller offer:', err);
