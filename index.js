@@ -1430,39 +1430,38 @@ function bindConsignmentDiscordButtons(client) {
         return;
       }
     
+      const sku = asText(f["SKU"]);
+      const size = asText(f["Size"]);
       const maxPrice = Number(f["Max Price"] || 0);
     
-      const memberWtbId =
-        asText(f["Member WTB ID"]) ||
-        asText(f["WTB ID"]) ||
-        memberWtbRecordId;
+      const availableInventoryUnits = await airtable(INVENTORY_UNITS_TABLE)
+        .select({
+          filterByFormula: `AND(
+            {SKU} = "${sku}",
+            {Size} = "${size}",
+            {Availability Status} = "Available"
+          )`,
+          maxRecords: 1
+        })
+        .firstPage();
     
-      const inventoryFields = {
-        "Product Name": asText(f["Product Name"]),
-        "SKU": asText(f["SKU"]),
-        "Size": asText(f["Size"]),
-        "Brand": asText(f["Brand"]),
+      const inventoryUnit = availableInventoryUnits[0];
     
-        "VAT Type": "Margin",
-        "Purchase Price": Math.max(0, maxPrice - 10),
-        "Shipping Deduction": 0,
-        "Purchase Date": new Date().toLocaleDateString("en-CA"),
+      if (!inventoryUnit) {
+        await interaction.message.edit({
+          content: "❌ No available KC stock found for this SKU / size.",
+          embeds: interaction.message.embeds,
+          components: []
+        });
+        return;
+      }
     
-        "Ticket Number": memberWtbId,
-    
-        "Type": "Custom",
-        "Source": "Outsourced",
-        "Verification Status": "Verified",
-        "Payment Note": `€${Math.max(0, maxPrice - 10).toFixed(2)}`,
-        "Payment Status": "To Pay",
-        "Availability Status": "Sold",
-    
-        "Selling Price": maxPrice,
+      await airtable(INVENTORY_UNITS_TABLE).update(inventoryUnit.id, {
+        "Availability Status": "Reserved",
         "Selling Method": "Kickz Caviar",
+        "Selling Price": maxPrice,
         "Member WTBs": [memberWtbRecordId]
-      };
-    
-      const inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).create(inventoryFields);
+      });
     
       await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
         "Purchase Status": "Confirmed",
@@ -1472,7 +1471,7 @@ function bindConsignmentDiscordButtons(client) {
       });
     
       await interaction.message.edit({
-        content: "✅ KC accepted this Member WTB offer and allocated it.",
+        content: "✅ KC stock accepted and allocated.",
         embeds: interaction.message.embeds,
         components: []
       });
