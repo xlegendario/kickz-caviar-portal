@@ -516,16 +516,16 @@ submitBuyingActionBtn?.addEventListener("click", async () => {
     return;
   }
 
-  if (selectedBuyingAction.action !== "buy") {
-    buyingActionError.textContent = "Offer flow is not active yet.";
-    return;
-  }
-
   submitBuyingActionBtn.disabled = true;
   submitBuyingActionBtn.textContent = "Submitting...";
 
   try {
-    const response = await fetch("/api/buying/requests", {
+    const endpoint =
+      selectedBuyingAction.action === "offer"
+        ? "/api/buying/offers"
+        : "/api/buying/requests";
+    
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -535,7 +535,8 @@ submitBuyingActionBtn?.addEventListener("click", async () => {
         seller_id: currentSeller.seller_id,
         sku: selectedBuyingAction.product.sku,
         size: selectedBuyingAction.size.size,
-        inventory_type: selectedBuyingAction.inventoryType
+        inventory_type: selectedBuyingAction.inventoryType,
+        offer_price: offerAmount
       })
     });
 
@@ -548,7 +549,11 @@ submitBuyingActionBtn?.addEventListener("click", async () => {
     closeBuyingActionFlow();
     closeBuyingProductFlow();
 
-    showSuccessToast("Purchase request submitted");
+    showSuccessToast(
+      selectedBuyingAction.action === "offer"
+        ? "Offer submitted"
+        : "Purchase request submitted"
+    );
 
     if (currentMainMode === "buying") {
       loadBuyingProducts({ force: true });
