@@ -565,6 +565,45 @@ async function disableConsignmentDiscordButtons(channelId, messageId, note, pref
   return false;
 }
 
+async function disableMemberWtbKcOfferButtons(memberWtbRecordId, note) {
+  const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+  const f = memberWtb.fields || {};
+
+  const channelId = asText(f["KC Offer Channel ID"]);
+  const messageId = asText(f["KC Offer Message ID"]);
+
+  if (!channelId || !messageId) return false;
+
+  await initKickzDealDiscord();
+
+  const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
+  if (!channel) return false;
+
+  const message = await channel.messages.fetch(messageId).catch(() => null);
+  if (!message) return false;
+
+  await message.edit({
+    content: note || "❌ This Member WTB is no longer available.",
+    embeds: message.embeds,
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 2,
+            label: "Closed",
+            custom_id: "kc_offer_closed_disabled",
+            disabled: true
+          }
+        ]
+      }
+    ]
+  });
+
+  return true;
+}
+
 function sanitizeDiscordChannelName(value) {
   return asText(value)
     .toLowerCase()
@@ -1059,6 +1098,11 @@ async function confirmConsignmentOffer(offerId) {
       .eq("id", lockedOffer.id);
   
     await closeCompetingMemberWtbOffers(memberWtbRecordId, lockedOffer.id);
+
+    await disableMemberWtbKcOfferButtons(
+      memberWtbRecordId,
+      "❌ This Member WTB was already allocated to a consignor."
+    );
   
     return {
       ok: true,
@@ -1469,6 +1513,8 @@ function bindConsignmentDiscordButtons(client) {
         "Linked Inventory Unit": [inventoryUnit.id],
         "Final Buying Price": maxPrice
       });
+
+      await closeCompetingMemberWtbOffers(memberWtbRecordId, null);
     
       await interaction.message.edit({
         content: "✅ KC stock accepted and allocated.",
@@ -8903,7 +8949,7 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
     if (asText(memberFields['Fulfillment Status']) === 'Allocated') {
       return res.status(409).json({ error: 'Member WTB already allocated' });
     }
-
+    
     const sellerOffer = await airtable(SELLER_OFFERS_TABLE).find(sellerOfferRecordId);
     const offerFields = sellerOffer.fields || {};
 
@@ -8961,6 +9007,11 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       'Linked Inventory Unit': [inventoryUnit.id],
       'Final Buying Price': maxPrice
     });
+    
+    await disableMemberWtbKcOfferButtons(
+      memberWtbRecordId,
+      "❌ This Member WTB was already allocated to another seller."
+    );
 
     return res.json({
       ok: true,
@@ -9031,10 +9082,10 @@ app.post("/api/buying/offers", async (req, res) => {
 
     const imageUrl = asText(product.image_url);
 
-    const currentLowestSourcePrice =
-      inventoryType === "b2b"
-        ? Math.round(offerPrice)
-        : Math.round(offerPrice);
+    const currentLowestSourcePrice = Math.max(
+      0,
+      Math.round(offerPrice - 10)
+    );
 
     const internalNotes = [
       "Buying Portal Offer",
@@ -9103,6 +9154,14 @@ app.post("/api/buying/offers", async (req, res) => {
         memberWtbRecordId: created.id,
         fields
       });
+      
+      if (kcOfferRequest?.channelId && kcOfferRequest?.messageId) {
+        await airtable(MEMBER_WTBS_TABLE).update(created.id, {
+          "KC Offer Channel ID": kcOfferRequest.channelId,
+          "KC Offer Message ID": kcOfferRequest.messageId
+        });
+      }
+      
     } catch (err) {
       console.error("Failed to send KC offer request:", err);
     }
