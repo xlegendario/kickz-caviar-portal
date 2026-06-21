@@ -8334,22 +8334,6 @@ async function refreshBuyingMasterCache() {
 
     const rawConsignmentRows = await fetchAllConsignmentInventoryRows();
 
-    console.log("CONSIGNMENT INVENTORY COUNT", rawConsignmentRows.length);
-    console.log(
-      "JR9633 ALL",
-      rawConsignmentRows
-        .filter((row) => normalizeSku(row.sku) === "JR9633")
-        .map((row) => ({
-          id: row.id,
-          sku: row.sku,
-          size: row.size,
-          size_key: getBuyingSizeKey(row.size),
-          quantity: row.quantity,
-          price: row.selling_price_suggested,
-          vat_type: row.vat_type
-        }))
-    );
-
     const consignmentStockKeys = [
       ...new Set(
         (rawConsignmentRows || [])
