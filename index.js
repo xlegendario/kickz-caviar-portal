@@ -1218,7 +1218,9 @@ function bindConsignmentDiscordButtons(client) {
       !customId.startsWith("counter_consignment_offer:") &&
       !customId.startsWith("counter_consignment_offer_modal:") &&
       !customId.startsWith("confirm_member_wtb_kc:") &&
-      !customId.startsWith("deny_member_wtb_kc:")
+      !customId.startsWith("deny_member_wtb_kc:") &&
+      !customId.startsWith("accept_member_wtb_kc_offer:") &&
+      !customId.startsWith("deny_member_wtb_kc_offer:")
     ) {
       return;
     }
@@ -1406,6 +1408,81 @@ function bindConsignmentDiscordButtons(client) {
     
       await interaction.message.edit({
         content: "❌ KC denied. WTB flow started.",
+        embeds: interaction.message.embeds,
+        components: []
+      });
+    
+      return;
+    }
+
+    if (customId.startsWith("accept_member_wtb_kc_offer:")) {
+      const memberWtbRecordId = customId.split(":")[1];
+    
+      const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+      const f = memberWtb.fields || {};
+    
+      if (asText(f["Fulfillment Status"]) === "Allocated") {
+        await interaction.message.edit({
+          content: "❌ This Member WTB is already allocated.",
+          embeds: interaction.message.embeds,
+          components: []
+        });
+        return;
+      }
+    
+      const maxPrice = Number(f["Max Price"] || 0);
+    
+      const memberWtbId =
+        asText(f["Member WTB ID"]) ||
+        asText(f["WTB ID"]) ||
+        memberWtbRecordId;
+    
+      const inventoryFields = {
+        "Product Name": asText(f["Product Name"]),
+        "SKU": asText(f["SKU"]),
+        "Size": asText(f["Size"]),
+        "Brand": asText(f["Brand"]),
+    
+        "VAT Type": "Margin",
+        "Purchase Price": Math.max(0, maxPrice - 10),
+        "Shipping Deduction": 0,
+        "Purchase Date": new Date().toLocaleDateString("en-CA"),
+    
+        "Ticket Number": memberWtbId,
+    
+        "Type": "Custom",
+        "Source": "Outsourced",
+        "Verification Status": "Verified",
+        "Payment Note": `€${Math.max(0, maxPrice - 10).toFixed(2)}`,
+        "Payment Status": "To Pay",
+        "Availability Status": "Sold",
+    
+        "Selling Price": maxPrice,
+        "Selling Method": "Kickz Caviar",
+        "Member WTBs": [memberWtbRecordId]
+      };
+    
+      const inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).create(inventoryFields);
+    
+      await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+        "Purchase Status": "Confirmed",
+        "Fulfillment Status": "Allocated",
+        "Linked Inventory Unit": [inventoryUnit.id],
+        "Final Buying Price": maxPrice
+      });
+    
+      await interaction.message.edit({
+        content: "✅ KC accepted this Member WTB offer and allocated it.",
+        embeds: interaction.message.embeds,
+        components: []
+      });
+    
+      return;
+    }
+    
+    if (customId.startsWith("deny_member_wtb_kc_offer:")) {
+      await interaction.message.edit({
+        content: "❌ KC denied this Member WTB offer.",
         embeds: interaction.message.embeds,
         components: []
       });
@@ -8426,6 +8503,66 @@ async function sendBuyingKcConfirmationRequest({ memberWtbRecordId, fields }) {
   };
 }
 
+async function sendBuyingKcOfferRequest({ memberWtbRecordId, fields }) {
+  if (!BUYING_KC_OFFER_REQUESTS_CHANNEL_ID) {
+    console.warn("Skipping KC offer request: missing BUYING_KC_OFFER_REQUESTS_CHANNEL_ID");
+    return null;
+  }
+
+  await initKickzDealDiscord();
+
+  const channel = await kickzDealDiscordClient.channels.fetch(
+    BUYING_KC_OFFER_REQUESTS_CHANNEL_ID
+  );
+
+  const maxPrice = Number(fields["Max Price"] || 0);
+
+  const message = await channel.send({
+    embeds: [{
+      title: "🟡 KC Buying Offer Received",
+      description: [
+        `**${asText(fields["Product Name"]) || "—"}**`,
+        "",
+        `**SKU:** ${asText(fields["SKU"]) || "—"}`,
+        `**Size:** ${asText(fields["Size"]) || "—"}`,
+        `**Brand:** ${asText(fields["Brand"]) || "—"}`,
+        `**Buyer Offer:** €${maxPrice.toFixed(2)}`,
+        `**Inventory Filter:** ${asText(fields["Buying Inventory Filter"]) || "—"}`,
+        "",
+        "Accept only if KC wants to fulfill this Member WTB at this price."
+      ].join("\n"),
+      color: 0xf1c40f,
+      footer: {
+        text: `Member WTB: ${memberWtbRecordId}`
+      },
+      timestamp: new Date().toISOString()
+    }],
+    components: [{
+      type: 1,
+      components: [
+        {
+          type: 2,
+          style: 3,
+          label: "Accept KC Offer",
+          custom_id: `accept_member_wtb_kc_offer:${memberWtbRecordId}`
+        },
+        {
+          type: 2,
+          style: 4,
+          label: "Deny",
+          custom_id: `deny_member_wtb_kc_offer:${memberWtbRecordId}`
+        }
+      ]
+    }]
+  });
+
+  return {
+    channelId: message.channelId,
+    messageId: message.id,
+    url: message.url
+  };
+}
+
 async function postMemberWtbToWtbBot({
   recordId,
   productName,
@@ -8815,6 +8952,158 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
 
     return res.status(500).json({
       error: 'Failed to process Member WTB seller offer',
+      details: err.message
+    });
+  }
+});
+
+app.post("/api/buying/offers", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const sellerId = asText(req.body?.seller_id);
+    const sku = normalizeSku(req.body?.sku);
+    const size = getBuyingSizeKey(req.body?.size);
+    const inventoryType = normalizeBuyingInventoryType(req.body?.inventory_type);
+    const offerPrice = Number(req.body?.offer_price);
+
+    if (!sellerRecordId || !sellerId || !sku || !size) {
+      return res.status(400).json({
+        error: "Missing buyer, SKU or size"
+      });
+    }
+
+    if (!Number.isFinite(offerPrice) || offerPrice <= 0) {
+      return res.status(400).json({
+        error: "Invalid offer price"
+      });
+    }
+
+    const liveSources = await getLiveBuyingSources({ force: true });
+
+    const matchingSources = (liveSources || []).filter((source) => {
+      const sourceSku = normalizeSku(source.sku);
+      const sourceSize = getBuyingSizeKey(source.size);
+
+      if (sourceSku !== sku || sourceSize !== size) return false;
+
+      const sourceType = asText(source.source_type);
+      const vatType = asText(source.vat_type);
+
+      if (inventoryType === "b2b") {
+        return vatType === "VAT0" || vatType === "VAT21";
+      }
+
+      if (inventoryType === "private") {
+        return vatType === "Margin";
+      }
+
+      return ["kc", "consignment"].includes(sourceType);
+    });
+
+    const product =
+      matchingSources[0] ||
+      (liveSources || []).find((source) =>
+        normalizeSku(source.sku) === sku &&
+        getBuyingSizeKey(source.size) === size
+      ) ||
+      {};
+
+    const imageUrl = asText(product.image_url);
+
+    const currentLowestSourcePrice =
+      inventoryType === "b2b"
+        ? Math.round(offerPrice)
+        : Math.round(offerPrice);
+
+    const internalNotes = [
+      "Buying Portal Offer",
+      "",
+      `Filter: ${getBuyingInventoryFilterLabel(inventoryType)}`,
+      `Buyer Offer Price: ${buyingMoneyValue(offerPrice)}`,
+      `Matching Sources: ${matchingSources.length}`,
+      "KC Priority: No"
+    ].join("\n");
+
+    const fields = {
+      "Product Name": asText(product.product_name) || sku,
+      "SKU": sku,
+      "Size": size,
+      "Brand": asText(product.brand),
+      "Date": new Date().toLocaleDateString("en-CA"),
+
+      "Max Price": offerPrice,
+      "Current Lowest Source Price": currentLowestSourcePrice,
+      "Fulfillment Status": "Outsource",
+      "Purchase Status": "Offers Sent",
+      "Payment Status": "Pending",
+
+      "Buyer Seller ID": [sellerRecordId],
+      "Auto Accept Seller Offers?": true,
+
+      "Buying Inventory Filter": getBuyingInventoryFilterLabel(inventoryType),
+      "Buying Selected Source Type": "Buyer Offer",
+      "Buying Selected Source ID": "",
+      "Buying Source Snapshot": buildBuyingSourceSnapshot(matchingSources),
+
+      "Internal Notes": internalNotes
+    };
+
+    if (imageUrl) {
+      fields["Picture"] = [{ url: imageUrl }];
+    }
+
+    const created = await airtable(MEMBER_WTBS_TABLE).create(fields);
+
+    let wtbPost = null;
+    let consignmentRequests = null;
+    let kcOfferRequest = null;
+
+    try {
+      wtbPost = await postMemberWtbToWtbBot({
+        recordId: created.id,
+        productName: fields["Product Name"],
+        sku,
+        size,
+        brand: fields["Brand"],
+        imageUrl
+      });
+    } catch (err) {
+      console.error("Failed to post Member WTB offer to WTB bot:", err);
+    }
+
+    try {
+      consignmentRequests = await sendMemberWtbConsignmentRequests(created.id);
+    } catch (err) {
+      console.error("Failed to send Member WTB offer consignment requests:", err);
+    }
+
+    try {
+      kcOfferRequest = await sendBuyingKcOfferRequest({
+        memberWtbRecordId: created.id,
+        fields
+      });
+    } catch (err) {
+      console.error("Failed to send KC offer request:", err);
+    }
+
+    return res.json({
+      success: true,
+      member_wtb_record_id: created.id,
+      purchase_status: "Offers Sent",
+      max_price: offerPrice,
+      max_price_display: buyingMoneyValue(offerPrice),
+      wtb_posted: !!wtbPost,
+      wtb_post: wtbPost,
+      consignment_requests_sent: !!consignmentRequests,
+      consignment_requests: consignmentRequests,
+      kc_offer_request_sent: !!kcOfferRequest,
+      kc_offer_request: kcOfferRequest
+    });
+  } catch (err) {
+    console.error("Failed to create buying offer:", err);
+
+    return res.status(500).json({
+      error: "Failed to create buying offer",
       details: err.message
     });
   }
