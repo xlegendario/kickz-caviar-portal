@@ -8262,6 +8262,46 @@ function buildBuyingSourceSnapshot(sources) {
   );
 }
 
+async function fetchAllConsignmentInventoryRows() {
+  const pageSize = 1000;
+  let from = 0;
+  let allRows = [];
+
+  while (true) {
+    const to = from + pageSize - 1;
+
+    const { data, error } = await supabase
+      .from("consignment_inventory")
+      .select(`
+        id,
+        seller_record_id,
+        seller_id,
+        product_name,
+        sku,
+        size,
+        brand,
+        vat_type,
+        selling_price_suggested,
+        quantity,
+        image_url
+      `)
+      .gt("quantity", 0)
+      .gt("selling_price_suggested", 0)
+      .range(from, to);
+
+    if (error) throw error;
+
+    const rows = data || [];
+    allRows.push(...rows);
+
+    if (rows.length < pageSize) break;
+
+    from += pageSize;
+  }
+
+  return allRows;
+}
+
 async function refreshBuyingMasterCache() {
   if (buyingMasterCache.refreshPromise) {
     return buyingMasterCache.refreshPromise;
@@ -8292,25 +8332,23 @@ async function refreshBuyingMasterCache() {
 
     const inventorySources = inventoryRecords.map(getBuyingInventoryProduct);
 
-    const { data: rawConsignmentRows, error: consignmentError } = await supabase
-      .from("consignment_inventory")
-      .select(`
-        id,
-        seller_record_id,
-        seller_id,
-        product_name,
-        sku,
-        size,
-        brand,
-        vat_type,
-        selling_price_suggested,
-        quantity,
-        image_url
-      `)
-      .gt("quantity", 0)
-      .gt("selling_price_suggested", 0);
+    const rawConsignmentRows = await fetchAllConsignmentInventoryRows();
 
-    if (consignmentError) throw consignmentError;
+    console.log("CONSIGNMENT INVENTORY COUNT", rawConsignmentRows.length);
+    console.log(
+      "JR9633 ALL",
+      rawConsignmentRows
+        .filter((row) => normalizeSku(row.sku) === "JR9633")
+        .map((row) => ({
+          id: row.id,
+          sku: row.sku,
+          size: row.size,
+          size_key: getBuyingSizeKey(row.size),
+          quantity: row.quantity,
+          price: row.selling_price_suggested,
+          vat_type: row.vat_type
+        }))
+    );
 
     const consignmentStockKeys = [
       ...new Set(
