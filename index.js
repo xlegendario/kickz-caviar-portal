@@ -9255,6 +9255,61 @@ app.post("/api/buying/requests", async (req, res) => {
   }
 });
 
+app.post("/api/consignment/offers/close-for-source", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (
+      !process.env.AIRTABLE_WEBHOOK_SECRET ||
+      secret !== process.env.AIRTABLE_WEBHOOK_SECRET
+    ) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const sourceType = asText(req.body?.source_type);
+    const recordId = asText(req.body?.record_id);
+
+    if (!recordId) {
+      return res.status(400).json({ error: "Missing record_id" });
+    }
+
+    let query = supabase
+      .from("consignment_offers")
+      .update({
+        status: "closed",
+        closed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq("status", "open");
+
+    if (sourceType === "member_wtb") {
+      query = query
+        .eq("source_type", "member_wtb")
+        .eq("member_wtb_record_id", recordId);
+    } else {
+      query = query
+        .eq("order_record_id", recordId);
+    }
+
+    const { error } = await query;
+
+    if (error) throw error;
+
+    return res.json({
+      ok: true,
+      source_type: sourceType,
+      record_id: recordId
+    });
+  } catch (err) {
+    console.error("Failed to close consignment offers for source:", err);
+
+    return res.status(500).json({
+      error: "Failed to close consignment offers for source",
+      details: err.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Kickz Caviar Portal running on port ${PORT}`);
 });
