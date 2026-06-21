@@ -45,28 +45,22 @@
     }
 
     .brand {
-      display: inline-flex;
-      align-items: center;
+      display: flex;
       justify-content: center;
-      gap: 10px;
-      margin-bottom: 18px;
-      color: var(--gold);
-      font-size: 14px;
-      font-weight: 900;
-      letter-spacing: 0.18em;
-      text-transform: uppercase;
+      align-items: center;
+      margin-bottom: 22px;
     }
-
-    .brand-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      background: var(--gold);
-      box-shadow: 0 0 18px rgba(241, 196, 15, 0.55);
+    
+    .brand-logo {
+      width: 110px;
+      height: auto;
+      display: block;
+      filter: drop-shadow(0 0 18px rgba(241, 196, 15, 0.15));
     }
 
     h1 {
       margin: 0;
+      margin-top: 8px;
       font-size: clamp(34px, 6vw, 58px);
       line-height: 1;
       font-weight: 900;
@@ -275,8 +269,11 @@
   <div class="wrap">
     <div class="header">
       <div class="brand">
-        <span class="brand-dot"></span>
-        Kickz Caviar
+        <img
+          src="https://i.imgur.com/gRmfHif.png"
+          alt="Kickz Caviar"
+          class="brand-logo"
+        />
       </div>
 
       <h1>Upload Shipping Label</h1>
