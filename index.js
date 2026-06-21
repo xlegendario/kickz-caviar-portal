@@ -8363,6 +8363,21 @@ async function refreshBuyingMasterCache() {
       getBuyingConsignmentProduct(row, consignmentImageMap)
     );
 
+    console.log("DEBUG JR9633 44 sources", {
+      raw: (rawConsignmentRows || []).filter((r) =>
+        normalizeSku(r.sku) === "JR9633" &&
+        getBuyingSizeKey(r.size) === "44"
+      ),
+      filtered: (consignmentRows || []).filter((r) =>
+        normalizeSku(r.sku) === "JR9633" &&
+        getBuyingSizeKey(r.size) === "44"
+      ),
+      sources: consignmentSources.filter((s) =>
+        normalizeSku(s.sku) === "JR9633" &&
+        getBuyingSizeKey(s.size) === "44"
+      )
+    });
+
     const sources = [...inventorySources, ...consignmentSources];
 
     buyingMasterCache.sources = sources;
