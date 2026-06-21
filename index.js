@@ -604,6 +604,118 @@ async function disableMemberWtbKcOfferButtons(memberWtbRecordId, note) {
   return true;
 }
 
+async function sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId) {
+  console.log("TODO: send Member WTB deal update + label request", {
+    memberWtbRecordId
+  });
+
+  return true;
+}
+
+async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buyerSeller) {
+  await initKickzDealDiscord();
+
+  const discordUserId = asText(buyerSeller.discord_id || buyerSeller.discord_user_id || buyerSeller.discord_id_raw);
+
+  if (!discordUserId) {
+    throw new Error("Buyer is missing Discord ID");
+  }
+
+  const user = await kickzDealDiscordClient.users.fetch(discordUserId);
+  const dm = await user.createDM();
+
+  const amount = Number(memberFields["Final Buying Price"] || memberFields["Max Price"] || 0);
+  const memberWtbId =
+    asText(memberFields["Member WTB ID"]) ||
+    asText(memberFields["WTB ID"]) ||
+    memberWtbRecordId;
+
+  const message = await dm.send({
+    embeds: [{
+      title: "💳 Payment Required",
+      description: [
+        `**Member WTB:** ${memberWtbId}`,
+        "",
+        `**Product:** ${asText(memberFields["Product Name"]) || "—"}`,
+        `**SKU:** ${asText(memberFields["SKU"]) || "—"}`,
+        `**Size:** ${asText(memberFields["Size"]) || "—"}`,
+        "",
+        `**Amount:** €${amount.toFixed(2)}`,
+        "",
+        "**Payment details**",
+        "Name: Kickz Caviar",
+        "IBAN: NL21INGB0109644271",
+        `Reference: ${memberWtbId}`,
+        ""OR"",
+        "Paypal: financial@payoutbykickzcaviar.com",
+        `Reference: ${memberWtbId}`,
+        "",
+        "After payment, click **Confirm Payment** below."
+      ].join("\n"),
+      color: 0xf1c40f,
+      timestamp: new Date().toISOString()
+    }],
+    components: [{
+      type: 1,
+      components: [{
+        type: 2,
+        style: 3,
+        label: "Confirm Payment",
+        custom_id: `confirm_member_wtb_payment:${memberWtbRecordId}`
+      }]
+    }]
+  });
+
+  await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+    "Payment Status": "Requested",
+    "Payment Request Channel ID": message.channelId,
+    "Payment Request Message ID": message.id
+  });
+
+  return {
+    channelId: message.channelId,
+    messageId: message.id
+  };
+}
+
+async function handleMemberWtbPaymentGate(memberWtbRecordId) {
+  const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+  const f = memberWtb.fields || {};
+
+  const buyerRecordId = Array.isArray(f["Buyer Seller ID"])
+    ? f["Buyer Seller ID"][0]
+    : null;
+
+  if (!buyerRecordId) {
+    throw new Error("Member WTB missing Buyer Seller ID");
+  }
+
+  const buyerRecord = await airtable(SELLERS_TABLE).find(buyerRecordId);
+  const buyerFields = buyerRecord.fields || {};
+  const buyer = normalizeSeller(buyerRecord);
+
+  const trustedBuyer = buyerFields["Trusted Buyer?"] === true;
+
+  if (trustedBuyer) {
+    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+      "Payment Status": "Trusted",
+      "Payment Confirmed At": new Date().toISOString()
+    });
+
+    await sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId);
+
+    return {
+      status: "trusted"
+    };
+  }
+
+  await sendMemberWtbPaymentRequest(memberWtbRecordId, f, buyer);
+
+  return {
+    status: "requested"
+  };
+}
+
 function sanitizeDiscordChannelName(value) {
   return asText(value)
     .toLowerCase()
@@ -1103,6 +1215,8 @@ async function confirmConsignmentOffer(offerId) {
       memberWtbRecordId,
       "❌ This Member WTB was already allocated to a consignor."
     );
+
+    await handleMemberWtbPaymentGate(memberWtbRecordId);
   
     return {
       ok: true,
@@ -1264,7 +1378,8 @@ function bindConsignmentDiscordButtons(client) {
       !customId.startsWith("confirm_member_wtb_kc:") &&
       !customId.startsWith("deny_member_wtb_kc:") &&
       !customId.startsWith("accept_member_wtb_kc_offer:") &&
-      !customId.startsWith("deny_member_wtb_kc_offer:")
+      !customId.startsWith("deny_member_wtb_kc_offer:") &&
+      !customId.startsWith("confirm_member_wtb_payment:")
     ) {
       return;
     }
@@ -1343,6 +1458,37 @@ function bindConsignmentDiscordButtons(client) {
     }
 
     await interaction.deferUpdate().catch(() => {});
+
+    if (customId.startsWith("confirm_member_wtb_payment:")) {
+      const memberWtbRecordId = customId.split(":")[1];
+    
+      const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+      const f = memberWtb.fields || {};
+    
+      if (!["Requested", "Pending"].includes(asText(f["Payment Status"]))) {
+        await interaction.message.edit({
+          content: "❌ Payment is already processed or this request is no longer active.",
+          embeds: interaction.message.embeds,
+          components: []
+        });
+        return;
+      }
+    
+      await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+        "Payment Status": "Paid",
+        "Payment Confirmed At": new Date().toISOString()
+      });
+    
+      await interaction.message.edit({
+        content: "✅ Payment confirmed.",
+        embeds: interaction.message.embeds,
+        components: []
+      });
+    
+      await sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId);
+    
+      return;
+    }
 
     if (customId.startsWith("confirm_member_wtb_kc:")) {
       const memberWtbRecordId = customId.split(":")[1];
@@ -1515,6 +1661,8 @@ function bindConsignmentDiscordButtons(client) {
       });
 
       await closeCompetingMemberWtbOffers(memberWtbRecordId, null);
+
+      await handleMemberWtbPaymentGate(memberWtbRecordId);
     
       await interaction.message.edit({
         content: "✅ KC stock accepted and allocated.",
@@ -9012,6 +9160,8 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       memberWtbRecordId,
       "❌ This Member WTB was already allocated to another seller."
     );
+
+    await handleMemberWtbPaymentGate(memberWtbRecordId);
 
     return res.json({
       ok: true,
