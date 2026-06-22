@@ -604,12 +604,364 @@ async function disableMemberWtbKcOfferButtons(memberWtbRecordId, note) {
   return true;
 }
 
-async function sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId) {
-  console.log("TODO: send Member WTB deal update + label request", {
-    memberWtbRecordId
+function firstLinkedRecordId(value) {
+  if (Array.isArray(value)) {
+    const first = value[0];
+    if (!first) return "";
+    if (typeof first === "string") return first;
+    return first.id || "";
+  }
+
+  if (typeof value === "string") return value;
+
+  return "";
+}
+
+function buildMemberWtbReadyToShipEmbed({ memberFields, payout }) {
+  const memberWtbId =
+    asText(memberFields["Member WTB ID"]) ||
+    asText(memberFields["WTB ID"]) ||
+    "Member WTB";
+
+  return {
+    title: "📦 Ready To Ship",
+    description: [
+      `**${asText(memberFields["Product Name"]) || "—"}**`,
+      "",
+      `**Member WTB:** ${memberWtbId}`,
+      `**SKU:** ${asText(memberFields["SKU"]) || "—"}`,
+      `**Size:** ${asText(memberFields["Size"]) || "—"}`,
+      `**Brand:** ${asText(memberFields["Brand"]) || "—"}`,
+      "",
+      `**Final payout:** €${Number(payout || 0).toFixed(2)}`,
+      "",
+      "Click **Request Label** when you are ready to ship."
+    ].join("\n"),
+    color: 0x2ecc71,
+    footer: {
+      text: "Kickz Caviar"
+    },
+    timestamp: new Date().toISOString()
+  };
+}
+
+async function sendMemberWtbReadyToShipToChannel({
+  channel,
+  sellerDiscordId,
+  memberWtbRecordId,
+  memberFields,
+  payout
+}) {
+  const message = await channel.send({
+    content: sellerDiscordId ? `<@${sellerDiscordId}>` : null,
+    embeds: [
+      buildMemberWtbReadyToShipEmbed({
+        memberFields,
+        payout
+      })
+    ],
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 3,
+            label: "Request Label",
+            custom_id: `request_member_wtb_label:${memberWtbRecordId}`
+          }
+        ]
+      }
+    ]
   });
 
-  return true;
+  await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+    "Seller Deal Update Channel ID": message.channelId,
+    "Seller Deal Update Message ID": message.id
+  });
+
+  return {
+    channelId: message.channelId,
+    messageId: message.id
+  };
+}
+
+async function sendMemberWtbLabelRequestToBuyer(memberWtbRecordId) {
+  const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+  const f = memberWtb.fields || {};
+
+  const buyerRecordId = firstLinkedRecordId(f["Buyer Seller ID"]);
+
+  if (!buyerRecordId) {
+    throw new Error("Member WTB missing Buyer Seller ID");
+  }
+
+  const buyerRecord = await airtable(SELLERS_TABLE).find(buyerRecordId);
+  const buyer = normalizeSeller(buyerRecord);
+
+  const discordUserId = asText(
+    buyer.discord_id ||
+    buyer.discord_user_id ||
+    buyer.discord_id_raw ||
+    buyerRecord.fields?.["Discord User ID"]
+  );
+
+  if (!discordUserId) {
+    throw new Error("Buyer is missing Discord ID");
+  }
+
+  await initKickzDealDiscord();
+
+  const memberWtbId =
+    asText(f["Member WTB ID"]) ||
+    asText(f["WTB ID"]) ||
+    memberWtbRecordId;
+
+  const uploadUrl = `${APP_PUBLIC_BASE_URL}/member-wtb-label-request.html?member_wtb_id=${encodeURIComponent(memberWtbRecordId)}`;
+
+  const user = await kickzDealDiscordClient.users.fetch(discordUserId);
+  const dm = await user.createDM();
+
+  const message = await dm.send({
+    embeds: [
+      {
+        title: "📦 Shipping Label Requested",
+        description: [
+          `**Order Number:** ${memberWtbId}`,
+          "",
+          `**Product:** ${asText(f["Product Name"]) || "—"}`,
+          `**SKU:** ${asText(f["SKU"]) || "—"}`,
+          `**Size:** ${asText(f["Size"]) || "—"}`,
+          "",
+          "The seller is ready to ship.",
+          "Please upload the shipping label and tracking number using the button below."
+        ].join("\n"),
+        color: 0xf1c40f,
+        timestamp: new Date().toISOString()
+      }
+    ],
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 5,
+            label: "Upload Shipping Label",
+            url: uploadUrl
+          }
+        ]
+      }
+    ]
+  });
+
+  await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+    "Label Request Channel ID": message.channelId,
+    "Label Request Message ID": message.id,
+    "Label Requested At": new Date().toISOString()
+  });
+
+  return {
+    channelId: message.channelId,
+    messageId: message.id,
+    url: uploadUrl
+  };
+}
+
+async function sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId) {
+  const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+  const f = memberWtb.fields || {};
+
+  const linkedInventoryUnitId = firstLinkedRecordId(f["Linked Inventory Unit"]);
+  const selectedSourceType = asText(f["Buying Selected Source Type"]);
+
+  if (!linkedInventoryUnitId) {
+    console.log("Skipping Member WTB deal update: missing Linked Inventory Unit", {
+      memberWtbRecordId
+    });
+    return {
+      skipped: true,
+      reason: "missing_inventory_unit"
+    };
+  }
+
+  const inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).find(linkedInventoryUnitId);
+  const inventoryFields = inventoryUnit.fields || {};
+
+  const sellerRecordId = firstLinkedRecordId(inventoryFields["Seller ID"]);
+  const payout =
+    Number(inventoryFields["Purchase Price"] || 0) ||
+    Number(f["Current Lowest Source Price"] || 0) ||
+    Number(f["Final Buying Price"] || 0);
+
+  /*
+    KC Owned:
+    - No seller needs a Ready To Ship embed.
+    - Buyer should receive label upload DM directly.
+  */
+  if (selectedSourceType === "KC Owned" || !sellerRecordId) {
+    await sendMemberWtbLabelRequestToBuyer(memberWtbRecordId);
+
+    return {
+      ok: true,
+      type: "kc_owned",
+      action: "buyer_label_request_sent"
+    };
+  }
+
+  const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId);
+  const seller = normalizeSeller(sellerRecord);
+  const sellerFields = sellerRecord.fields || {};
+
+  const sellerDiscordId = asText(
+    seller.discord_id ||
+    seller.discord_user_id ||
+    seller.discord_id_raw ||
+    sellerFields["Discord User ID"]
+  );
+
+  /*
+    WTB Seller winner:
+    - WTB bot already created a Member WTB deal channel
+    - Member WTB field WTB Created Channel ID should contain that channel
+  */
+  const memberWtbDealChannelId = asText(f["WTB Created Channel ID"]);
+
+  if (memberWtbDealChannelId) {
+    await initKickzDealDiscord();
+
+    const channel = await kickzDealDiscordClient.channels
+      .fetch(memberWtbDealChannelId)
+      .catch(() => null);
+
+    if (!channel) {
+      throw new Error(`Member Created WTB deal channel not found: ${memberWtbDealChannelId}`);
+    }
+
+    return await sendMemberWtbReadyToShipToChannel({
+      channel,
+      sellerDiscordId,
+      memberWtbRecordId,
+      memberFields: f,
+      payout
+    });
+  }
+
+  /*
+    Consignment private-channel winner:
+    - Use seller Deal Updates channel if it exists.
+  */
+  const privateDealUpdatesChannelId = asText(seller.deal_updates_channel_id);
+
+  if (privateDealUpdatesChannelId) {
+    await initDiscord();
+
+    const channel = await discordClient.channels
+      .fetch(privateDealUpdatesChannelId)
+      .catch(() => null);
+
+    if (!channel) {
+      throw new Error(`Deal Updates channel not found: ${privateDealUpdatesChannelId}`);
+    }
+
+    return await sendMemberWtbReadyToShipToChannel({
+      channel,
+      sellerDiscordId,
+      memberWtbRecordId,
+      memberFields: f,
+      payout
+    });
+  }
+
+  /*
+    Consignor without private channels:
+    - Create a deal channel in KC server
+    - Send Ready To Ship there
+    - DM seller the channel link
+  */
+  await initKickzDealDiscord();
+
+  if (!sellerDiscordId) {
+    throw new Error(`Missing Discord ID for seller ${asText(seller.seller_id) || sellerRecordId}`);
+  }
+
+  const guild = await kickzDealDiscordClient.guilds.fetch(KICKZ_DEAL_SERVER_ID);
+
+  const memberWtbId =
+    asText(f["Member WTB ID"]) ||
+    asText(f["WTB ID"]) ||
+    memberWtbRecordId;
+
+  const channelName = sanitizeDiscordChannelName(memberWtbId);
+
+  const channel = await guild.channels.create({
+    name: channelName,
+    type: ChannelType.GuildText,
+    parent: CONSIGNMENT_DEAL_CATEGORY_ID,
+    permissionOverwrites: [
+      {
+        id: guild.roles.everyone.id,
+        deny: [PermissionFlagsBits.ViewChannel]
+      },
+      {
+        id: sellerDiscordId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.AttachFiles,
+          PermissionFlagsBits.EmbedLinks
+        ]
+      },
+      {
+        id: KICKZ_ADMIN_ROLE_ID,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.ManageChannels,
+          PermissionFlagsBits.AttachFiles,
+          PermissionFlagsBits.EmbedLinks
+        ]
+      },
+      {
+        id: kickzDealDiscordClient.user.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.ManageChannels,
+          PermissionFlagsBits.AttachFiles,
+          PermissionFlagsBits.EmbedLinks
+        ]
+      }
+    ],
+    reason: `Member WTB deal channel for ${asText(seller.seller_id) || sellerRecordId} / ${memberWtbId}`
+  });
+
+  await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+    "WTB Created Channel ID": channel.id
+  });
+
+  const readyMessage = await sendMemberWtbReadyToShipToChannel({
+    channel,
+    sellerDiscordId,
+    memberWtbRecordId,
+    memberFields: f,
+    payout
+  });
+
+  const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
+  await user.createDM().then((dm) =>
+    dm.send({
+      content: `Your Member WTB deal channel has been created: <#${channel.id}>`
+    })
+  );
+
+  return {
+    ...readyMessage,
+    deliveryType: "deal_channel"
+  };
 }
 
 async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buyerSeller, options = {}) {
@@ -1406,7 +1758,8 @@ function bindConsignmentDiscordButtons(client) {
       !customId.startsWith("deny_member_wtb_kc:") &&
       !customId.startsWith("accept_member_wtb_kc_offer:") &&
       !customId.startsWith("deny_member_wtb_kc_offer:") &&
-      !customId.startsWith("confirm_member_wtb_payment:")
+      !customId.startsWith("confirm_member_wtb_payment:") &&
+      !customId.startsWith("request_member_wtb_label:")
     ) {
       return;
     }
@@ -1517,6 +1870,38 @@ function bindConsignmentDiscordButtons(client) {
       return;
     }
 
+    if (customId.startsWith("request_member_wtb_label:")) {
+      const memberWtbRecordId = customId.split(":")[1];
+    
+      await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+        "Fulfillment Status": "Label Requested",
+        "Label Requested At": new Date().toISOString()
+      });
+    
+      await sendMemberWtbLabelRequestToBuyer(memberWtbRecordId);
+    
+      await interaction.message.edit({
+        content: interaction.message.content,
+        embeds: interaction.message.embeds,
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 2,
+                style: 2,
+                label: "Label Requested",
+                custom_id: "member_wtb_label_requested_disabled",
+                disabled: true
+              }
+            ]
+          }
+        ]
+      });
+    
+      return;
+    }
+
     if (customId.startsWith("confirm_member_wtb_kc:")) {
       const memberWtbRecordId = customId.split(":")[1];
     
@@ -1572,6 +1957,8 @@ function bindConsignmentDiscordButtons(client) {
         "Linked Inventory Unit": [inventoryUnitId],
         "Final Buying Price": maxPrice
       });
+
+      await handleMemberWtbPaymentGate(memberWtbRecordId);
     
       await interaction.message.edit({
         content: "✅ KC stock confirmed and allocated.",
@@ -1967,6 +2354,34 @@ async function uploadConsignmentApplicationFile({
 
   if (error) {
     throw new Error(`Failed to upload ${type}: ${error.message}`);
+  }
+
+  const { data } = supabase.storage
+    .from(CONSIGNMENT_APPLICATIONS_BUCKET)
+    .getPublicUrl(path);
+
+  return {
+    url: data.publicUrl,
+    filename: safeName
+  };
+}
+
+async function uploadMemberWtbLabelFile({ memberWtbRecordId, file }) {
+  if (!file?.data || !file?.name) return null;
+
+  const buffer = getBase64Buffer(file);
+  const safeName = sanitizeUploadFileName(file.name);
+  const path = `member-wtb-labels/${memberWtbRecordId}/${Date.now()}-${safeName}`;
+
+  const { error } = await supabase.storage
+    .from(CONSIGNMENT_APPLICATIONS_BUCKET)
+    .upload(path, buffer, {
+      contentType: file.type || "application/pdf",
+      upsert: true
+    });
+
+  if (error) {
+    throw new Error(`Failed to upload label: ${error.message}`);
   }
 
   const { data } = supabase.storage
@@ -9603,6 +10018,85 @@ app.post("/api/consignment/offers/close-for-source", async (req, res) => {
 
     return res.status(500).json({
       error: "Failed to close consignment offers for source",
+      details: err.message
+    });
+  }
+});
+
+app.get("/api/member-wtb/label-request/:recordId", async (req, res) => {
+  try {
+    const recordId = asText(req.params.recordId);
+
+    if (!recordId) {
+      return res.status(400).json({ error: "Missing recordId" });
+    }
+
+    const record = await airtable(MEMBER_WTBS_TABLE).find(recordId);
+    const f = record.fields || {};
+
+    res.json({
+      record_id: record.id,
+      member_wtb_id: asText(f["Member WTB ID"]) || asText(f["WTB ID"]) || record.id,
+      buyer_name: asText(f["Buyer Name"]) || asText(f["Buyer Seller ID"]),
+      buyer_seller_id: asText(f["Buyer Seller ID"]),
+      product_name: asText(f["Product Name"]),
+      sku: asText(f["SKU"]),
+      size: asText(f["Size"]),
+      brand: asText(f["Brand"]),
+      max_price: Number(f["Max Price"] || 0),
+      final_buying_price: Number(f["Final Buying Price"] || 0),
+      shipping_label_url: asText(f["Shipping Label URL"]),
+      tracking_number: asText(f["Tracking Number"])
+    });
+  } catch (err) {
+    console.error("Failed to load Member WTB label request:", err);
+
+    res.status(500).json({
+      error: "Failed to load label request",
+      details: err.message
+    });
+  }
+});
+
+app.post("/api/member-wtb/label-request-submit", async (req, res) => {
+  try {
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+    const trackingNumber = asText(req.body?.tracking_number);
+    const labelFile = req.body?.label_file;
+
+    if (!memberWtbRecordId) {
+      return res.status(400).json({ error: "Missing member_wtb_record_id" });
+    }
+
+    if (!trackingNumber) {
+      return res.status(400).json({ error: "Missing tracking_number" });
+    }
+
+    if (!labelFile?.data) {
+      return res.status(400).json({ error: "Missing label_file" });
+    }
+
+    const upload = await uploadMemberWtbLabelFile({
+      memberWtbRecordId,
+      file: labelFile
+    });
+
+    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+      "Shipping Label": upload.url,
+      "Tracking Number": trackingNumber,
+      "Label Uploaded At": new Date().toISOString()
+    });
+
+    res.json({
+      ok: true,
+      label_url: upload.url,
+      tracking_number: trackingNumber
+    });
+  } catch (err) {
+    console.error("Failed to submit Member WTB label:", err);
+
+    res.status(500).json({
+      error: "Failed to submit label",
       details: err.message
     });
   }
