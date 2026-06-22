@@ -2394,6 +2394,91 @@ async function uploadMemberWtbLabelFile({ memberWtbRecordId, file }) {
   };
 }
 
+app.get("/api/member-wtb/label-request/:recordId", async (req, res) => {
+  try {
+    const recordId = asText(req.params.recordId);
+
+    if (!recordId) {
+      return res.status(400).json({ error: "Missing recordId" });
+    }
+
+    const record = await airtable(MEMBER_WTBS_TABLE).find(recordId);
+    const f = record.fields || {};
+
+    res.json({
+      record_id: record.id,
+      member_wtb_id: asText(f["Member WTB ID"]) || asText(f["WTB ID"]) || record.id,
+      buyer_name: asText(f["Buyer Name"]) || asText(f["Buyer Seller ID"]),
+      buyer_seller_id: asText(f["Buyer Seller ID"]),
+      product_name: asText(f["Product Name"]),
+      sku: asText(f["SKU"]),
+      size: asText(f["Size"]),
+      brand: asText(f["Brand"]),
+      max_price: Number(f["Max Price"] || 0),
+      final_buying_price: Number(f["Final Buying Price"] || 0),
+      shipping_label_url: asText(f["Shipping Label Permanent URL"]),
+      tracking_number: asText(f["Tracking Number"])
+    });
+  } catch (err) {
+    console.error("Failed to load Member WTB label request:", err);
+
+    res.status(500).json({
+      error: "Failed to load label request",
+      details: err.message
+    });
+  }
+});
+
+app.post("/api/member-wtb/label-request-submit", async (req, res) => {
+  try {
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+    const trackingNumber = asText(req.body?.tracking_number);
+    const labelFile = req.body?.label_file;
+
+    if (!memberWtbRecordId) {
+      return res.status(400).json({ error: "Missing member_wtb_record_id" });
+    }
+
+    if (!trackingNumber) {
+      return res.status(400).json({ error: "Missing tracking_number" });
+    }
+
+    if (!labelFile?.data) {
+      return res.status(400).json({ error: "Missing label_file" });
+    }
+
+    const upload = await uploadMemberWtbLabelFile({
+      memberWtbRecordId,
+      file: labelFile
+    });
+
+    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+      "Shipping Label": [
+        {
+          url: upload.url,
+          filename: upload.filename
+        }
+      ],
+      "Shipping Label Permanent URL": upload.url,
+      "Tracking Number": trackingNumber,
+      "Label Uploaded At": new Date().toISOString()
+    });
+
+    res.json({
+      ok: true,
+      label_url: upload.url,
+      tracking_number: trackingNumber
+    });
+  } catch (err) {
+    console.error("Failed to submit Member WTB label:", err);
+
+    res.status(500).json({
+      error: "Failed to submit label",
+      details: err.message
+    });
+  }
+});oke heb iik
+
 app.post("/api/consignment/application", async (req, res) => {
   try {
     const sellerRecordId = asText(req.body?.seller_record_id);
