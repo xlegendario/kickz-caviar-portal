@@ -617,7 +617,29 @@ function firstLinkedRecordId(value) {
   return "";
 }
 
-function buildMemberWtbReadyToShipEmbed({ memberFields, payout }) {
+function buildMemberWtbReadyToShipEmbed({ memberFields, payout, compact = false }) {
+  if (compact) {
+    return {
+      title: "📦 Ready to Ship",
+      description: [
+        "💶 **Payout**",
+        `Final payout: €${Number(payout || 0).toFixed(2)}`,
+        "",
+        "📦 **Next Step**",
+        "Click **Request Label** when you are ready to ship.",
+        "",
+        "📬 **Packaging Instructions**",
+        "Use a clean, unbranded box.",
+        "Remove all price tags.",
+        "No extra items inside."
+      ].join("\n"),
+      color: 0x2ecc71,
+      footer: {
+        text: "Kickz Caviar"
+      }
+    };
+  }
+
   const memberWtbId =
     asText(memberFields["Member WTB ID"]) ||
     asText(memberFields["WTB ID"]) ||
@@ -626,9 +648,9 @@ function buildMemberWtbReadyToShipEmbed({ memberFields, payout }) {
   return {
     title: "📦 Ready To Ship",
     description: [
-      `**${asText(memberFields["Product Name"]) || "—"}**`,
-      "",
       `**Member WTB:** ${memberWtbId}`,
+      "",
+      `**Product:** ${asText(memberFields["Product Name"]) || "—"}`,
       `**SKU:** ${asText(memberFields["SKU"]) || "—"}`,
       `**Size:** ${asText(memberFields["Size"]) || "—"}`,
       `**Brand:** ${asText(memberFields["Brand"]) || "—"}`,
@@ -650,14 +672,16 @@ async function sendMemberWtbReadyToShipToChannel({
   sellerDiscordId,
   memberWtbRecordId,
   memberFields,
-  payout
+  payout,
+  compact = false
 }) {
   const message = await channel.send({
     content: sellerDiscordId ? `<@${sellerDiscordId}>` : null,
     embeds: [
       buildMemberWtbReadyToShipEmbed({
         memberFields,
-        payout
+        payout,
+        compact
       })
     ],
     components: [
@@ -673,11 +697,6 @@ async function sendMemberWtbReadyToShipToChannel({
         ]
       }
     ]
-  });
-
-  await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
-    "Seller Deal Update Channel ID": message.channelId,
-    "Seller Deal Update Message ID": message.id
   });
 
   return {
@@ -843,7 +862,8 @@ async function sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId) {
       sellerDiscordId,
       memberWtbRecordId,
       memberFields: f,
-      payout
+      payout,
+      compact: true
     });
   }
 
@@ -948,7 +968,8 @@ async function sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId) {
     sellerDiscordId,
     memberWtbRecordId,
     memberFields: f,
-    payout
+    payout,
+    compact: true
   });
 
   const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
