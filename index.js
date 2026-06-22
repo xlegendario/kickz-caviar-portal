@@ -2037,7 +2037,8 @@ function bindConsignmentDiscordButtons(client) {
         "Purchase Status": "Confirmed",
         "Fulfillment Status": "Allocated",
         "Linked Inventory Unit": [inventoryUnitId],
-        "Final Buying Price": maxPrice
+        "Final Buying Price": maxPrice,
+        "Buying Selected Source Type": "KC Owned"
       });
 
       await handleMemberWtbPaymentGate(memberWtbRecordId);
@@ -2153,7 +2154,8 @@ function bindConsignmentDiscordButtons(client) {
         "Purchase Status": "Confirmed",
         "Fulfillment Status": "Allocated",
         "Linked Inventory Unit": [inventoryUnit.id],
-        "Final Buying Price": maxPrice
+        "Final Buying Price": maxPrice,
+        "Buying Selected Source Type": "KC Owned"
       });
 
       await closeCompetingMemberWtbOffers(memberWtbRecordId, null);
