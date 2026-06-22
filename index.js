@@ -4079,6 +4079,27 @@ app.post("/api/counter-offers/create", async (req, res) => {
           ? sellerOriginalPrice
           : counterPayout;
 
+      const finalConsignmentOfferPrice =
+        sellerOriginalPrice <= counterPayout
+          ? sellerOriginalPrice
+          : counterPayout;
+      
+      const { data: existingCounterOffer, error: existingCounterError } = await supabase
+        .from("consignment_offers")
+        .select("id")
+        .eq("order_record_id", orderRecordId)
+        .eq("inventory_id", row.id)
+        .eq("seller_record_id", row.seller_record_id)
+        .eq("is_counter_offer", true)
+        .in("status", ["open", "processing"])
+        .maybeSingle();
+      
+      if (existingCounterError) throw existingCounterError;
+      
+      if (existingCounterOffer) {
+        continue;
+      }
+
       const { data: createdOffer, error: offerError } = await supabase
         .from("consignment_offers")
         .insert({
