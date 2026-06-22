@@ -23,7 +23,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const {
-
   PORT = 3000,
   AIRTABLE_TOKEN,
   AIRTABLE_BASE_ID,
@@ -2488,25 +2487,23 @@ app.get("/api/member-wtb/label-request/:recordId", async (req, res) => {
     const record = await airtable(MEMBER_WTBS_TABLE).find(recordId);
     const f = record.fields || {};
 
+    let buyerName = "";
+    const buyerRecordId = firstLinkedRecordId(f["Buyer Seller ID"]);
+
+    if (buyerRecordId) {
+      const buyerRecord = await airtable(SELLERS_TABLE).find(buyerRecordId);
+
+      buyerName =
+        asText(buyerRecord.fields?.["Full Name"]) ||
+        asText(buyerRecord.fields?.["Name"]) ||
+        buyerRecordId;
+    }
+
     res.json({
       record_id: record.id,
       member_wtb_id: asText(f["Member WTB ID"]) || asText(f["WTB ID"]) || record.id,
-      let buyerName = "";
-      const buyerRecordId = firstLinkedRecordId(f["Buyer Seller ID"]);
-      
-      if (buyerRecordId) {
-        const buyerRecord = await airtable(SELLERS_TABLE).find(buyerRecordId);
-        buyerName =
-          asText(buyerRecord.fields?.["Full Name"]) ||
-          asText(buyerRecord.fields?.["Name"]) ||
-          buyerRecordId;
-      }
-      
-      res.json({
-        record_id: record.id,
-        member_wtb_id: asText(f["Member WTB ID"]) || asText(f["WTB ID"]) || record.id,
-        buyer_name: buyerName,
-        buyer_seller_id: buyerRecordId,
+      buyer_name: buyerName,
+      buyer_seller_id: buyerRecordId,
       product_name: asText(f["Product Name"]),
       sku: asText(f["SKU"]),
       size: asText(f["Size"]),
