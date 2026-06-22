@@ -1620,8 +1620,7 @@ async function confirmConsignmentOffer(offerId) {
       "Purchase Status": "Confirmed",
       "Fulfillment Status": "Allocated",
       "Linked Inventory Unit": [inventoryUnitRecord.id],
-      "Final Buying Price": finalBuyingPrice,
-      "VAT Type": vatType
+      "Final Buying Price": finalBuyingPrice
     });
   
     await supabase
@@ -2062,7 +2061,6 @@ function bindConsignmentDiscordButtons(client) {
         "Fulfillment Status": "Allocated",
         "Linked Inventory Unit": [inventoryUnitId],
         "Final Buying Price": finalBuyingPrice,
-        "VAT Type": vatType,
         "Buying Selected Source Type": "KC Owned"
       });
 
@@ -2183,7 +2181,6 @@ function bindConsignmentDiscordButtons(client) {
         "Fulfillment Status": "Allocated",
         "Linked Inventory Unit": [inventoryUnit.id],
         "Final Buying Price": finalBuyingPrice,
-        "VAT Type": vatType,
         "Buying Selected Source Type": "KC Owned"
       });
 
