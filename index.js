@@ -775,8 +775,6 @@ async function sendMemberWtbLabelRequestToBuyer(memberWtbRecordId) {
   });
 
   await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
-    "Label Request Channel ID": message.channelId,
-    "Label Request Message ID": message.id,
     "Label Requested At": new Date().toISOString()
   });
 
