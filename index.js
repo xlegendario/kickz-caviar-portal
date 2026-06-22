@@ -1893,6 +1893,32 @@ function bindConsignmentDiscordButtons(client) {
 
     if (customId.startsWith("request_member_wtb_label:")) {
       const memberWtbRecordId = customId.split(":")[1];
+      
+      const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+      const currentStatus = asText(memberWtb.fields?.["Fulfillment Status"]);
+      
+      if (currentStatus === "Label Requested") {
+        await interaction.message.edit({
+          content: interaction.message.content,
+          embeds: interaction.message.embeds,
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 2,
+                  label: "Label Requested",
+                  custom_id: "member_wtb_label_requested_disabled",
+                  disabled: true
+                }
+              ]
+            }
+          ]
+        });
+      
+        return;
+      }
     
       try {
         console.log("📦 request_member_wtb_label clicked", {
@@ -2461,8 +2487,22 @@ app.get("/api/member-wtb/label-request/:recordId", async (req, res) => {
     res.json({
       record_id: record.id,
       member_wtb_id: asText(f["Member WTB ID"]) || asText(f["WTB ID"]) || record.id,
-      buyer_name: asText(f["Buyer Name"]) || asText(f["Buyer Seller ID"]),
-      buyer_seller_id: asText(f["Buyer Seller ID"]),
+      let buyerName = "";
+      const buyerRecordId = firstLinkedRecordId(f["Buyer Seller ID"]);
+      
+      if (buyerRecordId) {
+        const buyerRecord = await airtable(SELLERS_TABLE).find(buyerRecordId);
+        buyerName =
+          asText(buyerRecord.fields?.["Full Name"]) ||
+          asText(buyerRecord.fields?.["Name"]) ||
+          buyerRecordId;
+      }
+      
+      res.json({
+        record_id: record.id,
+        member_wtb_id: asText(f["Member WTB ID"]) || asText(f["WTB ID"]) || record.id,
+        buyer_name: buyerName,
+        buyer_seller_id: buyerRecordId,
       product_name: asText(f["Product Name"]),
       sku: asText(f["SKU"]),
       size: asText(f["Size"]),
