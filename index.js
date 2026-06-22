@@ -279,6 +279,19 @@ function asText(value) {
   return String(value).trim();
 }
 
+function getMemberWtbNetSalePrice(price, vatType) {
+  const amount = Number(price || 0);
+  const type = asText(vatType);
+
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+
+  if (type === "VAT0" || type === "VAT21") {
+    return Math.round((amount / 1.21) * 100) / 100;
+  }
+
+  return amount;
+}
+
 function getSellerOfferChannelId(sellerRow, isConfirmation) {
   if (!sellerRow) return null;
 
@@ -1001,7 +1014,12 @@ async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buye
   const user = await kickzDealDiscordClient.users.fetch(discordUserId);
   const dm = await user.createDM();
 
-  const amount = Number(memberFields["Final Buying Price"] || memberFields["Max Price"] || 0);
+  const amount = Number(
+    memberFields["Invoice Price"] ||
+    memberFields["Final Buying Price"] ||
+    memberFields["Max Price"] ||
+    0
+  );
   const memberWtbId =
     asText(memberFields["Member WTB ID"]) ||
     asText(memberFields["WTB ID"]) ||
@@ -1558,6 +1576,9 @@ async function confirmConsignmentOffer(offerId) {
   
     const maxPrice = Number(memberFields["Max Price"] || 0);
 
+    const vatType = asText(lockedOffer.vat_type);
+    const finalBuyingPrice = getMemberWtbNetSalePrice(maxPrice, vatType);
+
     const memberWtbId =
       asText(memberFields["Member WTB ID"]) ||
       asText(memberFields["WTB ID"]) ||
@@ -1569,7 +1590,7 @@ async function confirmConsignmentOffer(offerId) {
       order_id: memberWtbId,
       source_type: "member_wtb",
       member_wtb_record_id: memberWtbRecordId,
-      selling_price: maxPrice,
+      selling_price: finalBuyingPrice,
       selling_method: "Kickz Caviar"
     });
   
@@ -1599,7 +1620,8 @@ async function confirmConsignmentOffer(offerId) {
       "Purchase Status": "Confirmed",
       "Fulfillment Status": "Allocated",
       "Linked Inventory Unit": [inventoryUnitRecord.id],
-      "Final Buying Price": maxPrice
+      "Final Buying Price": finalBuyingPrice,
+      "VAT Type": vatType
     });
   
     await supabase
@@ -2012,6 +2034,8 @@ function bindConsignmentDiscordButtons(client) {
       }
     
       const inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).find(inventoryUnitId);
+      const vatType = asText(inventoryUnit.fields?.["VAT Type"]);
+      const finalBuyingPrice = getMemberWtbNetSalePrice(maxPrice, vatType);
       const inventoryStatus = asText(inventoryUnit.fields?.["Availability Status"]);
     
       if (inventoryStatus !== "Available") {
@@ -2030,14 +2054,15 @@ function bindConsignmentDiscordButtons(client) {
       await airtable(INVENTORY_UNITS_TABLE).update(inventoryUnitId, {
         "Availability Status": "Reserved",
         "Selling Method": "Kickz Caviar",
-        "Selling Price": maxPrice
+        "Selling Price": finalBuyingPrice
       });
     
       await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
         "Purchase Status": "Confirmed",
         "Fulfillment Status": "Allocated",
         "Linked Inventory Unit": [inventoryUnitId],
-        "Final Buying Price": maxPrice,
+        "Final Buying Price": finalBuyingPrice,
+        "VAT Type": vatType,
         "Buying Selected Source Type": "KC Owned"
       });
 
@@ -2142,11 +2167,14 @@ function bindConsignmentDiscordButtons(client) {
         });
         return;
       }
+
+      const vatType = asText(inventoryUnit.fields?.["VAT Type"]);
+      const finalBuyingPrice = getMemberWtbNetSalePrice(maxPrice, vatType);
     
       await airtable(INVENTORY_UNITS_TABLE).update(inventoryUnit.id, {
         "Availability Status": "Reserved",
         "Selling Method": "Kickz Caviar",
-        "Selling Price": maxPrice,
+        "Selling Price": finalBuyingPrice,
         "Member WTBs": [memberWtbRecordId]
       });
     
@@ -2154,7 +2182,8 @@ function bindConsignmentDiscordButtons(client) {
         "Purchase Status": "Confirmed",
         "Fulfillment Status": "Allocated",
         "Linked Inventory Unit": [inventoryUnit.id],
-        "Final Buying Price": maxPrice,
+        "Final Buying Price": finalBuyingPrice,
+        "VAT Type": vatType,
         "Buying Selected Source Type": "KC Owned"
       });
 
@@ -9890,6 +9919,7 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
     const purchasePrice = Number(offerFields['Seller Offer'] || 0);
     const vatType = asText(offerFields['Offer VAT Type']);
     const maxPrice = Number(memberFields['Max Price'] || 0);
+    const finalBuyingPrice = getMemberWtbNetSalePrice(maxPrice, vatType);
 
     if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) {
       return res.status(400).json({ error: 'Invalid seller offer price' });
@@ -9920,7 +9950,7 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       'Payment Note': `€${purchasePrice.toFixed(2)}`,
       'Payment Status': 'To Pay',
       'Availability Status': 'Sold',
-      'Selling Price': maxPrice,
+      'Selling Price': finalBuyingPrice,
       'Selling Method': 'Kickz Caviar',
       'Member WTBs': [memberWtbRecordId]
     };
@@ -9958,7 +9988,7 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
         payment_note: `€${purchasePrice.toFixed(2)}`,
         payment_status: "To Pay",
         availability_status: "Sold",
-        selling_price: maxPrice,
+        selling_price: finalBuyingPrice,
         selling_method: "Kickz Caviar",
     
         airtable_fields: inventoryFields,
@@ -9970,7 +10000,8 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       'Purchase Status': 'Confirmed',
       'Fulfillment Status': 'Allocated',
       'Linked Inventory Unit': [inventoryUnit.id],
-      'Final Buying Price': maxPrice
+      'Final Buying Price': finalBuyingPrice,
+      'VAT Type': vatType
     });
     
     await disableMemberWtbKcOfferButtons(
