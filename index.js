@@ -1894,33 +1894,65 @@ function bindConsignmentDiscordButtons(client) {
     if (customId.startsWith("request_member_wtb_label:")) {
       const memberWtbRecordId = customId.split(":")[1];
     
-      await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
-        "Fulfillment Status": "Label Requested",
-        "Label Requested At": new Date().toISOString()
-      });
+      try {
+        console.log("📦 request_member_wtb_label clicked", {
+          memberWtbRecordId,
+          channelId: interaction.channelId,
+          messageId: interaction.message?.id
+        });
     
-      await sendMemberWtbLabelRequestToBuyer(memberWtbRecordId);
+        await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+          "Fulfillment Status": "Label Requested",
+          "Label Requested At": new Date().toISOString()
+        });
     
-      await interaction.message.edit({
-        content: interaction.message.content,
-        embeds: interaction.message.embeds,
-        components: [
-          {
-            type: 1,
-            components: [
-              {
-                type: 2,
-                style: 2,
-                label: "Label Requested",
-                custom_id: "member_wtb_label_requested_disabled",
-                disabled: true
-              }
-            ]
-          }
-        ]
-      });
+        console.log("✅ Member WTB status updated to Label Requested", {
+          memberWtbRecordId
+        });
     
-      return;
+        const labelRequestResult = await sendMemberWtbLabelRequestToBuyer(memberWtbRecordId);
+    
+        console.log("✅ Member WTB label request DM sent", {
+          memberWtbRecordId,
+          labelRequestResult
+        });
+    
+        await interaction.message.edit({
+          content: interaction.message.content,
+          embeds: interaction.message.embeds,
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 2,
+                  label: "Label Requested",
+                  custom_id: "member_wtb_label_requested_disabled",
+                  disabled: true
+                }
+              ]
+            }
+          ]
+        });
+    
+        return;
+      } catch (err) {
+        console.error("❌ request_member_wtb_label failed:", {
+          memberWtbRecordId,
+          message: err.message,
+          stack: err.stack,
+          airtableError: err.error,
+          statusCode: err.statusCode
+        });
+    
+        await interaction.followUp({
+          content: `❌ Failed to request label: ${err.message || "Unknown error"}`,
+          ephemeral: true
+        }).catch(() => {});
+    
+        return;
+      }
     }
 
     if (customId.startsWith("confirm_member_wtb_kc:")) {
