@@ -4743,10 +4743,6 @@ function linkedRecordIsEmpty(value) {
   return !Array.isArray(value) || value.length === 0;
 }
 
-function firstLinkedRecordId(value) {
-  return Array.isArray(value) && value.length ? value[0] : "";
-}
-
 function formatDateEU(value) {
   if (!value) return "";
 
