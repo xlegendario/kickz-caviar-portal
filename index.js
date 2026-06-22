@@ -4078,11 +4078,6 @@ app.post("/api/counter-offers/create", async (req, res) => {
         sellerOriginalPrice <= counterPayout
           ? sellerOriginalPrice
           : counterPayout;
-
-      const finalConsignmentOfferPrice =
-        sellerOriginalPrice <= counterPayout
-          ? sellerOriginalPrice
-          : counterPayout;
       
       const { data: existingCounterOffer, error: existingCounterError } = await supabase
         .from("consignment_offers")
@@ -4091,7 +4086,7 @@ app.post("/api/counter-offers/create", async (req, res) => {
         .eq("inventory_id", row.id)
         .eq("seller_record_id", row.seller_record_id)
         .eq("is_counter_offer", true)
-        .in("status", ["open", "processing"])
+        .in("status", ["open", "processing", "store_pending"])
         .maybeSingle();
       
       if (existingCounterError) throw existingCounterError;
@@ -4470,6 +4465,20 @@ app.post("/api/consignment/offers/:id/counter", async (req, res) => {
     if (Number(offer.offer_price) >= Number(offer.seller_price)) {
       return res.status(400).json({
         error: "This is already a confirmation, counter offer is not needed"
+      });
+    }
+
+    const currentOfferPrice = Number(offer.offer_price || 0);
+
+    if (!Number.isFinite(currentOfferPrice) || currentOfferPrice <= 0) {
+      return res.status(400).json({
+        error: "Invalid current offer price"
+      });
+    }
+    
+    if (counterPrice > currentOfferPrice - 5) {
+      return res.status(400).json({
+        error: `Counter must be at least €5 below the current offer (€${currentOfferPrice.toFixed(2)}).`
       });
     }
 
