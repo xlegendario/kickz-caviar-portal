@@ -9998,7 +9998,6 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       'Fulfillment Status': 'Allocated',
       'Linked Inventory Unit': [inventoryUnit.id],
       'Final Buying Price': finalBuyingPrice,
-      'VAT Type': vatType
     });
     
     await disableMemberWtbKcOfferButtons(
