@@ -23,6 +23,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const {
+
   PORT = 3000,
   AIRTABLE_TOKEN,
   AIRTABLE_BASE_ID,
@@ -791,6 +792,7 @@ async function sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId) {
 
   const linkedInventoryUnitId = firstLinkedRecordId(f["Linked Inventory Unit"]);
   const selectedSourceType = asText(f["Buying Selected Source Type"]);
+  const selectedSourceTypeKey = selectedSourceType.toLowerCase();
 
   if (!linkedInventoryUnitId) {
     console.log("Skipping Member WTB deal update: missing Linked Inventory Unit", {
@@ -816,7 +818,11 @@ async function sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId) {
     - No seller needs a Ready To Ship embed.
     - Buyer should receive label upload DM directly.
   */
-  if (selectedSourceType === "KC Owned" || !sellerRecordId) {
+  if (
+    !sellerRecordId ||
+    selectedSourceTypeKey.includes("kc") ||
+    selectedSourceTypeKey.includes("owned")
+  ) {
     await sendMemberWtbLabelRequestToBuyer(memberWtbRecordId);
 
     return {
