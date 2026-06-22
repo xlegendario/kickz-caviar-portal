@@ -2477,7 +2477,136 @@ app.post("/api/member-wtb/label-request-submit", async (req, res) => {
       details: err.message
     });
   }
-});oke heb iik
+});
+
+app.post("/api/member-wtb/send-label-to-discord", async (req, res) => {
+  try {
+    const memberWtbRecordId = asText(req.body?.recordId);
+
+    if (!memberWtbRecordId) {
+      return res.status(400).json({ error: "Missing recordId" });
+    }
+
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+    const f = memberWtb.fields || {};
+
+    const labelUrl = asText(f["Shipping Label Permanent URL"]);
+    const trackingNumber = asText(f["Tracking Number"]);
+
+    if (!labelUrl) {
+      return res.status(400).json({ error: "Missing Shipping Label Permanent URL" });
+    }
+
+    if (!trackingNumber) {
+      return res.status(400).json({ error: "Missing Tracking Number" });
+    }
+
+    const memberWtbId =
+      asText(f["Member WTB ID"]) ||
+      asText(f["WTB ID"]) ||
+      memberWtbRecordId;
+
+    const linkedInventoryUnitId = firstLinkedRecordId(f["Linked Inventory Unit"]);
+
+    let targetChannelId = asText(f["WTB Created Channel ID"]);
+    let targetReason = targetChannelId ? "wtb_created_channel" : "";
+
+    if (!targetChannelId && linkedInventoryUnitId) {
+      const inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).find(linkedInventoryUnitId);
+      const inventoryFields = inventoryUnit.fields || {};
+      const sellerRecordId = firstLinkedRecordId(inventoryFields["Seller ID"]);
+
+      if (sellerRecordId) {
+        const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId);
+        targetChannelId = asText(sellerRecord.fields?.["Label Channel ID"]);
+
+        if (targetChannelId) {
+          targetReason = "seller_label_channel";
+        }
+      }
+    }
+
+    if (!targetChannelId) {
+      targetChannelId = asText(process.env.MEMBER_WTB_KC_LABEL_CHANNEL_ID);
+      targetReason = "kc_label_channel";
+    }
+
+    if (!targetChannelId) {
+      return res.status(500).json({
+        error: "No target label channel found"
+      });
+    }
+
+    await initKickzDealDiscord();
+
+    const channel = await kickzDealDiscordClient.channels
+      .fetch(targetChannelId)
+      .catch(() => null);
+
+    if (!channel) {
+      return res.status(404).json({
+        error: "Target Discord channel not found",
+        details: targetChannelId
+      });
+    }
+
+    const isGlobalLabelChannel =
+      targetReason === "seller_label_channel" ||
+      targetReason === "kc_label_channel";
+    
+    const embedDescription = isGlobalLabelChannel
+      ? [
+          `**Order:** ${memberWtbId}`,
+          `**Product:** ${asText(f["Product Name"]) || "—"}`,
+          `**SKU:** ${asText(f["SKU"]) || "—"}`,
+          `**Size:** ${asText(f["Size"]) || "—"}`,
+          "",
+          `**Tracking:**`,
+          trackingNumber,
+          "",
+          `📄 [Download Label](${labelUrl})`
+        ].join("\n")
+      : [
+          `**Order:** ${memberWtbId}`,
+          `**Tracking:**`,
+          trackingNumber,
+          "",
+          `📄 [Download Label](${labelUrl})`
+        ].join("\n");
+    
+    const message = await channel.send({
+      embeds: [
+        {
+          title: "📦 Shipping Label Ready",
+          description: embedDescription,
+          color: 0x2ecc71,
+          footer: {
+            text: "Kickz Caviar"
+          },
+          timestamp: new Date().toISOString()
+        }
+      ]
+    });
+
+    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+      "Label Sent To Discord?": true
+    });
+
+    res.json({
+      ok: true,
+      channel_id: message.channelId,
+      message_id: message.id,
+      target_reason: targetReason
+    });
+  } catch (err) {
+    console.error("Failed to send Member WTB label to Discord:", err);
+
+    res.status(500).json({
+      error: "Failed to send Member WTB label to Discord",
+      details: err.message
+    });
+  }
+});
 
 app.post("/api/consignment/application", async (req, res) => {
   try {
