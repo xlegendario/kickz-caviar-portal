@@ -2401,8 +2401,27 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       if (action === "confirm_offer") {
+        await interaction.message.edit({
+          content: "⏳ Processing confirmation...",
+          embeds: interaction.message.embeds,
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 2,
+                  label: "Processing...",
+                  custom_id: "consignment_processing_disabled",
+                  disabled: true
+                }
+              ]
+            }
+          ]
+        }).catch(() => null);
+        
         const result = await confirmConsignmentOffer(offerId);
-
+        
         await disableConsignmentDiscordButtons(
           interaction.channelId,
           interaction.message.id,
@@ -2411,7 +2430,7 @@ function bindConsignmentDiscordButtons(client) {
             : "❌ This offer is no longer available.",
           client
         );
-
+        
         return;
       }
     } catch (err) {
