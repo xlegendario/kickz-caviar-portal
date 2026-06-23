@@ -203,48 +203,50 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     inventoryFields
   );
 
-  await fetch("https://hook.eu2.make.com/cmq6wlbq5sa9spmwogy4pdordvjzuz4i", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      event: "consignment_inventory_unit_created",
-      inventory_unit_record_id: created.id,
-      offer_id: offer.id,
-
-      product_name: offer.product_name,
-      sku: offer.sku,
-      size: offer.size,
-      brand: offer.brand,
-      vat_type: offer.vat_type,
-
-      purchase_price: purchasePrice,
-      shipping_deduction: 0,
-      purchase_date: inventoryFields["Purchase Date"],
-
-      seller_record_id: offer.seller_record_id,
-      seller_id: offer.seller_id,
-
-      ticket_number: offer.order_id,
-      order_id: offer.order_id,
-      order_record_id: offer.order_record_id,
-      source_type: asText(offer.source_type) || "order",
-      member_wtb_record_id: asText(offer.member_wtb_record_id),
-
-      type: "Consignment",
-      source: "Regular",
-      verification_status: "Consigned",
-      payment_note: `€${purchasePrice.toFixed(2)}`,
-      payment_status: "To Pay",
-      availability_status: "Sold",
-      margin: "7.5%",
-      base_costs: 5,
-
-      airtable_fields: inventoryFields,
-      created_at: new Date().toISOString()
-    })
-  });
+  if (asText(offer.source_type) !== "member_wtb") {
+    await fetch("https://hook.eu2.make.com/cmq6wlbq5sa9spmwogy4pdordvjzuz4i", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        event: "consignment_inventory_unit_created",
+        inventory_unit_record_id: created.id,
+        offer_id: offer.id,
+  
+        product_name: offer.product_name,
+        sku: offer.sku,
+        size: offer.size,
+        brand: offer.brand,
+        vat_type: offer.vat_type,
+  
+        purchase_price: purchasePrice,
+        shipping_deduction: 0,
+        purchase_date: inventoryFields["Purchase Date"],
+  
+        seller_record_id: offer.seller_record_id,
+        seller_id: offer.seller_id,
+  
+        ticket_number: offer.order_id,
+        order_id: offer.order_id,
+        order_record_id: offer.order_record_id,
+        source_type: asText(offer.source_type) || "order",
+        member_wtb_record_id: asText(offer.member_wtb_record_id),
+  
+        type: "Consignment",
+        source: "Regular",
+        verification_status: "Consigned",
+        payment_note: `€${purchasePrice.toFixed(2)}`,
+        payment_status: "To Pay",
+        availability_status: "Sold",
+        margin: "7.5%",
+        base_costs: 5,
+  
+        airtable_fields: inventoryFields,
+        created_at: new Date().toISOString()
+      })
+    });
+  }
 
   return created;
 }
@@ -1092,6 +1094,61 @@ async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buye
   };
 }
 
+async function sendMemberWtbPurchaseWebhook(memberWtbRecordId) {
+  const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+  const f = memberWtb.fields || {};
+
+  const inventoryUnitId = firstLinkedRecordId(f["Linked Inventory Unit"]);
+  if (!inventoryUnitId) throw new Error("Member WTB missing Linked Inventory Unit");
+
+  const inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).find(inventoryUnitId);
+  const inventoryFields = inventoryUnit.fields || {};
+
+  const type = asText(inventoryFields["Type"]);
+  const isConsignment = type === "Consignment";
+
+  await fetch("https://hook.eu2.make.com/cmq6wlbq5sa9spmwogy4pdordvjzuz4i", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      event: isConsignment
+        ? "consignment_inventory_unit_created"
+        : "member_wtb_seller_inventory_unit_created",
+
+      inventory_unit_record_id: inventoryUnit.id,
+      member_wtb_record_id: memberWtbRecordId,
+
+      product_name: asText(inventoryFields["Product Name"]),
+      sku: asText(inventoryFields["SKU"]),
+      size: asText(inventoryFields["Size"]),
+      brand: asText(inventoryFields["Brand"]),
+      vat_type: asText(inventoryFields["VAT Type"]),
+
+      purchase_price: Number(inventoryFields["Purchase Price"] || 0),
+      shipping_deduction: Number(inventoryFields["Shipping Deduction"] || 0),
+      purchase_date: asText(inventoryFields["Purchase Date"]),
+
+      seller_record_id: firstLinkedRecordId(inventoryFields["Seller ID"]),
+
+      ticket_number: asText(f["Member WTB ID"]) || asText(f["WTB ID"]) || memberWtbRecordId,
+      order_id: asText(f["Member WTB ID"]) || asText(f["WTB ID"]) || memberWtbRecordId,
+      source_type: "member_wtb",
+
+      type,
+      source: asText(inventoryFields["Source"]),
+      verification_status: asText(inventoryFields["Verification Status"]),
+      payment_note: asText(inventoryFields["Payment Note"]),
+      payment_status: asText(inventoryFields["Payment Status"]),
+      availability_status: asText(inventoryFields["Availability Status"]),
+      selling_price: Number(inventoryFields["Selling Price"] || 0),
+      selling_method: asText(inventoryFields["Selling Method"]),
+
+      airtable_fields: inventoryFields,
+      created_at: new Date().toISOString()
+    })
+  });
+}
+
 async function handleMemberWtbPaymentGate(memberWtbRecordId) {
   const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
   const f = memberWtb.fields || {};
@@ -1128,6 +1185,8 @@ async function handleMemberWtbPaymentGate(memberWtbRecordId) {
       trusted: true
     });
   
+    await sendMemberWtbPurchaseWebhook(memberWtbRecordId);
+
     await sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId);
   
     return {
@@ -9992,45 +10051,6 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
     };
 
     const inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).create(inventoryFields);
-
-    await fetch("https://hook.eu2.make.com/cmq6wlbq5sa9spmwogy4pdordvjzuz4i", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        event: "member_wtb_seller_inventory_unit_created",
-        inventory_unit_record_id: inventoryUnit.id,
-        seller_offer_record_id: sellerOfferRecordId,
-        member_wtb_record_id: memberWtbRecordId,
-    
-        product_name: inventoryFields["Product Name"],
-        sku: inventoryFields["SKU"],
-        size: inventoryFields["Size"],
-        brand: inventoryFields["Brand"],
-        vat_type: vatType,
-    
-        purchase_price: purchasePrice,
-        shipping_deduction: 0,
-        purchase_date: inventoryFields["Purchase Date"],
-    
-        seller_record_id: sellerRecordId,
-        ticket_number: memberWtbId,
-        order_id: memberWtbId,
-    
-        type: "Custom",
-        source: "Outsourced",
-        verification_status: "Verified",
-        payment_note: `€${purchasePrice.toFixed(2)}`,
-        payment_status: "To Pay",
-        availability_status: "Sold",
-        selling_price: finalBuyingPrice,
-        selling_method: "Kickz Caviar",
-    
-        airtable_fields: inventoryFields,
-        created_at: new Date().toISOString()
-      })
-    });
 
     await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
       'Purchase Status': 'Confirmed',
