@@ -5747,6 +5747,9 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
         fields: [
           "Seller ID",
           "Linked Orders",
+          "Member WTBs",
+          "Member WTB ID",
+          "WTB Created Channel ID (MWTB)",
           "Seller Offer",
           "Offer VAT Type",
           "Offer Date",
@@ -5775,10 +5778,20 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
     const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
     const acceptedOffers = filteredOffers.filter((record) => {
-      const linkedOrderId = firstLinkedRecordId(record.fields?.["Linked Orders"]);
+      const f = record.fields || {};
+
+      const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+      const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
+      const isMemberWtb = !!linkedMemberWtbId;
+      
       const orderFields = orderMap.get(linkedOrderId) || {};
+      
+      if (isMemberWtb) {
+        return !displayValue(f["WTB Created Channel ID (MWTB)"]);
+      }
+      
       const channelCreated = orderFields["Channel Created?"] === true;
-    
+      
       return (
         displayValue(orderFields["Partner or Seller"]) === "Seller" &&
         displayValue(orderFields["Lowest Offer Seller ID"]) === sellerCode &&
@@ -5789,6 +5802,9 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
     const items = acceptedOffers.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+      const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
+      const isMemberWtb = !!linkedMemberWtbId;
+      
       const orderFields = orderMap.get(linkedOrderId) || {};
 
       const offerAmount = numberValue(f["Seller Offer"]);
@@ -5796,7 +5812,10 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
       return {
         id: record.id,
         order_record_id: linkedOrderId,
-        order_id: displayValue(orderFields["Order ID"]),
+        member_wtb_record_id: linkedMemberWtbId,
+        order_id: isMemberWtb
+          ? displayValue(f["Member WTB ID"])
+          : displayValue(orderFields["Order ID"]),
         product: displayValue(f["Product Name"] || orderFields["Product Name"]),
         sku: displayValue(f["SKU"] || orderFields["SKU"]),
         size: displayValue(f["Size"] || orderFields["Size"]),
@@ -6752,6 +6771,11 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
         fields: [
           "Seller ID",
           "Linked Orders",
+          "Member WTBs",
+          "Member WTB ID",
+          "Current Lowest Source Price (MWTB)",
+          "Lowest Seller Offer (MWTB)",
+          "Lowest Offer Seller ID (MWTB)",
           "Seller Offer",
           "Offer VAT Type",
           "Offer Date",
@@ -6782,24 +6806,35 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
     const items = filteredOffers.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+      const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
+      const isMemberWtb = !!linkedMemberWtbId;
+      
+      const orderFields = orderMap.get(linkedOrderId) || {};
       const orderFields = orderMap.get(linkedOrderId) || {};
 
       const vatType = displayValue(f["Offer VAT Type"]);
       const offerAmount = numberValue(f["Seller Offer"]);
 
-      const currentLowest =
-        vatType === "VAT0"
+      const currentLowest = isMemberWtb
+        ? (
+            numberValue(f["Lowest Seller Offer (MWTB)"]) ||
+            numberValue(f["Current Lowest Source Price (MWTB)"])
+          )
+        : vatType === "VAT0"
           ? numberValue(orderFields["Current Lowest (VAT0)"])
           : numberValue(orderFields["Current Lowest (Normalized)"]);
 
-      const isLowest =
-        displayValue(orderFields["Lowest Offer Seller ID"]) ===
-        displayValue(req.query.seller_id);
+      const isLowest = isMemberWtb
+        ? displayValue(f["Lowest Offer Seller ID (MWTB)"]) === displayValue(req.query.seller_id)
+        : displayValue(orderFields["Lowest Offer Seller ID"]) === displayValue(req.query.seller_id);
 
       return {
         id: record.id,
         order_record_id: linkedOrderId,
-        order_id: displayValue(orderFields["Order ID"]),
+        member_wtb_record_id: linkedMemberWtbId,
+        order_id: isMemberWtb
+          ? displayValue(f["Member WTB ID"])
+          : displayValue(orderFields["Order ID"]),
         product: displayValue(f["Product Name"] || orderFields["Product Name"]),
         sku: displayValue(f["SKU"] || orderFields["SKU"]),
         size: displayValue(f["Size"] || orderFields["Size"]),
