@@ -6263,9 +6263,11 @@ app.get("/api/dashboard/wtb-label-requested", async (req, res) => {
           "Item ID",
           "Type",
           "Fulfillment Status (UOL)",
+          "Fulfillment Status (MWTB)",
           "Seller Offer",
           "Final Purchase Price",
           "Unfulfilled Orders Log",
+          "Member WTBs",
           "Product Name",
           "SKU",
           "Size",
@@ -6276,7 +6278,10 @@ app.get("/api/dashboard/wtb-label-requested", async (req, res) => {
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Fulfillment Status (UOL)} = 'Requested Label'
+          OR(
+            {Fulfillment Status (UOL)} = 'Label Requested',
+            {Fulfillment Status (MWTB)} = 'Label Requested'
+          )
         )`
       })
       .all();
@@ -6356,9 +6361,11 @@ app.get("/api/dashboard/wtb-ready-to-ship", async (req, res) => {
           "Item ID",
           "Type",
           "Fulfillment Status (UOL)",
+          "Fulfillment Status (MWTB)",
           "Seller Offer",
           "Final Purchase Price",
           "Unfulfilled Orders Log",
+          "Member WTBs",
           "Product Name",
           "SKU",
           "Size",
@@ -6369,7 +6376,10 @@ app.get("/api/dashboard/wtb-ready-to-ship", async (req, res) => {
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Fulfillment Status (UOL)} = 'Ready to Ship'
+          OR(
+            {Fulfillment Status (UOL)} = 'Ready To Ship',
+            {Fulfillment Status (MWTB)} = 'Ready To Ship'
+          )
         )`
       })
       .all();
@@ -10016,7 +10026,11 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
     const purchasePrice = Number(offerFields['Seller Offer'] || 0);
     const vatType = asText(offerFields['Offer VAT Type']);
     const maxPrice = Number(memberFields['Max Price'] || 0);
-    const finalBuyingPrice = getMemberWtbNetSalePrice(maxPrice, vatType);
+    const finalBuyingPrice = getMemberWtbNetSalePrice(
+      maxPrice,
+      vatType,
+      memberFields["Buying Inventory Filter"]
+    );
 
     if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) {
       return res.status(400).json({ error: 'Invalid seller offer price' });
