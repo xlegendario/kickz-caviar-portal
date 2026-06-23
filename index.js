@@ -279,13 +279,18 @@ function asText(value) {
   return String(value).trim();
 }
 
-function getMemberWtbNetSalePrice(price, vatType) {
+function getMemberWtbNetSalePrice(price, vatType, inventoryFilter) {
   const amount = Number(price || 0);
   const type = asText(vatType);
+  const filter = asText(inventoryFilter).toLowerCase();
 
   if (!Number.isFinite(amount) || amount <= 0) return 0;
 
   if (type === "VAT0" || type === "VAT21") {
+    if (filter.includes("b2b")) {
+      return amount;
+    }
+
     return Math.round((amount / 1.21) * 100) / 100;
   }
 
@@ -1577,7 +1582,12 @@ async function confirmConsignmentOffer(offerId) {
     const maxPrice = Number(memberFields["Max Price"] || 0);
 
     const vatType = asText(lockedOffer.vat_type);
-    const finalBuyingPrice = getMemberWtbNetSalePrice(maxPrice, vatType);
+
+    const finalBuyingPrice = getMemberWtbNetSalePrice(
+      maxPrice,
+      vatType,
+      memberFields["Buying Inventory Filter"]
+    );
 
     const memberWtbId =
       asText(memberFields["Member WTB ID"]) ||
@@ -2034,7 +2044,12 @@ function bindConsignmentDiscordButtons(client) {
     
       const inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).find(inventoryUnitId);
       const vatType = asText(inventoryUnit.fields?.["VAT Type"]);
-      const finalBuyingPrice = getMemberWtbNetSalePrice(maxPrice, vatType);
+
+      const finalBuyingPrice = getMemberWtbNetSalePrice(
+        maxPrice,
+        vatType,
+        f["Buying Inventory Filter"]
+      );
       const inventoryStatus = asText(inventoryUnit.fields?.["Availability Status"]);
     
       if (inventoryStatus !== "Available") {
@@ -2167,7 +2182,12 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       const vatType = asText(inventoryUnit.fields?.["VAT Type"]);
-      const finalBuyingPrice = getMemberWtbNetSalePrice(maxPrice, vatType);
+
+      const finalBuyingPrice = getMemberWtbNetSalePrice(
+        maxPrice,
+        vatType,
+        f["Buying Inventory Filter"]
+      );
     
       await airtable(INVENTORY_UNITS_TABLE).update(inventoryUnit.id, {
         "Availability Status": "Reserved",
@@ -10144,6 +10164,16 @@ app.post("/api/buying/offers", async (req, res) => {
       console.error("Failed to send Member WTB offer consignment requests:", err);
     }
 
+    const hasMatchingKcOwnedSource = (matchingSources || []).some((source) => {
+    const sourceType = asText(source.source_type || source.sourceType || source.type).toLowerCase();
+  
+    return (
+      sourceType.includes("kc") ||
+      sourceType.includes("owned")
+    );
+  });
+  
+  if (hasMatchingKcOwnedSource) {
     try {
       kcOfferRequest = await sendBuyingKcOfferRequest({
         memberWtbRecordId: created.id,
@@ -10160,6 +10190,7 @@ app.post("/api/buying/offers", async (req, res) => {
     } catch (err) {
       console.error("Failed to send KC offer request:", err);
     }
+  }
 
     return res.json({
       success: true,
