@@ -6016,9 +6016,13 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
           "Item ID",
           "Type",
           "Fulfillment Status (UOL)",
+          "Fulfillment Status (MWTB)",
           "Seller Offer",
           "Final Purchase Price",
           "Unfulfilled Orders Log",
+          "Member WTBs",
+          "Member WTB ID",
+          "WTB Created Channel ID (MWTB)",
           "Product Name",
           "SKU",
           "Size",
@@ -6029,7 +6033,10 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Fulfillment Status (UOL)} = 'Allocated'
+          OR(
+            {Fulfillment Status (UOL)} = 'Allocated',
+            {Fulfillment Status (MWTB)} = 'Allocated'
+          )
         )`
       })
       .all();
@@ -6056,12 +6063,19 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
     const items = filteredInventory.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
+      const isMemberWtb = !linkedOrderId && !linkedRecordIsEmpty(f["Member WTBs"]);
+      
       const orderFields = orderMap.get(linkedOrderId) || {};
-      const channelId = displayValue(orderFields["WTB Created Channel ID"]);
-
+      
+      const channelId = isMemberWtb
+        ? displayValue(f["WTB Created Channel ID (MWTB)"])
+        : displayValue(orderFields["WTB Created Channel ID"]);
+      
       return {
         id: record.id,
-        order_id: displayValue(orderFields["Order ID"]),
+        order_id: isMemberWtb
+          ? displayValue(f["Member WTB ID"])
+          : displayValue(orderFields["Order ID"]),
         order_record_id: linkedOrderId,
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
@@ -6082,6 +6096,9 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
         fields: [
           "Seller ID",
           "Linked Orders",
+          "Member WTBs",
+          "Member WTB ID",
+          "WTB Created Channel ID (MWTB)",
           "Seller Offer",
           "Offer VAT Type",
           "Offer Date",
@@ -6111,20 +6128,36 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
     
     const channelCreatedOffers = filteredOffers
       .filter((record) => {
-        const linkedOrderId = firstLinkedRecordId(record.fields?.["Linked Orders"]);
-        const orderFields = offerOrderMap.get(linkedOrderId) || {};
+        const f = record.fields || {};
     
+        const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+        const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
+    
+        if (linkedMemberWtbId) {
+          return !!displayValue(f["WTB Created Channel ID (MWTB)"]);
+        }
+    
+        const orderFields = offerOrderMap.get(linkedOrderId) || {};
         return orderFields["Channel Created?"] === true;
       })
       .map((record) => {
         const f = record.fields || {};
+    
         const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+        const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
+        const isMemberWtb = !!linkedMemberWtbId;
+    
         const orderFields = offerOrderMap.get(linkedOrderId) || {};
-        const channelId = displayValue(orderFields["WTB Created Channel ID"]);
+    
+        const channelId = isMemberWtb
+          ? displayValue(f["WTB Created Channel ID (MWTB)"])
+          : displayValue(orderFields["WTB Created Channel ID"]);
     
         return {
           id: record.id,
-          order_id: displayValue(orderFields["Order ID"]),
+          order_id: isMemberWtb
+            ? displayValue(f["Member WTB ID"])
+            : displayValue(orderFields["Order ID"]),
           order_record_id: linkedOrderId,
           product: displayValue(f["Product Name"] || orderFields["Product Name"]),
           sku: displayValue(f["SKU"] || orderFields["SKU"]),
@@ -6390,8 +6423,8 @@ app.get("/api/dashboard/wtb-ready-to-ship", async (req, res) => {
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
           OR(
-            {Fulfillment Status (UOL)} = 'Ready To Ship',
-            {Fulfillment Status (MWTB)} = 'Ready To Ship'
+            {Fulfillment Status (UOL)} = 'Ready to Ship',
+            {Fulfillment Status (MWTB)} = 'Ready to Ship'
           )
         )`
       })
@@ -6491,10 +6524,16 @@ app.get("/api/dashboard/wtb-shipped", async (req, res) => {
           "Item ID",
           "Type",
           "Fulfillment Status (UOL)",
+          "Fulfillment Status (MWTB)",
           "Shipping Status",
+          "Shipping Status (MWTB)",
           "Seller Offer",
           "Final Purchase Price",
           "Unfulfilled Orders Log",
+          "Member WTBs",
+          "Member WTB ID",
+          "WTB Created Channel ID (MWTB)",
+          "Tracking URL (MWTB)",
           "Product Name",
           "SKU",
           "Size",
@@ -6505,7 +6544,10 @@ app.get("/api/dashboard/wtb-shipped", async (req, res) => {
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Shipping Status} = 'Shipped'
+          OR(
+            {Shipping Status} = 'Shipped',
+            {Shipping Status (MWTB)} = 'Shipped'
+          )
         )`
       })
       .all();
@@ -6532,13 +6574,23 @@ app.get("/api/dashboard/wtb-shipped", async (req, res) => {
     const items = filteredInventory.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
+      const isMemberWtb = !linkedOrderId && !linkedRecordIsEmpty(f["Member WTBs"]);
+      
       const orderFields = orderMap.get(linkedOrderId) || {};
-      const channelId = displayValue(orderFields["WTB Created Channel ID"]);
-      const trackingUrl = displayValue(orderFields["Tracking URL"]);
+      
+      const channelId = isMemberWtb
+        ? displayValue(f["WTB Created Channel ID (MWTB)"])
+        : displayValue(orderFields["WTB Created Channel ID"]);
+      
+      const trackingUrl = isMemberWtb
+        ? displayValue(f["Tracking URL (MWTB)"])
+        : displayValue(orderFields["Tracking URL"]);
 
       return {
         id: record.id,
-        order_id: displayValue(orderFields["Order ID"]),
+        order_id: isMemberWtb
+          ? displayValue(f["Member WTB ID"])
+          : displayValue(orderFields["Order ID"]),
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
@@ -6587,10 +6639,15 @@ app.get("/api/dashboard/wtb-delivered", async (req, res) => {
           "Item ID",
           "Type",
           "Shipping Status",
+          "Shipping Status (MWTB)",
           "Payment Status",
           "Seller Offer",
           "Final Purchase Price",
           "Unfulfilled Orders Log",
+          "Member WTBs",
+          "Member WTB ID",
+          "WTB Created Channel ID (MWTB)",
+          "Tracking URL (MWTB)",
           "Product Name",
           "SKU",
           "Size",
@@ -6601,7 +6658,10 @@ app.get("/api/dashboard/wtb-delivered", async (req, res) => {
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Shipping Status} = 'Delivered',
+          OR(
+            {Shipping Status} = 'Delivered',
+            {Shipping Status (MWTB)} = 'Delivered'
+          ),
           {Payment Status} = 'To Pay'
         )`
       })
@@ -6629,13 +6689,23 @@ app.get("/api/dashboard/wtb-delivered", async (req, res) => {
     const items = filteredInventory.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
+      const isMemberWtb = !linkedOrderId && !linkedRecordIsEmpty(f["Member WTBs"]);
+      
       const orderFields = orderMap.get(linkedOrderId) || {};
-      const channelId = displayValue(orderFields["WTB Created Channel ID"]);
-      const trackingUrl = displayValue(orderFields["Tracking URL"]);
+      
+      const channelId = isMemberWtb
+        ? displayValue(f["WTB Created Channel ID (MWTB)"])
+        : displayValue(orderFields["WTB Created Channel ID"]);
+      
+      const trackingUrl = isMemberWtb
+        ? displayValue(f["Tracking URL (MWTB)"])
+        : displayValue(orderFields["Tracking URL"]);
 
       return {
         id: record.id,
-        order_id: displayValue(orderFields["Order ID"]),
+        order_id: isMemberWtb
+          ? displayValue(f["Member WTB ID"])
+          : displayValue(orderFields["Order ID"]),
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
@@ -7714,12 +7784,16 @@ app.get("/api/dashboard/counts", async (req, res) => {
       .select({
         fields: [
           "Seller ID",
-          "Seller Offer"
+          "Seller Offer",
+          "Fulfillment Status (MWTB)"
         ],
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Fulfillment Status (UOL)} = 'Allocated'
+          OR(
+            {Fulfillment Status (UOL)} = 'Allocated',
+            {Fulfillment Status (MWTB)} = 'Allocated'
+          )
         )`
       })
       .all(),
@@ -7728,12 +7802,16 @@ app.get("/api/dashboard/counts", async (req, res) => {
       .select({
         fields: [
           "Seller ID",
-          "Seller Offer"
+          "Seller Offer",
+          "Fulfillment Status (MWTB)"
         ],
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Fulfillment Status (UOL)} = 'Requested Label'
+          OR(
+            {Fulfillment Status (UOL)} = 'Requested Label',
+            {Fulfillment Status (MWTB)} = 'Requested Label'
+          )
         )`
       })
       .all(),
@@ -7742,12 +7820,16 @@ app.get("/api/dashboard/counts", async (req, res) => {
       .select({
         fields: [
           "Seller ID",
-          "Seller Offer"
+          "Seller Offer",
+          "Fulfillment Status (MWTB)"
         ],
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Fulfillment Status (UOL)} = 'Ready to Ship'
+          OR(
+            {Fulfillment Status (UOL)} = 'Ready to Ship',
+            {Fulfillment Status (MWTB)} = 'Ready to Ship'
+          )
         )`
       })
       .all(),
@@ -7756,12 +7838,16 @@ app.get("/api/dashboard/counts", async (req, res) => {
       .select({
         fields: [
           "Seller ID",
-          "Seller Offer"
+          "Seller Offer",
+          "Shipping Status (MWTB)"
         ],
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Shipping Status} = 'Shipped'
+          OR(
+            {Shipping Status} = 'Shipped',
+            {Shipping Status (MWTB)} = 'Shipped'
+          )
         )`
       })
       .all(),
@@ -7770,12 +7856,16 @@ app.get("/api/dashboard/counts", async (req, res) => {
       .select({
         fields: [
           "Seller ID",
-          "Seller Offer"
+          "Seller Offer",
+          "Shipping Status (MWTB)"
         ],
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Shipping Status} = 'Delivered',
+          OR(
+            {Shipping Status} = 'Delivered',
+            {Shipping Status (MWTB)} = 'Delivered'
+          ),
           {Payment Status} = 'To Pay'
         )`
       })
