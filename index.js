@@ -1978,7 +1978,9 @@ function bindConsignmentDiscordButtons(client) {
         embeds: interaction.message.embeds,
         components: []
       });
-    
+      
+      await sendMemberWtbPurchaseWebhook(memberWtbRecordId);
+      
       await sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId);
     
       return;
