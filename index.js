@@ -1992,7 +1992,7 @@ function bindConsignmentDiscordButtons(client) {
       const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
       const currentStatus = asText(memberWtb.fields?.["Fulfillment Status"]);
       
-      if (currentStatus === "Label Requested") {
+      if (currentStatus === "Requested Label") {
         await interaction.message.edit({
           content: interaction.message.content,
           embeds: interaction.message.embeds,
@@ -2003,7 +2003,7 @@ function bindConsignmentDiscordButtons(client) {
                 {
                   type: 2,
                   style: 2,
-                  label: "Label Requested",
+                  label: "Requested Label",
                   custom_id: "member_wtb_label_requested_disabled",
                   disabled: true
                 }
@@ -2023,11 +2023,11 @@ function bindConsignmentDiscordButtons(client) {
         });
     
         await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
-          "Fulfillment Status": "Label Requested",
+          "Fulfillment Status": "Requested Label",
           "Label Requested At": new Date().toISOString()
         });
     
-        console.log("✅ Member WTB status updated to Label Requested", {
+        console.log("✅ Member WTB status updated to Requested Label", {
           memberWtbRecordId
         });
     
@@ -2048,7 +2048,7 @@ function bindConsignmentDiscordButtons(client) {
                 {
                   type: 2,
                   style: 2,
-                  label: "Label Requested",
+                  label: "Requested Label",
                   custom_id: "member_wtb_label_requested_disabled",
                   disabled: true
                 }
@@ -2434,7 +2434,7 @@ function bindConsignmentDiscordButtons(client) {
                 {
                   type: 2,
                   style: 2,
-                  label: "Label Requested",
+                  label: "Requested Label",
                   custom_id: "label_requested_disabled",
                   disabled: true
                 }
@@ -6315,8 +6315,8 @@ app.get("/api/dashboard/wtb-label-requested", async (req, res) => {
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
           OR(
-            {Fulfillment Status (UOL)} = 'Label Requested',
-            {Fulfillment Status (MWTB)} = 'Label Requested'
+            {Fulfillment Status (UOL)} = 'Requested Label',
+            {Fulfillment Status (MWTB)} = 'Requested Label'
           )
         )`
       })
