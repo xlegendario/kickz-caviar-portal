@@ -6311,12 +6311,19 @@ app.get("/api/dashboard/wtb-label-requested", async (req, res) => {
     const items = filteredInventory.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
+      const isMemberWtb = !linkedOrderId && !linkedRecordIsEmpty(f["Member WTBs"]);
+      
       const orderFields = orderMap.get(linkedOrderId) || {};
-      const channelId = displayValue(orderFields["WTB Created Channel ID"]);
-
+      
+      const channelId = isMemberWtb
+        ? displayValue(f["WTB Created Channel ID (MWTB)"])
+        : displayValue(orderFields["WTB Created Channel ID"]);
+      
       return {
         id: record.id,
-        order_id: displayValue(orderFields["Order ID"]),
+        order_id: isMemberWtb
+          ? displayValue(f["Member WTB ID"])
+          : displayValue(orderFields["Order ID"]),
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
@@ -6412,21 +6419,30 @@ app.get("/api/dashboard/wtb-ready-to-ship", async (req, res) => {
     const items = filteredInventory.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
+      const isMemberWtb = !linkedOrderId && !linkedRecordIsEmpty(f["Member WTBs"]);
+      
       const orderFields = orderMap.get(linkedOrderId) || {};
-      const channelId = displayValue(orderFields["WTB Created Channel ID"]);
-
-      const permanentLabelUrl =
-        displayValue(orderFields["Shipping Label URL (Permanent)"]);
-
-      const shippingLabelAttachment =
-        firstAttachmentUrl(orderFields["Shipping Label"]);
-
+      
+      const channelId = isMemberWtb
+        ? displayValue(f["WTB Created Channel ID (MWTB)"])
+        : displayValue(orderFields["WTB Created Channel ID"]);
+      
+      const permanentLabelUrl = isMemberWtb
+        ? displayValue(f["Shipping Label URL (Permanent) (MWTB)"])
+        : displayValue(orderFields["Shipping Label URL (Permanent)"]);
+      
+      const shippingLabelAttachment = isMemberWtb
+        ? ""
+        : firstAttachmentUrl(orderFields["Shipping Label"]);
+      
       const labelUrl =
         permanentLabelUrl || shippingLabelAttachment || "";
 
       return {
         id: record.id,
-        order_id: displayValue(orderFields["Order ID"]),
+        order_id: isMemberWtb
+          ? displayValue(f["Member WTB ID"])
+          : displayValue(orderFields["Order ID"]),
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
