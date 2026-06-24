@@ -6238,6 +6238,12 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
       
       return {
         id: record.id,
+        member_wtb_record_id: isMemberWtb
+          ? firstLinkedRecordId(f["Member WTBs"])
+          : "",
+        payment_status: isMemberWtb
+          ? displayValue(f["Payment Status (MWTB)"])
+          : "Paid",
         order_id: isMemberWtb
           ? displayValue(f["Member WTB ID"])
           : displayValue(orderFields["Order ID"]),
