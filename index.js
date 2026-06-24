@@ -10488,6 +10488,7 @@ app.post("/api/member-wtb/open", async (req, res) => {
       "Brand": brand,
 
       "Max Price": maxPrice,
+      "Offer Margin": 10,
       "Current Lowest Source Price": maxPrice,
 
       "Fulfillment Status": "Outsource",
