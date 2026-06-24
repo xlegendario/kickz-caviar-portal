@@ -60,8 +60,17 @@
   <main class="page">
     <section class="hero">
       <div class="hero-content">
-        <h2>Sell inventory directly to Kickz Caviar</h2>
-        <p>Claim Quick Deals instantly or place offers on active Want To Buys.</p>
+        <div class="hero-title-row">
+          <div class="hero-copy">
+            <h2>Sell inventory directly to Kickz Caviar</h2>
+            <p>Claim Quick Deals instantly or place offers on active Want To Buys.</p>
+          </div>
+      
+          <button class="place-wtb-btn hidden" id="openMemberWtbModalBtn" type="button">
+            Place Want To Buy
+          </button>
+        </div>
+      
         <p class="hero-consignor-cta hidden" id="heroConsignorCta">
           Want to join the Kickz Caviar Consignment Network and have your stock listed directly as In-Stock items across our partner stores?
           <a href="/consignment-application">Become a consignor now.</a>
@@ -209,6 +218,35 @@
       </div>
   
       <div class="login-error" id="buyingActionError"></div>
+    </div>
+  </div>
+
+  <div id="memberWtbModal" class="modal-backdrop hidden">
+    <div class="login-modal">
+      <button id="closeMemberWtbModal" class="modal-close" type="button">×</button>
+  
+      <h2>Place Want To Buy</h2>
+      <p>Place a request and let sellers compete for the lowest offer.</p>
+  
+      <label class="offer-label">SKU</label>
+      <input id="memberWtbSkuInput" class="offer-input" type="text" placeholder="DD1391-100" />
+  
+      <label class="offer-label">SIZE</label>
+      <input id="memberWtbSizeInput" class="offer-input" type="text" placeholder="43" />
+  
+      <label class="offer-label">MAX PRICE</label>
+      <input id="memberWtbMaxPriceInput" class="offer-input" type="text" inputmode="numeric" placeholder="120" />
+  
+      <label class="offer-label">INVENTORY FILTER</label>
+      <select id="memberWtbInventoryTypeInput" class="offer-input">
+        <option value="all">All Inventory</option>
+        <option value="b2b">B2B Only</option>
+        <option value="private">Margin Only</option>
+      </select>
+  
+      <button id="submitMemberWtbBtn" class="modal-submit">Submit Want To Buy</button>
+  
+      <div id="memberWtbError" class="login-error"></div>
     </div>
   </div>
 
