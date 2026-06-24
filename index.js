@@ -1993,6 +1993,12 @@ function bindConsignmentDiscordButtons(client) {
 
         if (customId.startsWith("accept_member_wtb_buyer_offer:")) {
           const [, memberWtbRecordId, sellerOfferRecordId] = customId.split(":");
+
+          await interaction.message.edit({
+            content: "⏳ Processing your acceptance...",
+            embeds: interaction.message.embeds,
+            components: []
+          }).catch(() => {});
     
           const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb/process-seller-offer`, {
             method: "POST",
