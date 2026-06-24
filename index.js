@@ -5930,6 +5930,10 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
 
       const offerAmount = numberValue(f["Seller Offer"]);
 
+      const channelId = isMemberWtb
+        ? displayValue(f["WTB Created Channel ID (MWTB)"])
+        : displayValue(orderFields["WTB Created Channel ID"]);
+      
       return {
         id: record.id,
         order_record_id: linkedOrderId,
@@ -5956,7 +5960,10 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
         vat_type: displayValue(f["Offer VAT Type"]),
         date: formatDateEU(f["Offer Date"]),
         raw_date: f["Offer Date"],
-        status: "Offer accepted, waiting processing.."
+        status: "Offer accepted, waiting processing..",
+        discord_url: channelId
+          ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
+          : ""
       };
     });
 
