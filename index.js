@@ -10417,6 +10417,115 @@ app.post("/api/buying/offers", async (req, res) => {
   }
 });
 
+app.post("/api/member-wtb/open", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const sellerId = asText(req.body?.seller_id);
+    const sku = normalizeSku(req.body?.sku);
+    const size = getBuyingSizeKey(req.body?.size);
+    const maxPrice = Number(req.body?.max_price);
+    const inventoryType = normalizeBuyingInventoryType(req.body?.inventory_type);
+
+    if (!sellerRecordId || !sellerId) {
+      return res.status(401).json({ error: "Login required" });
+    }
+
+    if (!sku || !size) {
+      return res.status(400).json({ error: "SKU and size are required" });
+    }
+
+    if (!Number.isFinite(maxPrice) || maxPrice <= 0) {
+      return res.status(400).json({ error: "Invalid max price" });
+    }
+
+    const liveSources = await getLiveBuyingSources({ force: true });
+
+    const product =
+      (liveSources || []).find((source) => normalizeSku(source.sku) === sku) ||
+      {};
+
+    const productName =
+      asText(product.product_name) ||
+      sku;
+
+    const brand =
+      asText(product.brand) ||
+      "";
+
+    const imageUrl =
+      asText(product.image_url) ||
+      "";
+
+    const fields = {
+      "Product Name": productName,
+      "SKU": sku,
+      "Size": size,
+      "Brand": brand,
+
+      "Max Price": maxPrice,
+      "Current Lowest Source Price": maxPrice,
+
+      "Fulfillment Status": "Outsource",
+      "Purchase Status": "Offers Sent",
+      "Payment Status": "Pending",
+
+      "Buyer Seller ID": [sellerRecordId],
+      "Auto Accept Seller Offers?": false,
+
+      "Buying Inventory Filter": getBuyingInventoryFilterLabel(inventoryType),
+      "Buying Selected Source Type": "Open WTB",
+      "Buying Selected Source ID": "",
+
+      "Offer Sent?": false,
+      "New Offer Available": false,
+
+      "Internal Notes": [
+        "Open WTB",
+        "",
+        `Filter: ${getBuyingInventoryFilterLabel(inventoryType)}`,
+        `Buyer Max Price: ${buyingMoneyValue(maxPrice)}`,
+        "Created From: Buying Portal"
+      ].join("\n")
+    };
+
+    if (imageUrl) {
+      fields["Picture"] = [{ url: imageUrl }];
+    }
+
+    const created = await airtable(MEMBER_WTBS_TABLE).create(fields);
+
+    let wtbPost = null;
+
+    try {
+      wtbPost = await postMemberWtbToWtbBot({
+        recordId: created.id,
+        productName,
+        sku,
+        size,
+        brand,
+        imageUrl
+      });
+    } catch (err) {
+      console.error("Failed to post Open Member WTB to WTB bot:", err);
+    }
+
+    return res.json({
+      success: true,
+      member_wtb_record_id: created.id,
+      purchase_status: "Offers Sent",
+      wtb_posted: !!wtbPost,
+      wtb_post: wtbPost
+    });
+  } catch (err) {
+    console.error("Failed to create Open Member WTB:", err);
+
+    return res.status(500).json({
+      error: "Failed to create Open WTB",
+      details: err.message
+    });
+  }
+});
+
 app.post("/api/buying/requests", async (req, res) => {
   try {
     const sellerRecordId = asText(req.body?.seller_record_id);
