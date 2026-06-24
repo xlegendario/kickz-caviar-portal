@@ -6201,11 +6201,17 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
 
     const filteredInventory = inventoryRecords.filter((record) => {
       const f = record.fields || {};
-
-      return (
-        linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
-        !linkedRecordIsEmpty(f["Seller Offer"])
-      );
+      const isMemberWtb = !linkedRecordIsEmpty(f["Member WTBs"]);
+    
+      if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
+        return false;
+      }
+    
+      if (isMemberWtb) {
+        return true;
+      }
+    
+      return !linkedRecordIsEmpty(f["Seller Offer"]);
     });
 
     const linkedOrderIds = [
