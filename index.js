@@ -10472,7 +10472,6 @@ app.post("/api/member-wtb/open", async (req, res) => {
       "Auto Accept Seller Offers?": false,
 
       "Buying Inventory Filter": getBuyingInventoryFilterLabel(inventoryType),
-      "Buying Selected Source Type": "Open WTB",
       "Buying Selected Source ID": "",
 
       "Offer Sent?": false,
