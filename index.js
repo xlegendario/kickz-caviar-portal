@@ -6998,6 +6998,97 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
   }
 });
 
+app.post("/api/dashboard/wtb-open-offers/:offerId/edit", async (req, res) => {
+  try {
+    const offerId = asText(req.params.offerId);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const offerAmount = Number(req.body?.offer_amount);
+    const vatType = asText(req.body?.vat_type);
+
+    if (!offerId || !sellerRecordId) {
+      return res.status(400).json({ error: "Missing offerId or seller_record_id" });
+    }
+
+    if (!Number.isFinite(offerAmount) || offerAmount <= 0) {
+      return res.status(400).json({ error: "Invalid offer amount" });
+    }
+
+    if (!["Margin", "VAT0", "VAT21"].includes(vatType)) {
+      return res.status(400).json({ error: "Invalid VAT type" });
+    }
+
+    const offerRecord = await airtable(SELLER_OFFERS_TABLE).find(offerId);
+    const f = offerRecord.fields || {};
+
+    if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
+    const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+
+    const normalizedOffer =
+      vatType === "VAT0"
+        ? offerAmount * 1.21
+        : offerAmount;
+
+    await airtable(SELLER_OFFERS_TABLE).update(offerId, {
+      "Seller Offer": offerAmount,
+      "Offer VAT Type": vatType,
+      "Offer Cost (Normalized)": normalizedOffer,
+      "Offer Date": new Date().toISOString()
+    });
+
+    if (linkedMemberWtbId) {
+      const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(linkedMemberWtbId);
+      const mf = memberWtb.fields || {};
+
+      if (["Confirmed", "Allocated", "Fulfilled", "Cancelled"].includes(asText(mf["Fulfillment Status"]))) {
+        return res.status(409).json({ error: "This WTB is no longer open for offers" });
+      }
+
+      await airtable(MEMBER_WTBS_TABLE).update(linkedMemberWtbId, {
+        "Current Lowest Offer": offerAmount,
+        "Current Lowest Normalized": normalizedOffer,
+        "Current Lowest Seller Offer": [offerId],
+        "Lowest Offer": offerAmount,
+        "Lowest Offer Normalized": normalizedOffer,
+        "Lowest Offer VAT Type": vatType,
+        "Lowest Offer Seller ID": [sellerRecordId],
+        "New Offer Available": false,
+        "Offer Sent?": true
+      });
+
+      await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb/send-current-offer-to-buyer`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.KC_PORTAL_SECRET
+        },
+        body: JSON.stringify({
+          member_wtb_record_id: linkedMemberWtbId
+        })
+      }).catch((err) => {
+        console.error("Failed to send edited Member WTB offer to buyer:", err);
+      });
+    }
+
+    return res.json({
+      ok: true,
+      offer_id: offerId,
+      member_wtb_record_id: linkedMemberWtbId,
+      order_record_id: linkedOrderId
+    });
+  } catch (err) {
+    console.error("Failed to edit open WTB offer:", err);
+
+    res.status(500).json({
+      error: "Failed to edit offer",
+      details: err.message
+    });
+  }
+});
+
 app.delete("/api/dashboard/wtb-open-offers/:offerId", async (req, res) => {
   try {
     const offerId = asText(req.params.offerId);
