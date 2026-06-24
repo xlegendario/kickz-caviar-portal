@@ -6466,6 +6466,46 @@ app.post("/api/dashboard/request-label", async (req, res) => {
   }
 });
 
+app.post("/api/dashboard/member-wtb-request-label", async (req, res) => {
+  try {
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+
+    if (!memberWtbRecordId) {
+      return res.status(400).json({
+        error: "Missing member_wtb_record_id"
+      });
+    }
+
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+    const currentStatus = asText(memberWtb.fields?.["Fulfillment Status"]);
+
+    if (currentStatus === "Requested Label") {
+      return res.json({
+        ok: true,
+        already_requested: true
+      });
+    }
+
+    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+      "Fulfillment Status": "Requested Label",
+      "Label Requested At": new Date().toISOString()
+    });
+
+    await sendMemberWtbLabelRequestToBuyer(memberWtbRecordId);
+
+    res.json({
+      ok: true
+    });
+  } catch (err) {
+    console.error("Failed to request Member WTB label:", err);
+
+    res.status(500).json({
+      error: "Failed to request Member WTB label",
+      details: err.message
+    });
+  }
+});
+
 app.get("/api/dashboard/wtb-label-requested", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
