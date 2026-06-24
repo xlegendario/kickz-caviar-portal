@@ -6897,7 +6897,11 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
           "Product Name",
           "SKU",
           "Size",
-          "Brand"
+          "Brand",
+          "Product Name (MWTB)",
+          "SKU (MWTB)",
+          "Size (MWTB)",
+          "Brand (MWTB)"
         ],
         filterByFormula: `OR(
           {Fulfillment Status} = 'Outsource',
@@ -6941,7 +6945,9 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
           : numberValue(orderFields["Current Lowest (Normalized)"]);
 
       const isLowest = isMemberWtb
-        ? displayValue(f["Lowest Offer Seller ID (MWTB)"]) === displayValue(req.query.seller_id)
+        ? Number.isFinite(offerAmount) &&
+          Number.isFinite(currentLowest) &&
+          Math.abs(offerAmount - currentLowest) < 0.01
         : displayValue(orderFields["Lowest Offer Seller ID"]) === displayValue(req.query.seller_id);
 
       return {
@@ -6951,10 +6957,21 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
         order_id: isMemberWtb
           ? displayValue(f["Member WTB ID"])
           : displayValue(orderFields["Order ID"]),
-        product: displayValue(f["Product Name"] || orderFields["Product Name"]),
-        sku: displayValue(f["SKU"] || orderFields["SKU"]),
-        size: displayValue(f["Size"] || orderFields["Size"]),
-        brand: displayValue(f["Brand"] || orderFields["Brand"]),
+        product: isMemberWtb
+          ? displayValue(f["Product Name (MWTB)"] || f["Product Name"])
+          : displayValue(f["Product Name"] || orderFields["Product Name"]),
+        
+        sku: isMemberWtb
+          ? displayValue(f["SKU (MWTB)"] || f["SKU"])
+          : displayValue(f["SKU"] || orderFields["SKU"]),
+        
+        size: isMemberWtb
+          ? displayValue(f["Size (MWTB)"] || f["Size"])
+          : displayValue(f["Size"] || orderFields["Size"]),
+        
+        brand: isMemberWtb
+          ? displayValue(f["Brand (MWTB)"] || f["Brand"])
+          : displayValue(f["Brand"] || orderFields["Brand"]),
         offer: moneyWholeValue(offerAmount),
         offer_raw: offerAmount,
         vat_type: vatType,
