@@ -6893,12 +6893,16 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
           "Offer VAT Type",
           "Offer Date",
           "Fulfillment Status",
+          "Fulfillment Status (MWTB)",
           "Product Name",
           "SKU",
           "Size",
           "Brand"
         ],
-        filterByFormula: `{Fulfillment Status} = 'Outsource'`
+        filterByFormula: `OR(
+          {Fulfillment Status} = 'Outsource',
+          {Fulfillment Status (MWTB)} = 'Outsource'
+        )`
       })
       .all();
 
