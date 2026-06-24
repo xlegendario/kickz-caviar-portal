@@ -1736,7 +1736,8 @@ function renderConfirmedRows(items) {
               <button
                 class="dashboard-mobile-btn dashboard-mobile-request-label-btn"
                 type="button"
-                data-request-label-id="${escapeHtml(item.order_record_id || item.member_wtb_record_id || "")}"
+                data-request-label-id="${escapeHtml(item.order_record_id || "")}"
+                data-member-wtb-record-id="${escapeHtml(item.member_wtb_record_id || "")}"
               >
                 Request Label
               </button>
@@ -1780,7 +1781,8 @@ function renderConfirmedRows(items) {
               <button
                 class="dashboard-issue-btn dashboard-request-label-btn"
                 type="button"
-                data-request-label-id="${escapeHtml(item.order_record_id || item.member_wtb_record_id || "")}"
+                data-request-label-id="${escapeHtml(item.order_record_id || "")}"
+                data-member-wtb-record-id="${escapeHtml(item.member_wtb_record_id || "")}"
               >
                 Request Label
               </button>
@@ -3384,7 +3386,8 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const requestLabelButton = event.target.closest("[data-request-label-id]");
 
   if (requestLabelButton) {
-    const orderRecordId = requestLabelButton.dataset.requestLabelId;
+    const orderRecordId = requestLabelButton.dataset.requestLabelId || "";
+    const memberWtbRecordId = requestLabelButton.dataset.memberWtbRecordId || "";
   
     if (!orderRecordId) {
       alert("Missing order record ID.");
@@ -3395,15 +3398,22 @@ dashboardTableBody.addEventListener("click", async (event) => {
     requestLabelButton.textContent = "REQUESTING...";
   
     try {
-      const response = await fetch("/api/dashboard/request-label", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          order_record_id: orderRecordId
-        })
-      });
+      const response = await fetch(
+        memberWtbRecordId
+          ? "/api/dashboard/member-wtb-request-label"
+          : "/api/dashboard/request-label",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(
+            memberWtbRecordId
+              ? { member_wtb_record_id: memberWtbRecordId }
+              : { order_record_id: orderRecordId }
+          )
+        }
+      );
   
       const data = await response.json();
   
