@@ -6181,6 +6181,7 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
           "Member WTBs",
           "Member WTB ID",
           "WTB Created Channel ID (MWTB)",
+          "Payment Status (MWTB)",
           "Product Name",
           "SKU",
           "Size",
@@ -6247,6 +6248,9 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
         brand: displayValue(f["Brand"]),
         payout: moneyWholeValue(f["Final Purchase Price"]),
         vat_type: displayValue(f["VAT Type"]),
+        payment_status: isMemberWtb
+          ? displayValue(f["Payment Status (MWTB)"])
+          : "Paid",
         date: formatDateEU(f["Purchase Date"]),
         raw_date: f["Purchase Date"],
         discord_url: channelId
