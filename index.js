@@ -2024,8 +2024,13 @@ function bindConsignmentDiscordButtons(client) {
           const data = await response.json().catch(() => ({}));
     
           if (!response.ok) {
+            console.error("accept_member_wtb_buyer_offer failed:", {
+              status: response.status,
+              data
+            });
+          
             await interaction.message.edit({
-              content: `❌ ${data.details || data.error || "Failed to accept offer."}`,
+              content: `❌ Failed to accept offer. Status: ${response.status}. ${data.details || data.error || ""}`,
               embeds: interaction.message.embeds,
               components: []
             }).catch(() => {});
