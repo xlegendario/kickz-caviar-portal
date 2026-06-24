@@ -1168,37 +1168,33 @@ function renderWtbOpenOffersRows(offers) {
       <td>${escapeHtml(offer.date || "-")}</td>
       <td>
         <div class="dashboard-action-row">
-          <td>
-            <div class="dashboard-action-row">
-              <button
-                class="dashboard-edit-btn"
-                type="button"
-                data-edit-offer-id="${escapeHtml(offer.id || "")}"
-                data-member-wtb-record-id="${escapeHtml(offer.member_wtb_record_id || "")}"
-                data-order-record-id="${escapeHtml(offer.order_record_id || "")}"
-                data-vat-type="${escapeHtml(offer.vat_type || "")}"
-                data-current-offer="${escapeHtml(offer.offer_raw || "")}"
-                data-current-lowest="${escapeHtml(offer.current_lowest || "-")}"
-              >
-                Edit
-              </button>
-          
-              <button
-                class="dashboard-delete-btn"
-                type="button"
-                data-delete-offer-id="${escapeHtml(offer.id || "")}"
-                title="Delete offer"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
-                  <path d="M3 6h18" stroke="currentColor"/>
-                  <path d="M8 6V4h8v2" stroke="currentColor"/>
-                  <path d="M19 6l-1 14H6L5 6" stroke="currentColor"/>
-                  <path d="M10 11v6" stroke="currentColor"/>
-                  <path d="M14 11v6" stroke="currentColor"/>
-                </svg>
-              </button>
-            </div>
-          </td>
+          <button
+            class="dashboard-edit-btn"
+            type="button"
+            data-edit-offer-id="${escapeHtml(offer.id || "")}"
+            data-member-wtb-record-id="${escapeHtml(offer.member_wtb_record_id || "")}"
+            data-order-record-id="${escapeHtml(offer.order_record_id || "")}"
+            data-vat-type="${escapeHtml(offer.vat_type || "")}"
+            data-current-offer="${escapeHtml(offer.offer_raw || "")}"
+            data-current-lowest="${escapeHtml(offer.current_lowest || "-")}"
+          >
+            Edit
+          </button>
+      
+          <button
+            class="dashboard-delete-btn"
+            type="button"
+            data-delete-offer-id="${escapeHtml(offer.id || "")}"
+            title="Delete offer"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+              <path d="M3 6h18" stroke="currentColor"/>
+              <path d="M8 6V4h8v2" stroke="currentColor"/>
+              <path d="M19 6l-1 14H6L5 6" stroke="currentColor"/>
+              <path d="M10 11v6" stroke="currentColor"/>
+              <path d="M14 11v6" stroke="currentColor"/>
+            </svg>
+          </button>
         </div>
       </td>
     </tr>
