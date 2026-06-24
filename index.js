@@ -2000,7 +2000,16 @@ function bindConsignmentDiscordButtons(client) {
             components: []
           }).catch(() => {});
     
-          const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb/process-seller-offer`, {
+          if (!DISCORD_BOT_BASE_URL) {
+            await interaction.message.edit({
+              content: "❌ DISCORD_BOT_BASE_URL is missing.",
+              embeds: interaction.message.embeds,
+              components: []
+            }).catch(() => {});
+            return;
+          }
+          
+          const response = await fetch(`${DISCORD_BOT_BASE_URL}/member-wtb/deal-channel`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -2008,9 +2017,7 @@ function bindConsignmentDiscordButtons(client) {
             },
             body: JSON.stringify({
               member_wtb_record_id: memberWtbRecordId,
-              seller_offer_record_id: sellerOfferRecordId,
-              discord_channel_id: interaction.channelId,
-              discord_message_id: interaction.message.id
+              seller_offer_record_id: sellerOfferRecordId
             })
           });
     
@@ -2026,7 +2033,7 @@ function bindConsignmentDiscordButtons(client) {
           }
     
           await interaction.message.edit({
-            content: "✅ Offer accepted. Payment instructions have been sent.",
+            content: "✅ Offer accepted. Payment will be requested once the seller confirms the deal.",
             embeds: interaction.message.embeds,
             components: []
           }).catch(() => {});
