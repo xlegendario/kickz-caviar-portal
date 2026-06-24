@@ -32,6 +32,7 @@ const {
   LOJIQ_WMS_BASE_URL = "https://lojiq-wms.onrender.com",
   SELLER_SIGNUP_URL = "https://discord.com/channels/922818998163361792/1444130166703128676",
   DISCORD_BOT_BASE_URL,
+  KICKZ_WTB_BOT_BASE_URL,
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
   RETAILED_STOCKX_SEARCH_URL,
@@ -2000,16 +2001,18 @@ function bindConsignmentDiscordButtons(client) {
             components: []
           }).catch(() => {});
     
-          if (!DISCORD_BOT_BASE_URL) {
+          const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
+
+          if (!wtbBotBaseUrl) {
             await interaction.message.edit({
-              content: "❌ DISCORD_BOT_BASE_URL is missing.",
+              content: "❌ KICKZ_WTB_BOT_BASE_URL is missing.",
               embeds: interaction.message.embeds,
               components: []
             }).catch(() => {});
             return;
           }
           
-          const response = await fetch(`${DISCORD_BOT_BASE_URL}/member-wtb/deal-channel`, {
+          const response = await fetch(`${wtbBotBaseUrl}/member-wtb/deal-channel`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
