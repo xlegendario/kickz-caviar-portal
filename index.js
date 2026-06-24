@@ -10171,12 +10171,33 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
 
     const purchasePrice = Number(offerFields['Seller Offer'] || 0);
     const vatType = asText(offerFields['Offer VAT Type']);
-    const maxPrice = Number(memberFields['Max Price'] || 0);
-    const finalBuyingPrice = getMemberWtbNetSalePrice(
-      maxPrice,
-      vatType,
-      memberFields["Buying Inventory Filter"]
-    );
+
+    const isOpenWtbFlow = memberFields['Auto Accept Seller Offers?'] !== true;
+
+    let finalBuyingPrice;
+
+    if (isOpenWtbFlow) {
+      const offerMargin = Number(memberFields['Offer Margin'] || 10);
+      const offerToBuyer = Number(memberFields['Offer To Buyer'] || 0);
+
+      if (vatType === 'VAT0') {
+        finalBuyingPrice = purchasePrice + offerMargin;
+      } else if (vatType === 'VAT21') {
+        finalBuyingPrice = (purchasePrice / 1.21) + offerMargin;
+      } else {
+        finalBuyingPrice = offerToBuyer || purchasePrice + offerMargin;
+      }
+
+      finalBuyingPrice = Math.round(finalBuyingPrice * 100) / 100;
+    } else {
+      const maxPrice = Number(memberFields['Max Price'] || 0);
+
+      finalBuyingPrice = getMemberWtbNetSalePrice(
+        maxPrice,
+        vatType,
+        memberFields["Buying Inventory Filter"]
+      );
+    }
 
     if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) {
       return res.status(400).json({ error: 'Invalid seller offer price' });
