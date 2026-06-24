@@ -2041,15 +2041,15 @@ body {
 }
 
 .post-wtb-icon {
-  width: 48px;
-  height: 48px;
+  width: 58px;
+  height: 58px;
   border-radius: 16px;
   background: linear-gradient(180deg, #fff27a, #f0a500);
   color: black;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 28px;
+  font-size: 34px;
   font-weight: 900;
   flex: 0 0 auto;
 }
@@ -2073,14 +2073,6 @@ body {
   color: #c7c7c7;
   font-size: 14px;
   line-height: 1.25;
-}
-
-.post-wtb-arrow {
-  color: #ffcc00;
-  font-size: 46px;
-  line-height: 1;
-  font-weight: 300;
-  flex: 0 0 auto;
 }
 
 .post-wtb-card:hover {
@@ -2117,9 +2109,5 @@ body {
 
   .post-wtb-copy span {
     font-size: 12px;
-  }
-
-  .post-wtb-arrow {
-    font-size: 30px;
   }
 }
