@@ -1094,6 +1094,42 @@ async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buye
   };
 }
 
+async function disableMemberWtbBuyerOfferMessage(memberFields, note) {
+  const channelId = asText(memberFields["Buyer Offer Channel ID"]);
+  const messageId = asText(memberFields["Buyer Offer Message ID"]);
+
+  if (!channelId || !messageId) return false;
+
+  await initKickzDealDiscord();
+
+  const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
+  if (!channel) return false;
+
+  const message = await channel.messages.fetch(messageId).catch(() => null);
+  if (!message) return false;
+
+  await message.edit({
+    content: note || "❌ A newer offer is available.",
+    embeds: message.embeds,
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 2,
+            label: "Expired",
+            custom_id: "member_wtb_buyer_offer_expired",
+            disabled: true
+          }
+        ]
+      }
+    ]
+  });
+
+  return true;
+}
+
 async function sendMemberWtbPurchaseWebhook(memberWtbRecordId) {
   const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
   const f = memberWtb.fields || {};
@@ -1873,7 +1909,9 @@ function bindConsignmentDiscordButtons(client) {
       !customId.startsWith("accept_member_wtb_kc_offer:") &&
       !customId.startsWith("deny_member_wtb_kc_offer:") &&
       !customId.startsWith("confirm_member_wtb_payment:") &&
-      !customId.startsWith("request_member_wtb_label:")
+      !customId.startsWith("request_member_wtb_label:") &&
+      !customId.startsWith("accept_member_wtb_buyer_offer:") &&
+      !customId.startsWith("decline_member_wtb_buyer_offer:")
     ) {
       return;
     }
@@ -1952,6 +1990,60 @@ function bindConsignmentDiscordButtons(client) {
     }
 
     await interaction.deferUpdate().catch(() => {});
+
+        if (customId.startsWith("accept_member_wtb_buyer_offer:")) {
+          const [, memberWtbRecordId, sellerOfferRecordId] = customId.split(":");
+    
+          const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb/process-seller-offer`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-kc-secret": process.env.KC_PORTAL_SECRET
+            },
+            body: JSON.stringify({
+              member_wtb_record_id: memberWtbRecordId,
+              seller_offer_record_id: sellerOfferRecordId,
+              discord_channel_id: interaction.channelId,
+              discord_message_id: interaction.message.id
+            })
+          });
+    
+          const data = await response.json().catch(() => ({}));
+    
+          if (!response.ok) {
+            await interaction.message.edit({
+              content: `❌ ${data.details || data.error || "Failed to accept offer."}`,
+              embeds: interaction.message.embeds,
+              components: []
+            }).catch(() => {});
+            return;
+          }
+    
+          await interaction.message.edit({
+            content: "✅ Offer accepted. Payment instructions have been sent.",
+            embeds: interaction.message.embeds,
+            components: []
+          }).catch(() => {});
+    
+          return;
+        }
+    
+        if (customId.startsWith("decline_member_wtb_buyer_offer:")) {
+          const memberWtbRecordId = customId.split(":")[1];
+    
+          await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+            "Purchase Status": "Offers Sent",
+            "Offer Sent?": false
+          }).catch(() => null);
+    
+          await interaction.message.edit({
+            content: "❌ Offer declined.",
+            embeds: interaction.message.embeds,
+            components: []
+          }).catch(() => {});
+    
+          return;
+        }
 
     if (customId.startsWith("confirm_member_wtb_payment:")) {
       const memberWtbRecordId = customId.split(":")[1];
@@ -10261,6 +10353,143 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
 
     return res.status(500).json({
       error: 'Failed to process Member WTB seller offer',
+      details: err.message
+    });
+  }
+});
+
+app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
+  try {
+    const secret = asText(req.headers['x-kc-secret']);
+
+    if (!process.env.KC_PORTAL_SECRET || secret !== process.env.KC_PORTAL_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+
+    if (!memberWtbRecordId) {
+      return res.status(400).json({ error: 'Missing member_wtb_record_id' });
+    }
+
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+    const f = memberWtb.fields || {};
+
+    if (asText(f["Fulfillment Status"]) === "Allocated") {
+      return res.status(409).json({ error: "Member WTB already allocated" });
+    }
+
+    const buyerRecordId = firstLinkedRecordId(f["Buyer Seller ID"]);
+
+    if (!buyerRecordId) {
+      return res.status(400).json({ error: "Member WTB missing Buyer Seller ID" });
+    }
+
+    const currentSellerOfferId = firstLinkedRecordId(f["Current Lowest Seller Offer"]);
+
+    if (!currentSellerOfferId) {
+      return res.status(400).json({ error: "No current seller offer found" });
+    }
+
+    const offerToBuyer = Number(f["Offer To Buyer"] || 0);
+
+    if (!Number.isFinite(offerToBuyer) || offerToBuyer <= 0) {
+      return res.status(400).json({ error: "Offer To Buyer is empty or invalid" });
+    }
+
+    const buyerRecord = await airtable(SELLERS_TABLE).find(buyerRecordId);
+    const buyer = normalizeSeller(buyerRecord);
+
+    const discordUserId = asText(
+      buyer.discord_id ||
+      buyer.discord_user_id ||
+      buyer.discord_id_raw ||
+      buyerRecord.fields?.["Discord User ID"]
+    );
+
+    if (!discordUserId) {
+      return res.status(400).json({ error: "Buyer is missing Discord ID" });
+    }
+
+    await disableMemberWtbBuyerOfferMessage(
+      f,
+      "❌ A better or newer offer is now available."
+    ).catch(() => null);
+
+    await initKickzDealDiscord();
+
+    const user = await kickzDealDiscordClient.users.fetch(discordUserId);
+    const dm = await user.createDM();
+
+    const memberWtbId =
+      asText(f["Member WTB ID"]) ||
+      asText(f["WTB ID"]) ||
+      memberWtbRecordId;
+
+    const imageUrl =
+      Array.isArray(f["Picture"]) && f["Picture"][0]?.url
+        ? f["Picture"][0].url
+        : "";
+
+    const embed = {
+      title: "🔥 New Offer Received",
+      description: [
+        `**Order Number:** ${memberWtbId}`,
+        "",
+        `**Product:** ${asText(f["Product Name"]) || "—"}`,
+        `**SKU:** ${asText(f["SKU"]) || "—"}`,
+        `**Size:** ${asText(f["Size"]) || "—"}`,
+        "",
+        `**Current Offer:** €${offerToBuyer.toFixed(2)}`,
+        "",
+        "Accept this offer to continue with payment."
+      ].join("\n"),
+      color: 0xf1c40f,
+      timestamp: new Date().toISOString(),
+      ...(imageUrl ? { image: { url: imageUrl } } : {})
+    };
+
+    const message = await dm.send({
+      embeds: [embed],
+      components: [
+        {
+          type: 1,
+          components: [
+            {
+              type: 2,
+              style: 3,
+              label: "Accept Offer",
+              custom_id: `accept_member_wtb_buyer_offer:${memberWtbRecordId}:${currentSellerOfferId}`
+            },
+            {
+              type: 2,
+              style: 4,
+              label: "Decline",
+              custom_id: `decline_member_wtb_buyer_offer:${memberWtbRecordId}`
+            }
+          ]
+        }
+      ]
+    });
+
+    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+      "Buyer Offer Channel ID": message.channelId,
+      "Buyer Offer Message ID": message.id,
+      "Offer Sent?": true,
+      "New Offer Available": false
+    });
+
+    return res.json({
+      ok: true,
+      member_wtb_record_id: memberWtbRecordId,
+      buyer_offer_channel_id: message.channelId,
+      buyer_offer_message_id: message.id
+    });
+  } catch (err) {
+    console.error("Failed to send current offer to buyer:", err);
+
+    return res.status(500).json({
+      error: "Failed to send current offer to buyer",
       details: err.message
     });
   }
