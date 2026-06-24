@@ -980,7 +980,7 @@ function renderWtbAcceptedRows(items) {
     ?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = wtbAcceptedColumns
-    .map((column) => `<th>${column}</th>`)
+    .map((column) => `<th>${column === "Status" ? "Action" : column}</th>`)
     .join("");
 
   if (!items.length) {
@@ -1006,8 +1006,8 @@ function renderWtbAcceptedRows(items) {
       primaryValue: (item) => item.offer,
       secondaryLabel: "Date",
       secondaryValue: (item) => item.date,
-      thirdLabel: "Status",
-      thirdValue: () => "Processing..."
+      thirdLabel: "Action",
+      thirdValue: (item) => item.discord_url ? "Discord available" : "Processing..."
     });
     return;
   }
@@ -1024,7 +1024,22 @@ function renderWtbAcceptedRows(items) {
       <td>${escapeHtml(item.offer || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
-      <td>${escapeHtml(item.status || "-")}</td>
+      <td>
+        ${
+          item.discord_url
+            ? `
+              <a
+                class="dashboard-discord-btn"
+                href="${escapeHtml(item.discord_url)}"
+                target="_blank"
+                rel="noopener"
+              >
+                Discord
+              </a>
+            `
+            : escapeHtml(item.status || "Offer accepted, waiting processing..")
+        }
+      </td>
     </tr>
   `).join("");
 }
