@@ -10439,9 +10439,35 @@ app.post("/api/member-wtb/open", async (req, res) => {
 
     const liveSources = await getLiveBuyingSources({ force: true });
 
-    const product =
+    let product =
       (liveSources || []).find((source) => normalizeSku(source.sku) === sku) ||
-      {};
+      null;
+    
+    if (!product) {
+      const skuMasterRecords = await airtable(SKU_MASTER_TABLE)
+        .select({
+          filterByFormula: `{SKU} = "${sku}"`,
+          maxRecords: 1
+        })
+        .firstPage();
+    
+      const skuMaster = skuMasterRecords[0];
+    
+      if (skuMaster) {
+        const f = skuMaster.fields || {};
+    
+        product = {
+          product_name: asText(f["Product Name"]),
+          brand: asText(f["Brand"]),
+          image_url:
+            Array.isArray(f["Picture"]) && f["Picture"][0]?.url
+              ? f["Picture"][0].url
+              : ""
+        };
+      }
+    }
+    
+    product = product || {};
 
     const productName =
       asText(product.product_name) ||
