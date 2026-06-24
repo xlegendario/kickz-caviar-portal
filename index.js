@@ -2073,11 +2073,11 @@ function bindConsignmentDiscordButtons(client) {
       const f = memberWtb.fields || {};
     
       if (!["Requested", "Pending", "Trusted"].includes(asText(f["Payment Status"]))) {
-        await interaction.message.edit({
+        await interaction.editReply({
           content: "❌ Payment is already processed or this request is no longer active.",
           embeds: interaction.message.embeds,
           components: []
-        });
+        }).catch(console.error);
         return;
       }
     
@@ -2086,11 +2086,11 @@ function bindConsignmentDiscordButtons(client) {
         "Payment Confirmed At": new Date().toISOString()
       });
     
-      await interaction.message.edit({
+      await interaction.editReply({
         content: "✅ Payment confirmed.",
         embeds: interaction.message.embeds,
         components: []
-      });
+      }).catch(console.error);
       
       await sendMemberWtbPurchaseWebhook(memberWtbRecordId);
       
