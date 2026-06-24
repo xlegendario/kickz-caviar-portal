@@ -10442,7 +10442,7 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
         "",
         `**Current Offer:** €${offerToBuyer.toFixed(2)}`,
         "",
-        "Accept this offer to continue with payment."
+        "Accept this offer to continue with the order."
       ].join("\n"),
       color: 0xf1c40f,
       timestamp: new Date().toISOString(),
