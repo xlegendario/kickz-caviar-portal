@@ -1011,6 +1011,10 @@ function syncMarketUi() {
   document.querySelector(".market-top-row").classList.toggle("hidden", currentMainMode === "buying");
   document.querySelector(".view-toggle").classList.toggle("hidden", currentMainMode === "buying");
   openMemberWtbModalBtn?.classList.toggle("hidden", currentMainMode !== "buying");
+  heroConsignorCta?.classList.toggle(
+    "hidden",
+    currentMainMode !== "selling" || currentSeller?.consignor === true
+  );
   
   marketTabs.forEach((tab) => {
     const tabType = tab.getAttribute("data-market-type");
@@ -1272,7 +1276,7 @@ function updateLoginState() {
   }
   heroConsignorCta?.classList.toggle(
     "hidden",
-    currentSeller?.consignor === true
+    currentMainMode !== "selling" || currentSeller?.consignor === true
   );
 }
 
