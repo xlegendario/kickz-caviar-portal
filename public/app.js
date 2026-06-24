@@ -27,6 +27,16 @@ const backToLoginBtn = document.getElementById("backToLoginBtn");
 
 const heroConsignorCta = document.getElementById("heroConsignorCta");
 
+const openMemberWtbModalBtn = document.getElementById("openMemberWtbModalBtn");
+const memberWtbModal = document.getElementById("memberWtbModal");
+const closeMemberWtbModal = document.getElementById("closeMemberWtbModal");
+const submitMemberWtbBtn = document.getElementById("submitMemberWtbBtn");
+const memberWtbSkuInput = document.getElementById("memberWtbSkuInput");
+const memberWtbSizeInput = document.getElementById("memberWtbSizeInput");
+const memberWtbMaxPriceInput = document.getElementById("memberWtbMaxPriceInput");
+const memberWtbInventoryTypeInput = document.getElementById("memberWtbInventoryTypeInput");
+const memberWtbError = document.getElementById("memberWtbError");
+
 let searchQuery = searchInput?.value?.trim() || "";
 let selectedBrand = "";
 let currentMainMode = localStorage.getItem("kc_main_mode") || "selling";
@@ -496,6 +506,91 @@ buyingActionModal?.addEventListener("click", (event) => {
   }
 });
 
+function openMemberWtbModalFlow() {
+  if (!currentSeller) {
+    openLoginModal();
+    return;
+  }
+
+  memberWtbError.textContent = "";
+  memberWtbSkuInput.value = "";
+  memberWtbSizeInput.value = "";
+  memberWtbMaxPriceInput.value = "";
+  memberWtbInventoryTypeInput.value = buyingInventoryType || "all";
+
+  memberWtbModal.classList.remove("hidden");
+}
+
+function closeMemberWtbModalFlow() {
+  memberWtbModal.classList.add("hidden");
+  memberWtbError.textContent = "";
+}
+
+openMemberWtbModalBtn?.addEventListener("click", openMemberWtbModalFlow);
+closeMemberWtbModal?.addEventListener("click", closeMemberWtbModalFlow);
+
+memberWtbModal?.addEventListener("click", (event) => {
+  if (event.target === memberWtbModal) {
+    closeMemberWtbModalFlow();
+  }
+});
+
+memberWtbMaxPriceInput?.addEventListener("input", () => {
+  memberWtbMaxPriceInput.value = memberWtbMaxPriceInput.value.replace(/\D/g, "");
+});
+
+submitMemberWtbBtn?.addEventListener("click", async () => {
+  if (!currentSeller) {
+    openLoginModal();
+    return;
+  }
+
+  const sku = memberWtbSkuInput.value.trim();
+  const size = memberWtbSizeInput.value.trim();
+  const maxPrice = Number(memberWtbMaxPriceInput.value);
+
+  memberWtbError.textContent = "";
+
+  if (!sku || !size || !Number.isInteger(maxPrice) || maxPrice <= 0) {
+    memberWtbError.textContent = "Enter SKU, size and a valid max price.";
+    return;
+  }
+
+  submitMemberWtbBtn.disabled = true;
+  submitMemberWtbBtn.textContent = "Submitting...";
+
+  try {
+    const response = await fetch("/api/member-wtb/open", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        seller_record_id: currentSeller.id,
+        seller_id: currentSeller.seller_id,
+        sku,
+        size,
+        max_price: maxPrice,
+        inventory_type: memberWtbInventoryTypeInput.value
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to place Want To Buy");
+    }
+
+    closeMemberWtbModalFlow();
+    showSuccessToast("Want To Buy placed successfully");
+  } catch (err) {
+    memberWtbError.textContent = err.message;
+  } finally {
+    submitMemberWtbBtn.disabled = false;
+    submitMemberWtbBtn.textContent = "Submit Want To Buy";
+  }
+});
+
 submitBuyingActionBtn?.addEventListener("click", async () => {
   if (!selectedBuyingAction || !currentSeller) return;
 
@@ -915,6 +1010,7 @@ function syncMarketUi() {
 
   document.querySelector(".market-top-row").classList.toggle("hidden", currentMainMode === "buying");
   document.querySelector(".view-toggle").classList.toggle("hidden", currentMainMode === "buying");
+  openMemberWtbModalBtn?.classList.toggle("hidden", currentMainMode !== "buying");
   
   marketTabs.forEach((tab) => {
     const tabType = tab.getAttribute("data-market-type");
