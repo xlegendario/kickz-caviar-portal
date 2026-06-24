@@ -3389,13 +3389,13 @@ dashboardTableBody.addEventListener("click", async (event) => {
     const orderRecordId = requestLabelButton.dataset.requestLabelId || "";
     const memberWtbRecordId = requestLabelButton.dataset.memberWtbRecordId || "";
   
-    if (!orderRecordId) {
-      alert("Missing order record ID.");
+    if (!orderRecordId && !memberWtbRecordId) {
+      alert("Missing order or Member WTB record ID.");
       return;
     }
   
     requestLabelButton.disabled = true;
-    requestLabelButton.textContent = "REQUESTING...";
+    requestLabelButton.textContent = "REQUESTING.";
   
     try {
       const response = await fetch(
