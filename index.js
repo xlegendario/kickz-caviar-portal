@@ -5900,7 +5900,7 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
       const orderFields = orderMap.get(linkedOrderId) || {};
       
       if (isMemberWtb) {
-        return !displayValue(f["WTB Created Channel ID (MWTB)"]);
+        return !!displayValue(f["WTB Created Channel ID (MWTB)"]);
       }
       
       const channelCreated = orderFields["Channel Created?"] === true;
@@ -6266,9 +6266,9 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
         const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
     
         if (linkedMemberWtbId) {
-          return !!displayValue(f["WTB Created Channel ID (MWTB)"]);
+          return false;
         }
-    
+        
         const orderFields = offerOrderMap.get(linkedOrderId) || {};
         return orderFields["Channel Created?"] === true;
       })
@@ -6887,7 +6887,7 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
           "Member WTBs",
           "Member WTB ID",
           "Current Lowest Source Price (MWTB)",
-          "Lowest Seller Offer (MWTB)",
+          "Current Lowest Offer (MWTB)",
           "Lowest Offer Seller ID (MWTB)",
           "Seller Offer",
           "Offer VAT Type",
@@ -6929,7 +6929,7 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
 
       const currentLowest = isMemberWtb
         ? (
-            numberValue(f["Lowest Seller Offer (MWTB)"]) ||
+            numberValue(f["Current Lowest Offer (MWTB)"]) ||
             numberValue(f["Current Lowest Source Price (MWTB)"])
           )
         : vatType === "VAT0"
