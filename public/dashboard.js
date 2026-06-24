@@ -1726,13 +1726,20 @@ function renderConfirmedRows(items) {
             : ""
         }
 
-        <button
-          class="dashboard-mobile-btn dashboard-mobile-request-label-btn"
-          type="button"
-          data-request-label-id="${escapeHtml(item.order_record_id || "")}"
-        >
-          Request Label
-        </button>
+        ${
+          !item.member_wtb_record_id ||
+          ["Paid", "Trusted"].includes(String(item.payment_status || "").trim())
+            ? `
+              <button
+                class="dashboard-mobile-btn dashboard-mobile-request-label-btn"
+                type="button"
+                data-request-label-id="${escapeHtml(item.order_record_id || "")}"
+              >
+                Request Label
+              </button>
+            `
+            : ""
+        }
       `
     });
 
@@ -1764,13 +1771,20 @@ function renderConfirmedRows(items) {
             : ""
         }
 
-        <button
-          class="dashboard-issue-btn dashboard-request-label-btn"
-          type="button"
-          data-request-label-id="${escapeHtml(item.order_record_id || "")}"
-        >
-          Request Label
-        </button>
+        ${
+          !item.member_wtb_record_id ||
+          ["Paid", "Trusted"].includes(String(item.payment_status || "").trim())
+            ? `
+              <button
+                class="dashboard-issue-btn dashboard-request-label-btn"
+                type="button"
+                data-request-label-id="${escapeHtml(item.order_record_id || "")}"
+              >
+                Request Label
+              </button>
+            `
+            : ""
+        }
       </div>
     `;
   });
