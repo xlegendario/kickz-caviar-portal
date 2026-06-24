@@ -11260,4 +11260,12 @@ app.post("/api/member-wtb/label-request-submit", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Kickz Caviar Portal running on port ${PORT}`);
+
+  initDiscord().catch((err) => {
+    console.error("Failed to init Discord bot on startup:", err);
+  });
+
+  initKickzDealDiscord().catch((err) => {
+    console.error("Failed to init Kickz Deal Discord bot on startup:", err);
+  });
 });
