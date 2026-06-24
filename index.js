@@ -5870,9 +5870,17 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
           "Product Name",
           "SKU",
           "Size",
-          "Brand"
+          "Brand",
+          "Fulfillment Status (MWTB)",
+          "Product Name (MWTB)",
+          "SKU (MWTB)",
+          "Size (MWTB)",
+          "Brand (MWTB)"
         ],
-        filterByFormula: `{Fulfillment Status} = 'Confirmed'`
+        filterByFormula: `OR(
+          {Fulfillment Status} = 'Confirmed',
+          {Fulfillment Status (MWTB)} = 'Confirmed'
+        )`
       })
       .all();
 
@@ -5929,10 +5937,21 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
         order_id: isMemberWtb
           ? displayValue(f["Member WTB ID"])
           : displayValue(orderFields["Order ID"]),
-        product: displayValue(f["Product Name"] || orderFields["Product Name"]),
-        sku: displayValue(f["SKU"] || orderFields["SKU"]),
-        size: displayValue(f["Size"] || orderFields["Size"]),
-        brand: displayValue(f["Brand"] || orderFields["Brand"]),
+        product: isMemberWtb
+          ? displayValue(f["Product Name (MWTB)"] || f["Product Name"])
+          : displayValue(f["Product Name"] || orderFields["Product Name"]),
+        
+        sku: isMemberWtb
+          ? displayValue(f["SKU (MWTB)"] || f["SKU"])
+          : displayValue(f["SKU"] || orderFields["SKU"]),
+        
+        size: isMemberWtb
+          ? displayValue(f["Size (MWTB)"] || f["Size"])
+          : displayValue(f["Size"] || orderFields["Size"]),
+        
+        brand: isMemberWtb
+          ? displayValue(f["Brand (MWTB)"] || f["Brand"])
+          : displayValue(f["Brand"] || orderFields["Brand"]),
         offer: moneyWholeValue(offerAmount),
         vat_type: displayValue(f["Offer VAT Type"]),
         date: formatDateEU(f["Offer Date"]),
