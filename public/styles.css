@@ -2052,6 +2052,8 @@ body {
   font-size: 34px;
   font-weight: 900;
   flex: 0 0 auto;
+  order: 2;
+  margin-left: auto;
 }
 
 .post-wtb-copy {
@@ -2060,6 +2062,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  order: 1;
 }
 
 .post-wtb-copy strong {
@@ -2101,6 +2104,8 @@ body {
     height: 38px;
     border-radius: 12px;
     font-size: 22px;
+    margin-left: auto;
+    flex: 0 0 38px;
   }
 
   .post-wtb-copy strong {
