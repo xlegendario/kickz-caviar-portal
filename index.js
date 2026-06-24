@@ -1891,6 +1891,19 @@ async function requestConsignmentShippingLabel(orderRecordId) {
   };
 }
 
+async function safeEditInteractionMessage(interaction, payload) {
+  try {
+    return await interaction.editReply(payload);
+  } catch (err) {
+    console.error("safeEditInteractionMessage failed:", {
+      customId: interaction.customId,
+      message: err.message,
+      code: err.code
+    });
+    return null;
+  }
+}
+
 function bindConsignmentDiscordButtons(client) {
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton() && !interaction.isModalSubmit()) return;
@@ -1995,7 +2008,7 @@ function bindConsignmentDiscordButtons(client) {
         if (customId.startsWith("accept_member_wtb_buyer_offer:")) {
           const [, memberWtbRecordId, sellerOfferRecordId] = customId.split(":");
 
-          await interaction.message.edit({
+          await safeEditInteractionMessage(interaction, {
             content: "⏳ Processing your acceptance...",
             embeds: interaction.message.embeds,
             components: []
@@ -2004,7 +2017,7 @@ function bindConsignmentDiscordButtons(client) {
           const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
 
           if (!wtbBotBaseUrl) {
-            await interaction.message.edit({
+            await safeEditInteractionMessage(interaction, {
               content: "❌ KICKZ_WTB_BOT_BASE_URL is missing.",
               embeds: interaction.message.embeds,
               components: []
@@ -2032,7 +2045,7 @@ function bindConsignmentDiscordButtons(client) {
               data
             });
           
-            await interaction.message.edit({
+            await safeEditInteractionMessage(interaction, {
               content: `❌ Failed to accept offer. Status: ${response.status}. ${data.details || data.error || ""}`,
               embeds: interaction.message.embeds,
               components: []
@@ -2040,7 +2053,7 @@ function bindConsignmentDiscordButtons(client) {
             return;
           }
     
-          await interaction.message.edit({
+          await safeEditInteractionMessage(interaction, {
             content: "✅ Offer accepted. Payment will be requested once the seller confirms the deal.",
             embeds: interaction.message.embeds,
             components: []
@@ -2057,7 +2070,7 @@ function bindConsignmentDiscordButtons(client) {
             "Offer Sent?": false
           }).catch(() => null);
     
-          await interaction.message.edit({
+          await safeEditInteractionMessage(interaction, {
             content: "❌ Offer declined.",
             embeds: interaction.message.embeds,
             components: []
@@ -2106,7 +2119,7 @@ function bindConsignmentDiscordButtons(client) {
       const currentStatus = asText(memberWtb.fields?.["Fulfillment Status"]);
       
       if (currentStatus === "Requested Label") {
-        await interaction.message.edit({
+        await safeEditInteractionMessage(interaction, {
           content: interaction.message.content,
           embeds: interaction.message.embeds,
           components: [
@@ -2151,7 +2164,7 @@ function bindConsignmentDiscordButtons(client) {
           labelRequestResult
         });
     
-        await interaction.message.edit({
+        await safeEditInteractionMessage(interaction, {
           content: interaction.message.content,
           embeds: interaction.message.embeds,
           components: [
@@ -2196,7 +2209,7 @@ function bindConsignmentDiscordButtons(client) {
       const f = memberWtb.fields || {};
     
       if (asText(f["Purchase Status"]) !== "KC Pending") {
-        await interaction.message.edit({
+        await safeEditInteractionMessage(interaction, {
           content: "❌ This KC confirmation is no longer available.",
           embeds: interaction.message.embeds,
           components: []
@@ -2208,7 +2221,7 @@ function bindConsignmentDiscordButtons(client) {
       const maxPrice = Number(f["Max Price"] || 0);
     
       if (!inventoryUnitId) {
-        await interaction.message.edit({
+        await safeEditInteractionMessage(interaction, {
           content: "❌ Missing selected KC Inventory Unit.",
           embeds: interaction.message.embeds,
           components: []
@@ -2231,7 +2244,7 @@ function bindConsignmentDiscordButtons(client) {
           "Purchase Status": "Out Of Stock"
         });
     
-        await interaction.message.edit({
+        await safeEditInteractionMessage(interaction, {
           content: "❌ KC stock is no longer available.",
           embeds: interaction.message.embeds,
           components: []
@@ -2255,7 +2268,7 @@ function bindConsignmentDiscordButtons(client) {
 
       await handleMemberWtbPaymentGate(memberWtbRecordId);
     
-      await interaction.message.edit({
+      await safeEditInteractionMessage(interaction, {
         content: "✅ KC stock confirmed and allocated.",
         embeds: interaction.message.embeds,
         components: []
@@ -2271,7 +2284,7 @@ function bindConsignmentDiscordButtons(client) {
       const f = memberWtb.fields || {};
     
       if (asText(f["Purchase Status"]) !== "KC Pending") {
-        await interaction.message.edit({
+        await safeEditInteractionMessage(interaction, {
           content: "❌ This KC confirmation is no longer available.",
           embeds: interaction.message.embeds,
           components: []
@@ -2305,7 +2318,7 @@ function bindConsignmentDiscordButtons(client) {
         console.error("Failed to send consignment requests after KC deny:", err);
       }
     
-      await interaction.message.edit({
+      await safeEditInteractionMessage(interaction, {
         content: "❌ KC denied. WTB flow started.",
         embeds: interaction.message.embeds,
         components: []
@@ -2321,7 +2334,7 @@ function bindConsignmentDiscordButtons(client) {
       const f = memberWtb.fields || {};
     
       if (asText(f["Fulfillment Status"]) === "Allocated") {
-        await interaction.message.edit({
+        await safeEditInteractionMessage(interaction, {
           content: "❌ This Member WTB is already allocated.",
           embeds: interaction.message.embeds,
           components: []
@@ -2347,7 +2360,7 @@ function bindConsignmentDiscordButtons(client) {
       const inventoryUnit = availableInventoryUnits[0];
     
       if (!inventoryUnit) {
-        await interaction.message.edit({
+        await safeEditInteractionMessage(interaction, {
           content: "❌ No available KC stock found for this SKU / size.",
           embeds: interaction.message.embeds,
           components: []
@@ -2382,7 +2395,7 @@ function bindConsignmentDiscordButtons(client) {
 
       await handleMemberWtbPaymentGate(memberWtbRecordId);
     
-      await interaction.message.edit({
+      await safeEditInteractionMessage(interaction, {
         content: "✅ KC stock accepted and allocated.",
         embeds: interaction.message.embeds,
         components: []
@@ -2392,7 +2405,7 @@ function bindConsignmentDiscordButtons(client) {
     }
     
     if (customId.startsWith("deny_member_wtb_kc_offer:")) {
-      await interaction.message.edit({
+      await safeEditInteractionMessage(interaction, {
         content: "❌ KC denied this Member WTB offer.",
         embeds: interaction.message.embeds,
         components: []
@@ -2537,7 +2550,7 @@ function bindConsignmentDiscordButtons(client) {
       
         await requestConsignmentShippingLabel(orderRecordId);
       
-        await interaction.message.edit({
+        await safeEditInteractionMessage(interaction, {
           content: interaction.message.content,
           embeds: interaction.message.embeds,
           components: [
@@ -2575,7 +2588,7 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       if (action === "confirm_offer") {
-        await interaction.message.edit({
+        await safeEditInteractionMessage(interaction, {
           content: "⏳ Processing confirmation...",
           embeds: interaction.message.embeds,
           components: [
