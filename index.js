@@ -6810,7 +6810,6 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
       const isMemberWtb = !!linkedMemberWtbId;
       
       const orderFields = orderMap.get(linkedOrderId) || {};
-      const orderFields = orderMap.get(linkedOrderId) || {};
 
       const vatType = displayValue(f["Offer VAT Type"]);
       const offerAmount = numberValue(f["Seller Offer"]);
