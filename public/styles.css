@@ -2020,9 +2020,9 @@ body {
 }
 
 .post-wtb-card {
-  flex: 0 0 360px;
+  flex: 0 0 430px;
   margin-top: 10px;
-  min-height: 118px;
+  min-height: 135px;
   padding: 20px 22px;
   border: 1px solid rgba(255, 204, 0, 0.75);
   border-radius: 18px;
@@ -2064,7 +2064,7 @@ body {
 
 .post-wtb-copy strong {
   color: #ffcc00;
-  font-size: 25px;
+  font-size: 30px;
   line-height: 1;
   font-weight: 950;
 }
