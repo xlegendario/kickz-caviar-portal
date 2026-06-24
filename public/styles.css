@@ -2007,3 +2007,44 @@ body {
 .buying-action-buttons .table-btn {
   height: 50px;
 }
+
+.hero-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.hero-copy {
+  min-width: 0;
+}
+
+.place-wtb-btn {
+  flex: 0 0 auto;
+  margin-top: 8px;
+  min-height: 46px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fff27a, #f0a500);
+  color: #000;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.42),
+    0 8px 24px rgba(0,0,0,0.35);
+}
+
+.place-wtb-btn:hover {
+  transform: translateY(-1px);
+}
+
+@media (max-width: 900px) {
+  .hero-title-row {
+    flex-direction: column;
+  }
+
+  .place-wtb-btn {
+    width: 100%;
+  }
+}
