@@ -10317,7 +10317,7 @@ app.post("/api/buying/offers", async (req, res) => {
       "SKU": sku,
       "Size": size,
       "Brand": asText(product.brand),
-      "Date": new Date().toLocaleDateString("en-CA"),
+      "Date": new Date().toISOString(),
 
       "Max Price": offerPrice,
       "Current Lowest Source Price": currentLowestSourcePrice,
@@ -10486,7 +10486,8 @@ app.post("/api/member-wtb/open", async (req, res) => {
       "SKU": sku,
       "Size": size,
       "Brand": brand,
-
+      "Date": new Date().toISOString(),
+    
       "Max Price": maxPrice,
       "Offer Margin": 10,
       "Current Lowest Source Price": maxPrice,
@@ -10608,7 +10609,7 @@ app.post("/api/buying/requests", async (req, res) => {
       "SKU": selectedSource.sku || sku,
       "Size": selectedSource.size || size,
       "Brand": selectedSource.brand || product?.brand || "",
-      "Date": new Date().toLocaleDateString("en-CA"),
+      "Date": new Date().toISOString(),
 
       "Max Price": maxPrice,
       "Current Lowest Source Price": getBuyingCurrentLowestSourcePriceForMemberWtb({
