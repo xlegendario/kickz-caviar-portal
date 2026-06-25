@@ -207,15 +207,24 @@ function renderSubnav() {
     const wrap = document.querySelector(`[data-subnav="${section}"]`);
     if (!wrap) return;
 
-    wrap.innerHTML = config.tabs.map((tab) => `
-      <button class="dashboard-subnav-btn" type="button" data-section="${section}" data-tab="${tab.key}">
-        <span>${tab.label}</span>
-        <span class="dashboard-subnav-meta">
-          <span class="dashboard-subnav-warning hidden" data-warning-key="${section}:${tab.key}">⚠</span>
-          <span class="dashboard-subnav-count" data-count-key="${section}:${tab.key}">0</span>
-        </span>
-      </button>
-    `).join("");
+    wrap.innerHTML = config.tabs.map((tab) => {
+      const count = Number(dashboardCountsCache?.[section]?.[tab.key] || 0);
+
+      const showWarning =
+        section === "buying" &&
+        tab.key === "delivered" &&
+        Number(dashboardCountsCache?.buying?.delivered_payment_warning || 0) > 0;
+
+      return `
+        <button class="dashboard-subnav-btn" type="button" data-section="${section}" data-tab="${tab.key}">
+          <span>${tab.label}</span>
+          <span class="dashboard-subnav-meta">
+            ${showWarning ? `<span class="dashboard-subnav-warning">⚠</span>` : ""}
+            <span class="dashboard-subnav-count" data-count-key="${section}:${tab.key}">${count}</span>
+          </span>
+        </button>
+      `;
+    }).join("");
   });
 }
 
@@ -365,36 +374,27 @@ async function loadDashboardCounts() {
     ...(data || {})
   };
 
-  Object.entries(dashboardCountsCache.consignment || {})
-  .forEach(([key, value]) => {
-    setConsignmentCount(key, value || 0);
-  });
-  
   quickCountsCache = dashboardCountsCache.quick || {};
 
-  Object.entries(dashboardCountsCache).forEach(([section, counts]) => {
-    Object.entries(counts || {}).forEach(([key, value]) => {
-      document.querySelectorAll(`[data-count-key="${section}:${key}"]`)
-        .forEach((el) => {
-          el.textContent = value || 0;
-        });
-    });
+  renderSubnav();
 
-    const total = Object.values(counts || {})
-      .reduce((sum, value) => sum + Number(value || 0), 0);
+  document.querySelectorAll(".dashboard-subnav-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      setActiveView(button.dataset.section, button.dataset.tab);
+
+      dashboardSidebar?.classList.remove("open");
+      dashboardSidebarBackdrop?.classList.remove("open");
+    });
+  });
+
+  Object.entries(dashboardCountsCache).forEach(([section, counts]) => {
+    const total = Object.entries(counts || {})
+      .filter(([key]) => key !== "delivered_payment_warning")
+      .reduce((sum, [, value]) => sum + Number(value || 0), 0);
 
     document.querySelectorAll(`[data-count-group="${section}"]`)
       .forEach((el) => {
         el.textContent = total;
-      });
-    
-    document
-      .querySelectorAll('[data-warning-key="buying:delivered"]')
-      .forEach((el) => {
-        el.classList.toggle(
-          "hidden",
-          Number(dashboardCountsCache.buying?.delivered_payment_warning || 0) <= 0
-        );
       });
   });
 
