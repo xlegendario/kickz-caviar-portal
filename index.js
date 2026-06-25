@@ -7726,6 +7726,85 @@ app.get("/api/dashboard/quick-delivered", async (req, res) => {
   }
 });
 
+app.get("/api/dashboard/buying-open-wtbs", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id"
+      });
+    }
+
+    const records = await airtable(MEMBER_WTBS_TABLE)
+      .select({
+        fields: [
+          "Buyer Seller ID",
+          "Member WTB ID",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "Max Price",
+          "Current Lowest Source Price",
+          "Current Lowest Offer",
+          "Fulfillment Status",
+          "Purchase Status",
+          "Payment Status",
+          "Buying Inventory Filter",
+          "Date"
+        ],
+        filterByFormula: `OR(
+          {Fulfillment Status} = 'Pending',
+          {Fulfillment Status} = 'Outsource'
+        )`
+      })
+      .all();
+
+    const items = records
+      .filter((record) =>
+        linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
+      )
+      .map((record) => {
+        const f = record.fields || {};
+
+        const currentLowest =
+          numberValue(f["Current Lowest Offer"]) ||
+          numberValue(f["Current Lowest Source Price"]);
+
+        return {
+          id: record.id,
+          member_wtb_record_id: record.id,
+          order_id: displayValue(f["Member WTB ID"]),
+          product: displayValue(f["Product Name"]),
+          sku: displayValue(f["SKU"]),
+          size: displayValue(f["Size"]),
+          brand: displayValue(f["Brand"]),
+          max_price: moneyWholeValue(f["Max Price"]),
+          current_lowest: currentLowest
+            ? moneyWholeValue(currentLowest)
+            : "-",
+          status: "Open",
+          inventory_filter: displayValue(f["Buying Inventory Filter"]),
+          date: formatDateEU(f["Date"]),
+          raw_date: f["Date"]
+        };
+      });
+
+    res.json({
+      count: items.length,
+      items: sortDashboardItemsNewestFirst(items)
+    });
+  } catch (err) {
+    console.error("Failed to load buying open WTBs:", err);
+
+    res.status(500).json({
+      error: "Failed to load buying open WTBs",
+      details: err.message
+    });
+  }
+});
+
 app.get("/api/dashboard/history-completed", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
