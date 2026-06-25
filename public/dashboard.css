@@ -3090,67 +3090,46 @@
 }
 
 .buying-payment-modal-card {
-  width: min(520px, calc(100vw - 32px));
-  background: linear-gradient(180deg, #171717 0%, #0f0f0f 100%);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.7);
+  width: min(440px, calc(100vw - 32px));
 }
 
-.buying-payment-summary {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin: 22px 0 14px;
+.buying-payment-simple-amount {
+  margin: 22px 0 18px;
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(255, 210, 31, 0.08);
+  border: 1px solid rgba(255, 210, 31, 0.28);
 }
 
-.buying-payment-summary > div,
-.buying-payment-product,
-.buying-payment-method {
-  background: rgba(255, 255, 255, 0.045);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 16px;
-  padding: 14px;
-}
-
-.buying-payment-summary span,
-.buying-payment-product span,
-.buying-payment-method span {
+.buying-payment-simple-amount span,
+.buying-payment-simple-section span {
   display: block;
-  color: #9ca3af;
-  font-size: 12px;
-  margin-top: 5px;
+  color: #a6adbb;
+  font-size: 13px;
+  line-height: 1.7;
 }
 
-.buying-payment-summary strong {
+.buying-payment-simple-amount strong {
   display: block;
-  margin-top: 5px;
+  margin-top: 6px;
   color: #fff;
-  font-size: 18px;
+  font-size: 30px;
+  line-height: 1;
 }
 
-.buying-payment-product {
-  margin-bottom: 14px;
+.buying-payment-simple-section {
+  padding: 14px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
 }
 
-.buying-payment-product strong {
-  color: #fff;
-  font-size: 15px;
-}
-
-.buying-payment-methods {
-  display: grid;
-  gap: 12px;
-  margin-top: 14px;
-}
-
-.buying-payment-method strong {
+.buying-payment-simple-section strong {
   display: block;
   color: #ffd21f;
-  margin-bottom: 8px;
+  margin-bottom: 7px;
 }
 
 .buying-payment-main-btn {
   width: 100%;
-  margin-top: 18px;
   justify-content: center;
+  margin-top: 16px;
 }
