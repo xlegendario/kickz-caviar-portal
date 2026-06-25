@@ -1240,38 +1240,52 @@ function openBuyingPaymentModal(button) {
   const size = button.dataset.size;
   const amount = button.dataset.amount;
 
-  const existing = document.getElementById("buyingPaymentModal");
-  existing?.remove();
+  document.getElementById("buyingPaymentModal")?.remove();
 
   document.body.insertAdjacentHTML("beforeend", `
-    <div class="dashboard-modal-backdrop" id="buyingPaymentModal">
-      <div class="dashboard-modal">
-        <button class="dashboard-modal-close" type="button" data-close-buying-payment-modal>×</button>
+    <div class="modal-backdrop" id="buyingPaymentModal">
+      <div class="modal-card buying-payment-modal-card">
+        <button class="modal-close" type="button" data-close-buying-payment-modal>×</button>
 
-        <h2>Payment Required</h2>
-        <p class="dashboard-modal-subtitle">Complete your payment to keep this order moving.</p>
+        <div class="modal-kicker">Payment Required</div>
+        <h2>Complete your payment</h2>
+        <p class="modal-subtitle">
+          Your order is matched. Confirm payment after sending the amount below.
+        </p>
 
-        <div class="dashboard-payment-card">
-          <strong>${escapeHtml(orderId)}</strong>
-          <span>${escapeHtml(product)}</span>
+        <div class="buying-payment-summary">
+          <div>
+            <span>Order</span>
+            <strong>${escapeHtml(orderId)}</strong>
+          </div>
+          <div>
+            <span>Amount</span>
+            <strong>${escapeHtml(amount)}</strong>
+          </div>
+        </div>
+
+        <div class="buying-payment-product">
+          <strong>${escapeHtml(product)}</strong>
           <span>SKU: ${escapeHtml(sku)} · Size: ${escapeHtml(size)}</span>
         </div>
 
-        <div class="dashboard-payment-amount">${escapeHtml(amount)}</div>
+        <div class="buying-payment-methods">
+          <div class="buying-payment-method">
+            <strong>Bank transfer</strong>
+            <span>Name: Kickz Caviar</span>
+            <span>IBAN: NL21INGB0109644271</span>
+            <span>Reference: ${escapeHtml(orderId)}</span>
+          </div>
 
-        <div class="dashboard-payment-details">
-          <strong>Bank transfer</strong>
-          <span>Name: Kickz Caviar</span>
-          <span>IBAN: NL21INGB0109644271</span>
-          <span>Reference: ${escapeHtml(orderId)}</span>
-
-          <strong>PayPal</strong>
-          <span>financial@payoutbykickzcaviar.com</span>
-          <span>Reference: ${escapeHtml(orderId)}</span>
+          <div class="buying-payment-method">
+            <strong>PayPal</strong>
+            <span>financial@payoutbykickzcaviar.com</span>
+            <span>Reference: ${escapeHtml(orderId)}</span>
+          </div>
         </div>
 
         <button
-          class="dashboard-confirm-btn dashboard-payment-confirm-btn"
+          class="dashboard-confirm-btn buying-payment-main-btn"
           type="button"
           data-confirm-buying-payment-id="${escapeHtml(recordId)}"
         >
