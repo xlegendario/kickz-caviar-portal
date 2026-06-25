@@ -1035,7 +1035,7 @@ function renderBuyingOpenWtbRows(items) {
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.max_price || "-")}</td>
       <td>${escapeHtml(item.current_lowest || "-")}</td>
-      <td><span class="dashboard-status-pill">Open</span></td>
+      <td><span class="dashboard-status-pill dashboard-status-open">Open</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
         <button
