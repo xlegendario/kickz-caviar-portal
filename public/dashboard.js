@@ -1256,15 +1256,15 @@ function openBuyingPaymentModal(button) {
 
         <div class="buying-payment-simple-section">
           <strong>Bank Transfer</strong>
-          <span>Name: Payout by Kickz Caviar B.V.</span>
-          <span>IBAN: NL21INGB0109644271</span>
-          <span>Reference: ${escapeHtml(orderId)}</span>
+          <span><strong>Name:</strong> Payout by Kickz Caviar B.V.</span>
+          <span><strong>IBAN:</strong> NL21INGB0109644271</span>
+          <span><strong>Reference:</strong> ${escapeHtml(orderId)}</span>
         </div>
 
         <div class="buying-payment-simple-section">
           <strong>PayPal</strong>
-          <span>financial@payoutbykickzcaviar.com</span>
-          <span>Reference: ${escapeHtml(orderId)}</span>
+          <span><strong>Email:</strong> financial@payoutbykickzcaviar.com</span>
+          <span><strong>Reference:</strong> ${escapeHtml(orderId)}</span>
         </div>
 
         <button
