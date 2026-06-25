@@ -7981,6 +7981,109 @@ app.get("/api/dashboard/buying-accepted", async (req, res) => {
   }
 });
 
+app.get("/api/dashboard/buying-payment-required", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({ error: "Missing seller_record_id" });
+    }
+
+    const records = await airtable(MEMBER_WTBS_TABLE)
+      .select({
+        fields: [
+          "Buyer Seller ID",
+          "Member WTB ID",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "Invoice Price",
+          "Final Buying Price",
+          "Max Price",
+          "Payment Status",
+          "Fulfillment Status",
+          "Date"
+        ],
+        filterByFormula: `{Payment Status} = 'Requested'`
+      })
+      .all();
+
+    const items = records
+      .filter((record) =>
+        linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
+      )
+      .map((record) => {
+        const f = record.fields || {};
+        const amount =
+          Number(f["Invoice Price"] || 0) ||
+          Number(f["Final Buying Price"] || 0) ||
+          Number(f["Max Price"] || 0);
+
+        return {
+          id: record.id,
+          member_wtb_record_id: record.id,
+          order_id: displayValue(f["Member WTB ID"]),
+          product: displayValue(f["Product Name"]),
+          sku: displayValue(f["SKU"]),
+          size: displayValue(f["Size"]),
+          brand: displayValue(f["Brand"]),
+          amount: moneyWholeValue(amount),
+          amount_raw: amount,
+          status: "Payment Required",
+          date: formatDateEU(f["Date"]),
+          raw_date: f["Date"]
+        };
+      });
+
+    res.json({
+      count: items.length,
+      items: sortDashboardItemsNewestFirst(items)
+    });
+  } catch (err) {
+    console.error("Failed to load buying payment required:", err);
+    res.status(500).json({
+      error: "Failed to load buying payment required",
+      details: err.message
+    });
+  }
+});
+
+app.post("/api/dashboard/buying/confirm-payment", async (req, res) => {
+  try {
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+
+    if (!memberWtbRecordId) {
+      return res.status(400).json({ error: "Missing member_wtb_record_id" });
+    }
+
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+    const f = memberWtb.fields || {};
+
+    if (!["Requested", "Pending", "Trusted"].includes(asText(f["Payment Status"]))) {
+      return res.status(409).json({
+        error: "Payment is already processed or this request is no longer active."
+      });
+    }
+
+    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+      "Payment Status": "Paid",
+      "Payment Confirmed At": new Date().toISOString()
+    });
+
+    await sendMemberWtbPurchaseWebhook(memberWtbRecordId);
+    await sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to confirm buying payment:", err);
+    res.status(500).json({
+      error: "Failed to confirm payment",
+      details: err.message
+    });
+  }
+});
+
 app.post("/api/dashboard/buying/deny-offer", async (req, res) => {
   try {
     const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
