@@ -7844,6 +7844,81 @@ app.get("/api/dashboard/buying-open-wtbs", async (req, res) => {
   }
 });
 
+app.get("/api/dashboard/buying-offers", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id"
+      });
+    }
+
+    const records = await airtable(MEMBER_WTBS_TABLE)
+      .select({
+        fields: [
+          "Buyer Seller ID",
+          "Member WTB ID",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "Max Price",
+          "Current Lowest Offer",
+          "Purchase Status",
+          "Fulfillment Status",
+          "Date"
+        ],
+        filterByFormula: `AND(
+          OR(
+            {Fulfillment Status} = 'Pending',
+            {Fulfillment Status} = 'Outsource'
+          ),
+          {Current Lowest Offer} > 0
+        )`
+      })
+      .all();
+
+    const items = records
+      .filter((record) =>
+        linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
+      )
+      .map((record) => {
+        const f = record.fields || {};
+        const offerAmount = numberValue(f["Current Lowest Offer"]);
+
+        return {
+          id: record.id,
+          member_wtb_record_id: record.id,
+          order_id: displayValue(f["Member WTB ID"]),
+          product: displayValue(f["Product Name"]),
+          sku: displayValue(f["SKU"]),
+          size: displayValue(f["Size"]),
+          brand: displayValue(f["Brand"]),
+          max_price: moneyWholeValue(f["Max Price"]),
+          offer: Number.isFinite(offerAmount) && offerAmount > 0
+            ? moneyWholeValue(offerAmount)
+            : "-",
+          status: "Offer Received",
+          date: formatDateEU(f["Date"]),
+          raw_date: f["Date"]
+        };
+      });
+
+    res.json({
+      count: items.length,
+      items: sortDashboardItemsNewestFirst(items)
+    });
+  } catch (err) {
+    console.error("Failed to load buying offers:", err);
+
+    res.status(500).json({
+      error: "Failed to load buying offers",
+      details: err.message
+    });
+  }
+});
+
 app.get("/api/dashboard/history-completed", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
