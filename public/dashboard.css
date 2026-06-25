@@ -3090,13 +3090,13 @@
 }
 
 .buying-payment-modal-card {
-  width: min(440px, calc(100vw - 32px));
+  width: min(520px, calc(100vw - 32px));
 }
 
 .buying-payment-simple-amount {
   margin: 22px 0 18px;
   padding: 18px;
-  border-radius: 18px;
+  border-radius: 14px;
   background: rgba(255, 210, 31, 0.08);
   border: 1px solid rgba(255, 210, 31, 0.28);
 }
