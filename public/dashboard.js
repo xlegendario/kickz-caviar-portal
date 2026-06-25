@@ -1240,9 +1240,11 @@ function openBuyingPaymentModal(button) {
   document.getElementById("buyingPaymentModal")?.remove();
 
   document.body.insertAdjacentHTML("beforeend", `
-    <div class="market-modal-backdrop open" id="buyingPaymentModal">
-      <div class="market-modal-card buying-payment-modal-card">
-        <button class="market-modal-close" type="button" data-close-buying-payment-modal>×</button>
+    <div class="dashboard-modal" id="buyingPaymentModal">
+      <div class="dashboard-modal-backdrop" data-close-buying-payment-modal></div>
+
+      <div class="dashboard-modal-card buying-payment-modal-card">
+        <button class="dashboard-modal-close" type="button" data-close-buying-payment-modal>×</button>
 
         <h2>Complete Your Payment</h2>
         <p>Send the amount below, then confirm your payment.</p>
