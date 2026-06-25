@@ -210,7 +210,10 @@ function renderSubnav() {
     wrap.innerHTML = config.tabs.map((tab) => `
       <button class="dashboard-subnav-btn" type="button" data-section="${section}" data-tab="${tab.key}">
         <span>${tab.label}</span>
-        <span class="dashboard-subnav-count" data-count-key="${section}:${tab.key}">0</span>
+        <span class="dashboard-subnav-meta">
+          <span class="dashboard-subnav-warning hidden" data-warning-key="${section}:${tab.key}">⚠</span>
+          <span class="dashboard-subnav-count" data-count-key="${section}:${tab.key}">0</span>
+        </span>
       </button>
     `).join("");
   });
@@ -383,6 +386,15 @@ async function loadDashboardCounts() {
     document.querySelectorAll(`[data-count-group="${section}"]`)
       .forEach((el) => {
         el.textContent = total;
+      });
+    
+    document
+      .querySelectorAll('[data-warning-key="buying:delivered"]')
+      .forEach((el) => {
+        el.classList.toggle(
+          "hidden",
+          Number(dashboardCountsCache.buying?.delivered_payment_warning || 0) <= 0
+        );
       });
   });
 
@@ -830,6 +842,18 @@ const buyingReadyToShipColumns = [
 ];
 
 const buyingShippedColumns = [
+  "WTB ID",
+  "Product",
+  "SKU",
+  "Size",
+  "Brand",
+  "Amount",
+  "Status",
+  "Date",
+  "Action"
+];
+
+const buyingDeliveredColumns = [
   "WTB ID",
   "Product",
   "SKU",
@@ -1441,14 +1465,78 @@ function renderBuyingShippedRows(items) {
       <td><span class="dashboard-status-pill dashboard-status-open">Shipped</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
-        <a
-          class="dashboard-confirm-btn"
-          href="${escapeHtml(item.tracking_url || "#")}"
-          target="_blank"
-          rel="noopener"
-        >
-          Track
-        </a>
+        ${
+          item.tracking_url
+            ? `<a class="dashboard-track-blue-btn" href="${escapeHtml(item.tracking_url)}" target="_blank" rel="noopener">Track</a>`
+            : "-"
+        }
+      </td>
+    </tr>
+  `).join("");
+}
+
+function renderBuyingDeliveredRows(items) {
+  dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
+
+  dashboardTableHead.innerHTML = buyingDeliveredColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingDeliveredColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No delivered orders</strong>
+            <span>Delivered buying orders will appear here.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  setMobileTableMode(false);
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${escapeHtml(item.product || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.amount || "-")}</td>
+      <td>
+        ${
+          item.requires_payment
+            ? `<span class="dashboard-status-pill dashboard-status-payment">Payment Required</span>`
+            : `<span class="dashboard-status-pill dashboard-status-open">Delivered</span>`
+        }
+      </td>
+      <td>${escapeHtml(item.date || "-")}</td>
+      <td>
+        <div class="dashboard-action-row">
+          ${
+            item.tracking_url
+              ? `<a class="dashboard-track-blue-btn" href="${escapeHtml(item.tracking_url)}" target="_blank" rel="noopener">Track</a>`
+              : ""
+          }
+
+          ${
+            item.requires_payment
+              ? `<button
+                  class="dashboard-confirm-btn"
+                  type="button"
+                  data-buying-pay-id="${escapeHtml(item.member_wtb_record_id || "")}"
+                  data-order-id="${escapeHtml(item.order_id || "")}"
+                  data-amount="${escapeHtml(item.amount || "")}"
+                >
+                  Pay
+                </button>`
+              : ""
+          }
+        </div>
       </td>
     </tr>
   `).join("");
@@ -2731,6 +2819,51 @@ async function loadDashboardData() {
       .querySelectorAll('[data-count-key="buying:shipped"]')
       .forEach((el) => {
         el.textContent = data.count || 0;
+      });
+  
+    renderStats();
+  
+    return;
+  }
+
+  if (activeSection === "buying" && activeTab === "delivered") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingDeliveredColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading delivered orders.</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/buying-delivered?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to load buying delivered");
+    }
+  
+    renderBuyingDeliveredRows(data.items || []);
+  
+    dashboardCountsCache.buying.delivered = data.count || 0;
+    dashboardCountsCache.buying.delivered_payment_warning = data.payment_warning_count || 0;
+  
+    document.querySelectorAll('[data-count-key="buying:delivered"]')
+      .forEach((el) => {
+        el.textContent = data.count || 0;
+      });
+  
+    document.querySelectorAll('[data-warning-key="buying:delivered"]')
+      .forEach((el) => {
+        el.classList.toggle("hidden", Number(data.payment_warning_count || 0) <= 0);
       });
   
     renderStats();
