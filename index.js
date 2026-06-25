@@ -8316,7 +8316,9 @@ app.get("/api/dashboard/counts", async (req, res) => {
     
     function isVisibleMemberWtbInventory(record) {
       const f = record.fields || {};
-      const isMemberWtb = !linkedRecordIsEmpty(f["Fulfillment Status (MWTB)"]);
+      const isMemberWtb =
+        !linkedRecordIsEmpty(f["Fulfillment Status (MWTB)"]) ||
+        !linkedRecordIsEmpty(f["Shipping Status (MWTB)"]);
     
       if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
         return false;
