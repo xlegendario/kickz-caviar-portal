@@ -7942,10 +7942,7 @@ app.get("/api/dashboard/buying-accepted", async (req, res) => {
           "Fulfillment Status",
           "Date"
         ],
-        filterByFormula: `AND(
-          {Purchase Status} = 'Confirmed',
-          {Fulfillment Status} = 'Confirmed'
-        )`
+        filterByFormula: `{Fulfillment Status} = 'Confirmed'`
       })
       .all();
 
