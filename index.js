@@ -7768,9 +7768,7 @@ app.get("/api/dashboard/buying-open-wtbs", async (req, res) => {
       .map((record) => {
         const f = record.fields || {};
 
-        const currentLowest =
-          numberValue(f["Current Lowest Offer"]) ||
-          numberValue(f["Current Lowest Source Price"]);
+        const currentLowest = numberValue(f["Current Lowest Offer"]);
 
         return {
           id: record.id,
