@@ -3147,3 +3147,48 @@
   justify-content: center;
   margin-top: 18px;
 }
+
+.dashboard-toast {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 14px 18px;
+  border-radius: 16px;
+  background: #151515;
+  border: 1px solid rgba(255,255,255,0.12);
+  color: white;
+  box-shadow: 0 18px 60px rgba(0,0,0,0.45);
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: 0.22s ease;
+}
+
+.dashboard-toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.dashboard-toast-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: #2ecc71;
+  color: #fff;
+  font-weight: 900;
+}
+
+.dashboard-toast.error .dashboard-toast-icon {
+  background: #ff5c5c;
+}
+
+.dashboard-toast-text {
+  font-weight: 900;
+  font-size: 14px;
+}
