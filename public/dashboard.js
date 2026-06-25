@@ -817,6 +817,18 @@ const buyingLabelRequestedColumns = [
   "Action"
 ];
 
+const buyingReadyToShipColumns = [
+  "WTB ID",
+  "Product",
+  "SKU",
+  "Size",
+  "Brand",
+  "Amount",
+  "Tracking",
+  "Status",
+  "Date"
+];
+
 function renderConsignmentInventoryRows(items) {
   dashboardTableBody
     .closest(".dashboard-table")
@@ -1339,6 +1351,45 @@ function renderBuyingLabelRequestedRows(items) {
           Upload
         </a>
       </td>
+    </tr>
+  `).join("");
+}
+
+function renderBuyingReadyToShipRows(items) {
+  dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
+
+  dashboardTableHead.innerHTML = buyingReadyToShipColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingReadyToShipColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No orders ready to ship</strong>
+            <span>Orders with uploaded labels will appear here.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  setMobileTableMode(false);
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${escapeHtml(item.product || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${escapeHtml(item.tracking_number || "-")}</td>
+      <td><span class="dashboard-status-pill dashboard-status-open">Ready to Ship</span></td>
+      <td>${escapeHtml(item.date || "-")}</td>
     </tr>
   `).join("");
 }
@@ -2538,6 +2589,46 @@ async function loadDashboardData() {
   
     document
       .querySelectorAll('[data-count-key="buying:label_requested"]')
+      .forEach((el) => {
+        el.textContent = data.count || 0;
+      });
+  
+    renderStats();
+  
+    return;
+  }
+
+  if (activeSection === "buying" && activeTab === "ready_to_ship") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingReadyToShipColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading ready to ship orders.</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/buying-ready-to-ship?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to load buying ready to ship");
+    }
+  
+    renderBuyingReadyToShipRows(data.items || []);
+  
+    dashboardCountsCache.buying.ready_to_ship = data.count || 0;
+  
+    document
+      .querySelectorAll('[data-count-key="buying:ready_to_ship"]')
       .forEach((el) => {
         el.textContent = data.count || 0;
       });
