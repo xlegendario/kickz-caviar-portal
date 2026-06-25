@@ -3755,6 +3755,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
 
   if (buyingAcceptOfferButton) {
     buyingAcceptOfferButton.disabled = true;
+    buyingAcceptOfferButton.textContent = "Accepting...";
   
     try {
       const response = await fetch("/api/dashboard/buying/accept-offer", {
@@ -3771,12 +3772,14 @@ dashboardTableBody.addEventListener("click", async (event) => {
         throw new Error(data.details || data.error || "Failed to accept offer");
       }
   
+      alert("Offer accepted. We are now waiting for the seller to process the deal.");
+  
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
       alert(err.message);
-    } finally {
       buyingAcceptOfferButton.disabled = false;
+      buyingAcceptOfferButton.textContent = "Accept";
     }
   
     return;
@@ -3784,6 +3787,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
   
   if (buyingDenyOfferButton) {
     buyingDenyOfferButton.disabled = true;
+    buyingDenyOfferButton.textContent = "Denying...";
   
     try {
       const response = await fetch("/api/dashboard/buying/deny-offer", {
@@ -3799,6 +3803,8 @@ dashboardTableBody.addEventListener("click", async (event) => {
       if (!response.ok) {
         throw new Error(data.details || data.error || "Failed to deny offer");
       }
+
+      alert("Offer declined.");
   
       await loadDashboardData();
       await loadDashboardCounts();
