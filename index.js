@@ -8288,6 +8288,7 @@ app.get("/api/dashboard/buying-shipped", async (req, res) => {
           "Max Price",
           "Shipping Status",
           "Tracking Number",
+          "Tracking URL",
           "Date"
         ],
         filterByFormula: `{Shipping Status} = 'Shipped'`
@@ -8315,6 +8316,7 @@ app.get("/api/dashboard/buying-shipped", async (req, res) => {
           brand: displayValue(f["Brand"]),
           amount: moneyValue(amount),
           tracking_number: displayValue(f["Tracking Number"]),
+          tracking_url: displayValue(f["Tracking URL"]),
           status: "Shipped",
           date: formatDateEU(f["Date"]),
           raw_date: f["Date"]
