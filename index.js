@@ -8410,7 +8410,10 @@ app.get("/api/dashboard/counts", async (req, res) => {
       airtable(SELLER_OFFERS_TABLE)
         .select({
           fields: ["Seller ID"],
-          filterByFormula: `{Fulfillment Status} = 'Outsource'`
+          filterByFormula: `OR(
+            {Fulfillment Status} = 'Outsource',
+            {Fulfillment Status (MWTB)} = 'Outsource'
+          )`
         })
         .all(),
 
@@ -8426,8 +8429,18 @@ app.get("/api/dashboard/counts", async (req, res) => {
       
       airtable(SELLER_OFFERS_TABLE)
         .select({
-          fields: ["Seller ID", "Linked Orders"],
-          filterByFormula: `{Fulfillment Status} = 'Confirmed'`
+          fields: [
+            "Seller ID",
+            "Linked Orders",
+            "Member WTBs",
+            "Fulfillment Status",
+            "Fulfillment Status (MWTB)",
+            "WTB Created Channel ID (MWTB)"
+          ],
+          filterByFormula: `OR(
+            {Fulfillment Status} = 'Confirmed',
+            {Fulfillment Status (MWTB)} = 'Confirmed'
+          )`
         })
         .all(),
 
@@ -8648,27 +8661,58 @@ app.get("/api/dashboard/counts", async (req, res) => {
     if (consignmentOffersError) throw consignmentOffersError;
     
     const consignmentConfirmedCount = await loadInventoryCount(
-      `AND({Type} = 'Consignment', {Fulfillment Status (UOL)} = 'Allocated')`,
+      `AND(
+        {Type} = 'Consignment',
+        OR(
+          {Fulfillment Status (UOL)} = 'Allocated',
+          {Fulfillment Status (MWTB)} = 'Allocated'
+        )
+      )`,
       false
     );
     
     const consignmentLabelRequestedCount = await loadInventoryCount(
-      `AND({Type} = 'Consignment', {Fulfillment Status (UOL)} = 'Requested Label')`,
+      `AND(
+        {Type} = 'Consignment',
+        OR(
+          {Fulfillment Status (UOL)} = 'Requested Label',
+          {Fulfillment Status (MWTB)} = 'Requested Label'
+        )
+      )`,
       false
     );
     
     const consignmentReadyToShipCount = await loadInventoryCount(
-      `AND({Type} = 'Consignment', {Fulfillment Status (UOL)} = 'Ready to Ship')`,
+      `AND(
+        {Type} = 'Consignment',
+        OR(
+          {Fulfillment Status (UOL)} = 'Ready to Ship',
+          {Fulfillment Status (MWTB)} = 'Ready to Ship'
+        )
+      )`,
       false
     );
     
     const consignmentShippedCount = await loadInventoryCount(
-      `AND({Type} = 'Consignment', {Shipping Status} = 'Shipped')`,
+      `AND(
+        {Type} = 'Consignment',
+        OR(
+          {Shipping Status} = 'Shipped',
+          {Shipping Status (MWTB)} = 'Shipped'
+        )
+      )`,
       false
     );
     
     const consignmentDeliveredCount = await loadInventoryCount(
-      `AND({Type} = 'Consignment', {Shipping Status} = 'Delivered', {Payment Status} = 'To Pay')`,
+      `AND(
+        {Type} = 'Consignment',
+        OR(
+          {Shipping Status} = 'Delivered',
+          {Shipping Status (MWTB)} = 'Delivered'
+        ),
+        {Payment Status} = 'To Pay'
+      )`,
       false
     );
 
