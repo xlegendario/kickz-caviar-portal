@@ -769,6 +769,18 @@ const buyingAcceptedColumns = [
   "Date"
 ];
 
+const buyingPaymentRequiredColumns = [
+  "WTB ID",
+  "Product",
+  "SKU",
+  "Size",
+  "Brand",
+  "Amount",
+  "Status",
+  "Date",
+  "Action"
+];
+
 const wtbAcceptedColumns = [
   "Order ID",
   "Product",
@@ -1163,6 +1175,58 @@ function renderBuyingOfferRows(items) {
             Deny
           </button>
         </div>
+      </td>
+    </tr>
+  `).join("");
+}
+
+function renderBuyingPaymentRequiredRows(items) {
+  dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
+
+  dashboardTableHead.innerHTML = buyingPaymentRequiredColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingPaymentRequiredColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No payments required</strong>
+            <span>Orders waiting for payment will appear here.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  setMobileTableMode(false);
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${escapeHtml(item.product || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.amount || "-")}</td>
+      <td><span class="dashboard-status-pill dashboard-status-payment">Payment Required</span></td>
+      <td>${escapeHtml(item.date || "-")}</td>
+      <td>
+        <button
+          class="dashboard-confirm-btn"
+          type="button"
+          data-buying-pay-id="${escapeHtml(item.member_wtb_record_id || "")}"
+          data-order-id="${escapeHtml(item.order_id || "")}"
+          data-product="${escapeHtml(item.product || "")}"
+          data-sku="${escapeHtml(item.sku || "")}"
+          data-size="${escapeHtml(item.size || "")}"
+          data-amount="${escapeHtml(item.amount || "")}"
+        >
+          Pay
+        </button>
       </td>
     </tr>
   `).join("");
@@ -2196,6 +2260,46 @@ async function loadDashboardData() {
   
     document
       .querySelectorAll('[data-count-key="buying:accepted"]')
+      .forEach((el) => {
+        el.textContent = data.count || 0;
+      });
+  
+    renderStats();
+  
+    return;
+  }
+
+  if (activeSection === "buying" && activeTab === "payment_required") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingPaymentRequiredColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading payments.</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/buying-payment-required?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to load payments");
+    }
+  
+    renderBuyingPaymentRequiredRows(data.items || []);
+  
+    dashboardCountsCache.buying.payment_required = data.count || 0;
+  
+    document
+      .querySelectorAll('[data-count-key="buying:payment_required"]')
       .forEach((el) => {
         el.textContent = data.count || 0;
       });
@@ -3739,6 +3843,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const buyingDeleteButton = event.target.closest("[data-buying-delete-wtb-id]");
   const buyingAcceptOfferButton = event.target.closest("[data-buying-accept-offer-id]");
   const buyingDenyOfferButton = event.target.closest("[data-buying-deny-offer-id]");
+  const buyingPayButton = event.target.closest("[data-buying-pay-id]");
   const requestLabelButton = event.target.closest("[data-request-label-id]");
 
   if (requestLabelButton) {
@@ -3903,6 +4008,11 @@ dashboardTableBody.addEventListener("click", async (event) => {
       buyingDenyOfferButton.disabled = false;
     }
   
+    return;
+  }
+
+  if (buyingPayButton) {
+    openBuyingPaymentModal(buyingPayButton);
     return;
   }
 });
