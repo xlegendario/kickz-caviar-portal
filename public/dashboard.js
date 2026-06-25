@@ -732,6 +732,19 @@ function bindConsignmentInputCleaning() {
   });
 }
 
+const buyingOpenWtbColumns = [
+  "WTB ID",
+  "Product",
+  "SKU",
+  "Size",
+  "Brand",
+  "Max Price",
+  "Current Lowest",
+  "Status",
+  "Date",
+  "Action"
+];
+
 const wtbAcceptedColumns = [
   "Order ID",
   "Product",
@@ -984,6 +997,55 @@ function renderConsignmentOfferRows(items) {
             Deny
           </button>
         </div>
+      </td>
+    </tr>
+  `).join("");
+}
+
+function renderBuyingOpenWtbRows(items) {
+  dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
+
+  dashboardTableHead.innerHTML = buyingOpenWtbColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingOpenWtbColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No open WTBs</strong>
+            <span>Your open buying requests will appear here.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  setMobileTableMode(false);
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${escapeHtml(item.product || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.max_price || "-")}</td>
+      <td>${escapeHtml(item.current_lowest || "-")}</td>
+      <td><span class="dashboard-status-pill">Open</span></td>
+      <td>${escapeHtml(item.date || "-")}</td>
+      <td>
+        <button
+          class="dashboard-delete-btn"
+          type="button"
+          data-buying-delete-wtb-id="${escapeHtml(item.member_wtb_record_id || "")}"
+          title="Delete WTB"
+        >
+          Delete
+        </button>
       </td>
     </tr>
   `).join("");
@@ -1905,6 +1967,46 @@ async function loadDashboardData() {
   if (!dashboardSeller) return;
 
   document.getElementById("consignmentInventoryActions")?.remove();
+
+  if (activeSection === "buying" && activeTab === "open_wtbs") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingOpenWtbColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading open WTBs...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/buying-open-wtbs?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to load open WTBs");
+    }
+  
+    renderBuyingOpenWtbRows(data.items || []);
+  
+    dashboardCountsCache.buying.open_wtbs = data.count || 0;
+  
+    document
+      .querySelectorAll('[data-count-key="buying:open_wtbs"]')
+      .forEach((el) => {
+        el.textContent = data.count || 0;
+      });
+  
+    renderStats();
+  
+    return;
+  }
 
   if (activeSection === "consignment" && activeTab === "inventory") {
     document.getElementById("consignmentInventoryActions")?.remove();
