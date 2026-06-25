@@ -805,6 +805,18 @@ const buyingConfirmedColumns = [
   "Date"
 ];
 
+const buyingLabelRequestedColumns = [
+  "WTB ID",
+  "Product",
+  "SKU",
+  "Size",
+  "Brand",
+  "Amount",
+  "Status",
+  "Date",
+  "Action"
+];
+
 function renderConsignmentInventoryRows(items) {
   dashboardTableBody
     .closest(".dashboard-table")
@@ -1279,6 +1291,54 @@ function renderBuyingConfirmedRows(items) {
       <td>${escapeHtml(item.payment_status || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Confirmed</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
+    </tr>
+  `).join("");
+}
+
+function renderBuyingLabelRequestedRows(items) {
+  dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
+
+  dashboardTableHead.innerHTML = buyingLabelRequestedColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingLabelRequestedColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No label requests</strong>
+            <span>Orders waiting for label upload will appear here.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  setMobileTableMode(false);
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${escapeHtml(item.product || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.amount || "-")}</td>
+      <td><span class="dashboard-status-pill dashboard-status-payment">Waiting for Label</span></td>
+      <td>${escapeHtml(item.date || "-")}</td>
+      <td>
+        <a
+          class="dashboard-confirm-btn"
+          href="${escapeHtml(item.label_url || "#")}"
+          target="_blank"
+          rel="noopener"
+        >
+          Upload
+        </a>
+      </td>
     </tr>
   `).join("");
 }
@@ -2438,6 +2498,46 @@ async function loadDashboardData() {
   
     document
       .querySelectorAll('[data-count-key="buying:confirmed"]')
+      .forEach((el) => {
+        el.textContent = data.count || 0;
+      });
+  
+    renderStats();
+  
+    return;
+  }
+
+  if (activeSection === "buying" && activeTab === "label_requested") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingLabelRequestedColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading label requests.</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/buying-label-requested?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to load buying label requested");
+    }
+  
+    renderBuyingLabelRequestedRows(data.items || []);
+  
+    dashboardCountsCache.buying.label_requested = data.count || 0;
+  
+    document
+      .querySelectorAll('[data-count-key="buying:label_requested"]')
       .forEach((el) => {
         el.textContent = data.count || 0;
       });
