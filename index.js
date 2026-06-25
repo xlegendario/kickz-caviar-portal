@@ -7919,6 +7919,86 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
   }
 });
 
+app.post("/api/dashboard/buying/deny-offer", async (req, res) => {
+  try {
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+
+    if (!memberWtbRecordId) {
+      return res.status(400).json({ error: "Missing member_wtb_record_id" });
+    }
+
+    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+      "Offer Sent?": false
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to deny buying offer:", err);
+    res.status(500).json({
+      error: "Failed to deny buying offer",
+      details: err.message
+    });
+  }
+});
+
+app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
+  try {
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+
+    if (!memberWtbRecordId) {
+      return res.status(400).json({ error: "Missing member_wtb_record_id" });
+    }
+
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+    const f = memberWtb.fields || {};
+
+    const sellerOfferRecordId = firstLinkedRecordId(f["Lowest Offer"]);
+
+    if (!sellerOfferRecordId) {
+      return res.status(400).json({
+        error: "Missing Lowest Offer linked seller offer"
+      });
+    }
+
+    const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
+
+    if (!wtbBotBaseUrl) {
+      return res.status(500).json({
+        error: "KICKZ_WTB_BOT_BASE_URL is missing"
+      });
+    }
+
+    const response = await fetch(`${wtbBotBaseUrl}/member-wtb/deal-channel`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-kc-secret": process.env.KC_PORTAL_SECRET
+      },
+      body: JSON.stringify({
+        member_wtb_record_id: memberWtbRecordId,
+        seller_offer_record_id: sellerOfferRecordId
+      })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: data.error || "Failed to accept offer",
+        details: data.details || ""
+      });
+    }
+
+    res.json({ ok: true, data });
+  } catch (err) {
+    console.error("Failed to accept buying offer:", err);
+    res.status(500).json({
+      error: "Failed to accept buying offer",
+      details: err.message
+    });
+  }
+});
+
 app.get("/api/dashboard/history-completed", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
