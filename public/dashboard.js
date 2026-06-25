@@ -1240,12 +1240,12 @@ function openBuyingPaymentModal(button) {
   document.getElementById("buyingPaymentModal")?.remove();
 
   document.body.insertAdjacentHTML("beforeend", `
-    <div class="modal-backdrop" id="buyingPaymentModal">
-      <div class="modal-card buying-payment-modal-card">
-        <button class="modal-close" type="button" data-close-buying-payment-modal>×</button>
+    <div class="market-modal-backdrop open" id="buyingPaymentModal">
+      <div class="market-modal-card buying-payment-modal-card">
+        <button class="market-modal-close" type="button" data-close-buying-payment-modal>×</button>
 
-        <div class="modal-kicker">Payment Required</div>
-        <h2>Complete your payment</h2>
+        <h2>Complete Your Payment</h2>
+        <p>Send the amount below, then confirm your payment.</p>
 
         <div class="buying-payment-simple-amount">
           <span>Amount</span>
@@ -4576,3 +4576,43 @@ syncAuthUi();
 if (dashboardSeller) {
   loadDashboardCounts().catch(console.error);
 }
+
+document.addEventListener("click", async (event) => {
+  if (event.target.closest("[data-close-buying-payment-modal]")) {
+    document.getElementById("buyingPaymentModal")?.remove();
+    return;
+  }
+
+  const confirmPaymentBtn = event.target.closest("[data-confirm-buying-payment-id]");
+
+  if (!confirmPaymentBtn) return;
+
+  const recordId = confirmPaymentBtn.dataset.confirmBuyingPaymentId;
+
+  confirmPaymentBtn.disabled = true;
+  confirmPaymentBtn.textContent = "Confirming...";
+
+  try {
+    const response = await fetch("/api/dashboard/buying/confirm-payment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ member_wtb_record_id: recordId })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to confirm payment");
+    }
+
+    alert("Payment confirmed.");
+    document.getElementById("buyingPaymentModal")?.remove();
+
+    await loadDashboardData();
+    await loadDashboardCounts();
+  } catch (err) {
+    alert(err.message);
+    confirmPaymentBtn.disabled = false;
+    confirmPaymentBtn.textContent = "Confirm Payment";
+  }
+});
