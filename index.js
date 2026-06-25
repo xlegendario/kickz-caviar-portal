@@ -8494,10 +8494,17 @@ async function loadConsignmentDashboardItemsByStatus(status) {
         "Item ID",
         "Type",
         "Fulfillment Status (UOL)",
+        "Fulfillment Status (MWTB)",
         "Shipping Status",
+        "Shipping Status (MWTB)",
         "Payment Status",
         "Purchase Price",
         "Unfulfilled Orders Log",
+        "Member WTBs",
+        "Member WTB ID",
+        "WTB Created Channel ID (MWTB)",
+        "Shipping Label URL (Permanent) (MWTB)",
+        "Tracking URL (MWTB)",
         "Product Name",
         "SKU",
         "Size",
@@ -8507,7 +8514,12 @@ async function loadConsignmentDashboardItemsByStatus(status) {
       ],
       filterByFormula: `AND(
         {Type} = 'Consignment',
-        {Fulfillment Status (UOL)} = '${escapeFormulaValue(status)}'
+        OR(
+          {Fulfillment Status (UOL)} = '${escapeFormulaValue(status)}',
+          {Fulfillment Status (MWTB)} = '${escapeFormulaValue(status)}',
+          {Shipping Status} = '${escapeFormulaValue(status)}',
+          {Shipping Status (MWTB)} = '${escapeFormulaValue(status)}'
+        )
       )`
     })
     .all();
@@ -8534,23 +8546,35 @@ async function normalizeConsignmentDashboardItems(records, sellerRecordId) {
 
   const items = filteredInventory.map((record) => {
     const f = record.fields || {};
-    const linkedOrderId =
-      firstLinkedRecordId(f["Unfulfilled Orders Log"]);
 
-    const orderFields =
-      orderMap.get(linkedOrderId) || {};
+    const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
+    const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
+    const isMemberWtb = !!linkedMemberWtbId;
 
-    const labelUrl =
-      displayValue(orderFields["Shipping Label URL (Permanent)"]) ||
-      displayValue(orderFields["Shipping Label"]);
-    
-    const trackingUrl =
-      displayValue(orderFields["Tracking URL"]);
-    
+    const orderFields = orderMap.get(linkedOrderId) || {};
+
+    const channelId = isMemberWtb
+      ? displayValue(f["WTB Created Channel ID (MWTB)"])
+      : displayValue(orderFields["WTB Created Channel ID"]);
+
+    const labelUrl = isMemberWtb
+      ? displayValue(f["Shipping Label URL (Permanent) (MWTB)"])
+      : (
+          displayValue(orderFields["Shipping Label URL (Permanent)"]) ||
+          displayValue(orderFields["Shipping Label"])
+        );
+
+    const trackingUrl = isMemberWtb
+      ? displayValue(f["Tracking URL (MWTB)"])
+      : displayValue(orderFields["Tracking URL"]);
+
     return {
       id: record.id,
-      order_id: displayValue(orderFields["Order ID"]),
+      order_id: isMemberWtb
+        ? displayValue(f["Member WTB ID"])
+        : displayValue(orderFields["Order ID"]),
       order_record_id: linkedOrderId,
+      member_wtb_record_id: linkedMemberWtbId,
       product: displayValue(f["Product Name"]),
       sku: displayValue(f["SKU"]),
       size: displayValue(f["Size"]),
@@ -8559,6 +8583,9 @@ async function normalizeConsignmentDashboardItems(records, sellerRecordId) {
       vat_type: displayValue(f["VAT Type"]),
       date: formatDateEU(f["Purchase Date"]),
       raw_date: f["Purchase Date"],
+      discord_url: channelId
+        ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
+        : "",
       label_url: labelUrl,
       tracking_url: trackingUrl
     };
@@ -8582,8 +8609,12 @@ app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
           "Item ID",
           "Type",
           "Fulfillment Status (UOL)",
+          "Fulfillment Status (MWTB)",
           "Purchase Price",
           "Unfulfilled Orders Log",
+          "Member WTBs",
+          "Member WTB ID",
+          "WTB Created Channel ID (MWTB)",
           "Product Name",
           "SKU",
           "Size",
@@ -8593,7 +8624,10 @@ app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
         ],
         filterByFormula: `AND(
           {Type} = 'Consignment',
-          {Fulfillment Status (UOL)} = 'Allocated'
+          OR(
+            {Fulfillment Status (UOL)} = 'Allocated',
+            {Fulfillment Status (MWTB)} = 'Allocated'
+          )
         )`
       })
       .all();
@@ -8615,12 +8649,22 @@ app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
     const items = filteredInventory.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
+      const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
+      const isMemberWtb = !!linkedMemberWtbId;
+
       const orderFields = orderMap.get(linkedOrderId) || {};
+
+      const channelId = isMemberWtb
+        ? displayValue(f["WTB Created Channel ID (MWTB)"])
+        : displayValue(orderFields["WTB Created Channel ID"]);
 
       return {
         id: record.id,
-        order_id: displayValue(orderFields["Order ID"]),
+        order_id: isMemberWtb
+          ? displayValue(f["Member WTB ID"])
+          : displayValue(orderFields["Order ID"]),
         order_record_id: linkedOrderId,
+        member_wtb_record_id: linkedMemberWtbId,
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
@@ -8628,7 +8672,10 @@ app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
         payout: moneyWholeValue(f["Purchase Price"]),
         vat_type: displayValue(f["VAT Type"]),
         date: formatDateEU(f["Purchase Date"]),
-        raw_date: f["Purchase Date"]
+        raw_date: f["Purchase Date"],
+        discord_url: channelId
+          ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
+          : ""
       };
     });
 
