@@ -4579,6 +4579,29 @@ if (dashboardSeller) {
   loadDashboardCounts().catch(console.error);
 }
 
+function showDashboardToast(message, type = "success") {
+  document.querySelector(".dashboard-toast")?.remove();
+
+  const toast = document.createElement("div");
+  toast.className = `dashboard-toast ${type}`;
+
+  toast.innerHTML = `
+    <div class="dashboard-toast-icon">${type === "success" ? "✓" : "!"}</div>
+    <div class="dashboard-toast-text">${escapeHtml(message)}</div>
+  `;
+
+  document.body.appendChild(toast);
+
+  requestAnimationFrame(() => {
+    toast.classList.add("show");
+  });
+
+  setTimeout(() => {
+    toast.classList.remove("show");
+    setTimeout(() => toast.remove(), 250);
+  }, 2600);
+}
+
 document.addEventListener("click", async (event) => {
   if (event.target.closest("[data-close-buying-payment-modal]")) {
     document.getElementById("buyingPaymentModal")?.remove();
@@ -4607,13 +4630,13 @@ document.addEventListener("click", async (event) => {
       throw new Error(data.details || data.error || "Failed to confirm payment");
     }
 
-    alert("Payment confirmed.");
     document.getElementById("buyingPaymentModal")?.remove();
+    showDashboardToast("Payment confirmed.", "success");
 
     await loadDashboardData();
     await loadDashboardCounts();
   } catch (err) {
-    alert(err.message);
+    showDashboardToast(err.message, "error");
     confirmPaymentBtn.disabled = false;
     confirmPaymentBtn.textContent = "Confirm Payment";
   }
