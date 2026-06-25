@@ -9255,63 +9255,75 @@ app.get("/api/dashboard/counts", async (req, res) => {
       false
     );
 
-    const buyingOpenWtbsCount = await loadMemberWtbCount(
-      `OR(
-        {Fulfillment Status} = 'Pending',
-        {Fulfillment Status} = 'Outsource'
-      )`
+    const buyingRecords = await airtable(MEMBER_WTBS_TABLE)
+      .select({
+        fields: [
+          "Buyer Seller ID",
+          "Fulfillment Status",
+          "Payment Status",
+          "Shipping Status",
+          "Current Lowest Offer"
+        ]
+      })
+      .all();
+    
+    const myBuyingRecords = buyingRecords.filter((record) =>
+      linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
     );
     
-    const buyingOffersCount = await loadMemberWtbCount(
-      `AND(
-        OR(
-          {Fulfillment Status} = 'Pending',
-          {Fulfillment Status} = 'Outsource'
-        ),
-        {Current Lowest Offer} > 0
-      )`
-    );
+    const buyingOpenWtbsCount = myBuyingRecords.filter((record) => {
+      const status = asText(record.fields?.["Fulfillment Status"]);
+      return status === "Pending" || status === "Outsource";
+    }).length;
     
-    const buyingAcceptedCount = await loadMemberWtbCount(
-      `{Fulfillment Status} = 'Confirmed'`
-    );
+    const buyingOffersCount = myBuyingRecords.filter((record) => {
+      const status = asText(record.fields?.["Fulfillment Status"]);
+      const lowestOffer = Number(record.fields?.["Current Lowest Offer"] || 0);
     
-    const buyingPaymentRequiredCount = await loadMemberWtbCount(
-      `{Payment Status} = 'Requested'`
-    );
+      return (
+        (status === "Pending" || status === "Outsource") &&
+        lowestOffer > 0
+      );
+    }).length;
     
-    const buyingConfirmedCount = await loadMemberWtbCount(
-      `AND(
-        OR(
-          {Payment Status} = 'Paid',
-          {Payment Status} = 'Trusted'
-        ),
-        {Fulfillment Status} = 'Allocated'
-      )`
-    );
+    const buyingAcceptedCount = myBuyingRecords.filter((record) =>
+      asText(record.fields?.["Fulfillment Status"]) === "Confirmed"
+    ).length;
     
-    const buyingLabelRequestedCount = await loadMemberWtbCount(
-      `{Fulfillment Status} = 'Requested Label'`
-    );
+    const buyingPaymentRequiredCount = myBuyingRecords.filter((record) =>
+      asText(record.fields?.["Payment Status"]) === "Requested"
+    ).length;
     
-    const buyingReadyToShipCount = await loadMemberWtbCount(
-      `{Fulfillment Status} = 'Ready to Ship'`
-    );
+    const buyingConfirmedCount = myBuyingRecords.filter((record) => {
+      const paymentStatus = asText(record.fields?.["Payment Status"]);
+      const fulfillmentStatus = asText(record.fields?.["Fulfillment Status"]);
     
-    const buyingShippedCount = await loadMemberWtbCount(
-      `{Shipping Status} = 'Shipped'`
-    );
+      return (
+        (paymentStatus === "Paid" || paymentStatus === "Trusted") &&
+        fulfillmentStatus === "Allocated"
+      );
+    }).length;
     
-    const buyingDeliveredCount = await loadMemberWtbCount(
-      `{Shipping Status} = 'Delivered'`
-    );
+    const buyingLabelRequestedCount = myBuyingRecords.filter((record) =>
+      asText(record.fields?.["Fulfillment Status"]) === "Requested Label"
+    ).length;
     
-    const buyingDeliveredPaymentWarningCount = await loadMemberWtbCount(
-      `AND(
-        {Shipping Status} = 'Delivered',
-        {Payment Status} = 'Trusted'
-      )`
-    );
+    const buyingReadyToShipCount = myBuyingRecords.filter((record) =>
+      asText(record.fields?.["Fulfillment Status"]) === "Ready to Ship"
+    ).length;
+    
+    const buyingShippedCount = myBuyingRecords.filter((record) =>
+      asText(record.fields?.["Shipping Status"]) === "Shipped"
+    ).length;
+    
+    const buyingDeliveredCount = myBuyingRecords.filter((record) =>
+      asText(record.fields?.["Shipping Status"]) === "Delivered"
+    ).length;
+    
+    const buyingDeliveredPaymentWarningCount = myBuyingRecords.filter((record) =>
+      asText(record.fields?.["Shipping Status"]) === "Delivered" &&
+      asText(record.fields?.["Payment Status"]) === "Trusted"
+    ).length;
 
     res.json({
       quick: {
