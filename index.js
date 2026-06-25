@@ -11441,6 +11441,34 @@ app.post("/api/member-wtb/label-request-submit", async (req, res) => {
   }
 });
 
+app.post("/api/dashboard/buying/cancel-wtb", async (req, res) => {
+  try {
+    const memberWtbRecordId = asText(req.body.member_wtb_record_id);
+
+    if (!memberWtbRecordId) {
+      return res.status(400).json({
+        error: "Missing member_wtb_record_id"
+      });
+    }
+
+    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+      "Purchase Status": "Cancelled",
+      "Fulfillment Status": "Cancelled"
+    });
+
+    res.json({
+      ok: true
+    });
+  } catch (err) {
+    console.error("Cancel Member WTB failed:", err);
+
+    res.status(500).json({
+      error: "Failed to cancel Member WTB",
+      details: err.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Kickz Caviar Portal running on port ${PORT}`);
 
