@@ -8905,6 +8905,19 @@ app.get("/api/dashboard/counts", async (req, res) => {
       }).length;
     }
 
+    async function loadMemberWtbCount(formula) {
+      const records = await airtable(MEMBER_WTBS_TABLE)
+        .select({
+          fields: ["Buyer Seller ID"],
+          filterByFormula: formula
+        })
+        .all();
+    
+      return records.filter((record) =>
+        linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
+      ).length;
+    }
+
     const [
       openClaimsRecords,
       quickConfirmed,
@@ -9242,6 +9255,64 @@ app.get("/api/dashboard/counts", async (req, res) => {
       false
     );
 
+    const buyingOpenWtbsCount = await loadMemberWtbCount(
+      `OR(
+        {Fulfillment Status} = 'Pending',
+        {Fulfillment Status} = 'Outsource'
+      )`
+    );
+    
+    const buyingOffersCount = await loadMemberWtbCount(
+      `AND(
+        OR(
+          {Fulfillment Status} = 'Pending',
+          {Fulfillment Status} = 'Outsource'
+        ),
+        {Current Lowest Offer} > 0
+      )`
+    );
+    
+    const buyingAcceptedCount = await loadMemberWtbCount(
+      `{Fulfillment Status} = 'Confirmed'`
+    );
+    
+    const buyingPaymentRequiredCount = await loadMemberWtbCount(
+      `{Payment Status} = 'Requested'`
+    );
+    
+    const buyingConfirmedCount = await loadMemberWtbCount(
+      `AND(
+        OR(
+          {Payment Status} = 'Paid',
+          {Payment Status} = 'Trusted'
+        ),
+        {Fulfillment Status} = 'Allocated'
+      )`
+    );
+    
+    const buyingLabelRequestedCount = await loadMemberWtbCount(
+      `{Fulfillment Status} = 'Requested Label'`
+    );
+    
+    const buyingReadyToShipCount = await loadMemberWtbCount(
+      `{Fulfillment Status} = 'Ready to Ship'`
+    );
+    
+    const buyingShippedCount = await loadMemberWtbCount(
+      `{Shipping Status} = 'Shipped'`
+    );
+    
+    const buyingDeliveredCount = await loadMemberWtbCount(
+      `{Shipping Status} = 'Delivered'`
+    );
+    
+    const buyingDeliveredPaymentWarningCount = await loadMemberWtbCount(
+      `AND(
+        {Shipping Status} = 'Delivered',
+        {Payment Status} = 'Trusted'
+      )`
+    );
+
     res.json({
       quick: {
         open_claims: openClaims,
@@ -9270,6 +9341,19 @@ app.get("/api/dashboard/counts", async (req, res) => {
         ready_to_ship: consignmentReadyToShipCount,
         shipped: consignmentShippedCount,
         delivered: consignmentDeliveredCount
+      },
+
+      buying: {
+        open_wtbs: buyingOpenWtbsCount,
+        offers: buyingOffersCount,
+        accepted: buyingAcceptedCount,
+        payment_required: buyingPaymentRequiredCount,
+        confirmed: buyingConfirmedCount,
+        label_requested: buyingLabelRequestedCount,
+        ready_to_ship: buyingReadyToShipCount,
+        shipped: buyingShippedCount,
+        delivered: buyingDeliveredCount,
+        delivered_payment_warning: buyingDeliveredPaymentWarningCount
       },
       
       history: {
