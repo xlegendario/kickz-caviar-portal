@@ -3225,3 +3225,9 @@
   filter: brightness(1.08);
   transform: translateY(-1px);
 }
+
+.dashboard-status-not-paid {
+  background: rgba(231, 76, 60, 0.14);
+  color: #ff7b7b;
+  border: 1px solid rgba(231, 76, 60, 0.45);
+}
