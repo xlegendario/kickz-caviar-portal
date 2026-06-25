@@ -8217,7 +8217,6 @@ app.get("/api/dashboard/buying-ready-to-ship", async (req, res) => {
           "Max Price",
           "Payment Status",
           "Fulfillment Status",
-          "Shipping Label URL",
           "Shipping Label Permanent URL",
           "Tracking Number",
           "Date"
@@ -8248,9 +8247,7 @@ app.get("/api/dashboard/buying-ready-to-ship", async (req, res) => {
           amount: moneyValue(amount),
           status: "Ready to Ship",
           tracking_number: displayValue(f["Tracking Number"]),
-          label_url:
-            displayValue(f["Shipping Label Permanent URL"]) ||
-            displayValue(f["Shipping Label URL"]),
+          label_url: displayValue(f["Shipping Label Permanent URL"]),
           date: formatDateEU(f["Date"]),
           raw_date: f["Date"]
         };
@@ -8264,6 +8261,74 @@ app.get("/api/dashboard/buying-ready-to-ship", async (req, res) => {
     console.error("Failed to load buying ready to ship:", err);
     res.status(500).json({
       error: "Failed to load buying ready to ship",
+      details: err.message
+    });
+  }
+});
+
+app.get("/api/dashboard/buying-shipped", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({ error: "Missing seller_record_id" });
+    }
+
+    const records = await airtable(MEMBER_WTBS_TABLE)
+      .select({
+        fields: [
+          "Buyer Seller ID",
+          "Member WTB ID",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "Invoice Price",
+          "Final Buying Price",
+          "Max Price",
+          "Shipping Status",
+          "Tracking Number",
+          "Date"
+        ],
+        filterByFormula: `{Shipping Status} = 'Shipped'`
+      })
+      .all();
+
+    const items = records
+      .filter((record) =>
+        linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
+      )
+      .map((record) => {
+        const f = record.fields || {};
+        const amount =
+          Number(f["Invoice Price"] || 0) ||
+          Number(f["Final Buying Price"] || 0) ||
+          Number(f["Max Price"] || 0);
+
+        return {
+          id: record.id,
+          member_wtb_record_id: record.id,
+          order_id: displayValue(f["Member WTB ID"]),
+          product: displayValue(f["Product Name"]),
+          sku: displayValue(f["SKU"]),
+          size: displayValue(f["Size"]),
+          brand: displayValue(f["Brand"]),
+          amount: moneyValue(amount),
+          tracking_number: displayValue(f["Tracking Number"]),
+          status: "Shipped",
+          date: formatDateEU(f["Date"]),
+          raw_date: f["Date"]
+        };
+      });
+
+    res.json({
+      count: items.length,
+      items: sortDashboardItemsNewestFirst(items)
+    });
+  } catch (err) {
+    console.error("Failed to load buying shipped:", err);
+    res.status(500).json({
+      error: "Failed to load buying shipped",
       details: err.message
     });
   }
