@@ -758,6 +758,17 @@ const buyingOffersColumns = [
   "Action"
 ];
 
+const buyingAcceptedColumns = [
+  "WTB ID",
+  "Product",
+  "SKU",
+  "Size",
+  "Brand",
+  "Offer",
+  "Status",
+  "Date"
+];
+
 const wtbAcceptedColumns = [
   "Order ID",
   "Product",
@@ -1011,6 +1022,44 @@ function renderConsignmentOfferRows(items) {
           </button>
         </div>
       </td>
+    </tr>
+  `).join("");
+}
+
+function renderBuyingAcceptedRows(items) {
+  dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
+
+  dashboardTableHead.innerHTML = buyingAcceptedColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingAcceptedColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No accepted offers yet</strong>
+            <span>Accepted offers waiting for seller processing will appear here.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  setMobileTableMode(false);
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${escapeHtml(item.product || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.offer || "-")}</td>
+      <td><span class="dashboard-status-pill dashboard-status-offer">Waiting for seller</span></td>
+      <td>${escapeHtml(item.date || "-")}</td>
     </tr>
   `).join("");
 }
@@ -2107,6 +2156,46 @@ async function loadDashboardData() {
   
     document
       .querySelectorAll('[data-count-key="buying:offers"]')
+      .forEach((el) => {
+        el.textContent = data.count || 0;
+      });
+  
+    renderStats();
+  
+    return;
+  }
+
+  if (activeSection === "buying" && activeTab === "accepted") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingAcceptedColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading accepted offers.</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/buying-accepted?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to load buying accepted");
+    }
+  
+    renderBuyingAcceptedRows(data.items || []);
+  
+    dashboardCountsCache.buying.accepted = data.count || 0;
+  
+    document
+      .querySelectorAll('[data-count-key="buying:accepted"]')
       .forEach((el) => {
         el.textContent = data.count || 0;
       });
