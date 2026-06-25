@@ -1895,11 +1895,35 @@ async function requestConsignmentShippingLabel(orderRecordId) {
   };
 }
 
-async function safeEditInteractionMessage(interaction, payload) {
+async function safeEditInteractionMessage(interaction, payload, preferredClient = null) {
+  const clients = preferredClient
+    ? [preferredClient]
+    : [discordClient, kickzDealDiscordClient];
+
+  for (const client of clients) {
+    try {
+      if (!client?.isReady?.()) continue;
+
+      const channel = await client.channels.fetch(interaction.channelId).catch(() => null);
+      if (!channel) continue;
+
+      const message = await channel.messages.fetch(interaction.message.id).catch(() => null);
+      if (!message) continue;
+
+      return await message.edit(payload);
+    } catch (err) {
+      console.error("safeEditInteractionMessage source edit failed:", {
+        customId: interaction.customId,
+        message: err.message,
+        code: err.code
+      });
+    }
+  }
+
   try {
-    return await interaction.editReply(payload);
+    return await interaction.message.edit(payload);
   } catch (err) {
-    console.error("safeEditInteractionMessage failed:", {
+    console.error("safeEditInteractionMessage fallback failed:", {
       customId: interaction.customId,
       message: err.message,
       code: err.code
@@ -2592,7 +2616,7 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       if (action === "confirm_offer") {
-        await interaction.message.edit({
+        await safeEditInteractionMessage(interaction, {
           content: "⏳ Processing confirmation...",
           embeds: interaction.message.embeds,
           components: [
@@ -2609,29 +2633,29 @@ function bindConsignmentDiscordButtons(client) {
               ]
             }
           ]
-        }).catch((err) => {
+        }, client).catch((err) => {
           console.error("Failed to set consignment message to processing:", err);
         });
       
         const result = await confirmConsignmentOffer(offerId);
       
         if (!result.ok) {
-          await interaction.message.edit({
+          await safeEditInteractionMessage(interaction, {
             content: "❌ This offer is no longer available.",
             embeds: interaction.message.embeds,
             components: []
-          }).catch((err) => {
+          }, client).catch((err) => {
             console.error("Failed to mark consignment offer unavailable:", err);
           });
       
           return;
         }
       
-        await interaction.message.edit({
+        await safeEditInteractionMessage(interaction, {
           content: `✅ Confirmed by ${result.offer.seller_id}. Deal update has been sent.`,
           embeds: interaction.message.embeds,
           components: []
-        }).catch((err) => {
+        }, client).catch((err) => {
           console.error("Failed to mark consignment offer confirmed:", err);
         });
       
