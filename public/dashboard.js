@@ -1235,9 +1235,6 @@ function renderBuyingPaymentRequiredRows(items) {
 function openBuyingPaymentModal(button) {
   const recordId = button.dataset.buyingPayId;
   const orderId = button.dataset.orderId;
-  const product = button.dataset.product;
-  const sku = button.dataset.sku;
-  const size = button.dataset.size;
   const amount = button.dataset.amount;
 
   document.getElementById("buyingPaymentModal")?.remove();
@@ -1249,39 +1246,23 @@ function openBuyingPaymentModal(button) {
 
         <div class="modal-kicker">Payment Required</div>
         <h2>Complete your payment</h2>
-        <p class="modal-subtitle">
-          Your order is matched. Confirm payment after sending the amount below.
-        </p>
 
-        <div class="buying-payment-summary">
-          <div>
-            <span>Order</span>
-            <strong>${escapeHtml(orderId)}</strong>
-          </div>
-          <div>
-            <span>Amount</span>
-            <strong>${escapeHtml(amount)}</strong>
-          </div>
+        <div class="buying-payment-simple-amount">
+          <span>Amount</span>
+          <strong>${escapeHtml(amount)}</strong>
         </div>
 
-        <div class="buying-payment-product">
-          <strong>${escapeHtml(product)}</strong>
-          <span>SKU: ${escapeHtml(sku)} · Size: ${escapeHtml(size)}</span>
+        <div class="buying-payment-simple-section">
+          <strong>Bank Transfer</strong>
+          <span>Name: Payout by Kickz Caviar B.V.</span>
+          <span>IBAN: NL21INGB0109644271</span>
+          <span>Reference: ${escapeHtml(orderId)}</span>
         </div>
 
-        <div class="buying-payment-methods">
-          <div class="buying-payment-method">
-            <strong>Bank transfer</strong>
-            <span>Name: Kickz Caviar</span>
-            <span>IBAN: NL21INGB0109644271</span>
-            <span>Reference: ${escapeHtml(orderId)}</span>
-          </div>
-
-          <div class="buying-payment-method">
-            <strong>PayPal</strong>
-            <span>financial@payoutbykickzcaviar.com</span>
-            <span>Reference: ${escapeHtml(orderId)}</span>
-          </div>
+        <div class="buying-payment-simple-section">
+          <strong>PayPal</strong>
+          <span>financial@payoutbykickzcaviar.com</span>
+          <span>Reference: ${escapeHtml(orderId)}</span>
         </div>
 
         <button
