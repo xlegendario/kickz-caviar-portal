@@ -1042,9 +1042,15 @@ function renderBuyingOpenWtbRows(items) {
           class="dashboard-delete-btn"
           type="button"
           data-buying-delete-wtb-id="${escapeHtml(item.member_wtb_record_id || "")}"
-          title="Delete WTB"
+          title="Cancel WTB"
         >
-          Delete
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+            <path d="M3 6h18" stroke="currentColor"/>
+            <path d="M8 6V4h8v2" stroke="currentColor"/>
+            <path d="M19 6l-1 14H6L5 6" stroke="currentColor"/>
+            <path d="M10 11v6" stroke="currentColor"/>
+            <path d="M14 11v6" stroke="currentColor"/>
+          </svg>
         </button>
       </td>
     </tr>
@@ -3236,6 +3242,45 @@ async function handleDeleteOffer(button) {
   }
 }
 
+async function handleCancelBuyingWtb(button) {
+  const memberWtbRecordId = button.dataset.buyingDeleteWtbId;
+
+  const confirmed = window.confirm(
+    "Are you sure you want to cancel this Want To Buy?"
+  );
+
+  if (!confirmed) return;
+
+  button.disabled = true;
+
+  try {
+    const response = await fetch("/api/dashboard/buying/cancel-wtb", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        member_wtb_record_id: memberWtbRecordId
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data.details || data.error || "Failed to cancel Want To Buy"
+      );
+    }
+
+    await loadDashboardData();
+    await loadDashboardCounts();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 dashboardStatsToggle?.addEventListener("click", () => {
   if (window.innerWidth > 768) return;
 
@@ -3500,6 +3545,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const solveIssueButton = event.target.closest("[data-solve-issue-id]");
   const editButton = event.target.closest("[data-edit-offer-id]");
   const deleteButton = event.target.closest("[data-delete-offer-id]");
+  const buyingDeleteButton = event.target.closest("[data-buying-delete-wtb-id]");
   const requestLabelButton = event.target.closest("[data-request-label-id]");
 
   if (requestLabelButton) {
@@ -3598,8 +3644,9 @@ dashboardTableBody.addEventListener("click", async (event) => {
     return;
   }
 
-  if (deleteButton) {
-    await handleDeleteOffer(deleteButton);
+  if (buyingDeleteButton) {
+    await handleCancelBuyingWtb(buyingDeleteButton);
+    return;
   }
 });
 
