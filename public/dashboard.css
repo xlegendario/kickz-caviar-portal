@@ -3072,7 +3072,19 @@
 }
 
 .dashboard-status-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 4px 10px;
+  border-radius: 999px;
+
   background: rgba(46, 204, 113, 0.14);
   color: #58d86a;
   border: 1px solid rgba(46, 204, 113, 0.45);
+
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
 }
