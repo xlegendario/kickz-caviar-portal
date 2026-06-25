@@ -38,6 +38,21 @@ const dashboardConfig = {
     ]
   },
 
+  buying: {
+    label: "Buying",
+    tabs: [
+      { key: "open_wtbs", label: "Open WTBs" },
+      { key: "offers", label: "Offers" },
+      { key: "accepted", label: "Accepted" },
+      { key: "payment_required", label: "Payment Required" },
+      { key: "confirmed", label: "Confirmed" },
+      { key: "label_requested", label: "Label Requested" },
+      { key: "ready_to_ship", label: "Ready To Ship" },
+      { key: "shipped", label: "Shipped" },
+      { key: "delivered", label: "Delivered" }
+    ]
+  },
+
   history: {
     label: "History",
     tabs: [
@@ -294,6 +309,7 @@ let dashboardCountsCache = {
   quick: {},
   wtb: {},
   consignment: {},
+  buying: {},
   history: {}
 };
 
@@ -343,6 +359,7 @@ async function loadDashboardCounts() {
     quick: {},
     wtb: {},
     consignment: {},
+    buying: {},
     history: {},
     ...(data || {})
   };
