@@ -8028,7 +8028,7 @@ app.get("/api/dashboard/buying-payment-required", async (req, res) => {
           sku: displayValue(f["SKU"]),
           size: displayValue(f["Size"]),
           brand: displayValue(f["Brand"]),
-          amount: moneyWholeValue(amount),
+          amount: moneyValue(amount),
           amount_raw: amount,
           status: "Payment Required",
           date: formatDateEU(f["Date"]),
