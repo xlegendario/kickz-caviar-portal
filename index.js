@@ -8313,51 +8313,31 @@ app.get("/api/dashboard/counts", async (req, res) => {
         displayValue(orderFields["Lowest Offer Seller ID"]) === sellerCode
       );
     }).length;
-
-    const wtbConfirmed = wtbConfirmedRecords.filter((record) => {
-      const f = record.fields || {};
     
-      return (
-        linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
-        !linkedRecordIsEmpty(f["Seller Offer"])
-      );
-    }).length;
-
-    const wtbLabelRequested = wtbLabelRequestedRecords.filter((record) => {
+    function isVisibleMemberWtbInventory(record) {
       const f = record.fields || {};
+      const isMemberWtb = !linkedRecordIsEmpty(f["Fulfillment Status (MWTB)"]);
     
-      return (
-        linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
-        !linkedRecordIsEmpty(f["Seller Offer"])
-      );
-    }).length;
+      if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
+        return false;
+      }
+    
+      if (isMemberWtb) {
+        return true;
+      }
+    
+      return !linkedRecordIsEmpty(f["Seller Offer"]);
+    }
 
-    const wtbReadyToShip = wtbReadyToShipRecords.filter((record) => {
-      const f = record.fields || {};
-    
-      return (
-        linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
-        !linkedRecordIsEmpty(f["Seller Offer"])
-      );
-    }).length;
+    const wtbConfirmed = wtbConfirmedRecords.filter(isVisibleMemberWtbInventory).length;
 
-    const wtbShipped = wtbShippedRecords.filter((record) => {
-      const f = record.fields || {};
-    
-      return (
-        linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
-        !linkedRecordIsEmpty(f["Seller Offer"])
-      );
-    }).length;
+    const wtbLabelRequested = wtbLabelRequestedRecords.filter(isVisibleMemberWtbInventory).length;
 
-    const wtbDelivered = wtbDeliveredRecords.filter((record) => {
-      const f = record.fields || {};
-    
-      return (
-        linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
-        !linkedRecordIsEmpty(f["Seller Offer"])
-      );
-    }).length;
+    const wtbReadyToShip = wtbReadyToShipRecords.filter(isVisibleMemberWtbInventory).length;
+
+    const wtbShipped = wtbShippedRecords.filter(isVisibleMemberWtbInventory).length;
+
+    const wtbDelivered = wtbDeliveredRecords.filter(isVisibleMemberWtbInventory).length;
 
     const { data: consignmentInventoryRows, error: consignmentInventoryError } =
       await supabase
