@@ -275,11 +275,9 @@ function syncDashboardUi() {
   document.querySelectorAll("[data-dashboard-section]").forEach((button) => {
     const isActiveSection = button.dataset.dashboardSection === activeSection;
     const subnav = document.querySelector(`[data-subnav="${button.dataset.dashboardSection}"]`);
-
-    if (isActiveSection) {
-      button.classList.add("open");
-      subnav?.classList.add("open");
-    }
+  
+    button.classList.toggle("open", isActiveSection);
+    subnav?.classList.toggle("open", isActiveSection);
   });
   
   document.querySelectorAll(".dashboard-subnav-btn").forEach((button) => {
