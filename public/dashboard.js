@@ -793,6 +793,18 @@ const wtbAcceptedColumns = [
   "Status"
 ];
 
+const buyingConfirmedColumns = [
+  "WTB ID",
+  "Product",
+  "SKU",
+  "Size",
+  "Brand",
+  "Amount",
+  "Payment",
+  "Status",
+  "Date"
+];
+
 function renderConsignmentInventoryRows(items) {
   dashboardTableBody
     .closest(".dashboard-table")
@@ -1228,6 +1240,45 @@ function renderBuyingPaymentRequiredRows(items) {
           Pay
         </button>
       </td>
+    </tr>
+  `).join("");
+}
+
+function renderBuyingConfirmedRows(items) {
+  dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
+
+  dashboardTableHead.innerHTML = buyingConfirmedColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingConfirmedColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No confirmed orders</strong>
+            <span>Confirmed buying orders will appear here.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  setMobileTableMode(false);
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${escapeHtml(item.product || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${escapeHtml(item.payment_status || "-")}</td>
+      <td><span class="dashboard-status-pill dashboard-status-open">Confirmed</span></td>
+      <td>${escapeHtml(item.date || "-")}</td>
     </tr>
   `).join("");
 }
@@ -2347,6 +2398,46 @@ async function loadDashboardData() {
   
     document
       .querySelectorAll('[data-count-key="buying:payment_required"]')
+      .forEach((el) => {
+        el.textContent = data.count || 0;
+      });
+  
+    renderStats();
+  
+    return;
+  }
+
+  if (activeSection === "buying" && activeTab === "confirmed") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingConfirmedColumns.length}">
+          <div class="dashboard-empty-state">
+            <strong>Loading confirmed orders.</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+  
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id
+    });
+  
+    const response = await fetch(
+      `/api/dashboard/buying-confirmed?${params.toString()}`
+    );
+  
+    const data = await response.json();
+  
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to load buying confirmed");
+    }
+  
+    renderBuyingConfirmedRows(data.items || []);
+  
+    dashboardCountsCache.buying.confirmed = data.count || 0;
+  
+    document
+      .querySelectorAll('[data-count-key="buying:confirmed"]')
       .forEach((el) => {
         el.textContent = data.count || 0;
       });
