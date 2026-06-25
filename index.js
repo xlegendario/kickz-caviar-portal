@@ -7952,11 +7952,11 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
     const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
     const f = memberWtb.fields || {};
 
-    const sellerOfferRecordId = firstLinkedRecordId(f["Lowest Offer"]);
+    const sellerOfferRecordId = firstLinkedRecordId(f["Current Lowest Seller Offer"]);
 
     if (!sellerOfferRecordId) {
       return res.status(400).json({
-        error: "Missing Lowest Offer linked seller offer"
+        error: "Missing Current Lowest Seller Offer linked seller offer"
       });
     }
 
