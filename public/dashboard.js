@@ -3648,6 +3648,8 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const editButton = event.target.closest("[data-edit-offer-id]");
   const deleteButton = event.target.closest("[data-delete-offer-id]");
   const buyingDeleteButton = event.target.closest("[data-buying-delete-wtb-id]");
+  const buyingAcceptOfferButton = event.target.closest("[data-buying-accept-offer-id]");
+  const buyingDenyOfferButton = event.target.closest("[data-buying-deny-offer-id]");
   const requestLabelButton = event.target.closest("[data-request-label-id]");
 
   if (requestLabelButton) {
@@ -3748,6 +3750,64 @@ dashboardTableBody.addEventListener("click", async (event) => {
 
   if (buyingDeleteButton) {
     await handleCancelBuyingWtb(buyingDeleteButton);
+    return;
+  }
+
+  if (buyingAcceptOfferButton) {
+    buyingAcceptOfferButton.disabled = true;
+  
+    try {
+      const response = await fetch("/api/dashboard/buying/accept-offer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          member_wtb_record_id: buyingAcceptOfferButton.dataset.buyingAcceptOfferId
+        })
+      });
+  
+      const data = await response.json();
+  
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to accept offer");
+      }
+  
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      buyingAcceptOfferButton.disabled = false;
+    }
+  
+    return;
+  }
+  
+  if (buyingDenyOfferButton) {
+    buyingDenyOfferButton.disabled = true;
+  
+    try {
+      const response = await fetch("/api/dashboard/buying/deny-offer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          member_wtb_record_id: buyingDenyOfferButton.dataset.buyingDenyOfferId
+        })
+      });
+  
+      const data = await response.json();
+  
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to deny offer");
+      }
+  
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      buyingDenyOfferButton.disabled = false;
+    }
+  
     return;
   }
 });
