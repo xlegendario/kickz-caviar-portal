@@ -8600,10 +8600,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
       const orderFields = wtbAcceptedOrderMap.get(linkedOrderId) || {};
     
       if (isMemberWtb) {
-        return (
-          displayValue(f["Fulfillment Status (MWTB)"]) === "Confirmed" &&
-          !displayValue(f["WTB Created Channel ID (MWTB)"])
-        );
+        return displayValue(f["Fulfillment Status (MWTB)"]) === "Confirmed";
       }
     
       return (
