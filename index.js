@@ -2588,7 +2588,7 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       if (action === "confirm_offer") {
-        await safeEditInteractionMessage(interaction, {
+        await interaction.message.edit({
           content: "⏳ Processing confirmation...",
           embeds: interaction.message.embeds,
           components: [
@@ -2605,19 +2605,32 @@ function bindConsignmentDiscordButtons(client) {
               ]
             }
           ]
-        }).catch(() => null);
-        
+        }).catch((err) => {
+          console.error("Failed to set consignment message to processing:", err);
+        });
+      
         const result = await confirmConsignmentOffer(offerId);
-        
-        await disableConsignmentDiscordButtons(
-          interaction.channelId,
-          interaction.message.id,
-          result.ok
-            ? `✅ Confirmed by ${result.offer.seller_id}.`
-            : "❌ This offer is no longer available.",
-          client
-        );
-        
+      
+        if (!result.ok) {
+          await interaction.message.edit({
+            content: "❌ This offer is no longer available.",
+            embeds: interaction.message.embeds,
+            components: []
+          }).catch((err) => {
+            console.error("Failed to mark consignment offer unavailable:", err);
+          });
+      
+          return;
+        }
+      
+        await interaction.message.edit({
+          content: `✅ Confirmed by ${result.offer.seller_id}. Deal update has been sent.`,
+          embeds: interaction.message.embeds,
+          components: []
+        }).catch((err) => {
+          console.error("Failed to mark consignment offer confirmed:", err);
+        });
+      
         return;
       }
     } catch (err) {
