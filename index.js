@@ -2803,9 +2803,12 @@ app.get("/api/member-wtb/label-request/:recordId", async (req, res) => {
       sku: asText(f["SKU"]),
       size: asText(f["Size"]),
       brand: asText(f["Brand"]),
+      invoice_price: Number(f["Invoice Price"] || 0),
       max_price: Number(f["Max Price"] || 0),
       final_buying_price: Number(f["Final Buying Price"] || 0),
-      shipping_label_url: asText(f["Shipping Label Permanent URL"]),
+      shipping_label_url:
+        asText(f["Shipping Label Permanent URL"]) ||
+        asText(f["Shipping Label URL"]),
       tracking_number: asText(f["Tracking Number"])
     });
   } catch (err) {
@@ -11914,41 +11917,6 @@ app.post("/api/consignment/offers/close-for-source", async (req, res) => {
 
     return res.status(500).json({
       error: "Failed to close consignment offers for source",
-      details: err.message
-    });
-  }
-});
-
-app.get("/api/member-wtb/label-request/:recordId", async (req, res) => {
-  try {
-    const recordId = asText(req.params.recordId);
-
-    if (!recordId) {
-      return res.status(400).json({ error: "Missing recordId" });
-    }
-
-    const record = await airtable(MEMBER_WTBS_TABLE).find(recordId);
-    const f = record.fields || {};
-
-    res.json({
-      record_id: record.id,
-      member_wtb_id: asText(f["Member WTB ID"]) || asText(f["WTB ID"]) || record.id,
-      buyer_name: asText(f["Buyer Name"]) || asText(f["Buyer Seller ID"]),
-      buyer_seller_id: asText(f["Buyer Seller ID"]),
-      product_name: asText(f["Product Name"]),
-      sku: asText(f["SKU"]),
-      size: asText(f["Size"]),
-      brand: asText(f["Brand"]),
-      max_price: Number(f["Max Price"] || 0),
-      final_buying_price: Number(f["Final Buying Price"] || 0),
-      shipping_label_url: asText(f["Shipping Label URL"]),
-      tracking_number: asText(f["Tracking Number"])
-    });
-  } catch (err) {
-    console.error("Failed to load Member WTB label request:", err);
-
-    res.status(500).json({
-      error: "Failed to load label request",
       details: err.message
     });
   }
