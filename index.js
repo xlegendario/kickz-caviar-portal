@@ -8578,8 +8578,20 @@ app.get("/api/dashboard/counts", async (req, res) => {
     const wtbAcceptedOrderMap = await loadOrderFieldsMap(wtbAcceptedOrderIds);
     
     const wtbAccepted = wtbAcceptedBase.filter((record) => {
-      const linkedOrderId = firstLinkedRecordId(record.fields?.["Linked Orders"]);
+      const f = record.fields || {};
+    
+      const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+      const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
+      const isMemberWtb = !!linkedMemberWtbId;
+    
       const orderFields = wtbAcceptedOrderMap.get(linkedOrderId) || {};
+    
+      if (isMemberWtb) {
+        return (
+          displayValue(f["Fulfillment Status (MWTB)"]) === "Confirmed" &&
+          !displayValue(f["WTB Created Channel ID (MWTB)"])
+        );
+      }
     
       return (
         displayValue(orderFields["Partner or Seller"]) === "Seller" &&
