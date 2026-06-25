@@ -745,6 +745,19 @@ const buyingOpenWtbColumns = [
   "Action"
 ];
 
+const buyingOffersColumns = [
+  "WTB ID",
+  "Product",
+  "SKU",
+  "Size",
+  "Brand",
+  "Max Price",
+  "Offer",
+  "Status",
+  "Date",
+  "Action"
+];
+
 const wtbAcceptedColumns = [
   "Order ID",
   "Product",
@@ -1052,6 +1065,55 @@ function renderBuyingOpenWtbRows(items) {
             <path d="M14 11v6" stroke="currentColor"/>
           </svg>
         </button>
+      </td>
+    </tr>
+  `).join("");
+}
+
+function renderBuyingOfferRows(items) {
+  dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
+
+  dashboardTableHead.innerHTML = buyingOffersColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${buyingOffersColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No offers yet</strong>
+            <span>Offers for your buying requests will appear here.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  setMobileTableMode(false);
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${escapeHtml(item.product || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.max_price || "-")}</td>
+      <td>${escapeHtml(item.offer || "-")}</td>
+      <td><span class="dashboard-status-pill dashboard-status-offer">Offer Received</span></td>
+      <td>${escapeHtml(item.date || "-")}</td>
+      <td>
+        <div class="dashboard-action-row">
+          <button class="dashboard-confirm-btn" type="button" data-buying-accept-offer-id="${escapeHtml(item.member_wtb_record_id || "")}">
+            Accept
+          </button>
+          <button class="dashboard-deny-btn" type="button" data-buying-deny-offer-id="${escapeHtml(item.member_wtb_record_id || "")}">
+            Deny
+          </button>
+        </div>
       </td>
     </tr>
   `).join("");
