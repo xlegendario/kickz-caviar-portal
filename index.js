@@ -4741,12 +4741,12 @@ app.post("/api/consignment/offers/:id/counter", async (req, res) => {
       });
     }
     
-    if (counterPrice > currentOfferPrice - 5) {
+    if (counterPrice <= currentOfferPrice) {
       return res.status(400).json({
-        error: `Counter must be at least €5 below the current offer (€${currentOfferPrice.toFixed(2)}).`
+        error: `Counter must be higher than the current offer (€${currentOfferPrice.toFixed(2)}).`
       });
     }
-
+    
     const orderRecord = await airtable(ORDERS_TABLE).find(offer.order_record_id);
     const orderFields = orderRecord.fields || {};
     const clientCountry = asText(orderFields["Client Country"]);
