@@ -1103,14 +1103,6 @@ document.querySelectorAll(".view-btn").forEach((button) => {
 searchQuery = "";
 searchInput.value = "";
 
-syncMarketUi();
-
-if (currentMainMode === "buying") {
-  loadBuyingProducts({ force: true });
-} else {
-  loadDeals(currentType);
-}
-
 async function loadBrands() {
   try {
     const response = await fetch(`/api/brands?type=${currentType}`);
@@ -1262,6 +1254,14 @@ let selectedDeal = null;
 let selectedVatType = "Margin";
 
 let currentSeller = JSON.parse(localStorage.getItem("kc_seller") || "null");
+
+syncMarketUi();
+
+if (currentMainMode === "buying") {
+  loadBuyingProducts({ force: true });
+} else {
+  loadDeals(currentType);
+}
 
 function updateLoginState() {
   if (currentSeller) {
