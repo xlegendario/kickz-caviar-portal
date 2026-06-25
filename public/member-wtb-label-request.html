@@ -435,7 +435,10 @@
       setText(els.productValue, data.product_name);
       setText(els.skuValue, data.sku);
       setText(els.sizeValue, data.size);
-      setText(els.priceValue, formatEuro(data.invoice_price || data.final_buying_price || data.max_price));
+      setText(
+        els.priceValue,
+        formatEuro(data.invoice_price || data.final_buying_price || data.max_price)
+      );
 
       if (data.shipping_label_url || data.tracking_number) {
         setStatus("A label or tracking number has already been submitted for this deal. You can submit again if you need to replace it.", "success");
