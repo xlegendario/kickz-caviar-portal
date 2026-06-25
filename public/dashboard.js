@@ -836,9 +836,9 @@ const buyingShippedColumns = [
   "Size",
   "Brand",
   "Amount",
-  "Tracking",
   "Status",
-  "Date"
+  "Date",
+  "Action"
 ];
 
 function renderConsignmentInventoryRows(items) {
@@ -1438,9 +1438,18 @@ function renderBuyingShippedRows(items) {
       <td>${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
-      <td>${escapeHtml(item.tracking_number || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Shipped</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
+      <td>
+        <a
+          class="dashboard-confirm-btn"
+          href="${escapeHtml(item.tracking_url || "#")}"
+          target="_blank"
+          rel="noopener"
+        >
+          Track
+        </a>
+      </td>
     </tr>
   `).join("");
 }
