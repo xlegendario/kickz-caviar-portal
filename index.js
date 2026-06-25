@@ -8336,6 +8336,83 @@ app.get("/api/dashboard/buying-shipped", async (req, res) => {
   }
 });
 
+app.get("/api/dashboard/buying-delivered", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({ error: "Missing seller_record_id" });
+    }
+
+    const records = await airtable(MEMBER_WTBS_TABLE)
+      .select({
+        fields: [
+          "Buyer Seller ID",
+          "Member WTB ID",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "Invoice Price",
+          "Final Buying Price",
+          "Max Price",
+          "Payment Status",
+          "Shipping Status",
+          "Tracking Number",
+          "Tracking URL",
+          "Date"
+        ],
+        filterByFormula: `{Shipping Status} = 'Delivered'`
+      })
+      .all();
+
+    const items = records
+      .filter((record) =>
+        linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
+      )
+      .map((record) => {
+        const f = record.fields || {};
+        const amount =
+          Number(f["Invoice Price"] || 0) ||
+          Number(f["Final Buying Price"] || 0) ||
+          Number(f["Max Price"] || 0);
+
+        const paymentStatus = displayValue(f["Payment Status"]);
+        const requiresPayment = paymentStatus === "Trusted";
+
+        return {
+          id: record.id,
+          member_wtb_record_id: record.id,
+          order_id: displayValue(f["Member WTB ID"]),
+          product: displayValue(f["Product Name"]),
+          sku: displayValue(f["SKU"]),
+          size: displayValue(f["Size"]),
+          brand: displayValue(f["Brand"]),
+          amount: moneyValue(amount),
+          payment_status: paymentStatus,
+          requires_payment: requiresPayment,
+          tracking_number: displayValue(f["Tracking Number"]),
+          tracking_url: displayValue(f["Tracking URL"]),
+          status: requiresPayment ? "Payment Required" : "Delivered",
+          date: formatDateEU(f["Date"]),
+          raw_date: f["Date"]
+        };
+      });
+
+    res.json({
+      count: items.length,
+      payment_warning_count: items.filter((item) => item.requires_payment).length,
+      items: sortDashboardItemsNewestFirst(items)
+    });
+  } catch (err) {
+    console.error("Failed to load buying delivered:", err);
+    res.status(500).json({
+      error: "Failed to load buying delivered",
+      details: err.message
+    });
+  }
+});
+
 app.post("/api/dashboard/buying/confirm-payment", async (req, res) => {
   try {
     const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
