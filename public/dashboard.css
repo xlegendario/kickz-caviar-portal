@@ -3071,3 +3071,8 @@
   opacity: 0.92;
 }
 
+.dashboard-status-open {
+  background: rgba(46, 204, 113, 0.14);
+  color: #58d86a;
+  border: 1px solid rgba(46, 204, 113, 0.45);
+}
