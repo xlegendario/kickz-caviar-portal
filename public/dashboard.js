@@ -1510,7 +1510,7 @@ function renderBuyingDeliveredRows(items) {
       <td>
         ${
           item.requires_payment
-            ? `<span class="dashboard-status-pill dashboard-status-payment">Payment Required</span>`
+            ? `<span class="dashboard-status-pill dashboard-status-payment">Not Paid</span>`
             : `<span class="dashboard-status-pill dashboard-status-open">Delivered</span>`
         }
       </td>
