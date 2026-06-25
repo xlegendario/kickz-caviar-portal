@@ -1426,9 +1426,13 @@ async function sendConsignmentDealUpdateDiscordMessage({
   offer,
   inventoryUnitRecordId
 }) {
-  await initDiscord();
-
   const wasOfferDeliveredByDm = offer.discord_delivery_type === "dm";
+
+  if (wasOfferDeliveredByDm) {
+    await initKickzDealDiscord();
+  } else {
+    await initDiscord();
+  }
 
   if (wasOfferDeliveredByDm) {
     const dealChannelResult = await createConsignmentDealChannelForDmSeller({
