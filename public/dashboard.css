@@ -3192,3 +3192,36 @@
   font-weight: 900;
   font-size: 14px;
 }
+
+.dashboard-subnav-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dashboard-subnav-warning {
+  color: #ffd21f;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.dashboard-track-blue-btn {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, #3b82f6, #2563eb);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 900;
+  text-decoration: none;
+  border: 1px solid rgba(255,255,255,0.12);
+  box-shadow: 0 8px 18px rgba(37,99,235,0.22);
+}
+
+.dashboard-track-blue-btn:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
