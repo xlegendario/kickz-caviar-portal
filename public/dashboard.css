@@ -3101,8 +3101,7 @@
   border: 1px solid rgba(255, 210, 31, 0.28);
 }
 
-.buying-payment-simple-amount span,
-.buying-payment-simple-section span {
+.buying-payment-simple-amount span {
   display: block;
   color: #a6adbb;
   font-size: 13px;
@@ -3125,11 +3124,26 @@
 .buying-payment-simple-section strong {
   display: block;
   color: #ffd21f;
-  margin-bottom: 7px;
+  margin-bottom: 10px;
+  font-size: 18px;
+}
+
+.buying-payment-simple-section span {
+  display: block;
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 14px;
+  line-height: 1.9;
+}
+
+.buying-payment-simple-section span strong {
+  display: inline;
+  color: #9ca3af;
+  font-size: inherit;
+  margin: 0;
 }
 
 .buying-payment-main-btn {
   width: 100%;
   justify-content: center;
-  margin-top: 16px;
+  margin-top: 18px;
 }
