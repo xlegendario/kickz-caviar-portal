@@ -28,6 +28,12 @@ const backToLoginBtn = document.getElementById("backToLoginBtn");
 const heroConsignorCta = document.getElementById("heroConsignorCta");
 
 const openMemberWtbModalBtn = document.getElementById("openMemberWtbModalBtn");
+
+const memberWtbChoiceModal = document.getElementById("memberWtbChoiceModal");
+const closeMemberWtbChoiceModal = document.getElementById("closeMemberWtbChoiceModal");
+const openSingleMemberWtbBtn = document.getElementById("openSingleMemberWtbBtn");
+const openBulkMemberWtbBtn = document.getElementById("openBulkMemberWtbBtn");
+
 const memberWtbModal = document.getElementById("memberWtbModal");
 const closeMemberWtbModal = document.getElementById("closeMemberWtbModal");
 const submitMemberWtbBtn = document.getElementById("submitMemberWtbBtn");
@@ -36,10 +42,14 @@ const memberWtbSizeInput = document.getElementById("memberWtbSizeInput");
 const memberWtbMaxPriceInput = document.getElementById("memberWtbMaxPriceInput");
 const memberWtbInventoryTypeInput = document.getElementById("memberWtbInventoryTypeInput");
 const memberWtbError = document.getElementById("memberWtbError");
+
+const memberWtbCsvModal = document.getElementById("memberWtbCsvModal");
+const closeMemberWtbCsvModal = document.getElementById("closeMemberWtbCsvModal");
+const memberWtbCsvInventoryTypeInput = document.getElementById("memberWtbCsvInventoryTypeInput");
 const memberWtbCsvInput = document.getElementById("memberWtbCsvInput");
 const submitMemberWtbCsvBtn = document.getElementById("submitMemberWtbCsvBtn");
 const memberWtbCsvPreview = document.getElementById("memberWtbCsvPreview");
-const memberWtbTemplateDownload = document.getElementById("memberWtbTemplateDownload");
+const memberWtbCsvError = document.getElementById("memberWtbCsvError");
 
 let searchQuery = searchInput?.value?.trim() || "";
 let selectedBrand = "";
@@ -622,34 +632,82 @@ function parseMemberWtbCsv(text) {
   };
 }
 
-function openMemberWtbModalFlow() {
+function openMemberWtbChoiceModalFlow() {
   if (!currentSeller) {
     openLoginModal();
     return;
   }
 
+  memberWtbChoiceModal?.classList.remove("hidden");
+}
+
+function closeMemberWtbChoiceModalFlow() {
+  memberWtbChoiceModal?.classList.add("hidden");
+}
+
+function openMemberWtbModalFlow() {
+  closeMemberWtbChoiceModalFlow();
+
   memberWtbError.textContent = "";
-  if (memberWtbCsvPreview) memberWtbCsvPreview.textContent = "";
-  if (memberWtbCsvInput) memberWtbCsvInput.value = "";
   memberWtbSkuInput.value = "";
   memberWtbSizeInput.value = "";
   memberWtbMaxPriceInput.value = "";
   memberWtbInventoryTypeInput.value = buyingInventoryType || "all";
 
-  memberWtbModal.classList.remove("hidden");
+  memberWtbModal?.classList.remove("hidden");
+  setTimeout(() => memberWtbSkuInput?.focus(), 50);
 }
 
 function closeMemberWtbModalFlow() {
-  memberWtbModal.classList.add("hidden");
+  memberWtbModal?.classList.add("hidden");
   memberWtbError.textContent = "";
 }
 
-openMemberWtbModalBtn?.addEventListener("click", openMemberWtbModalFlow);
+function openMemberWtbCsvModalFlow() {
+  closeMemberWtbChoiceModalFlow();
+
+  if (memberWtbCsvInventoryTypeInput) {
+    memberWtbCsvInventoryTypeInput.value = buyingInventoryType || "all";
+  }
+
+  if (memberWtbCsvInput) memberWtbCsvInput.value = "";
+  if (memberWtbCsvPreview) memberWtbCsvPreview.textContent = "";
+  if (memberWtbCsvError) memberWtbCsvError.textContent = "";
+
+  memberWtbCsvModal?.classList.remove("hidden");
+}
+
+function closeMemberWtbCsvModalFlow() {
+  memberWtbCsvModal?.classList.add("hidden");
+
+  if (memberWtbCsvPreview) memberWtbCsvPreview.textContent = "";
+  if (memberWtbCsvError) memberWtbCsvError.textContent = "";
+}
+
+openMemberWtbModalBtn?.addEventListener("click", openMemberWtbChoiceModalFlow);
+
+closeMemberWtbChoiceModal?.addEventListener("click", closeMemberWtbChoiceModalFlow);
+openSingleMemberWtbBtn?.addEventListener("click", openMemberWtbModalFlow);
+openBulkMemberWtbBtn?.addEventListener("click", openMemberWtbCsvModalFlow);
+
 closeMemberWtbModal?.addEventListener("click", closeMemberWtbModalFlow);
+closeMemberWtbCsvModal?.addEventListener("click", closeMemberWtbCsvModalFlow);
+
+memberWtbChoiceModal?.addEventListener("click", (event) => {
+  if (event.target === memberWtbChoiceModal) {
+    closeMemberWtbChoiceModalFlow();
+  }
+});
 
 memberWtbModal?.addEventListener("click", (event) => {
   if (event.target === memberWtbModal) {
     closeMemberWtbModalFlow();
+  }
+});
+
+memberWtbCsvModal?.addEventListener("click", (event) => {
+  if (event.target === memberWtbCsvModal) {
+    closeMemberWtbCsvModalFlow();
   }
 });
 
@@ -719,13 +777,13 @@ submitMemberWtbCsvBtn?.addEventListener("click", async () => {
     return;
   }
 
-  memberWtbError.textContent = "";
+  if (memberWtbCsvError) memberWtbCsvError.textContent = "";
   if (memberWtbCsvPreview) memberWtbCsvPreview.textContent = "";
 
   const file = memberWtbCsvInput?.files?.[0];
 
   if (!file) {
-    memberWtbError.textContent = "Please choose a CSV file.";
+    memberWtbCsvError.textContent = "Please choose a CSV file.";
     return;
   }
 
@@ -734,7 +792,7 @@ submitMemberWtbCsvBtn?.addEventListener("click", async () => {
     const result = parseMemberWtbCsv(text);
 
     if (result.errors.length) {
-      memberWtbError.innerHTML = result.errors
+      memberWtbCsvError.innerHTML = result.errors
         .slice(0, 12)
         .map((error) => `<div>${escapeHtml(error)}</div>`)
         .join("");
@@ -760,7 +818,7 @@ submitMemberWtbCsvBtn?.addEventListener("click", async () => {
           sku: row.sku,
           size: row.size,
           max_price: row.max_price,
-          inventory_type: memberWtbInventoryTypeInput.value
+          inventory_type: memberWtbCsvInventoryTypeInput.value
         })
       });
 
@@ -781,7 +839,7 @@ submitMemberWtbCsvBtn?.addEventListener("click", async () => {
     }
 
     if (failedRows.length) {
-      memberWtbError.innerHTML = failedRows
+      memberWtbCsvError.innerHTML = failedRows
         .slice(0, 12)
         .map((error) => `<div>${escapeHtml(error)}</div>`)
         .join("");
@@ -793,14 +851,14 @@ submitMemberWtbCsvBtn?.addEventListener("click", async () => {
       return;
     }
 
-    closeMemberWtbModalFlow();
+    closeMemberWtbCsvModalFlow();
     showSuccessToast(`${successCount} Want To Buys placed successfully`);
 
     if (currentMainMode === "buying") {
       loadBuyingProducts({ force: true });
     }
   } catch (err) {
-    memberWtbError.textContent = err.message;
+    memberWtbCsvError.textContent = err.message;
   } finally {
     submitMemberWtbCsvBtn.disabled = false;
     submitMemberWtbCsvBtn.textContent = "Upload CSV";
