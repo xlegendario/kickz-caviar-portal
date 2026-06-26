@@ -36,6 +36,10 @@ const memberWtbSizeInput = document.getElementById("memberWtbSizeInput");
 const memberWtbMaxPriceInput = document.getElementById("memberWtbMaxPriceInput");
 const memberWtbInventoryTypeInput = document.getElementById("memberWtbInventoryTypeInput");
 const memberWtbError = document.getElementById("memberWtbError");
+const memberWtbCsvInput = document.getElementById("memberWtbCsvInput");
+const submitMemberWtbCsvBtn = document.getElementById("submitMemberWtbCsvBtn");
+const memberWtbCsvPreview = document.getElementById("memberWtbCsvPreview");
+const memberWtbTemplateDownload = document.getElementById("memberWtbTemplateDownload");
 
 let searchQuery = searchInput?.value?.trim() || "";
 let selectedBrand = "";
@@ -512,6 +516,127 @@ function cleanMemberWtbSkuInput(value) {
     .replace(/[^A-Z0-9-]/g, "");
 }
 
+function detectCsvDelimiter(headerLine) {
+  const line = String(headerLine || "");
+
+  const commaCount = (line.match(/,/g) || []).length;
+  const semicolonCount = (line.match(/;/g) || []).length;
+  const tabCount = (line.match(/\t/g) || []).length;
+
+  if (semicolonCount > commaCount && semicolonCount >= tabCount) return ";";
+  if (tabCount > commaCount && tabCount > semicolonCount) return "\t";
+
+  return ",";
+}
+
+function parseCsvLine(line, delimiter = ",") {
+  const result = [];
+  let current = "";
+  let insideQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    const nextChar = line[i + 1];
+
+    if (char === '"' && insideQuotes && nextChar === '"') {
+      current += '"';
+      i += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      insideQuotes = !insideQuotes;
+      continue;
+    }
+
+    if (char === delimiter && !insideQuotes) {
+      result.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  result.push(current.trim());
+  return result;
+}
+
+function parseMemberWtbCsv(text) {
+  const lines = String(text || "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) {
+    throw new Error("CSV must include a header row and at least one WTB row.");
+  }
+
+  const delimiter = detectCsvDelimiter(lines[0]);
+
+  const headers = parseCsvLine(lines[0], delimiter)
+    .map((header) =>
+      String(header || "")
+        .replace(/^\uFEFF/, "")
+        .trim()
+        .toLowerCase()
+    );
+
+  const requiredColumns = ["sku", "size", "max price"];
+
+  const missingColumns = requiredColumns.filter(
+    (column) => !headers.includes(column)
+  );
+
+  if (missingColumns.length) {
+    throw new Error(`Missing required columns: ${missingColumns.join(", ")}`);
+  }
+
+  const columnIndex = (name) => headers.indexOf(name);
+
+  const rows = lines.slice(1).map((line, index) => {
+    const values = parseCsvLine(line, delimiter);
+
+    return {
+      row_number: index + 2,
+      sku: cleanMemberWtbSkuInput(values[columnIndex("sku")]),
+      size: String(values[columnIndex("size")] || "").trim(),
+      max_price: Number(String(values[columnIndex("max price")] || "").replace(/[^\d]/g, ""))
+    };
+  });
+
+  const errors = [];
+
+  rows.forEach((row) => {
+    if (!row.sku) errors.push(`Row ${row.row_number}: missing SKU`);
+    if (!row.size) errors.push(`Row ${row.row_number}: missing Size`);
+    if (!Number.isInteger(row.max_price) || row.max_price <= 0) {
+      errors.push(`Row ${row.row_number}: invalid Max Price`);
+    }
+  });
+
+  return {
+    rows,
+    errors
+  };
+}
+
+function setupMemberWtbCsvTemplate() {
+  if (!memberWtbTemplateDownload) return;
+
+  const csv = [
+    "SKU,Size,Max Price",
+    "DD1391-100,43,120",
+    "DZ4549-110,42.5,150"
+  ].join("\n");
+
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+
+  memberWtbTemplateDownload.href = url;
+}
+
 function openMemberWtbModalFlow() {
   if (!currentSeller) {
     openLoginModal();
@@ -519,6 +644,9 @@ function openMemberWtbModalFlow() {
   }
 
   memberWtbError.textContent = "";
+  if (memberWtbCsvPreview) memberWtbCsvPreview.textContent = "";
+  if (memberWtbCsvInput) memberWtbCsvInput.value = "";
+  setupMemberWtbCsvTemplate();
   memberWtbSkuInput.value = "";
   memberWtbSizeInput.value = "";
   memberWtbMaxPriceInput.value = "";
@@ -598,6 +726,101 @@ submitMemberWtbBtn?.addEventListener("click", async () => {
   } finally {
     submitMemberWtbBtn.disabled = false;
     submitMemberWtbBtn.textContent = "Submit Want To Buy";
+  }
+});
+
+submitMemberWtbCsvBtn?.addEventListener("click", async () => {
+  if (!currentSeller) {
+    openLoginModal();
+    return;
+  }
+
+  memberWtbError.textContent = "";
+  if (memberWtbCsvPreview) memberWtbCsvPreview.textContent = "";
+
+  const file = memberWtbCsvInput?.files?.[0];
+
+  if (!file) {
+    memberWtbError.textContent = "Please choose a CSV file.";
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    const result = parseMemberWtbCsv(text);
+
+    if (result.errors.length) {
+      memberWtbError.innerHTML = result.errors
+        .slice(0, 12)
+        .map((error) => `<div>${escapeHtml(error)}</div>`)
+        .join("");
+      return;
+    }
+
+    submitMemberWtbCsvBtn.disabled = true;
+    submitMemberWtbCsvBtn.textContent = "Uploading...";
+    memberWtbCsvInput.disabled = true;
+
+    let successCount = 0;
+    const failedRows = [];
+
+    for (const row of result.rows) {
+      const response = await fetch("/api/member-wtb/open", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          seller_record_id: currentSeller.id,
+          seller_id: currentSeller.seller_id,
+          sku: row.sku,
+          size: row.size,
+          max_price: row.max_price,
+          inventory_type: memberWtbInventoryTypeInput.value
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        failedRows.push(
+          `Row ${row.row_number}: ${data.details || data.error || "Failed"}`
+        );
+        continue;
+      }
+
+      successCount += 1;
+
+      if (memberWtbCsvPreview) {
+        memberWtbCsvPreview.textContent = `Uploaded ${successCount}/${result.rows.length} WTBs...`;
+      }
+    }
+
+    if (failedRows.length) {
+      memberWtbError.innerHTML = failedRows
+        .slice(0, 12)
+        .map((error) => `<div>${escapeHtml(error)}</div>`)
+        .join("");
+
+      if (memberWtbCsvPreview) {
+        memberWtbCsvPreview.textContent = `${successCount} WTBs created, ${failedRows.length} failed.`;
+      }
+
+      return;
+    }
+
+    closeMemberWtbModalFlow();
+    showSuccessToast(`${successCount} Want To Buys placed successfully`);
+
+    if (currentMainMode === "buying") {
+      loadBuyingProducts({ force: true });
+    }
+  } catch (err) {
+    memberWtbError.textContent = err.message;
+  } finally {
+    submitMemberWtbCsvBtn.disabled = false;
+    submitMemberWtbCsvBtn.textContent = "Upload CSV";
+    memberWtbCsvInput.disabled = false;
   }
 });
 
