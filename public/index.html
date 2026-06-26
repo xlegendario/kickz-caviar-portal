@@ -228,12 +228,29 @@
     </div>
   </div>
 
+  <div id="memberWtbChoiceModal" class="modal-backdrop hidden">
+    <div class="login-modal">
+      <button id="closeMemberWtbChoiceModal" class="modal-close" type="button">×</button>
+  
+      <h2>Post Want To Buys</h2>
+      <p>Choose how you want to post your buying request.</p>
+  
+      <button id="openSingleMemberWtbBtn" class="modal-submit" type="button">
+        Single WTB
+      </button>
+  
+      <button id="openBulkMemberWtbBtn" class="modal-submit" type="button" style="margin-top:12px;">
+        Bulk CSV Upload
+      </button>
+    </div>
+  </div>
+  
   <div id="memberWtbModal" class="modal-backdrop hidden">
     <div class="login-modal">
       <button id="closeMemberWtbModal" class="modal-close" type="button">×</button>
   
       <h2>Place Want To Buy</h2>
-      <p>Place a request and let sellers compete for the lowest offer.</p>
+      <p>Place one request and receive offers from sellers.</p>
   
       <label class="offer-label">SKU</label>
       <input id="memberWtbSkuInput" class="offer-input" type="text" placeholder="DD1391-100" />
@@ -252,8 +269,23 @@
       </select>
   
       <button id="submitMemberWtbBtn" class="modal-submit">Submit Want To Buy</button>
+      <div id="memberWtbError" class="login-error"></div>
+    </div>
+  </div>
   
-      <div class="vat-label" style="margin-top:18px;">OR UPLOAD CSV</div>
+  <div id="memberWtbCsvModal" class="modal-backdrop hidden">
+    <div class="login-modal">
+      <button id="closeMemberWtbCsvModal" class="modal-close" type="button">×</button>
+  
+      <h2>Bulk Post WTBs</h2>
+      <p>Upload multiple Want To Buys using a CSV file.</p>
+  
+      <label class="offer-label">BUYING TYPE</label>
+      <select id="memberWtbCsvInventoryTypeInput" class="offer-input">
+        <option value="all">All Types</option>
+        <option value="b2b">B2B Only</option>
+        <option value="private">Margin Only</option>
+      </select>
   
       <a
         id="memberWtbTemplateDownload"
@@ -272,7 +304,7 @@
       </button>
   
       <div id="memberWtbCsvPreview" class="login-error" style="color:#58d86a;"></div>
-      <div id="memberWtbError" class="login-error"></div>
+      <div id="memberWtbCsvError" class="login-error"></div>
     </div>
   </div>
 
