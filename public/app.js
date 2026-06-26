@@ -506,6 +506,12 @@ buyingActionModal?.addEventListener("click", (event) => {
   }
 });
 
+function cleanMemberWtbSkuInput(value) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, "");
+}
+
 function openMemberWtbModalFlow() {
   if (!currentSeller) {
     openLoginModal();
@@ -535,6 +541,10 @@ memberWtbModal?.addEventListener("click", (event) => {
   }
 });
 
+memberWtbSkuInput?.addEventListener("input", () => {
+  memberWtbSkuInput.value = cleanMemberWtbSkuInput(memberWtbSkuInput.value);
+});
+
 memberWtbMaxPriceInput?.addEventListener("input", () => {
   memberWtbMaxPriceInput.value = memberWtbMaxPriceInput.value.replace(/\D/g, "");
 });
@@ -545,7 +555,7 @@ submitMemberWtbBtn?.addEventListener("click", async () => {
     return;
   }
 
-  const sku = memberWtbSkuInput.value.trim();
+  const sku = cleanMemberWtbSkuInput(memberWtbSkuInput.value);
   const size = memberWtbSizeInput.value.trim();
   const maxPrice = Number(memberWtbMaxPriceInput.value);
 
