@@ -287,13 +287,14 @@
         <option value="private">Margin Only</option>
       </select>
   
-      <button
-        type="button"
-        class="secondary-btn member-wtb-template-btn"
-        onclick="window.open('/templates/member-wtb-template.csv','_blank')"
+      <a
+        id="memberWtbTemplateDownload"
+        class="member-wtb-template-btn"
+        href="/templates/member-wtb-template.csv"
+        download
       >
         Download CSV Template
-      </button>
+      </a>
   
       <label class="offer-label">CSV FILE</label>
       <input id="memberWtbCsvInput" class="offer-input" type="file" accept=".csv,text/csv" />
