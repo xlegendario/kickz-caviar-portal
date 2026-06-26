@@ -12010,6 +12010,16 @@ app.post("/api/member-wtb/open", async (req, res) => {
               ? f["Picture"][0].url
               : ""
         };
+      } else {
+        const retailedProduct = await lookupProductFromRetailed(sku).catch(() => null);
+    
+        if (retailedProduct) {
+          product = {
+            product_name: asText(retailedProduct.product_name) || sku,
+            brand: asText(retailedProduct.brand),
+            image_url: asText(retailedProduct.image)
+          };
+        }
       }
     }
     
