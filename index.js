@@ -5884,6 +5884,7 @@ function normalizeDeal(record) {
 
   return {
     id: record.id,
+    source_type: "order",
     order_id: displayValue(f["Order ID"]),
     product: displayValue(f["Product Name"]),
     sku: displayValue(f["SKU"]),
@@ -5906,6 +5907,57 @@ function normalizeDeal(record) {
     current_offer_margin: moneyValue(Math.floor(numberValue(f["Current Lowest (Normalized)"]))),
     current_offer_vat0: moneyValue(Math.floor(numberValue(f["Current Lowest (VAT0)"]))),
     maximum_buying_price: numberValue(f["Maximum Buying Price"])
+  };
+}
+
+function normalizeMemberWtbDeal(record) {
+  const f = record.fields || {};
+
+  return {
+    id: record.id,
+    source_type: "member_wtb",
+
+    order_id:
+      displayValue(f["Member WTB ID"]) ||
+      displayValue(f["WTB ID"]) ||
+      record.id,
+
+    product: displayValue(f["Product Name"]),
+    sku: displayValue(f["SKU"]),
+    size: displayValue(f["Size"]),
+    brand: displayValue(f["Brand"]),
+    image_url: getImageUrl(f["Picture"]),
+
+    auto_offer_accept: "No",
+    fulfillment_status: displayValue(f["Fulfillment Status"]),
+
+    outsource_start_time: displayValue(f["Date"]),
+    time_to_max: "",
+
+    current_payout_margin: "",
+    max_payout_margin: "",
+
+    current_payout_vat0: "",
+    max_payout_vat0: "",
+
+    current_offer_margin: moneyValue(
+      Math.floor(
+        numberValue(f["Current Lowest Normalized"]) ||
+        numberValue(f["Current Lowest Offer"]) ||
+        numberValue(f["Lowest Offer"])
+      )
+    ),
+
+    current_offer_vat0: moneyValue(
+      Math.floor(
+        numberValue(f["Lowest Offer VAT Type"]) === "VAT0"
+          ? numberValue(f["Current Lowest Offer"])
+          : 0
+      )
+    ),
+
+    maximum_buying_price: numberValue(f["Max Price"]),
+    raw_date: f["Date"] || f["Created At"] || ""
   };
 }
 
@@ -10319,7 +10371,47 @@ app.get("/api/deals", async (req, res) => {
     }
     
     const records = airtableData.records || [];
-    const deals = records.map(normalizeDeal);
+    let deals = records.map(normalizeDeal);
+    
+    if (type === "wtb") {
+      const memberWtbRecords = await airtable(MEMBER_WTBS_TABLE)
+        .select({
+          fields: [
+            "Member WTB ID",
+            "WTB ID",
+            "Product Name",
+            "SKU",
+            "Size",
+            "Brand",
+            "Picture",
+            "Date",
+            "Max Price",
+            "Fulfillment Status",
+            "Purchase Status",
+            "Current Lowest Offer",
+            "Current Lowest Normalized",
+            "Lowest Offer",
+            "Lowest Offer Normalized",
+            "Lowest Offer VAT Type"
+          ],
+          filterByFormula: `AND(
+            {Fulfillment Status} = 'Outsource',
+            OR(
+              {Purchase Status} = 'Offers Sent',
+              {Purchase Status} = 'Pending',
+              {Purchase Status} = ''
+            )
+          )`
+        })
+        .all();
+    
+      const memberDeals = memberWtbRecords.map(normalizeMemberWtbDeal);
+    
+      deals = [
+        ...deals,
+        ...memberDeals
+      ];
+    }
     
     res.json({
       type,
