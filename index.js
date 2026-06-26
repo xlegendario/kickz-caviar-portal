@@ -7271,6 +7271,81 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
   }
 });
 
+app.post("/api/member-wtb/place-offer", async (req, res) => {
+  try {
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const offerAmount = Number(req.body?.offer_amount);
+    const vatType = asText(req.body?.vat_type);
+
+    if (!memberWtbRecordId || !sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing member_wtb_record_id or seller_record_id"
+      });
+    }
+
+    if (!Number.isInteger(offerAmount) || offerAmount <= 0) {
+      return res.status(400).json({
+        error: "Invalid offer amount"
+      });
+    }
+
+    if (!["Margin", "VAT21", "VAT0"].includes(vatType)) {
+      return res.status(400).json({
+        error: "Invalid VAT type"
+      });
+    }
+
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+    const f = memberWtb.fields || {};
+
+    if (["Confirmed", "Allocated", "Fulfilled", "Cancelled"].includes(asText(f["Fulfillment Status"]))) {
+      return res.status(409).json({
+        error: "This Want To Buy is no longer open for offers"
+      });
+    }
+
+    const normalizedOffer =
+      vatType === "VAT0"
+        ? offerAmount * 1.21
+        : offerAmount;
+
+    const createdOffer = await airtable(SELLER_OFFERS_TABLE).create({
+      "Seller ID": [sellerRecordId],
+      "Member WTBs": [memberWtbRecordId],
+      "Seller Offer": offerAmount,
+      "Offer VAT Type": vatType,
+      "Offer Cost (Normalized)": normalizedOffer,
+      "Offer Date": new Date().toISOString()
+    });
+
+    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+      "Current Lowest Offer": offerAmount,
+      "Current Lowest Normalized": normalizedOffer,
+      "Current Lowest Seller Offer": [createdOffer.id],
+      "Lowest Offer": offerAmount,
+      "Lowest Offer Normalized": normalizedOffer,
+      "Lowest Offer VAT Type": vatType,
+      "Lowest Offer Seller ID": [sellerRecordId],
+      "New Offer Available": false,
+      "Offer Sent?": true
+    });
+
+    return res.json({
+      ok: true,
+      offer_id: createdOffer.id,
+      member_wtb_record_id: memberWtbRecordId
+    });
+  } catch (err) {
+    console.error("Failed to place Member WTB offer:", err);
+
+    return res.status(500).json({
+      error: "Failed to place Member WTB offer",
+      details: err.message
+    });
+  }
+});
+
 app.post("/api/dashboard/wtb-open-offers/:offerId/edit", async (req, res) => {
   try {
     const offerId = asText(req.params.offerId);
