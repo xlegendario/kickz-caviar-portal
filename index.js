@@ -5918,9 +5918,7 @@ function normalizeMemberWtbDeal(record) {
     source_type: "member_wtb",
 
     order_id:
-      displayValue(f["Member WTB ID"]) ||
-      displayValue(f["WTB ID"]) ||
-      record.id,
+      displayValue(f["Member WTB ID"]) || record.id,
 
     product: displayValue(f["Product Name"]),
     sku: displayValue(f["SKU"]),
@@ -10378,7 +10376,6 @@ app.get("/api/deals", async (req, res) => {
         .select({
           fields: [
             "Member WTB ID",
-            "WTB ID",
             "Product Name",
             "SKU",
             "Size",
