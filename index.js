@@ -5550,6 +5550,7 @@ async function lookupProductFromRetailed(sku) {
     );
 
     const match = exactMatch || results[0];
+    const isExactSkuMatch = !!exactMatch;
 
     const productName = [
       asText(match.name),
@@ -5561,6 +5562,8 @@ async function lookupProductFromRetailed(sku) {
       brand: asText(match.brand),
       image: asText(match.image),
       slug: asText(match.slug),
+      colorway: asText(match.colorway),
+      is_exact_sku_match: isExactSkuMatch,
       raw: match
     };
   } finally {
@@ -5568,8 +5571,57 @@ async function lookupProductFromRetailed(sku) {
   }
 }
 
+async function lookupProductFromRetailedStrictSku(sku) {
+  const cleanSku = normalizeSku(sku);
+
+  const product = await lookupProductFromRetailed(cleanSku).catch(() => null);
+  const rawSku = normalizeSku(product?.raw?.sku);
+
+  if (!product || !rawSku || rawSku !== cleanSku) {
+    return null;
+  }
+
+  return product;
+}
+
+async function createSkuMasterFromRetailedIfExactSku(sku) {
+  const cleanSku = normalizeSku(sku);
+
+  const existing = await airtable(SKU_MASTER_TABLE)
+    .select({
+      fields: ["SKU"],
+      filterByFormula: `{SKU} = "${escapeFormulaValue(cleanSku)}"`,
+      maxRecords: 1
+    })
+    .firstPage();
+
+  if (existing[0]) return null;
+
+  const product = await lookupProductFromRetailedStrictSku(cleanSku);
+
+  if (!product) return null;
+
+  const productName = product.product_name || cleanSku;
+  
+  const fields = {
+    "SKU": cleanSku,
+    "Product Name": productName || cleanSku,
+    "Brand": product.brand || ""
+  };
+  
+  if (product.image) {
+    fields["Picture"] = [
+      {
+        url: product.image
+      }
+    ];
+  }
+
+  return await airtable(SKU_MASTER_TABLE).create(fields);
+}
+
 async function lookupSkuMasterProduct(sku) {
-  const cleanSku = asText(sku).toUpperCase();
+  const cleanSku = normalizeSku(sku);
 
   if (!cleanSku) {
     return {
@@ -5595,21 +5647,29 @@ async function lookupSkuMasterProduct(sku) {
     };
   }
 
-  const retailedProduct = await lookupProductFromRetailed(cleanSku);
+  const retailedProduct = await lookupProductFromRetailed(cleanSku).catch(() => null);
+
+  if (!retailedProduct || !retailedProduct.is_exact_sku_match) {
+    return {
+      product_name: cleanSku,
+      brand: ""
+    };
+  }
+
+  const productName = retailedProduct.product_name || cleanSku;
 
   await airtable(SKU_MASTER_TABLE).create({
     "SKU": cleanSku,
-    "Product Name": retailedProduct.product_name,
-    "Brand": retailedProduct.brand,
+    "Product Name": productName || cleanSku,
+    "Brand": retailedProduct.brand || "",
     "Picture": retailedProduct.image
       ? [{ url: retailedProduct.image }]
-      : [],
-    "Seller Generated?": true
+      : []
   });
 
   return {
-    product_name: retailedProduct.product_name,
-    brand: retailedProduct.brand
+    product_name: productName || cleanSku,
+    brand: retailedProduct.brand || ""
   };
 }
 
@@ -11926,14 +11986,18 @@ app.post("/api/member-wtb/open", async (req, res) => {
       null;
     
     if (!product) {
-      const skuMasterRecords = await airtable(SKU_MASTER_TABLE)
+      let skuMasterRecords = await airtable(SKU_MASTER_TABLE)
         .select({
-          filterByFormula: `{SKU} = "${sku}"`,
+          filterByFormula: `{SKU} = "${escapeFormulaValue(sku)}"`,
           maxRecords: 1
         })
         .firstPage();
     
-      const skuMaster = skuMasterRecords[0];
+      let skuMaster = skuMasterRecords[0];
+    
+      if (!skuMaster) {
+        skuMaster = await createSkuMasterFromRetailedIfExactSku(sku);
+      }
     
       if (skuMaster) {
         const f = skuMaster.fields || {};
