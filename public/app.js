@@ -622,21 +622,6 @@ function parseMemberWtbCsv(text) {
   };
 }
 
-function setupMemberWtbCsvTemplate() {
-  if (!memberWtbTemplateDownload) return;
-
-  const csv = [
-    "SKU,Size,Max Price",
-    "DD1391-100,43,120",
-    "DZ4549-110,42.5,150"
-  ].join("\n");
-
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-
-  memberWtbTemplateDownload.href = url;
-}
-
 function openMemberWtbModalFlow() {
   if (!currentSeller) {
     openLoginModal();
@@ -646,7 +631,6 @@ function openMemberWtbModalFlow() {
   memberWtbError.textContent = "";
   if (memberWtbCsvPreview) memberWtbCsvPreview.textContent = "";
   if (memberWtbCsvInput) memberWtbCsvInput.value = "";
-  setupMemberWtbCsvTemplate();
   memberWtbSkuInput.value = "";
   memberWtbSizeInput.value = "";
   memberWtbMaxPriceInput.value = "";
