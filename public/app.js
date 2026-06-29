@@ -1849,35 +1849,19 @@ confirmOfferBtn.addEventListener("click", async () => {
   confirmOfferBtn.textContent = "Submitting...";
 
   try {
-    const isMemberWtb =
-      selectedOfferDeal.source_type === "member_wtb";
-    
-    const endpoint = isMemberWtb
-      ? "/api/member-wtb/place-offer"
-      : "/api/place-offer";
-    
-    const body = isMemberWtb
-      ? {
-          member_wtb_record_id: selectedOfferDeal.id,
-          seller_record_id: currentSeller.id,
-          offer_amount: offerAmount,
-          vat_type: selectedOfferVatType
-        }
-      : {
-          orderRecordId: selectedOfferDeal.id,
-          sellerRecordId: currentSeller.id,
-          offerAmount,
-          vatType: selectedOfferVatType
-        };
-    
-    const response = await fetch(endpoint, {
+    const response = await fetch("/api/place-offer", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify({
+        orderRecordId: selectedOfferDeal.id,
+        sellerRecordId: currentSeller.id,
+        offerAmount,
+        vatType: selectedOfferVatType,
+        sourceType: selectedOfferDeal.source_type || "order"
+      })
     });
-
     const data = await response.json();
 
     if (!response.ok) {
