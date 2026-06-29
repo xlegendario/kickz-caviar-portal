@@ -10222,7 +10222,8 @@ app.post("/api/place-offer", async (req, res) => {
       orderRecordId,
       sellerRecordId,
       offerAmount,
-      vatType
+      vatType,
+      sourceType = "order"
     } = req.body || {};
 
     const wtbBotBaseUrl = process.env.KICKZ_WTB_BOT_BASE_URL;
@@ -10242,7 +10243,8 @@ app.post("/api/place-offer", async (req, res) => {
         orderRecordId,
         sellerRecordId,
         offerAmount,
-        vatType
+        vatType,
+        sourceType
       })
     });
 
