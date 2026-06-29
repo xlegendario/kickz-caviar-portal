@@ -150,6 +150,10 @@ async function loadBuyingProducts(options = {}) {
     const response = await fetch(`/api/buying/products?${params.toString()}`);
     const data = await response.json();
 
+    if (currentMainMode !== "buying") {
+      return;
+    }
+
     if (!response.ok) {
       throw new Error(data.details || data.error || "Failed to load buying products");
     }
@@ -977,6 +981,10 @@ async function loadDeals(type = "quick", reset = true) {
 
     const response = await fetch(`/api/deals?${params.toString()}`);
     const data = await response.json();
+
+    if (currentMainMode !== "selling") {
+      return;
+    }
 
     if (!response.ok) {
       throw new Error(data.details || data.error || "Failed to load deals");
