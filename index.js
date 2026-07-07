@@ -37,6 +37,10 @@ const {
   SUPABASE_SERVICE_ROLE_KEY,
   RETAILED_STOCKX_SEARCH_URL,
   RETAILED_API_KEY,
+  STOCKX_API_KEY,
+  STOCKX_CLIENT_ID,
+  STOCKX_CLIENT_SECRET,
+  STOCKX_REFRESH_TOKEN,
   AIRTABLE_DISCORD_UPDATES_URL = "https://airtable-discord-updates.onrender.com",
   COUNTER_OFFERS_SECRET,
   BUYING_KC_CONFIRMATION_CHANNEL_ID,
@@ -59,7 +63,8 @@ const COUNTER_OFFERS_TABLE =
   process.env.AIRTABLE_COUNTER_OFFERS_TABLE || "Counter Offers";
 const COUNTER_OFFER_ACCEPT_WEBHOOK_URL =
   process.env.COUNTER_OFFER_ACCEPT_WEBHOOK_URL || "";
-const SKU_MASTER_TABLE = process.env.AIRTABLE_SKU_MASTER_TABLE || "SKU Master";
+const STOCKX_ACCESS_TOKEN_TABLE =
+  process.env.AIRTABLE_STOCKX_ACCESS_TOKEN_TABLE || "StockX Access Token";
 const STOCK_LEVELS_TABLE = process.env.AIRTABLE_STOCK_LEVELS_TABLE || "Stock Levels";
 const MERCHANTS_TABLE = process.env.AIRTABLE_MERCHANTS_TABLE || "Merchants";
 const MEMBER_WTBS_TABLE = process.env.AIRTABLE_MEMBER_WTBS_TABLE || "Member WTBs";
@@ -5639,6 +5644,177 @@ async function createSkuMasterFromRetailedIfExactSku(sku) {
   return await airtable(SKU_MASTER_TABLE).create(fields);
 }
 
+async function getStoredStockxAccessToken() {
+  const records = await airtable(STOCKX_ACCESS_TOKEN_TABLE)
+    .select({
+      fields: ["Access Token", "Refreshed At"],
+      maxRecords: 1
+    })
+    .firstPage();
+
+  const record = records[0];
+
+  if (!record) {
+    throw new Error("No StockX Access Token record found in Airtable");
+  }
+
+  const accessToken = asText(record.fields?.["Access Token"]);
+
+  if (!accessToken) {
+    throw new Error("StockX Access Token field is empty in Airtable");
+  }
+
+  return accessToken;
+}
+
+async function refreshStockxAccessToken() {
+  if (!STOCKX_CLIENT_ID || !STOCKX_CLIENT_SECRET || !STOCKX_REFRESH_TOKEN) {
+    throw new Error("Missing StockX refresh token config");
+  }
+
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: STOCKX_CLIENT_ID,
+    client_secret: STOCKX_CLIENT_SECRET,
+    audience: "gateway.stockx.com",
+    refresh_token: STOCKX_REFRESH_TOKEN
+  });
+
+  const response = await fetch("https://accounts.stockx.com/oauth/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || !data.access_token) {
+    throw new Error(
+      `StockX token refresh failed: ${response.status} ${JSON.stringify(data)}`
+    );
+  }
+
+  const records = await airtable(STOCKX_ACCESS_TOKEN_TABLE)
+    .select({
+      fields: ["Access Token", "Refreshed At"],
+      maxRecords: 1
+    })
+    .firstPage();
+
+  const record = records[0];
+
+  if (!record) {
+    throw new Error("No StockX Access Token record found to update");
+  }
+
+  await airtable(STOCKX_ACCESS_TOKEN_TABLE).update(record.id, {
+    "Access Token": data.access_token,
+    "Refreshed At": new Date().toISOString()
+  });
+
+  return data.access_token;
+}
+
+function normalizeStockxCatalogResults(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.products)) return data.products;
+  if (Array.isArray(data.data)) return data.data;
+  if (Array.isArray(data.results)) return data.results;
+  return [];
+}
+
+async function stockxCatalogSearchWithToken(sku, accessToken) {
+  if (!STOCKX_API_KEY) {
+    throw new Error("Missing STOCKX_API_KEY");
+  }
+
+  const cleanSku = normalizeSku(sku);
+
+  const url = new URL("https://api.stockx.com/v2/catalog/search");
+  url.searchParams.set("query", cleanSku);
+
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "x-api-key": STOCKX_API_KEY,
+      Accept: "application/json"
+    }
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const err = new Error(
+      `StockX catalog search failed: ${response.status} ${JSON.stringify(data)}`
+    );
+
+    err.status = response.status;
+    throw err;
+  }
+
+  return data;
+}
+
+async function lookupProductFromStockx(sku) {
+  const cleanSku = normalizeSku(sku);
+
+  let accessToken = await getStoredStockxAccessToken();
+  let data;
+
+  try {
+    data = await stockxCatalogSearchWithToken(cleanSku, accessToken);
+  } catch (err) {
+    if (![401, 403].includes(Number(err.status))) {
+      throw err;
+    }
+
+    accessToken = await refreshStockxAccessToken();
+    data = await stockxCatalogSearchWithToken(cleanSku, accessToken);
+  }
+
+  const results = normalizeStockxCatalogResults(data);
+
+  const exactMatch = results.find((item) => {
+    const stockxSku =
+      normalizeSku(item.styleId) ||
+      normalizeSku(item.style_id) ||
+      normalizeSku(item.sku);
+
+    return stockxSku === cleanSku;
+  });
+
+  if (!exactMatch) return null;
+
+  const productName =
+    asText(exactMatch.title) ||
+    asText(exactMatch.name) ||
+    asText(exactMatch.productName) ||
+    cleanSku;
+
+  const brand =
+    asText(exactMatch.brand) ||
+    asText(exactMatch.primaryCategory) ||
+    "";
+
+  const image =
+    asText(exactMatch.image) ||
+    asText(exactMatch.media?.imageUrl) ||
+    asText(exactMatch.media?.smallImageUrl) ||
+    asText(exactMatch.thumbnail) ||
+    "";
+
+  return {
+    product_name: productName,
+    brand,
+    image,
+    is_exact_sku_match: true,
+    raw: exactMatch
+  };
+}
+
 async function lookupSkuMasterProduct(sku) {
   const cleanSku = normalizeSku(sku);
 
@@ -5666,29 +5842,36 @@ async function lookupSkuMasterProduct(sku) {
     };
   }
 
-  const retailedProduct = await lookupProductFromRetailed(cleanSku).catch(() => null);
+  const stockxProduct = await lookupProductFromStockx(cleanSku).catch((err) => {
+    console.error("StockX SKU lookup failed:", {
+      sku: cleanSku,
+      error: err.message
+    });
 
-  if (!retailedProduct || !retailedProduct.is_exact_sku_match) {
+    return null;
+  });
+
+  if (!stockxProduct || !stockxProduct.is_exact_sku_match) {
     return {
       product_name: cleanSku,
       brand: ""
     };
   }
 
-  const productName = retailedProduct.product_name || cleanSku;
+  const productName = stockxProduct.product_name || cleanSku;
 
   await airtable(SKU_MASTER_TABLE).create({
     "SKU": cleanSku,
     "Product Name": productName || cleanSku,
-    "Brand": retailedProduct.brand || "",
-    "Picture": retailedProduct.image
-      ? [{ url: retailedProduct.image }]
+    "Brand": stockxProduct.brand || "",
+    "Picture": stockxProduct.image
+      ? [{ url: stockxProduct.image }]
       : []
   });
 
   return {
     product_name: productName || cleanSku,
-    brand: retailedProduct.brand || ""
+    brand: stockxProduct.brand || ""
   };
 }
 
