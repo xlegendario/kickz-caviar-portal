@@ -3615,6 +3615,19 @@ async function processCsvImportJob(job) {
   const rows = Array.isArray(job.rows_json) ? job.rows_json : [];
   let processed = Number(job.processed_rows || 0);
 
+  const affectedStockKeys = new Map();
+
+  function rememberStockKey(sku, size) {
+    const cleanSku = asText(sku).toUpperCase();
+    const cleanSize = asText(size).toUpperCase();
+    const key = getStockCounterKey(cleanSku, cleanSize);
+
+    affectedStockKeys.set(key, {
+      sku: cleanSku,
+      size: cleanSize
+    });
+  }
+
   await updateCsvImportJob(job.id, {
     status: "processing",
     started_at: job.started_at || new Date().toISOString()
@@ -3647,7 +3660,7 @@ async function processCsvImportJob(job) {
 
           if (error) throw error;
 
-          await refreshConsignmentStockLevel(existing.sku, existing.size);
+          rememberStockKey(existing.sku, existing.size);
         }
       }
     }
@@ -3670,7 +3683,7 @@ async function processCsvImportJob(job) {
           quantity: row.quantity
         });
 
-        await refreshConsignmentStockLevel(row.sku, row.size);
+        rememberStockKey(row.sku, row.size);
       } else {
         await addConsignmentInventoryRow({
           sellerRecordId: job.seller_record_id,
@@ -3681,6 +3694,8 @@ async function processCsvImportJob(job) {
           sellingPriceSuggested: row.selling_price_suggested,
           quantity: row.quantity
         });
+      
+        rememberStockKey(row.sku, row.size);
       }
 
       processed = i + 1;
@@ -3688,6 +3703,10 @@ async function processCsvImportJob(job) {
       await updateCsvImportJob(job.id, {
         processed_rows: processed
       });
+    }
+
+    for (const item of affectedStockKeys.values()) {
+      await refreshConsignmentStockLevel(item.sku, item.size);
     }
 
     await updateCsvImportJob(job.id, {
