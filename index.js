@@ -11368,24 +11368,39 @@ async function refreshBuyingMasterCache() {
 
     if (consignmentStockKeys.length) {
       const batchSize = 100;
-      const allConsignmentStockLevels = [];
+      const concurrency = 5;
+      const batches = [];
     
       for (let i = 0; i < consignmentStockKeys.length; i += batchSize) {
-        const keyBatch = consignmentStockKeys.slice(i, i + batchSize);
+        batches.push(consignmentStockKeys.slice(i, i + batchSize));
+      }
     
-        const {
-          data: consignmentStockLevels,
-          error: consignmentStockLevelError
-        } = await supabase
-          .from("consignment_stock_levels")
-          .select("stock_counter_key, stock_level, lowest_suggested_price")
-          .in("stock_counter_key", keyBatch);
+      const allConsignmentStockLevels = [];
     
-        if (consignmentStockLevelError) {
-          throw consignmentStockLevelError;
+      for (let i = 0; i < batches.length; i += concurrency) {
+        const batchGroup = batches.slice(i, i + concurrency);
+    
+        const results = await Promise.all(
+          batchGroup.map(async (keyBatch) => {
+            const {
+              data: consignmentStockLevels,
+              error: consignmentStockLevelError
+            } = await supabase
+              .from("consignment_stock_levels")
+              .select("stock_counter_key, stock_level, lowest_suggested_price")
+              .in("stock_counter_key", keyBatch);
+    
+            if (consignmentStockLevelError) {
+              throw consignmentStockLevelError;
+            }
+    
+            return consignmentStockLevels || [];
+          })
+        );
+    
+        for (const rows of results) {
+          allConsignmentStockLevels.push(...rows);
         }
-    
-        allConsignmentStockLevels.push(...(consignmentStockLevels || []));
       }
     
       consignmentStockLevelMap = new Map(
