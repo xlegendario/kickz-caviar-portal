@@ -11315,45 +11315,46 @@ async function refreshBuyingMasterCache() {
   }
 
   buyingMasterCache.refreshPromise = (async () => {
-    let inventoryRecords;
+    const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
+      .select({
+        fields: [
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "Picture",
+          "Ideal Selling Price",
+          "VAT Type",
+          "Availability Status"
+        ],
+        filterByFormula: `AND(
+          {Availability Status} = 'Available',
+          {SKU} != '',
+          {Size} != '',
+          {Ideal Selling Price} > 0
+        )`,
+        maxRecords: 500
+      })
+      .all();
+
+    const inventorySources = inventoryRecords.map(getBuyingInventoryProduct);
+
+    let rawConsignmentRows;
 
     try {
-      inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
-        .select({
-          fields: [
-            "Product Name",
-            "SKU",
-            "Size",
-            "Brand",
-            "Picture",
-            "Ideal Selling Price",
-            "VAT Type",
-            "Availability Status"
-          ],
-          filterByFormula: `AND(
-            {Availability Status} = 'Available',
-            {SKU} != '',
-            {Size} != '',
-            {Ideal Selling Price} > 0
-          )`,
-          maxRecords: 500
-        })
-        .all();
+      rawConsignmentRows = await fetchAllConsignmentInventoryRows();
     } catch (err) {
-      console.error("BUYING INVENTORY UNITS ERROR:", {
+      console.error("BUYING CONSIGNMENT INVENTORY ERROR:", {
         message: err.message,
+        code: err.code,
+        details: err.details,
+        hint: err.hint,
         statusCode: err.statusCode,
-        error: err.error,
-        requestId: err.requestId,
         stack: err.stack
       });
     
       throw err;
     }
-
-    const inventorySources = inventoryRecords.map(getBuyingInventoryProduct);
-
-    const rawConsignmentRows = await fetchAllConsignmentInventoryRows();
 
     const consignmentStockKeys = [
       ...new Set(
