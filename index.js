@@ -11315,27 +11315,41 @@ async function refreshBuyingMasterCache() {
   }
 
   buyingMasterCache.refreshPromise = (async () => {
-    const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
-      .select({
-        fields: [
-          "Product Name",
-          "SKU",
-          "Size",
-          "Brand",
-          "Picture",
-          "Ideal Selling Price",
-          "VAT Type",
-          "Availability Status"
-        ],
-        filterByFormula: `AND(
-          {Availability Status} = 'Available',
-          {SKU} != '',
-          {Size} != '',
-          {Ideal Selling Price} > 0
-        )`,
-        maxRecords: 500
-      })
-      .all();
+    let inventoryRecords;
+
+    try {
+      inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
+        .select({
+          fields: [
+            "Product Name",
+            "SKU",
+            "Size",
+            "Brand",
+            "Picture",
+            "Ideal Selling Price",
+            "VAT Type",
+            "Availability Status"
+          ],
+          filterByFormula: `AND(
+            {Availability Status} = 'Available',
+            {SKU} != '',
+            {Size} != '',
+            {Ideal Selling Price} > 0
+          )`,
+          maxRecords: 500
+        })
+        .all();
+    } catch (err) {
+      console.error("BUYING INVENTORY UNITS ERROR:", {
+        message: err.message,
+        statusCode: err.statusCode,
+        error: err.error,
+        requestId: err.requestId,
+        stack: err.stack
+      });
+    
+      throw err;
+    }
 
     const inventorySources = inventoryRecords.map(getBuyingInventoryProduct);
 
