@@ -11367,38 +11367,36 @@ async function refreshBuyingMasterCache() {
     let consignmentStockLevelMap = new Map();
 
     if (consignmentStockKeys.length) {
-      try {
-        const { data: consignmentStockLevels, error: consignmentStockLevelError } =
-          await supabase
-            .from("consignment_stock_levels")
-            .select("stock_counter_key, stock_level, lowest_suggested_price")
-            .in("stock_counter_key", consignmentStockKeys);
+      const batchSize = 100;
+      const allConsignmentStockLevels = [];
+    
+      for (let i = 0; i < consignmentStockKeys.length; i += batchSize) {
+        const keyBatch = consignmentStockKeys.slice(i, i + batchSize);
+    
+        const {
+          data: consignmentStockLevels,
+          error: consignmentStockLevelError
+        } = await supabase
+          .from("consignment_stock_levels")
+          .select("stock_counter_key, stock_level, lowest_suggested_price")
+          .in("stock_counter_key", keyBatch);
     
         if (consignmentStockLevelError) {
           throw consignmentStockLevelError;
         }
     
-        consignmentStockLevelMap = new Map(
-          (consignmentStockLevels || []).map((row) => [
-            row.stock_counter_key,
-            {
-              stock_level: Number(row.stock_level || 0),
-              lowest_suggested_price: Number(row.lowest_suggested_price || 0)
-            }
-          ])
-        );
-      } catch (err) {
-        console.error("BUYING STOCK LEVELS ERROR:", {
-          message: err.message,
-          code: err.code,
-          details: err.details,
-          hint: err.hint,
-          statusCode: err.statusCode,
-          stack: err.stack
-        });
-    
-        throw err;
+        allConsignmentStockLevels.push(...(consignmentStockLevels || []));
       }
+    
+      consignmentStockLevelMap = new Map(
+        allConsignmentStockLevels.map((row) => [
+          row.stock_counter_key,
+          {
+            stock_level: Number(row.stock_level || 0),
+            lowest_suggested_price: Number(row.lowest_suggested_price || 0)
+          }
+        ])
+      );
     }
 
     const consignmentRows = (rawConsignmentRows || []).filter((row) => {
