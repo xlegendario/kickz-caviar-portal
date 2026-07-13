@@ -11339,8 +11339,23 @@ async function refreshBuyingMasterCache() {
 
     const inventorySources = inventoryRecords.map(getBuyingInventoryProduct);
 
-    rawConsignmentRows = await fetchAllConsignmentInventoryRows();
-
+    let rawConsignmentRows;
+    
+    try {
+      rawConsignmentRows = await fetchAllConsignmentInventoryRows();
+    } catch (err) {
+      console.error("BUYING CONSIGNMENT INVENTORY ERROR:", {
+        message: err.message,
+        code: err.code,
+        details: err.details,
+        hint: err.hint,
+        statusCode: err.statusCode,
+        stack: err.stack
+      });
+    
+      throw err;
+    }
+    
     const consignmentStockKeys = [
       ...new Set(
         (rawConsignmentRows || [])
