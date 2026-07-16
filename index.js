@@ -1245,7 +1245,8 @@ async function createMemberWtbMolliePayment(
             member_wtb_record_id:
               memberWtbRecordId,
             member_wtb_id: memberWtbId,
-            buyer_record_id: buyerRecordId
+            buyer_record_id: buyerRecordId,
+            trusted_buyer: options.trusted === true
           }
         })
       }
@@ -1347,34 +1348,98 @@ async function updateMemberWtbPaymentRequestMessage(
       };
     }
 
+    const memberWtbId =
+      asText(fields["Member WTB ID"]) ||
+      asText(fields["WTB ID"]) ||
+      memberWtbRecordId;
+
+    const amount =
+      getMemberWtbPaymentAmount(fields);
+
     let content = "";
+    let title = "";
+    let description = [];
+    let color = 0x95a5a6;
     let buttonLabel = "Payment";
     let buttonStyle = 2;
 
     if (status === "Pending Payment") {
-      content =
-        "🏦 Your bank transfer has been submitted. " +
-        "We are waiting for Mollie to confirm receipt.";
+      content = "🏦 Bank transfer submitted.";
 
+      title = "🏦 Waiting for Mollie";
+
+      description = [
+        `**Order Number:** ${memberWtbId}`,
+        `**Amount:** €${amount.toFixed(2)}`,
+        "",
+        "Your SEPA bank transfer has been submitted through Mollie.",
+        "We are waiting for Mollie to confirm receipt.",
+        "",
+        "Your payment status will update automatically."
+      ];
+
+      color = 0xf1c40f;
       buttonLabel = "Waiting for Mollie";
-      buttonStyle = 2;
     } else if (status === "Paid") {
-      content =
-        "✅ Payment confirmed by Mollie. " +
-        "Your order is now being processed.";
+      content = "✅ Payment confirmed by Mollie.";
 
+      title = "✅ Payment Confirmed";
+
+      description = [
+        `**Order Number:** ${memberWtbId}`,
+        `**Amount:** €${amount.toFixed(2)}`,
+        "",
+        "Mollie has confirmed your payment.",
+        "Your order is now being processed."
+      ];
+
+      color = 0x2ecc71;
       buttonLabel = "Paid";
       buttonStyle = 3;
     } else if (status === "Cancelled") {
-      content = "❌ This payment was cancelled.";
+      content = "❌ Payment cancelled.";
+
+      title = "❌ Payment Cancelled";
+
+      description = [
+        `**Order Number:** ${memberWtbId}`,
+        `**Amount:** €${amount.toFixed(2)}`,
+        "",
+        "This Mollie payment was cancelled.",
+        "A new payment link must be created before payment can be completed."
+      ];
+
+      color = 0x95a5a6;
       buttonLabel = "Cancelled";
-      buttonStyle = 2;
     } else if (status === "Expired") {
-      content = "⌛ This payment has expired.";
+      content = "⌛ Payment expired.";
+
+      title = "⌛ Payment Expired";
+
+      description = [
+        `**Order Number:** ${memberWtbId}`,
+        `**Amount:** €${amount.toFixed(2)}`,
+        "",
+        "This Mollie payment link has expired.",
+        "A new payment link must be created before payment can be completed."
+      ];
+
+      color = 0x95a5a6;
       buttonLabel = "Expired";
-      buttonStyle = 2;
     } else if (status === "Failed") {
-      content = "❌ This payment failed.";
+      content = "❌ Payment failed.";
+
+      title = "❌ Payment Failed";
+
+      description = [
+        `**Order Number:** ${memberWtbId}`,
+        `**Amount:** €${amount.toFixed(2)}`,
+        "",
+        "Mollie could not complete this payment.",
+        "Please use a new Mollie payment link."
+      ];
+
+      color = 0xe74c3c;
       buttonLabel = "Payment Failed";
       buttonStyle = 4;
     } else {
@@ -1386,7 +1451,19 @@ async function updateMemberWtbPaymentRequestMessage(
 
     await message.edit({
       content,
-      embeds: message.embeds,
+
+      embeds: [
+        {
+          title,
+          description: description.join("\n"),
+          color,
+          footer: {
+            text: "Secure payment powered by Mollie"
+          },
+          timestamp: new Date().toISOString()
+        }
+      ],
+
       components: [
         {
           type: 1,
@@ -1422,89 +1499,152 @@ async function updateMemberWtbPaymentRequestMessage(
   }
 }
 
-async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buyerSeller, options = {}) {
+async function sendMemberWtbPaymentRequest(
+  memberWtbRecordId,
+  memberFields,
+  buyerSeller,
+  options = {}
+) {
   const trusted = options.trusted === true;
+
   await initKickzDealDiscord();
 
-  const discordUserId = asText(buyerSeller.discord_id || buyerSeller.discord_user_id || buyerSeller.discord_id_raw);
+  const discordUserId = asText(
+    buyerSeller.discord_id ||
+    buyerSeller.discord_user_id ||
+    buyerSeller.discord_id_raw
+  );
 
   if (!discordUserId) {
     throw new Error("Buyer is missing Discord ID");
   }
 
-  const user = await kickzDealDiscordClient.users.fetch(discordUserId);
-  const dm = await user.createDM();
+  const paymentResult =
+    await createMemberWtbMolliePayment(
+        memberWtbRecordId,
+        {
+            trusted
+        }
+    );
+
+  const paymentUrl = asText(
+    paymentResult.payment_url
+  );
+
+  if (!paymentUrl) {
+    throw new Error(
+      "Member WTB Mollie payment link is missing"
+    );
+  }
 
   const amount = Number(
-    memberFields["Invoice Price"] ||
-    memberFields["Final Buying Price"] ||
-    memberFields["Max Price"] ||
-    0
+    paymentResult.amount || 0
   );
+
   const memberWtbId =
     asText(memberFields["Member WTB ID"]) ||
     asText(memberFields["WTB ID"]) ||
     memberWtbRecordId;
 
+  const user =
+    await kickzDealDiscordClient.users.fetch(
+      discordUserId
+    );
+
+  const dm = await user.createDM();
+
+  const paymentExplanation = trusted
+    ? [
+        "Your deal has already moved forward because your account is trusted.",
+        "Please complete the payment through Mollie as soon as possible."
+      ]
+    : [
+        "Please complete your payment through Mollie.",
+        "**The order will continue processing once Mollie confirms the payment.**"
+      ];
+
   const message = await dm.send({
-    embeds: [{
-      title: "💳 Payment Required",
-      description: [
-        `**We succesfully matched a seller to your Want To Buy!`,
-        "",
-        `**Order Number:** ${memberWtbId}`,
-        "",
-        `**Product:** ${asText(memberFields["Product Name"]) || "—"}`,
-        `**SKU:** ${asText(memberFields["SKU"]) || "—"}`,
-        `**Size:** ${asText(memberFields["Size"]) || "—"}`,
-        "",
-        `**Amount:** €${amount.toFixed(2)}`,
-        "",
-        ...(trusted
-          ? [
-              "Please complete the payment using one of the methods below.",
-              "This deal has already moved forward because your account is trusted, but fast payment is highly appreciated :pray:"
-            ]
-          : [
-              "Please complete the payment using one of the methods below.",
-              "**The order will not be processed until payment is confirmed.**"
-            ]),
-        "",
-        "**Payment details**",
-        "Name: Kickz Caviar",
-        "IBAN: NL21INGB0109644271",
-        `Reference: ${memberWtbId}`,
-        "",
-        "OR",
-        "",
-        "Paypal: financial@payoutbykickzcaviar.com",
-        `Reference: ${memberWtbId}`,
-        "",
-        "After payment, click **Confirm Payment** below."
-      ].join("\n"),
-      color: 0xf1c40f,
-      timestamp: new Date().toISOString()
-    }],
-    components: [{
-      type: 1,
-      components: [{
-        type: 2,
-        style: 3,
-        label: "Confirm Payment",
-        custom_id: `confirm_member_wtb_payment:${memberWtbRecordId}`
-      }]
-    }]
+    embeds: [
+      {
+        title: trusted
+          ? "💳 Payment Requested"
+          : "💳 Payment Required",
+
+        description: [
+          "**We successfully matched a seller to your Want To Buy!**",
+          "",
+          `**Order Number:** ${memberWtbId}`,
+          "",
+          `**Product:** ${
+            asText(memberFields["Product Name"]) ||
+            "—"
+          }`,
+          `**SKU:** ${
+            asText(memberFields["SKU"]) ||
+            "—"
+          }`,
+          `**Size:** ${
+            asText(memberFields["Size"]) ||
+            "—"
+          }`,
+          "",
+          `**Amount:** €${amount.toFixed(2)}`,
+          "",
+          ...paymentExplanation,
+          "",
+          "**Available through Mollie**",
+          "• iDEAL",
+          "• Wero",
+          "• SEPA Bank Transfer",
+          "",
+          "Payments must be completed through Mollie.",
+          "Manual bank transfers and PayPal payments are not accepted.",
+          "",
+          "Once Mollie confirms the payment, the payment status is updated automatically."
+        ].join("\n"),
+
+        color: trusted
+          ? 0x3498db
+          : 0xf1c40f,
+
+        footer: {
+          text: "Secure payment powered by Mollie"
+        },
+
+        timestamp: new Date().toISOString()
+      }
+    ],
+
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 5,
+            label: `Pay €${amount.toFixed(2)} with Mollie`,
+            url: paymentUrl
+          }
+        ]
+      }
+    ]
   });
 
-  await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
-    "Payment Status": trusted ? "Trusted" : "Requested",
-    "Payment Request Channel ID": message.channelId,
-    "Payment Request Message ID": message.id
-  });
+  await airtable(MEMBER_WTBS_TABLE).update(
+    memberWtbRecordId,
+    {
+      "Payment Request Channel ID":
+        message.channelId,
+      "Payment Request Message ID":
+        message.id
+    }
+  );
 
   return {
     channelId: message.channelId,
-    messageId: message.id
+    messageId: message.id,
+    paymentUrl,
+    paymentResult
   };
 }
 
@@ -1599,16 +1739,29 @@ async function sendMemberWtbPurchaseWebhook(memberWtbRecordId) {
   });
 }
 
-async function handleMemberWtbPaymentGate(memberWtbRecordId) {
-  const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
-  const f = memberWtb.fields || {};
+async function handleMemberWtbPaymentGate(
+  memberWtbRecordId
+) {
+  const memberWtb = await airtable(
+    MEMBER_WTBS_TABLE
+  ).find(memberWtbRecordId);
 
-  const currentPaymentStatus = asText(f["Payment Status"]);
+  const fields = memberWtb.fields || {};
+
+  const currentPaymentStatus = asText(
+    fields["Payment Status"]
+  );
+
+  const alreadyProcessedStatuses = new Set([
+    "Awaiting Payment",
+    "Pending Payment",
+    "Paid"
+  ]);
 
   if (
-    currentPaymentStatus === "Requested" ||
-    currentPaymentStatus === "Paid" ||
-    currentPaymentStatus === "Trusted"
+    alreadyProcessedStatuses.has(
+      currentPaymentStatus
+    )
   ) {
     return {
       status: "already_processed",
@@ -1616,38 +1769,57 @@ async function handleMemberWtbPaymentGate(memberWtbRecordId) {
     };
   }
 
-  const buyerRecordId = Array.isArray(f["Buyer Seller ID"])
-    ? f["Buyer Seller ID"][0]
-    : null;
+  const buyerRecordId =
+    firstLinkedRecordId(
+      fields["Buyer Seller ID"]
+    );
 
   if (!buyerRecordId) {
-    throw new Error("Member WTB missing Buyer Seller ID");
+    throw new Error(
+      "Member WTB missing Buyer Seller ID"
+    );
   }
 
-  const buyerRecord = await airtable(SELLERS_TABLE).find(buyerRecordId);
+  const buyerRecord = await airtable(
+    SELLERS_TABLE
+  ).find(buyerRecordId);
+
   const buyerFields = buyerRecord.fields || {};
   const buyer = normalizeSeller(buyerRecord);
 
-  const trustedBuyer = buyerFields["Trusted Buyer?"] === true;
+  const trustedBuyer =
+    buyerFields["Trusted Buyer?"] === true;
+
+  await sendMemberWtbPaymentRequest(
+    memberWtbRecordId,
+    fields,
+    buyer,
+    {
+      trusted: trustedBuyer
+    }
+  );
 
   if (trustedBuyer) {
-    await sendMemberWtbPaymentRequest(memberWtbRecordId, f, buyer, {
-      trusted: true
-    });
-  
-    await sendMemberWtbPurchaseWebhook(memberWtbRecordId);
+    /*
+      Trusted buyers continue immediately.
+      Payment is still required through Mollie,
+      but payment confirmation does not block the deal.
+    */
+    await sendMemberWtbPurchaseWebhook(
+      memberWtbRecordId
+    );
 
-    await sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId);
-  
+    await sendMemberWtbDealUpdateAfterPayment(
+      memberWtbRecordId
+    );
+
     return {
-      status: "trusted"
+      status: "trusted_payment_requested"
     };
   }
 
-  await sendMemberWtbPaymentRequest(memberWtbRecordId, f, buyer);
-
   return {
-    status: "requested"
+    status: "payment_requested"
   };
 }
 
@@ -2363,7 +2535,6 @@ function bindConsignmentDiscordButtons(client) {
       !customId.startsWith("deny_member_wtb_kc:") &&
       !customId.startsWith("accept_member_wtb_kc_offer:") &&
       !customId.startsWith("deny_member_wtb_kc_offer:") &&
-      !customId.startsWith("confirm_member_wtb_payment:") &&
       !customId.startsWith("request_member_wtb_label:") &&
       !customId.startsWith("accept_member_wtb_buyer_offer:") &&
       !customId.startsWith("decline_member_wtb_buyer_offer:")
@@ -2519,39 +2690,6 @@ function bindConsignmentDiscordButtons(client) {
     
           return;
         }
-
-    if (customId.startsWith("confirm_member_wtb_payment:")) {
-      const memberWtbRecordId = customId.split(":")[1];
-    
-      const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
-      const f = memberWtb.fields || {};
-    
-      if (!["Requested", "Pending", "Trusted"].includes(asText(f["Payment Status"]))) {
-        await interaction.editReply({
-          content: "❌ Payment is already processed or this request is no longer active.",
-          embeds: interaction.message.embeds,
-          components: []
-        }).catch(console.error);
-        return;
-      }
-    
-      await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
-        "Payment Status": "Paid",
-        "Payment Confirmed At": new Date().toISOString()
-      });
-    
-      await interaction.editReply({
-        content: "✅ Payment confirmed.",
-        embeds: interaction.message.embeds,
-        components: []
-      }).catch(console.error);
-      
-      await sendMemberWtbPurchaseWebhook(memberWtbRecordId);
-      
-      await sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId);
-    
-      return;
-    }
 
     if (customId.startsWith("request_member_wtb_label:")) {
       const memberWtbRecordId = customId.split(":")[1];
@@ -9156,6 +9294,7 @@ app.get("/api/dashboard/buying-delivered", async (req, res) => {
           "Final Buying Price",
           "Max Price",
           "Payment Status",
+          "Payment Link",
           "Shipping Status",
           "Tracking Number",
           "Tracking URL",
@@ -9176,8 +9315,26 @@ app.get("/api/dashboard/buying-delivered", async (req, res) => {
           Number(f["Final Buying Price"] || 0) ||
           Number(f["Max Price"] || 0);
 
-        const paymentStatus = displayValue(f["Payment Status"]);
-        const requiresPayment = paymentStatus === "Trusted";
+        const paymentStatus = displayValue(
+          f["Payment Status"]
+        );
+        
+        const paymentLink = displayValue(
+          f["Payment Link"]
+        );
+        
+        const requiresPayment = [
+          "Awaiting Payment",
+          "Requested",
+          "Pending",
+          "Trusted",
+          "Cancelled",
+          "Expired",
+          "Failed"
+        ].includes(paymentStatus);
+        
+        const waitingForMollie =
+          paymentStatus === "Pending Payment";
 
         return {
           id: record.id,
@@ -9188,11 +9345,26 @@ app.get("/api/dashboard/buying-delivered", async (req, res) => {
           size: displayValue(f["Size"]),
           brand: displayValue(f["Brand"]),
           amount: moneyValue(amount),
+        
           payment_status: paymentStatus,
-          requires_payment: requiresPayment,
-          tracking_number: displayValue(f["Tracking Number"]),
-          tracking_url: displayValue(f["Tracking URL"]),
-          status: requiresPayment ? "Payment Required" : "Delivered",
+          payment_link: paymentLink,
+          requires_payment:
+            requiresPayment && Boolean(paymentLink),
+          waiting_for_mollie: waitingForMollie,
+        
+          tracking_number: displayValue(
+            f["Tracking Number"]
+          ),
+          tracking_url: displayValue(
+            f["Tracking URL"]
+          ),
+        
+          status: waitingForMollie
+            ? "Waiting for Mollie"
+            : requiresPayment && paymentLink
+              ? "Payment Required"
+              : "Delivered",
+        
           date: formatDateEU(f["Date"]),
           raw_date: f["Date"]
         };
@@ -9207,41 +9379,6 @@ app.get("/api/dashboard/buying-delivered", async (req, res) => {
     console.error("Failed to load buying delivered:", err);
     res.status(500).json({
       error: "Failed to load buying delivered",
-      details: err.message
-    });
-  }
-});
-
-app.post("/api/dashboard/buying/confirm-payment", async (req, res) => {
-  try {
-    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
-
-    if (!memberWtbRecordId) {
-      return res.status(400).json({ error: "Missing member_wtb_record_id" });
-    }
-
-    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
-    const f = memberWtb.fields || {};
-
-    if (!["Requested", "Pending", "Trusted"].includes(asText(f["Payment Status"]))) {
-      return res.status(409).json({
-        error: "Payment is already processed or this request is no longer active."
-      });
-    }
-
-    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
-      "Payment Status": "Paid",
-      "Payment Confirmed At": new Date().toISOString()
-    });
-
-    await sendMemberWtbPurchaseWebhook(memberWtbRecordId);
-    await sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId);
-
-    res.json({ ok: true });
-  } catch (err) {
-    console.error("Failed to confirm buying payment:", err);
-    res.status(500).json({
-      error: "Failed to confirm payment",
       details: err.message
     });
   }
@@ -13415,13 +13552,20 @@ app.post(
           These are the same two actions that the old
           manual Confirm Payment button currently triggers.
         */
-        await sendMemberWtbPurchaseWebhook(
-          memberWtbRecordId
-        );
-
-        await sendMemberWtbDealUpdateAfterPayment(
-          memberWtbRecordId
-        );
+        const trustedBuyer =
+          metadata.trusted_buyer === true ||
+          asText(metadata.trusted_buyer)
+            .toLowerCase() === "true";
+        
+        if (!trustedBuyer) {
+          await sendMemberWtbPurchaseWebhook(
+            memberWtbRecordId
+          );
+        
+          await sendMemberWtbDealUpdateAfterPayment(
+            memberWtbRecordId
+          );
+        }
 
         return res.status(200).send("ok");
       }
