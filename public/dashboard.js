@@ -1598,20 +1598,7 @@ function renderBuyingDeliveredRows(items) {
               : ""
           }
 
-          ${
-            item.waiting_for_mollie
-              ? `<span class="dashboard-status-pill dashboard-status-open">
-                  Waiting for Mollie
-                </span>`
-              : item.requires_payment && item.payment_link
-                ? `<a
-                    class="dashboard-confirm-btn"
-                    href="${escapeHtml(item.payment_link)}"
-                  >
-                    Pay
-                  </a>`
-                : ""
-          }
+          ${renderBuyingPaymentAction(item)}
         </div>
       </td>
     </tr>
