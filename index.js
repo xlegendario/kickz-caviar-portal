@@ -76,6 +76,41 @@ const MEMBER_WTBS_TABLE = process.env.AIRTABLE_MEMBER_WTBS_TABLE || "Member WTBs
 const PAYMENT_BATCHES_TABLE =
   AIRTABLE_PAYMENT_BATCHES_TABLE || "Payment Batches";
 
+const memberWtbPaymentLocks = new Map();
+
+async function withMemberWtbPaymentLock(
+  memberWtbRecordId,
+  callback
+) {
+  const existingLock =
+    memberWtbPaymentLocks.get(memberWtbRecordId);
+
+  if (existingLock) {
+    return existingLock;
+  }
+
+  const lockPromise = Promise.resolve()
+    .then(callback)
+    .finally(() => {
+      if (
+        memberWtbPaymentLocks.get(
+          memberWtbRecordId
+        ) === lockPromise
+      ) {
+        memberWtbPaymentLocks.delete(
+          memberWtbRecordId
+        );
+      }
+    });
+
+  memberWtbPaymentLocks.set(
+    memberWtbRecordId,
+    lockPromise
+  );
+
+  return lockPromise;
+}
+
 function mollieMoney(value) {
   const amount = Number(value);
 
@@ -1295,6 +1330,75 @@ async function createMemberWtbMolliePayment(
 
     throw err;
   }
+}
+
+async function getMemberWtbCheckout(
+  memberWtbRecordId
+) {
+  return withMemberWtbPaymentLock(
+    memberWtbRecordId,
+    async () => {
+      const memberWtb = await airtable(
+        MEMBER_WTBS_TABLE
+      ).find(memberWtbRecordId);
+
+      const fields = memberWtb.fields || {};
+
+      const paymentStatus = asText(
+        fields["Payment Status"]
+      );
+
+      if (paymentStatus === "Paid") {
+        const error = new Error(
+          "This Member WTB is already paid"
+        );
+
+        error.statusCode = 409;
+        throw error;
+      }
+
+      if (paymentStatus === "Pending Payment") {
+        const error = new Error(
+          "This payment is awaiting Mollie confirmation"
+        );
+
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const buyerRecordId = firstLinkedRecordId(
+        fields["Buyer Seller ID"]
+      );
+
+      if (!buyerRecordId) {
+        throw new Error(
+          "Member WTB is missing Buyer Seller ID"
+        );
+      }
+
+      const buyerRecord = await airtable(
+        SELLERS_TABLE
+      ).find(buyerRecordId);
+
+      const trustedBuyer =
+        buyerRecord.fields?.["Trusted Buyer?"] ===
+        true;
+
+      const mustCreateNew = [
+        "Expired",
+        "Cancelled",
+        "Failed"
+      ].includes(paymentStatus);
+
+      return createMemberWtbMolliePayment(
+        memberWtbRecordId,
+        {
+          forceNew: mustCreateNew,
+          trusted: trustedBuyer
+        }
+      );
+    }
+  );
 }
 
 async function updateMemberWtbPaymentRequestMessage(
@@ -13381,6 +13485,76 @@ app.post("/api/dashboard/buying/cancel-wtb", async (req, res) => {
     });
   }
 });
+
+app.post(
+  "/api/dashboard/buying/payment-link",
+  async (req, res) => {
+    try {
+      const memberWtbRecordId = asText(
+        req.body?.member_wtb_record_id
+      );
+
+      const buyerRecordId = asText(
+        req.body?.buyer_record_id
+      );
+
+      if (!memberWtbRecordId) {
+        return res.status(400).json({
+          error: "Missing member_wtb_record_id"
+        });
+      }
+
+      if (!buyerRecordId) {
+        return res.status(400).json({
+          error: "Missing buyer_record_id"
+        });
+      }
+
+      const memberWtb = await airtable(
+        MEMBER_WTBS_TABLE
+      ).find(memberWtbRecordId);
+
+      const actualBuyerRecordId =
+        firstLinkedRecordId(
+          memberWtb.fields?.["Buyer Seller ID"]
+        );
+
+      if (
+        !actualBuyerRecordId ||
+        actualBuyerRecordId !== buyerRecordId
+      ) {
+        return res.status(403).json({
+          error:
+            "This payment does not belong to this buyer"
+        });
+      }
+
+      const result =
+        await getMemberWtbCheckout(
+          memberWtbRecordId
+        );
+
+      return res.json({
+        ok: true,
+        reused: result.reused === true,
+        payment_url: result.payment_url
+      });
+    } catch (err) {
+      console.error(
+        "Failed to prepare Member WTB payment:",
+        err
+      );
+
+      return res
+        .status(err.statusCode || 500)
+        .json({
+          error:
+            err.message ||
+            "Failed to prepare payment"
+        });
+    }
+  }
+);
 
 // --------------------------------------------------
 // MEMBER WTB MOLLIE WEBHOOK
