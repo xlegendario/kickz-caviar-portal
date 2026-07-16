@@ -1624,11 +1624,8 @@ async function sendMemberWtbPaymentRequest(
   }
 
   const paymentResult =
-    await createMemberWtbMolliePayment(
-        memberWtbRecordId,
-        {
-            trusted
-        }
+    await getMemberWtbCheckout(
+      memberWtbRecordId
     );
 
   const paymentUrl = asText(
@@ -9474,8 +9471,12 @@ app.get("/api/dashboard/buying-delivered", async (req, res) => {
           f["Payment Link"]
         );
         
-        const requiresPayment =
-          paymentStatus === "Awaiting Payment";
+        const requiresPayment = [
+          "Awaiting Payment",
+          "Expired",
+          "Cancelled",
+          "Failed"
+        ].includes(paymentStatus);
         
         const waitingForMollie =
           paymentStatus === "Pending Payment";
@@ -9492,8 +9493,7 @@ app.get("/api/dashboard/buying-delivered", async (req, res) => {
         
           payment_status: paymentStatus,
           payment_link: paymentLink,
-          requires_payment:
-            requiresPayment && Boolean(paymentLink),
+          requires_payment: requiresPayment,
           waiting_for_mollie: waitingForMollie,
         
           tracking_number: displayValue(
