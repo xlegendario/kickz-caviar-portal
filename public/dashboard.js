@@ -1509,9 +1509,17 @@ function renderBuyingDeliveredRows(items) {
       <td>${escapeHtml(item.amount || "-")}</td>
       <td>
         ${
-          item.requires_payment
-            ? `<span class="dashboard-status-pill dashboard-status-not-paid">Not Paid</span>`
-            : `<span class="dashboard-status-pill dashboard-status-open">Delivered</span>`
+          item.waiting_for_mollie
+            ? `<span class="dashboard-status-pill dashboard-status-open">
+                Waiting for Mollie
+              </span>`
+            : item.requires_payment
+              ? `<span class="dashboard-status-pill dashboard-status-not-paid">
+                  Not Paid
+                </span>`
+              : `<span class="dashboard-status-pill dashboard-status-open">
+                  Delivered
+                </span>`
         }
       </td>
       <td>${escapeHtml(item.date || "-")}</td>
@@ -1524,17 +1532,18 @@ function renderBuyingDeliveredRows(items) {
           }
 
           ${
-            item.requires_payment
-              ? `<button
-                  class="dashboard-confirm-btn"
-                  type="button"
-                  data-buying-pay-id="${escapeHtml(item.member_wtb_record_id || "")}"
-                  data-order-id="${escapeHtml(item.order_id || "")}"
-                  data-amount="${escapeHtml(item.amount || "")}"
-                >
-                  Pay
-                </button>`
-              : ""
+            item.waiting_for_mollie
+              ? `<span class="dashboard-status-pill dashboard-status-open">
+                  Waiting for Mollie
+                </span>`
+              : item.requires_payment && item.payment_link
+                ? `<a
+                    class="dashboard-confirm-btn"
+                    href="${escapeHtml(item.payment_link)}"
+                  >
+                    Pay
+                  </a>`
+                : ""
           }
         </div>
       </td>
@@ -1542,52 +1551,6 @@ function renderBuyingDeliveredRows(items) {
   `).join("");
 }
 
-function openBuyingPaymentModal(button) {
-  const recordId = button.dataset.buyingPayId;
-  const orderId = button.dataset.orderId;
-  const amount = button.dataset.amount;
-
-  document.getElementById("buyingPaymentModal")?.remove();
-
-  document.body.insertAdjacentHTML("beforeend", `
-    <div class="dashboard-modal" id="buyingPaymentModal">
-      <div class="dashboard-modal-backdrop" data-close-buying-payment-modal></div>
-
-      <div class="dashboard-modal-card buying-payment-modal-card">
-        <button class="dashboard-modal-close" type="button" data-close-buying-payment-modal>×</button>
-
-        <h2>Complete Your Payment</h2>
-        <p>Send the amount below, then confirm your payment.</p>
-
-        <div class="buying-payment-simple-amount">
-          <span>Amount</span>
-          <strong>${escapeHtml(amount)}</strong>
-        </div>
-
-        <div class="buying-payment-simple-section">
-          <strong>Bank Transfer</strong>
-          <span><strong>Name:</strong> Payout by Kickz Caviar B.V.</span>
-          <span><strong>IBAN:</strong> NL21INGB0109644271</span>
-          <span><strong>Reference:</strong> ${escapeHtml(orderId)}</span>
-        </div>
-
-        <div class="buying-payment-simple-section">
-          <strong>PayPal</strong>
-          <span><strong>Email:</strong> financial@payoutbykickzcaviar.com</span>
-          <span><strong>Reference:</strong> ${escapeHtml(orderId)}</span>
-        </div>
-
-        <button
-          class="dashboard-confirm-btn buying-payment-main-btn"
-          type="button"
-          data-confirm-buying-payment-id="${escapeHtml(recordId)}"
-        >
-          Confirm Payment
-        </button>
-      </div>
-    </div>
-  `);
-}
 
 function renderWtbAcceptedRows(items) {
   dashboardTableBody
@@ -4405,7 +4368,6 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const buyingDeleteButton = event.target.closest("[data-buying-delete-wtb-id]");
   const buyingAcceptOfferButton = event.target.closest("[data-buying-accept-offer-id]");
   const buyingDenyOfferButton = event.target.closest("[data-buying-deny-offer-id]");
-  const buyingPayButton = event.target.closest("[data-buying-pay-id]");
   const requestLabelButton = event.target.closest("[data-request-label-id]");
 
   if (requestLabelButton) {
@@ -4570,11 +4532,6 @@ dashboardTableBody.addEventListener("click", async (event) => {
       buyingDenyOfferButton.disabled = false;
     }
   
-    return;
-  }
-
-  if (buyingPayButton) {
-    openBuyingPaymentModal(buyingPayButton);
     return;
   }
 });
@@ -5116,43 +5073,3 @@ function showDashboardToast(message, type = "success") {
     setTimeout(() => toast.remove(), 250);
   }, 2600);
 }
-
-document.addEventListener("click", async (event) => {
-  if (event.target.closest("[data-close-buying-payment-modal]")) {
-    document.getElementById("buyingPaymentModal")?.remove();
-    return;
-  }
-
-  const confirmPaymentBtn = event.target.closest("[data-confirm-buying-payment-id]");
-
-  if (!confirmPaymentBtn) return;
-
-  const recordId = confirmPaymentBtn.dataset.confirmBuyingPaymentId;
-
-  confirmPaymentBtn.disabled = true;
-  confirmPaymentBtn.textContent = "Confirming...";
-
-  try {
-    const response = await fetch("/api/dashboard/buying/confirm-payment", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ member_wtb_record_id: recordId })
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.details || data.error || "Failed to confirm payment");
-    }
-
-    document.getElementById("buyingPaymentModal")?.remove();
-    showDashboardToast("Payment confirmed.", "success");
-
-    await loadDashboardData();
-    await loadDashboardCounts();
-  } catch (err) {
-    showDashboardToast(err.message, "error");
-    confirmPaymentBtn.disabled = false;
-    confirmPaymentBtn.textContent = "Confirm Payment";
-  }
-});
