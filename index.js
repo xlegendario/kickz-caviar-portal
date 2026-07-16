@@ -1296,6 +1296,132 @@ async function createMemberWtbMolliePayment(
   }
 }
 
+async function updateMemberWtbPaymentRequestMessage(
+  memberWtbRecordId,
+  status
+) {
+  try {
+    const memberWtb = await airtable(
+      MEMBER_WTBS_TABLE
+    ).find(memberWtbRecordId);
+
+    const fields = memberWtb.fields || {};
+
+    const channelId = asText(
+      fields["Payment Request Channel ID"]
+    );
+
+    const messageId = asText(
+      fields["Payment Request Message ID"]
+    );
+
+    if (!channelId || !messageId) {
+      return {
+        updated: false,
+        reason: "missing_payment_request_message"
+      };
+    }
+
+    await initKickzDealDiscord();
+
+    const channel =
+      await kickzDealDiscordClient.channels
+        .fetch(channelId)
+        .catch(() => null);
+
+    if (!channel) {
+      return {
+        updated: false,
+        reason: "channel_not_found"
+      };
+    }
+
+    const message = await channel.messages
+      .fetch(messageId)
+      .catch(() => null);
+
+    if (!message) {
+      return {
+        updated: false,
+        reason: "message_not_found"
+      };
+    }
+
+    let content = "";
+    let buttonLabel = "Payment";
+    let buttonStyle = 2;
+
+    if (status === "Pending Payment") {
+      content =
+        "🏦 Your bank transfer has been submitted. " +
+        "We are waiting for Mollie to confirm receipt.";
+
+      buttonLabel = "Waiting for Mollie";
+      buttonStyle = 2;
+    } else if (status === "Paid") {
+      content =
+        "✅ Payment confirmed by Mollie. " +
+        "Your order is now being processed.";
+
+      buttonLabel = "Paid";
+      buttonStyle = 3;
+    } else if (status === "Cancelled") {
+      content = "❌ This payment was cancelled.";
+      buttonLabel = "Cancelled";
+      buttonStyle = 2;
+    } else if (status === "Expired") {
+      content = "⌛ This payment has expired.";
+      buttonLabel = "Expired";
+      buttonStyle = 2;
+    } else if (status === "Failed") {
+      content = "❌ This payment failed.";
+      buttonLabel = "Payment Failed";
+      buttonStyle = 4;
+    } else {
+      return {
+        updated: false,
+        reason: "unsupported_status"
+      };
+    }
+
+    await message.edit({
+      content,
+      embeds: message.embeds,
+      components: [
+        {
+          type: 1,
+          components: [
+            {
+              type: 2,
+              style: buttonStyle,
+              label: buttonLabel,
+              custom_id:
+                `member_wtb_payment_${status
+                  .toLowerCase()
+                  .replace(/\s+/g, "_")}_disabled`,
+              disabled: true
+            }
+          ]
+        }
+      ]
+    });
+
+    return {
+      updated: true
+    };
+  } catch (err) {
+    console.error(
+      "Failed to update Member WTB payment request message:",
+      err
+    );
+
+    return {
+      updated: false,
+      reason: err.message
+    };
+  }
+}
+
 async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buyerSeller, options = {}) {
   const trusted = options.trusted === true;
   await initKickzDealDiscord();
@@ -2956,6 +3082,10 @@ function bindConsignmentDiscordButtons(client) {
 
 app.use(compression());
 app.use(express.json({ limit: "25mb" }));
+app.use(express.urlencoded({
+  extended: false,
+  limit: "25mb"
+}));
 
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -13074,6 +13204,290 @@ app.post("/api/dashboard/buying/cancel-wtb", async (req, res) => {
     });
   }
 });
+
+// --------------------------------------------------
+// MEMBER WTB MOLLIE WEBHOOK
+// Receives authoritative payment updates from Mollie.
+// --------------------------------------------------
+
+app.post(
+  "/api/mollie/member-wtb-webhook",
+  async (req, res) => {
+    try {
+      const paymentId = asText(
+        req.body?.id ||
+        req.query?.id
+      );
+
+      if (!paymentId) {
+        return res.status(400).send(
+          "Missing payment id"
+        );
+      }
+
+      const payment = await mollieRequest(
+        `/payments/${encodeURIComponent(paymentId)}`
+      );
+
+      const metadata = payment?.metadata || {};
+
+      if (
+        asText(metadata.payment_context) !==
+        "member_wtb"
+      ) {
+        console.log(
+          "Ignoring non-Member-WTB Mollie webhook:",
+          paymentId
+        );
+
+        return res.status(200).send("ok");
+      }
+
+      const memberWtbRecordId = asText(
+        metadata.member_wtb_record_id
+      );
+
+      const batchRecordId = asText(
+        metadata.batch_record_id
+      );
+
+      if (!memberWtbRecordId || !batchRecordId) {
+        console.error(
+          "Member WTB Mollie webhook missing metadata:",
+          {
+            paymentId,
+            metadata
+          }
+        );
+
+        return res.status(200).send("ok");
+      }
+
+      const [memberWtb, batch] = await Promise.all([
+        airtable(MEMBER_WTBS_TABLE).find(
+          memberWtbRecordId
+        ),
+        airtable(PAYMENT_BATCHES_TABLE).find(
+          batchRecordId
+        )
+      ]);
+
+      const memberFields = memberWtb.fields || {};
+      const batchFields = batch.fields || {};
+
+      const storedMemberPaymentId = asText(
+        memberFields["Mollie Payment ID"]
+      );
+
+      const storedBatchPaymentId = asText(
+        batchFields["Mollie Payment ID"]
+      );
+
+      if (
+        storedMemberPaymentId &&
+        storedMemberPaymentId !== payment.id
+      ) {
+        console.error(
+          "Member WTB Mollie payment ID mismatch:",
+          {
+            memberWtbRecordId,
+            expected: storedMemberPaymentId,
+            received: payment.id
+          }
+        );
+
+        return res.status(200).send("ok");
+      }
+
+      if (
+        storedBatchPaymentId &&
+        storedBatchPaymentId !== payment.id
+      ) {
+        console.error(
+          "Payment Batch Mollie payment ID mismatch:",
+          {
+            batchRecordId,
+            expected: storedBatchPaymentId,
+            received: payment.id
+          }
+        );
+
+        return res.status(200).send("ok");
+      }
+
+      const mollieStatus = asText(
+        payment.status
+      ).toLowerCase();
+
+      const currentPaymentStatus = asText(
+        memberFields["Payment Status"]
+      );
+
+      console.log(
+        "Member WTB Mollie webhook:",
+        {
+          paymentId: payment.id,
+          mollieStatus,
+          memberWtbRecordId,
+          batchRecordId,
+          currentPaymentStatus
+        }
+      );
+
+      /*
+        Mollie bank transfer submitted:
+        payment exists, but money has not yet been confirmed.
+      */
+      if (mollieStatus === "pending") {
+        await Promise.all([
+          airtable(PAYMENT_BATCHES_TABLE).update(
+            batchRecordId,
+            {
+              "Payment Status": "Pending Payment",
+              "Mollie Payment ID": payment.id
+            }
+          ),
+
+          airtable(MEMBER_WTBS_TABLE).update(
+            memberWtbRecordId,
+            {
+              "Payment Status": "Pending Payment",
+              "Mollie Payment ID": payment.id
+            }
+          )
+        ]);
+
+        await updateMemberWtbPaymentRequestMessage(
+          memberWtbRecordId,
+          "Pending Payment"
+        );
+
+        return res.status(200).send("ok");
+      }
+
+      /*
+        Payment confirmed.
+      */
+      if (mollieStatus === "paid") {
+        if (currentPaymentStatus === "Paid") {
+          console.log(
+            "Skipping already processed Member WTB payment:",
+            {
+              paymentId: payment.id,
+              memberWtbRecordId
+            }
+          );
+
+          return res.status(200).send("ok");
+        }
+
+        const paidAt =
+          asText(payment.paidAt) ||
+          new Date().toISOString();
+
+        await Promise.all([
+          airtable(PAYMENT_BATCHES_TABLE).update(
+            batchRecordId,
+            {
+              "Payment Status": "Paid",
+              "Paid At": paidAt,
+              "Mollie Payment ID": payment.id
+            }
+          ),
+
+          airtable(MEMBER_WTBS_TABLE).update(
+            memberWtbRecordId,
+            {
+              "Payment Status": "Paid",
+              "Paid At": paidAt,
+              "Payment Confirmed At": paidAt,
+              "Mollie Payment ID": payment.id
+            }
+          )
+        ]);
+
+        await updateMemberWtbPaymentRequestMessage(
+          memberWtbRecordId,
+          "Paid"
+        );
+
+        /*
+          These are the same two actions that the old
+          manual Confirm Payment button currently triggers.
+        */
+        await sendMemberWtbPurchaseWebhook(
+          memberWtbRecordId
+        );
+
+        await sendMemberWtbDealUpdateAfterPayment(
+          memberWtbRecordId
+        );
+
+        return res.status(200).send("ok");
+      }
+
+      const terminalStatusMap = {
+        canceled: "Cancelled",
+        cancelled: "Cancelled",
+        expired: "Expired",
+        failed: "Failed"
+      };
+
+      const airtableStatus =
+        terminalStatusMap[mollieStatus];
+
+      if (airtableStatus) {
+        await Promise.all([
+          airtable(PAYMENT_BATCHES_TABLE).update(
+            batchRecordId,
+            {
+              "Payment Status": airtableStatus,
+              "Mollie Payment ID": payment.id
+            }
+          ),
+
+          airtable(MEMBER_WTBS_TABLE).update(
+            memberWtbRecordId,
+            {
+              "Payment Status": airtableStatus,
+              "Mollie Payment ID": payment.id
+            }
+          )
+        ]);
+
+        await updateMemberWtbPaymentRequestMessage(
+          memberWtbRecordId,
+          airtableStatus
+        );
+
+        return res.status(200).send("ok");
+      }
+
+      /*
+        open, authorized or another non-final status:
+        do not change Airtable yet.
+      */
+      console.log(
+        "No Member WTB action required for Mollie status:",
+        {
+          paymentId: payment.id,
+          mollieStatus
+        }
+      );
+
+      return res.status(200).send("ok");
+    } catch (err) {
+      console.error(
+        "Member WTB Mollie webhook failed:",
+        err
+      );
+
+      return res.status(500).send(
+        "webhook failed"
+      );
+    }
+  }
+);
 
 // --------------------------------------------------
 // MEMBER WTB MOLLIE PAYMENT TEST
