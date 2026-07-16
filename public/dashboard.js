@@ -814,7 +814,8 @@ const buyingConfirmedColumns = [
   "Amount",
   "Payment",
   "Status",
-  "Date"
+  "Date",
+  "Action"
 ];
 
 const buyingLabelRequestedColumns = [
@@ -838,7 +839,8 @@ const buyingReadyToShipColumns = [
   "Amount",
   "Tracking",
   "Status",
-  "Date"
+  "Date",
+  "Action"
 ];
 
 const buyingShippedColumns = [
@@ -1110,6 +1112,33 @@ function renderConsignmentOfferRows(items) {
   `).join("");
 }
 
+function renderBuyingPaymentAction(item) {
+  if (item.waiting_for_mollie) {
+    return `
+      <button
+        class="dashboard-track-blue-btn"
+        type="button"
+        disabled
+      >
+        Waiting for Mollie
+      </button>
+    `;
+  }
+
+  if (item.can_pay && item.payment_link) {
+    return `
+      <a
+        class="dashboard-confirm-btn"
+        href="${escapeHtml(item.payment_link)}"
+      >
+        Pay
+      </a>
+    `;
+  }
+
+  return "";
+}
+
 function renderBuyingAcceptedRows(items) {
   dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
 
@@ -1339,6 +1368,9 @@ function renderBuyingConfirmedRows(items) {
       <td>${escapeHtml(item.payment_status || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Confirmed</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
+      <td>
+        ${renderBuyingPaymentAction(item) || "-"}
+      </td>
     </tr>
   `).join("");
 }
@@ -1378,14 +1410,18 @@ function renderBuyingLabelRequestedRows(items) {
       <td><span class="dashboard-status-pill dashboard-status-payment">Waiting for Label</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
-        <a
-          class="dashboard-confirm-btn"
-          href="${escapeHtml(item.label_url || "#")}"
-          target="_blank"
-          rel="noopener"
-        >
-          Upload
-        </a>
+        <div class="dashboard-action-row">
+          <a
+            class="dashboard-confirm-btn"
+            href="${escapeHtml(item.label_url || "#")}"
+            target="_blank"
+            rel="noopener"
+          >
+            Upload
+          </a>
+      
+          ${renderBuyingPaymentAction(item)}
+        </div>
       </td>
     </tr>
   `).join("");
@@ -1426,6 +1462,9 @@ function renderBuyingReadyToShipRows(items) {
       <td>${escapeHtml(item.tracking_number || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Ready to Ship</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
+      <td>
+        ${renderBuyingPaymentAction(item) || "-"}
+      </td>
     </tr>
   `).join("");
 }
@@ -1465,11 +1504,22 @@ function renderBuyingShippedRows(items) {
       <td><span class="dashboard-status-pill dashboard-status-open">Shipped</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
-        ${
-          item.tracking_url
-            ? `<a class="dashboard-track-blue-btn" href="${escapeHtml(item.tracking_url)}" target="_blank" rel="noopener">Track</a>`
-            : "-"
-        }
+        <div class="dashboard-action-row">
+          ${
+            item.tracking_url
+              ? `<a
+                  class="dashboard-track-blue-btn"
+                  href="${escapeHtml(item.tracking_url)}"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  Track
+                </a>`
+              : ""
+          }
+      
+          ${renderBuyingPaymentAction(item)}
+        </div>
       </td>
     </tr>
   `).join("");
