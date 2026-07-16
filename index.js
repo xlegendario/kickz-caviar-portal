@@ -26,6 +26,9 @@ const {
   PORT = 3000,
   AIRTABLE_TOKEN,
   AIRTABLE_BASE_ID,
+  MOLLIE_API_KEY,
+  AIRTABLE_PAYMENT_BATCHES_TABLE = "Payment Batches",
+  APP_URL = "https://www.kickzcaviar.com",
   SENDGRID_API_KEY,
   RESET_EMAIL_FROM,
   APP_PUBLIC_BASE_URL = "https://kickz-caviar-portal.onrender.com",
@@ -69,6 +72,55 @@ const STOCKX_ACCESS_TOKEN_TABLE =
 const STOCK_LEVELS_TABLE = process.env.AIRTABLE_STOCK_LEVELS_TABLE || "Stock Levels";
 const MERCHANTS_TABLE = process.env.AIRTABLE_MERCHANTS_TABLE || "Merchants";
 const MEMBER_WTBS_TABLE = process.env.AIRTABLE_MEMBER_WTBS_TABLE || "Member WTBs";
+
+const PAYMENT_BATCHES_TABLE =
+  AIRTABLE_PAYMENT_BATCHES_TABLE || "Payment Batches";
+
+function mollieMoney(value) {
+  const amount = Number(value);
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Invalid Mollie payment amount");
+  }
+
+  return amount.toFixed(2);
+}
+
+async function mollieRequest(pathname, options = {}) {
+  if (!MOLLIE_API_KEY) {
+    throw new Error("Missing MOLLIE_API_KEY");
+  }
+
+  const response = await fetch(
+    `https://api.mollie.com/v2${pathname}`,
+    {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${MOLLIE_API_KEY}`,
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      }
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const error = new Error(
+      data.detail ||
+      data.title ||
+      data.message ||
+      `Mollie request failed with status ${response.status}`
+    );
+
+    error.statusCode = response.status;
+    error.mollieResponse = data;
+
+    throw error;
+  }
+
+  return data;
+}
 
 const BUYING_KC_DELIVERY_TIME = "1-2 business days";
 const BUYING_CONSIGNMENT_DELIVERY_TIME = "1-2 business days";
@@ -1013,6 +1065,235 @@ async function sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId) {
     ...readyMessage,
     deliveryType: "deal_channel"
   };
+}
+
+function getMemberWtbPaymentAmount(fields = {}) {
+  const amount =
+    Number(fields["Invoice Price"] || 0) ||
+    Number(fields["Final Buying Price"] || 0) ||
+    Number(fields["Max Price"] || 0);
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error(
+      "Member WTB has no valid Invoice Price, Final Buying Price or Max Price"
+    );
+  }
+
+  return Math.round(amount * 100) / 100;
+}
+
+function getMemberWtbDisplayId(record) {
+  const fields = record.fields || {};
+
+  return (
+    asText(fields["Member WTB ID"]) ||
+    asText(fields["WTB ID"]) ||
+    record.id
+  );
+}
+
+async function findExistingMemberWtbPaymentBatch(
+  memberWtbRecordId
+) {
+  const safeRecordId = asText(memberWtbRecordId)
+    .replace(/'/g, "\\'");
+
+  const records = await airtable(PAYMENT_BATCHES_TABLE)
+    .select({
+      fields: [
+        "Batch ID",
+        "Linked Member WTBs",
+        "Buyer",
+        "Amount",
+        "Payment Status",
+        "Payment Link",
+        "Mollie Payment ID"
+      ],
+      filterByFormula: `AND(
+        FIND(
+          '${safeRecordId}',
+          ARRAYJOIN({Linked Member WTBs})
+        ),
+        OR(
+          {Payment Status} = 'Pending',
+          {Payment Status} = 'Awaiting Payment',
+          {Payment Status} = 'Pending Payment'
+        )
+      )`,
+      maxRecords: 1
+    })
+    .firstPage();
+
+  return records[0] || null;
+}
+
+async function createMemberWtbMolliePayment(
+  memberWtbRecordId,
+  options = {}
+) {
+  const forceNew = options.forceNew === true;
+
+  const memberWtb = await airtable(
+    MEMBER_WTBS_TABLE
+  ).find(memberWtbRecordId);
+
+  const fields = memberWtb.fields || {};
+
+  const buyerRecordIds = Array.isArray(
+    fields["Buyer Seller ID"]
+  )
+    ? fields["Buyer Seller ID"]
+    : [];
+
+  const buyerRecordId = asText(buyerRecordIds[0]);
+
+  if (!buyerRecordId) {
+    throw new Error(
+      "Member WTB is missing Buyer Seller ID"
+    );
+  }
+
+  const paymentStatus = asText(
+    fields["Payment Status"]
+  );
+
+  if (paymentStatus === "Paid") {
+    throw new Error(
+      "This Member WTB is already paid"
+    );
+  }
+
+  if (paymentStatus === "Pending Payment") {
+    throw new Error(
+      "This bank transfer is already awaiting Mollie confirmation"
+    );
+  }
+
+  if (!forceNew) {
+    const existingBatch =
+      await findExistingMemberWtbPaymentBatch(
+        memberWtbRecordId
+      );
+
+    if (existingBatch) {
+      const existingPaymentLink = asText(
+        existingBatch.fields["Payment Link"]
+      );
+
+      if (existingPaymentLink) {
+        return {
+          reused: true,
+          member_wtb_record_id: memberWtbRecordId,
+          batch_record_id: existingBatch.id,
+          batch_id:
+            asText(existingBatch.fields["Batch ID"]) ||
+            existingBatch.id,
+          payment_url: existingPaymentLink,
+          mollie_payment_id: asText(
+            existingBatch.fields[
+              "Mollie Payment ID"
+            ]
+          ),
+          amount: Number(
+            existingBatch.fields["Amount"] || 0
+          )
+        };
+      }
+    }
+  }
+
+  const amount = getMemberWtbPaymentAmount(fields);
+  const memberWtbId =
+    getMemberWtbDisplayId(memberWtb);
+
+  const technicalBatchId = `MWTB-${Date.now()}`;
+
+  const batch = await airtable(
+    PAYMENT_BATCHES_TABLE
+  ).create({
+    "Linked Member WTBs": [memberWtbRecordId],
+    "Buyer": [buyerRecordId],
+    "Order Numbers": memberWtbId,
+    "Amount": amount,
+    "Payment Status": "Pending",
+    "Payment Provider": "Mollie"
+  });
+
+  try {
+    const payment = await mollieRequest(
+      "/payments",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          amount: {
+            currency: "EUR",
+            value: mollieMoney(amount)
+          },
+          description:
+            `Kickz Caviar ${memberWtbId}`,
+          redirectUrl:
+            `${APP_URL}/dashboard?` +
+            `member_wtb_payment=${encodeURIComponent(
+              memberWtbRecordId
+            )}`,
+          webhookUrl:
+            `${APP_URL}/api/mollie/member-wtb-webhook`,
+          metadata: {
+            payment_context: "member_wtb",
+            batch_record_id: batch.id,
+            batch_id: technicalBatchId,
+            member_wtb_record_id:
+              memberWtbRecordId,
+            member_wtb_id: memberWtbId,
+            buyer_record_id: buyerRecordId
+          }
+        })
+      }
+    );
+
+    const paymentUrl =
+      payment?._links?.checkout?.href || "";
+
+    if (!paymentUrl) {
+      throw new Error(
+        "Mollie did not return a checkout URL"
+      );
+    }
+
+    await airtable(PAYMENT_BATCHES_TABLE)
+      .update(batch.id, {
+        "Payment Status": "Awaiting Payment",
+        "Payment Link": paymentUrl,
+        "Mollie Payment ID": payment.id
+      });
+
+    await airtable(MEMBER_WTBS_TABLE)
+      .update(memberWtbRecordId, {
+        "Payment Status": "Awaiting Payment",
+        "Payment Link": paymentUrl,
+        "Mollie Payment ID": payment.id,
+        "Payment Batches": [batch.id]
+      });
+
+    return {
+      reused: false,
+      member_wtb_record_id: memberWtbRecordId,
+      member_wtb_id: memberWtbId,
+      batch_record_id: batch.id,
+      batch_id: technicalBatchId,
+      payment_url: paymentUrl,
+      mollie_payment_id: payment.id,
+      amount
+    };
+  } catch (err) {
+    await airtable(PAYMENT_BATCHES_TABLE)
+      .update(batch.id, {
+        "Payment Status": "Failed"
+      })
+      .catch(() => {});
+
+    throw err;
+  }
 }
 
 async function sendMemberWtbPaymentRequest(memberWtbRecordId, memberFields, buyerSeller, options = {}) {
@@ -12793,6 +13074,69 @@ app.post("/api/dashboard/buying/cancel-wtb", async (req, res) => {
     });
   }
 });
+
+// --------------------------------------------------
+// MEMBER WTB MOLLIE PAYMENT TEST
+// Temporary internal endpoint.
+// --------------------------------------------------
+
+app.post(
+  "/api/internal/member-wtb/mollie/create-test",
+  async (req, res) => {
+    try {
+      const providedSecret = asText(
+        req.headers["x-kc-secret"]
+      );
+
+      const expectedSecret = asText(
+        process.env.KC_PORTAL_SECRET
+      );
+
+      if (
+        !expectedSecret ||
+        providedSecret !== expectedSecret
+      ) {
+        return res.status(401).json({
+          error: "Unauthorized"
+        });
+      }
+
+      const memberWtbRecordId = asText(
+        req.body?.member_wtb_record_id
+      );
+
+      if (!memberWtbRecordId) {
+        return res.status(400).json({
+          error:
+            "Missing member_wtb_record_id"
+        });
+      }
+
+      const result =
+        await createMemberWtbMolliePayment(
+          memberWtbRecordId
+        );
+
+      res.json({
+        ok: true,
+        ...result
+      });
+    } catch (err) {
+      console.error(
+        "Member WTB Mollie test failed:",
+        err
+      );
+
+      res.status(500).json({
+        error:
+          "Failed to create Member WTB Mollie payment",
+        details: err.message,
+        mollie_response:
+          err.mollieResponse || null
+      });
+    }
+  }
+);
 
 app.listen(PORT, () => {
   console.log(`Kickz Caviar Portal running on port ${PORT}`);
