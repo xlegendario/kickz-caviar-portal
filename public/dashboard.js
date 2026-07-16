@@ -1125,14 +1125,28 @@ function renderBuyingPaymentAction(item) {
     `;
   }
 
-  if (item.can_pay && item.payment_link) {
+  const payableStatuses = [
+    "Awaiting Payment",
+    "Expired",
+    "Cancelled",
+    "Failed"
+  ];
+
+  if (
+    payableStatuses.includes(
+      item.payment_status
+    )
+  ) {
     return `
-      <a
+      <button
         class="dashboard-confirm-btn"
-        href="${escapeHtml(item.payment_link)}"
+        type="button"
+        data-member-wtb-pay-id="${escapeHtml(
+          item.member_wtb_record_id || item.id || ""
+        )}"
       >
         Pay
-      </a>
+      </button>
     `;
   }
 
@@ -5093,6 +5107,90 @@ dashboardSearchInput.addEventListener("input", () => {
     `;
   });
 });
+
+document.addEventListener(
+  "click",
+  async (event) => {
+    const payButton = event.target.closest(
+      "[data-member-wtb-pay-id]"
+    );
+
+    if (!payButton) return;
+
+    if (payButton.dataset.processing === "true") {
+      return;
+    }
+
+    const memberWtbRecordId =
+      payButton.dataset.memberWtbPayId;
+
+    if (
+      !memberWtbRecordId ||
+      !dashboardSeller?.id
+    ) {
+      showDashboardToast(
+        "Payment could not be opened.",
+        "error"
+      );
+
+      return;
+    }
+
+    payButton.dataset.processing = "true";
+    payButton.disabled = true;
+
+    const originalText =
+      payButton.textContent;
+
+    payButton.textContent = "Opening...";
+
+    try {
+      const response = await fetch(
+        "/api/dashboard/buying/payment-link",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            member_wtb_record_id:
+              memberWtbRecordId,
+            buyer_record_id:
+              dashboardSeller.id
+          })
+        }
+      );
+
+      const data = await response
+        .json()
+        .catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.error ||
+          "Payment could not be opened"
+        );
+      }
+
+      if (!data.payment_url) {
+        throw new Error(
+          "No Mollie payment link was returned"
+        );
+      }
+
+      window.location.href = data.payment_url;
+    } catch (err) {
+      showDashboardToast(
+        err.message,
+        "error"
+      );
+
+      payButton.dataset.processing = "false";
+      payButton.disabled = false;
+      payButton.textContent = originalText;
+    }
+  }
+);
 
 renderSubnav();
 bindNavigation();
