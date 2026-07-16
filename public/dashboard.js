@@ -1313,21 +1313,24 @@ function renderBuyingPaymentRequiredRows(items) {
       <td>${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
-      <td><span class="dashboard-status-pill dashboard-status-payment">Payment Required</span></td>
+      <td>
+        ${
+          item.waiting_for_mollie
+            ? `
+              <span class="dashboard-status-pill dashboard-status-open">
+                Waiting for Mollie
+              </span>
+            `
+            : `
+              <span class="dashboard-status-pill dashboard-status-payment">
+                Payment Required
+              </span>
+            `
+        }
+      </td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
-        <button
-          class="dashboard-confirm-btn"
-          type="button"
-          data-buying-pay-id="${escapeHtml(item.member_wtb_record_id || "")}"
-          data-order-id="${escapeHtml(item.order_id || "")}"
-          data-product="${escapeHtml(item.product || "")}"
-          data-sku="${escapeHtml(item.sku || "")}"
-          data-size="${escapeHtml(item.size || "")}"
-          data-amount="${escapeHtml(item.amount || "")}"
-        >
-          Pay
-        </button>
+        ${renderBuyingPaymentAction(item) || "-"}
       </td>
     </tr>
   `).join("");
