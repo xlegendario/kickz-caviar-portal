@@ -8859,6 +8859,30 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
   }
 });
 
+function getBuyingPaymentUiFields(fields = {}) {
+  const paymentStatus = displayValue(
+    fields["Payment Status"]
+  );
+
+  const paymentLink = displayValue(
+    fields["Payment Link"]
+  );
+
+  const canPay =
+    paymentStatus === "Awaiting Payment" &&
+    Boolean(paymentLink);
+
+  const waitingForMollie =
+    paymentStatus === "Pending Payment";
+
+  return {
+    payment_status: paymentStatus,
+    payment_link: paymentLink,
+    can_pay: canPay,
+    waiting_for_mollie: waitingForMollie
+  };
+}
+
 app.get("/api/dashboard/buying-accepted", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
@@ -8942,10 +8966,14 @@ app.get("/api/dashboard/buying-payment-required", async (req, res) => {
           "Final Buying Price",
           "Max Price",
           "Payment Status",
+          "Payment Link",
           "Fulfillment Status",
           "Date"
         ],
-        filterByFormula: `{Payment Status} = 'Requested'`
+        filterByFormula: `OR(
+          {Payment Status} = 'Awaiting Payment',
+          {Payment Status} = 'Pending Payment'
+        )`
       })
       .all();
 
@@ -8970,7 +8998,15 @@ app.get("/api/dashboard/buying-payment-required", async (req, res) => {
           brand: displayValue(f["Brand"]),
           amount: moneyValue(amount),
           amount_raw: amount,
-          status: "Payment Required",
+          
+          ...getBuyingPaymentUiFields(f),
+          
+          status:
+            displayValue(f["Payment Status"]) ===
+            "Pending Payment"
+              ? "Waiting for Mollie"
+              : "Payment Required",
+          
           date: formatDateEU(f["Date"]),
           raw_date: f["Date"]
         };
@@ -9010,15 +9046,18 @@ app.get("/api/dashboard/buying-confirmed", async (req, res) => {
           "Final Buying Price",
           "Max Price",
           "Payment Status",
+          "Payment Link",
           "Fulfillment Status",
           "Date"
         ],
         filterByFormula: `AND(
+          {Fulfillment Status} = 'Allocated',
           OR(
             {Payment Status} = 'Paid',
+            {Payment Status} = 'Awaiting Payment',
+            {Payment Status} = 'Pending Payment',
             {Payment Status} = 'Trusted'
-          ),
-          {Fulfillment Status} = 'Allocated'
+          )
         )`
       })
       .all();
@@ -9043,7 +9082,8 @@ app.get("/api/dashboard/buying-confirmed", async (req, res) => {
           size: displayValue(f["Size"]),
           brand: displayValue(f["Brand"]),
           amount: moneyValue(amount),
-          payment_status: displayValue(f["Payment Status"]),
+          ...getBuyingPaymentUiFields(f),
+
           status: "Confirmed",
           date: formatDateEU(f["Date"]),
           raw_date: f["Date"]
@@ -9084,6 +9124,7 @@ app.get("/api/dashboard/buying-label-requested", async (req, res) => {
           "Final Buying Price",
           "Max Price",
           "Payment Status",
+          "Payment Link",
           "Fulfillment Status",
           "Date"
         ],
@@ -9111,7 +9152,8 @@ app.get("/api/dashboard/buying-label-requested", async (req, res) => {
           size: displayValue(f["Size"]),
           brand: displayValue(f["Brand"]),
           amount: moneyValue(amount),
-          payment_status: displayValue(f["Payment Status"]),
+          ...getBuyingPaymentUiFields(f),
+
           status: "Waiting for Label",
           date: formatDateEU(f["Date"]),
           raw_date: f["Date"],
@@ -9153,6 +9195,7 @@ app.get("/api/dashboard/buying-ready-to-ship", async (req, res) => {
           "Final Buying Price",
           "Max Price",
           "Payment Status",
+          "Payment Link",
           "Fulfillment Status",
           "Shipping Label Permanent URL",
           "Tracking Number",
@@ -9182,6 +9225,7 @@ app.get("/api/dashboard/buying-ready-to-ship", async (req, res) => {
           size: displayValue(f["Size"]),
           brand: displayValue(f["Brand"]),
           amount: moneyValue(amount),
+          ...getBuyingPaymentUiFields(f),
           status: "Ready to Ship",
           tracking_number: displayValue(f["Tracking Number"]),
           label_url: displayValue(f["Shipping Label Permanent URL"]),
@@ -9223,6 +9267,8 @@ app.get("/api/dashboard/buying-shipped", async (req, res) => {
           "Invoice Price",
           "Final Buying Price",
           "Max Price",
+          "Payment Status",
+          "Payment Link",
           "Shipping Status",
           "Tracking Number",
           "Tracking URL",
@@ -9252,6 +9298,7 @@ app.get("/api/dashboard/buying-shipped", async (req, res) => {
           size: displayValue(f["Size"]),
           brand: displayValue(f["Brand"]),
           amount: moneyValue(amount),
+          ...getBuyingPaymentUiFields(f),
           tracking_number: displayValue(f["Tracking Number"]),
           tracking_url: displayValue(f["Tracking URL"]),
           status: "Shipped",
@@ -9323,15 +9370,8 @@ app.get("/api/dashboard/buying-delivered", async (req, res) => {
           f["Payment Link"]
         );
         
-        const requiresPayment = [
-          "Awaiting Payment",
-          "Requested",
-          "Pending",
-          "Trusted",
-          "Cancelled",
-          "Expired",
-          "Failed"
-        ].includes(paymentStatus);
+        const requiresPayment =
+          paymentStatus === "Awaiting Payment";
         
         const waitingForMollie =
           paymentStatus === "Pending Payment";
