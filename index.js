@@ -13987,16 +13987,26 @@ async function postMemberWtbDiscordPanel() {
     `${APP_URL}/templates/` +
     `member-wtb-template.csv`;
 
+  const templatePath = path.join(
+    __dirname,
+    "public",
+    "templates",
+    "member-wtb-template.csv"
+  );
+  
   const message = await channel.send({
+    content:
+      "Download the attached CSV template below for bulk Member WTB uploads.",
+  
     embeds: [
       {
         title: "📋 Post Member Want To Buys",
-
+  
         description: [
           "Create a single Want To Buy using the button below.",
           "",
           "To create multiple WTBs:",
-          "1. Download the CSV template.",
+          "1. Download the attached CSV template.",
           "2. Fill in the SKU, Size and Max Price.",
           "3. Upload the completed CSV directly in this channel.",
           "",
@@ -14007,18 +14017,24 @@ async function postMemberWtbDiscordPanel() {
           "",
           "Your selection applies to both single WTBs and CSV uploads."
         ].join("\n"),
-
+  
         color: 0x111111,
-
+  
         footer: {
           text: "Kickz Caviar Member Marketplace"
         },
-
-        timestamp:
-          new Date().toISOString()
+  
+        timestamp: new Date().toISOString()
       }
     ],
-
+  
+    files: [
+      {
+        attachment: templatePath,
+        name: "member-wtb-template.csv"
+      }
+    ],
+  
     components: [
       {
         type: 1,
@@ -14029,12 +14045,6 @@ async function postMemberWtbDiscordPanel() {
             label: "Create Member WTB",
             custom_id:
               MEMBER_WTB_DISCORD_PANEL_BUTTON_ID
-          },
-          {
-            type: 2,
-            style: 5,
-            label: "Download CSV Template",
-            url: templateUrl
           }
         ]
       },
@@ -14045,8 +14055,7 @@ async function postMemberWtbDiscordPanel() {
             type: 3,
             custom_id:
               MEMBER_WTB_DISCORD_INVENTORY_SELECT_ID,
-            placeholder:
-              "Choose Buying Type",
+            placeholder: "Choose Buying Type",
             min_values: 1,
             max_values: 1,
             options: [
