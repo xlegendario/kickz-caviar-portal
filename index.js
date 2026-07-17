@@ -203,7 +203,9 @@ const discordClient = new Client({
 
 const kickzDealDiscordClient = new Client({
   intents: [
-    GatewayIntentBits.Guilds
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
   ]
 });
 
