@@ -13984,19 +13984,9 @@ async function postMemberWtbDiscordPanel() {
   }
 
   const templateUrl =
-    `${APP_URL}/templates/` +
-    `member-wtb-template.csv`;
-
-  const templatePath = path.join(
-    __dirname,
-    "public",
-    "templates",
-    "member-wtb-template.csv"
-  );
+  `${APP_URL}/templates/member-wtb-template.csv`;
   
   const message = await channel.send({
-    content:
-      "Download the attached CSV template below for bulk Member WTB uploads.",
   
     embeds: [
       {
@@ -14018,20 +14008,13 @@ async function postMemberWtbDiscordPanel() {
           "Your selection applies to both single WTBs and CSV uploads."
         ].join("\n"),
   
-        color: 0x111111,
+        color: 0xFFD700,
   
         footer: {
           text: "Kickz Caviar Member Marketplace"
         },
   
         timestamp: new Date().toISOString()
-      }
-    ],
-  
-    files: [
-      {
-        attachment: templatePath,
-        name: "member-wtb-template.csv"
       }
     ],
   
@@ -14045,6 +14028,12 @@ async function postMemberWtbDiscordPanel() {
             label: "Create Member WTB",
             custom_id:
               MEMBER_WTB_DISCORD_PANEL_BUTTON_ID
+          },
+          {
+            type: 2,
+            style: 5,
+            label: "Download CSV Template",
+            url: templateUrl
           }
         ]
       },
