@@ -46,6 +46,7 @@ const {
   STOCKX_REFRESH_TOKEN,
   AIRTABLE_DISCORD_UPDATES_URL = "https://airtable-discord-updates.onrender.com",
   COUNTER_OFFERS_SECRET,
+  MEMBER_WTB_POST_CHANNEL_ID,
   BUYING_KC_CONFIRMATION_CHANNEL_ID,
   BUYING_KC_OFFER_REQUESTS_CHANNEL_ID
 } = process.env;
@@ -213,6 +214,21 @@ let discordReady = false;
 let kickzDealDiscordReady = false;
 let consignmentButtonsBound = false;
 let kickzDealButtonsBound = false;
+let memberWtbCreationBound = false;
+let memberWtbCsvUploadsBound = false;
+
+const memberWtbDiscordInventoryTypes = new Map();
+
+const MEMBER_WTB_DISCORD_DEFAULT_INVENTORY_TYPE = "all";
+
+const MEMBER_WTB_DISCORD_PANEL_BUTTON_ID =
+  "member_wtb_discord_create";
+
+const MEMBER_WTB_DISCORD_INVENTORY_SELECT_ID =
+  "member_wtb_discord_inventory_type";
+
+const MEMBER_WTB_DISCORD_MODAL_PREFIX =
+  "member_wtb_discord_modal:";
 
 async function initDiscord() {
   if (discordReady) return;
@@ -249,6 +265,22 @@ async function initKickzDealDiscord() {
   if (!kickzDealButtonsBound) {
     bindConsignmentDiscordButtons(kickzDealDiscordClient);
     kickzDealButtonsBound = true;
+  }
+
+  if (!memberWtbCreationBound) {
+    bindMemberWtbDiscordCreation(
+      kickzDealDiscordClient
+    );
+  
+    memberWtbCreationBound = true;
+  }
+  
+  if (!memberWtbCsvUploadsBound) {
+    bindMemberWtbDiscordCsvUploads(
+      kickzDealDiscordClient
+    );
+  
+    memberWtbCsvUploadsBound = true;
   }
 
   console.log("✅ Kickz deal Discord bot logged in");
@@ -2618,6 +2650,462 @@ async function safeEditInteractionMessage(interaction, payload, preferredClient 
     });
     return null;
   }
+}
+
+function bindMemberWtbDiscordCreation(
+  client
+) {
+  client.on(
+    Events.InteractionCreate,
+    async (interaction) => {
+      try {
+        const customId =
+          String(
+            interaction.customId || ""
+          );
+
+        if (
+          interaction.isStringSelectMenu() &&
+          customId ===
+            MEMBER_WTB_DISCORD_INVENTORY_SELECT_ID
+        ) {
+          const inventoryType =
+            normalizeBuyingInventoryType(
+              interaction.values?.[0]
+            );
+
+          memberWtbDiscordInventoryTypes.set(
+            interaction.user.id,
+            inventoryType
+          );
+
+          await interaction.reply({
+            content:
+              `✅ Buying Type set to **${getBuyingInventoryFilterLabel(
+                inventoryType
+              )}**.\n\n` +
+              "This applies to your next single WTBs and CSV uploads.",
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        if (
+          interaction.isButton() &&
+          customId ===
+            MEMBER_WTB_DISCORD_PANEL_BUTTON_ID
+        ) {
+          const inventoryType =
+            memberWtbDiscordInventoryTypes.get(
+              interaction.user.id
+            ) ||
+            MEMBER_WTB_DISCORD_DEFAULT_INVENTORY_TYPE;
+
+          const modal = {
+            title: "Create Member WTB",
+
+            custom_id:
+              `${MEMBER_WTB_DISCORD_MODAL_PREFIX}` +
+              `${inventoryType}`,
+
+            components: [
+              {
+                type: 1,
+                components: [
+                  {
+                    type: 4,
+                    custom_id: "sku",
+                    label: "SKU",
+                    style: 1,
+                    min_length: 2,
+                    max_length: 50,
+                    placeholder:
+                      "Example: DD1391-100",
+                    required: true
+                  }
+                ]
+              },
+              {
+                type: 1,
+                components: [
+                  {
+                    type: 4,
+                    custom_id: "size",
+                    label: "Size",
+                    style: 1,
+                    min_length: 1,
+                    max_length: 20,
+                    placeholder:
+                      "Example: 43",
+                    required: true
+                  }
+                ]
+              },
+              {
+                type: 1,
+                components: [
+                  {
+                    type: 4,
+                    custom_id: "max_price",
+                    label:
+                      "Maximum Buying Price",
+                    style: 1,
+                    min_length: 1,
+                    max_length: 10,
+                    placeholder:
+                      "Example: 120",
+                    required: true
+                  }
+                ]
+              }
+            ]
+          };
+
+          await interaction.showModal(
+            modal
+          );
+
+          return;
+        }
+
+        if (
+          interaction.isModalSubmit() &&
+          customId.startsWith(
+            MEMBER_WTB_DISCORD_MODAL_PREFIX
+          )
+        ) {
+          await interaction.deferReply({
+            ephemeral: true
+          });
+
+          const sellerRecord =
+            await findSellerByDiscordUserId(
+              interaction.user.id
+            );
+
+          if (!sellerRecord) {
+            await interaction.editReply({
+              content:
+                "❌ Your Discord account is not linked to a Kickz Caviar member account."
+            });
+
+            return;
+          }
+
+          const seller =
+            normalizeSeller(sellerRecord);
+
+          if (seller.portal_enabled === false) {
+            await interaction.editReply({
+              content:
+                "❌ Your Kickz Caviar account is currently disabled."
+            });
+
+            return;
+          }
+
+          const inventoryType =
+            normalizeBuyingInventoryType(
+              customId.slice(
+                MEMBER_WTB_DISCORD_MODAL_PREFIX
+                  .length
+              )
+            );
+
+          const sku =
+            interaction.fields
+              .getTextInputValue("sku");
+
+          const size =
+            interaction.fields
+              .getTextInputValue("size");
+
+          const maxPrice =
+            Number(
+              interaction.fields
+                .getTextInputValue(
+                  "max_price"
+                )
+                .replace(/[^\d]/g, "")
+            );
+
+          const result =
+            await createOpenMemberWtb({
+              sellerRecordId:
+                sellerRecord.id,
+              sellerId:
+                seller.seller_id,
+              sku,
+              size,
+              maxPrice,
+              inventoryType,
+              createdFrom:
+                "Discord Single WTB"
+            });
+
+          await interaction.editReply({
+            content: [
+              "✅ **Member WTB created**",
+              "",
+              `**Product:** ${result.product_name}`,
+              `**SKU:** ${result.sku}`,
+              `**Size:** ${result.size}`,
+              `**Max Price:** €${Number(
+                result.max_price
+              ).toFixed(2)}`,
+              `**Buying Type:** ${getBuyingInventoryFilterLabel(
+                result.inventory_type
+              )}`,
+              "",
+              "You will automatically receive offers when sellers respond."
+            ].join("\n")
+          });
+
+          return;
+        }
+      } catch (error) {
+        console.error(
+          "Member WTB Discord creation failed:",
+          error
+        );
+
+        if (
+          interaction.deferred ||
+          interaction.replied
+        ) {
+          await interaction
+            .editReply({
+              content:
+                `❌ ${error.message}`
+            })
+            .catch(() => {});
+        } else {
+          await interaction
+            .reply({
+              content:
+                `❌ ${error.message}`,
+              ephemeral: true
+            })
+            .catch(() => {});
+        }
+      }
+    }
+  );
+}
+
+function bindMemberWtbDiscordCsvUploads(
+  client
+) {
+  client.on(
+    Events.MessageCreate,
+    async (message) => {
+      if (message.author.bot) {
+        return;
+      }
+
+      if (
+        !MEMBER_WTB_POST_CHANNEL_ID ||
+        message.channelId !==
+          MEMBER_WTB_POST_CHANNEL_ID
+      ) {
+        return;
+      }
+
+      const csvAttachment =
+        [...message.attachments.values()]
+          .find((attachment) => {
+            const filename =
+              String(
+                attachment.name || ""
+              ).toLowerCase();
+
+            return (
+              filename.endsWith(".csv") ||
+              attachment.contentType ===
+                "text/csv"
+            );
+          });
+
+      if (!csvAttachment) {
+        await message.delete()
+          .catch(() => {});
+
+        const warning =
+          await message.channel.send({
+            content:
+              `<@${message.author.id}> ` +
+              "please upload a valid `.csv` file."
+          });
+
+        setTimeout(() => {
+          warning.delete().catch(() => {});
+        }, 15000);
+
+        return;
+      }
+
+      let resultMessage = null;
+
+      try {
+        resultMessage =
+          await message.channel.send({
+            content:
+              `<@${message.author.id}> ` +
+              "⏳ Processing your Member WTB CSV..."
+          });
+
+        const sellerRecord =
+          await findSellerByDiscordUserId(
+            message.author.id
+          );
+
+        if (!sellerRecord) {
+          throw new Error(
+            "Your Discord account is not linked to a Kickz Caviar member account."
+          );
+        }
+
+        const seller =
+          normalizeSeller(sellerRecord);
+
+        if (seller.portal_enabled === false) {
+          throw new Error(
+            "Your Kickz Caviar account is currently disabled."
+          );
+        }
+
+        const response = await fetch(
+          csvAttachment.url
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            "The uploaded CSV could not be downloaded."
+          );
+        }
+
+        const csvText =
+          await response.text();
+
+        const parsed =
+          parseMemberWtbCsvText(
+            csvText
+          );
+
+        if (parsed.errors.length) {
+          throw new Error(
+            parsed.errors
+              .slice(0, 10)
+              .join("\n")
+          );
+        }
+
+        const inventoryType =
+          memberWtbDiscordInventoryTypes.get(
+            message.author.id
+          ) ||
+          MEMBER_WTB_DISCORD_DEFAULT_INVENTORY_TYPE;
+
+        let successCount = 0;
+        const failedRows = [];
+
+        for (const row of parsed.rows) {
+          try {
+            await createOpenMemberWtb({
+              sellerRecordId:
+                sellerRecord.id,
+              sellerId:
+                seller.seller_id,
+              sku:
+                row.sku,
+              size:
+                row.size,
+              maxPrice:
+                row.max_price,
+              inventoryType,
+              createdFrom:
+                "Discord CSV Upload"
+            });
+
+            successCount += 1;
+
+            await resultMessage.edit({
+              content:
+                `<@${message.author.id}> ` +
+                `⏳ Created ${successCount}/${parsed.rows.length} WTBs...`
+            });
+          } catch (error) {
+            failedRows.push(
+              `Row ${row.row_number}: ${error.message}`
+            );
+          }
+        }
+
+        const resultLines = [
+          `<@${message.author.id}>`,
+          "",
+          "✅ **CSV processing completed**",
+          "",
+          `Created: **${successCount}**`,
+          `Failed: **${failedRows.length}**`,
+          `Buying Type: **${getBuyingInventoryFilterLabel(
+            inventoryType
+          )}**`
+        ];
+
+        if (failedRows.length) {
+          resultLines.push(
+            "",
+            "**Failed rows:**",
+            failedRows
+              .slice(0, 10)
+              .join("\n")
+          );
+        }
+
+        await resultMessage.edit({
+          content:
+            resultLines.join("\n")
+        });
+      } catch (error) {
+        console.error(
+          "Member WTB Discord CSV processing failed:",
+          error
+        );
+
+        const content = [
+          `<@${message.author.id}>`,
+          "",
+          "❌ **CSV upload failed**",
+          "",
+          error.message
+        ].join("\n");
+
+        if (resultMessage) {
+          await resultMessage.edit({
+            content
+          });
+        } else {
+          resultMessage =
+            await message.channel.send({
+              content
+            });
+        }
+      } finally {
+        await message.delete()
+          .catch(() => {});
+
+        if (resultMessage) {
+          setTimeout(() => {
+            resultMessage
+              .delete()
+              .catch(() => {});
+          }, 30000);
+        }
+      }
+    }
+  );
 }
 
 function bindConsignmentDiscordButtons(client) {
@@ -13064,128 +13552,176 @@ app.post("/api/buying/offers", async (req, res) => {
   }
 });
 
-app.post("/api/member-wtb/open", async (req, res) => {
-  try {
-    const sellerRecordId = asText(req.body?.seller_record_id);
-    const sellerId = asText(req.body?.seller_id);
-    const sku = normalizeSku(req.body?.sku);
-    const size = getBuyingSizeKey(req.body?.size);
-    const maxPrice = Number(req.body?.max_price);
-    const inventoryType = normalizeBuyingInventoryType(req.body?.inventory_type);
+async function createOpenMemberWtb({
+  sellerRecordId,
+  sellerId,
+  sku: rawSku,
+  size: rawSize,
+  maxPrice: rawMaxPrice,
+  inventoryType: rawInventoryType,
+  createdFrom = "Buying Portal"
+}) {
+  const sku = normalizeSku(rawSku);
+  const size = getBuyingSizeKey(rawSize);
+  const maxPrice = Number(rawMaxPrice);
+  const inventoryType =
+    normalizeBuyingInventoryType(rawInventoryType);
 
-    if (!sellerRecordId || !sellerId) {
-      return res.status(401).json({ error: "Login required" });
+  if (!sellerRecordId || !sellerId) {
+    const error = new Error("Buyer could not be identified");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  if (!sku || !size) {
+    const error = new Error("SKU and size are required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (
+    !Number.isFinite(maxPrice) ||
+    maxPrice <= 0
+  ) {
+    const error = new Error("Invalid max price");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const liveSources =
+    await getLiveBuyingSources({
+      force: true
+    });
+
+  let product =
+    (liveSources || []).find(
+      (source) =>
+        normalizeSku(source.sku) === sku
+    ) || null;
+
+  if (!product) {
+    let skuMasterRecords = await airtable(
+      SKU_MASTER_TABLE
+    )
+      .select({
+        filterByFormula:
+          `{SKU} = "${escapeFormulaValue(sku)}"`,
+        maxRecords: 1
+      })
+      .firstPage();
+
+    let skuMaster = skuMasterRecords[0];
+
+    if (!skuMaster) {
+      skuMaster =
+        await createSkuMasterFromRetailedIfExactSku(
+          sku
+        );
     }
 
-    if (!sku || !size) {
-      return res.status(400).json({ error: "SKU and size are required" });
-    }
+    if (skuMaster) {
+      const fields = skuMaster.fields || {};
 
-    if (!Number.isFinite(maxPrice) || maxPrice <= 0) {
-      return res.status(400).json({ error: "Invalid max price" });
-    }
+      product = {
+        product_name:
+          asText(fields["Product Name"]),
+        brand:
+          asText(fields["Brand"]),
+        image_url:
+          Array.isArray(fields["Picture"]) &&
+          fields["Picture"][0]?.url
+            ? fields["Picture"][0].url
+            : ""
+      };
+    } else {
+      const retailedProduct =
+        await lookupProductFromRetailed(sku)
+          .catch(() => null);
 
-    const liveSources = await getLiveBuyingSources({ force: true });
-
-    let product =
-      (liveSources || []).find((source) => normalizeSku(source.sku) === sku) ||
-      null;
-    
-    if (!product) {
-      let skuMasterRecords = await airtable(SKU_MASTER_TABLE)
-        .select({
-          filterByFormula: `{SKU} = "${escapeFormulaValue(sku)}"`,
-          maxRecords: 1
-        })
-        .firstPage();
-    
-      let skuMaster = skuMasterRecords[0];
-    
-      if (!skuMaster) {
-        skuMaster = await createSkuMasterFromRetailedIfExactSku(sku);
-      }
-    
-      if (skuMaster) {
-        const f = skuMaster.fields || {};
-    
+      if (retailedProduct) {
         product = {
-          product_name: asText(f["Product Name"]),
-          brand: asText(f["Brand"]),
+          product_name:
+            asText(
+              retailedProduct.product_name
+            ) || sku,
+          brand:
+            asText(retailedProduct.brand),
           image_url:
-            Array.isArray(f["Picture"]) && f["Picture"][0]?.url
-              ? f["Picture"][0].url
-              : ""
+            asText(retailedProduct.image)
         };
-      } else {
-        const retailedProduct = await lookupProductFromRetailed(sku).catch(() => null);
-    
-        if (retailedProduct) {
-          product = {
-            product_name: asText(retailedProduct.product_name) || sku,
-            brand: asText(retailedProduct.brand),
-            image_url: asText(retailedProduct.image)
-          };
-        }
       }
     }
-    
-    product = product || {};
+  }
 
-    const productName =
-      asText(product.product_name) ||
-      sku;
+  product = product || {};
 
-    const brand =
-      asText(product.brand) ||
-      "";
+  const productName =
+    asText(product.product_name) || sku;
 
-    const imageUrl =
-      asText(product.image_url) ||
-      "";
+  const brand =
+    asText(product.brand);
 
-    const fields = {
-      "Product Name": productName,
-      "SKU": sku,
-      "Size": size,
-      "Brand": brand,
-      "Date": new Date().toISOString(),
-    
-      "Max Price": maxPrice,
-      "Offer Margin": 10,
-      "Current Lowest Source Price": maxPrice,
+  const imageUrl =
+    asText(product.image_url);
 
-      "Fulfillment Status": "Outsource",
-      "Purchase Status": "Offers Sent",
-      "Payment Status": "Pending",
+  const fields = {
+    "Product Name": productName,
+    "SKU": sku,
+    "Size": size,
+    "Brand": brand,
+    "Date": new Date().toISOString(),
 
-      "Buyer Seller ID": [sellerRecordId],
-      "Auto Accept Seller Offers?": false,
+    "Max Price": maxPrice,
+    "Offer Margin": 10,
+    "Current Lowest Source Price": maxPrice,
 
-      "Buying Inventory Filter": getBuyingInventoryFilterLabel(inventoryType),
-      "Buying Selected Source ID": "",
+    "Fulfillment Status": "Outsource",
+    "Purchase Status": "Offers Sent",
+    "Payment Status": "Pending",
 
-      "Offer Sent?": false,
-      "New Offer Available": false,
+    "Buyer Seller ID": [sellerRecordId],
+    "Auto Accept Seller Offers?": false,
 
-      "Internal Notes": [
-        "Open WTB",
-        "",
-        `Filter: ${getBuyingInventoryFilterLabel(inventoryType)}`,
-        `Buyer Max Price: ${buyingMoneyValue(maxPrice)}`,
-        "Created From: Buying Portal"
-      ].join("\n")
-    };
+    "Buying Inventory Filter":
+      getBuyingInventoryFilterLabel(
+        inventoryType
+      ),
 
-    if (imageUrl) {
-      fields["Picture"] = [{ url: imageUrl }];
-    }
+    "Buying Selected Source ID": "",
 
-    const created = await airtable(MEMBER_WTBS_TABLE).create(fields);
+    "Offer Sent?": false,
+    "New Offer Available": false,
 
-    let wtbPost = null;
+    "Internal Notes": [
+      "Open WTB",
+      "",
+      `Filter: ${getBuyingInventoryFilterLabel(
+        inventoryType
+      )}`,
+      `Buyer Max Price: ${buyingMoneyValue(
+        maxPrice
+      )}`,
+      `Created From: ${createdFrom}`
+    ].join("\n")
+  };
 
-    try {
-      wtbPost = await postMemberWtbToWtbBot({
+  if (imageUrl) {
+    fields["Picture"] = [
+      {
+        url: imageUrl
+      }
+    ];
+  }
+
+  const created = await airtable(
+    MEMBER_WTBS_TABLE
+  ).create(fields);
+
+  let wtbPost = null;
+
+  try {
+    wtbPost =
+      await postMemberWtbToWtbBot({
         recordId: created.id,
         productName,
         sku,
@@ -13193,26 +13729,406 @@ app.post("/api/member-wtb/open", async (req, res) => {
         brand,
         imageUrl
       });
-    } catch (err) {
-      console.error("Failed to post Open Member WTB to WTB bot:", err);
+  } catch (error) {
+    console.error(
+      "Failed to post Open Member WTB to WTB bot:",
+      error
+    );
+  }
+
+  return {
+    success: true,
+    member_wtb_record_id: created.id,
+    purchase_status: "Offers Sent",
+    wtb_posted: Boolean(wtbPost),
+    wtb_post: wtbPost,
+    product_name: productName,
+    sku,
+    size,
+    max_price: maxPrice,
+    inventory_type: inventoryType
+  };
+}
+
+function detectMemberWtbCsvDelimiter(
+  headerLine
+) {
+  const line = String(headerLine || "");
+
+  const commaCount =
+    (line.match(/,/g) || []).length;
+
+  const semicolonCount =
+    (line.match(/;/g) || []).length;
+
+  const tabCount =
+    (line.match(/\t/g) || []).length;
+
+  if (
+    semicolonCount > commaCount &&
+    semicolonCount >= tabCount
+  ) {
+    return ";";
+  }
+
+  if (
+    tabCount > commaCount &&
+    tabCount > semicolonCount
+  ) {
+    return "\t";
+  }
+
+  return ",";
+}
+
+function parseMemberWtbCsvLine(
+  line,
+  delimiter = ","
+) {
+  const result = [];
+  let current = "";
+  let insideQuotes = false;
+
+  for (
+    let index = 0;
+    index < line.length;
+    index += 1
+  ) {
+    const character = line[index];
+    const nextCharacter =
+      line[index + 1];
+
+    if (
+      character === '"' &&
+      insideQuotes &&
+      nextCharacter === '"'
+    ) {
+      current += '"';
+      index += 1;
+      continue;
     }
 
-    return res.json({
-      success: true,
-      member_wtb_record_id: created.id,
-      purchase_status: "Offers Sent",
-      wtb_posted: !!wtbPost,
-      wtb_post: wtbPost
-    });
-  } catch (err) {
-    console.error("Failed to create Open Member WTB:", err);
+    if (character === '"') {
+      insideQuotes = !insideQuotes;
+      continue;
+    }
 
-    return res.status(500).json({
-      error: "Failed to create Open WTB",
-      details: err.message
-    });
+    if (
+      character === delimiter &&
+      !insideQuotes
+    ) {
+      result.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += character;
   }
-});
+
+  result.push(current.trim());
+
+  return result;
+}
+
+function parseMemberWtbCsvText(text) {
+  const lines = String(text || "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) {
+    throw new Error(
+      "CSV must include a header row and at least one WTB row."
+    );
+  }
+
+  const delimiter =
+    detectMemberWtbCsvDelimiter(lines[0]);
+
+  const headers =
+    parseMemberWtbCsvLine(
+      lines[0],
+      delimiter
+    ).map((header) =>
+      String(header || "")
+        .replace(/^\uFEFF/, "")
+        .trim()
+        .toLowerCase()
+    );
+
+  const requiredColumns = [
+    "sku",
+    "size",
+    "max price"
+  ];
+
+  const missingColumns =
+    requiredColumns.filter(
+      (column) =>
+        !headers.includes(column)
+    );
+
+  if (missingColumns.length) {
+    throw new Error(
+      `Missing required columns: ${missingColumns.join(
+        ", "
+      )}`
+    );
+  }
+
+  const columnIndex = (name) =>
+    headers.indexOf(name);
+
+  const rows = lines
+    .slice(1)
+    .map((line, index) => {
+      const values =
+        parseMemberWtbCsvLine(
+          line,
+          delimiter
+        );
+
+      return {
+        row_number: index + 2,
+
+        sku: normalizeSku(
+          values[columnIndex("sku")]
+        ),
+
+        size:
+          getBuyingSizeKey(
+            values[columnIndex("size")]
+          ),
+
+        max_price: Number(
+          String(
+            values[
+              columnIndex("max price")
+            ] || ""
+          ).replace(/[^\d]/g, "")
+        )
+      };
+    });
+
+  const errors = [];
+
+  rows.forEach((row) => {
+    if (!row.sku) {
+      errors.push(
+        `Row ${row.row_number}: missing SKU`
+      );
+    }
+
+    if (!row.size) {
+      errors.push(
+        `Row ${row.row_number}: missing Size`
+      );
+    }
+
+    if (
+      !Number.isInteger(row.max_price) ||
+      row.max_price <= 0
+    ) {
+      errors.push(
+        `Row ${row.row_number}: invalid Max Price`
+      );
+    }
+  });
+
+  return {
+    rows,
+    errors
+  };
+}
+
+async function findSellerByDiscordUserId(
+  discordUserId
+) {
+  const safeDiscordUserId =
+    escapeFormulaValue(discordUserId);
+
+  const records = await airtable(
+    SELLERS_TABLE
+  )
+    .select({
+      filterByFormula:
+        `{Discord ID} = '${safeDiscordUserId}'`,
+      maxRecords: 1
+    })
+    .firstPage();
+
+  return records[0] || null;
+}
+
+async function postMemberWtbDiscordPanel() {
+  if (!MEMBER_WTB_POST_CHANNEL_ID) {
+    throw new Error(
+      "Missing MEMBER_WTB_POST_CHANNEL_ID"
+    );
+  }
+
+  await initKickzDealDiscord();
+
+  const channel =
+    await kickzDealDiscordClient.channels
+      .fetch(
+        MEMBER_WTB_POST_CHANNEL_ID
+      )
+      .catch(() => null);
+
+  if (!channel || !channel.isTextBased()) {
+    throw new Error(
+      "Member WTB post channel not found"
+    );
+  }
+
+  const templateUrl =
+    `${APP_URL}/templates/` +
+    `member-wtb-template.csv`;
+
+  const message = await channel.send({
+    embeds: [
+      {
+        title: "📋 Post Member Want To Buys",
+
+        description: [
+          "Create a single Want To Buy using the button below.",
+          "",
+          "To create multiple WTBs:",
+          "1. Download the CSV template.",
+          "2. Fill in the SKU, Size and Max Price.",
+          "3. Upload the completed CSV directly in this channel.",
+          "",
+          "The uploaded file will be processed automatically and removed afterwards.",
+          "",
+          "**Buying Type**",
+          "Use the dropdown below to choose which inventory types you want to receive offers from.",
+          "",
+          "Your selection applies to both single WTBs and CSV uploads."
+        ].join("\n"),
+
+        color: 0x111111,
+
+        footer: {
+          text: "Kickz Caviar Member Marketplace"
+        },
+
+        timestamp:
+          new Date().toISOString()
+      }
+    ],
+
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 3,
+            label: "Create Member WTB",
+            custom_id:
+              MEMBER_WTB_DISCORD_PANEL_BUTTON_ID
+          },
+          {
+            type: 2,
+            style: 5,
+            label: "Download CSV Template",
+            url: templateUrl
+          }
+        ]
+      },
+      {
+        type: 1,
+        components: [
+          {
+            type: 3,
+            custom_id:
+              MEMBER_WTB_DISCORD_INVENTORY_SELECT_ID,
+            placeholder:
+              "Choose Buying Type",
+            min_values: 1,
+            max_values: 1,
+            options: [
+              {
+                label: "All Types",
+                value: "all",
+                description:
+                  "Receive offers from all inventory types",
+                default: true
+              },
+              {
+                label: "B2B Only",
+                value: "b2b",
+                description:
+                  "Only VAT0 and VAT21 inventory"
+              },
+              {
+                label: "Margin Only",
+                value: "private",
+                description:
+                  "Only margin inventory"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  });
+
+  return {
+    channel_id: message.channelId,
+    message_id: message.id
+  };
+}
+
+app.post(
+  "/api/member-wtb/open",
+  async (req, res) => {
+    try {
+      const result =
+        await createOpenMemberWtb({
+          sellerRecordId:
+            asText(
+              req.body?.seller_record_id
+            ),
+
+          sellerId:
+            asText(req.body?.seller_id),
+
+          sku:
+            req.body?.sku,
+
+          size:
+            req.body?.size,
+
+          maxPrice:
+            req.body?.max_price,
+
+          inventoryType:
+            req.body?.inventory_type,
+
+          createdFrom:
+            "Buying Portal"
+        });
+
+      return res.json(result);
+    } catch (error) {
+      console.error(
+        "Failed to create Open Member WTB:",
+        error
+      );
+
+      return res
+        .status(error.statusCode || 500)
+        .json({
+          error:
+            error.message ||
+            "Failed to create Open WTB"
+        });
+    }
+  }
+);
 
 app.post("/api/buying/requests", async (req, res) => {
   try {
@@ -13907,6 +14823,51 @@ app.post(
         details: err.message,
         mollie_response:
           err.mollieResponse || null
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/internal/member-wtb/discord-panel",
+  async (req, res) => {
+    try {
+      const providedSecret =
+        asText(
+          req.headers["x-kc-secret"]
+        );
+
+      const expectedSecret =
+        asText(
+          process.env.KC_PORTAL_SECRET
+        );
+
+      if (
+        !expectedSecret ||
+        providedSecret !== expectedSecret
+      ) {
+        return res.status(401).json({
+          error: "Unauthorized"
+        });
+      }
+
+      const result =
+        await postMemberWtbDiscordPanel();
+
+      return res.json({
+        ok: true,
+        ...result
+      });
+    } catch (error) {
+      console.error(
+        "Failed to post Member WTB Discord panel:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          "Failed to post Member WTB Discord panel",
+        details: error.message
       });
     }
   }
