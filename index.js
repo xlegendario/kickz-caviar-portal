@@ -11838,6 +11838,96 @@ app.post("/api/place-offer", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
+// NEW — additive only: edit an EXISTING Seller Offer after it was denied,
+// instead of creating a brand new one. Mirrors the exact pattern already
+// used by /api/dashboard/wtb-open-offers/:offerId/edit for Member WTBs,
+// just applied to a Store-Order Seller Offer. Enforces that the new
+// amount is at least €2.50 lower than the previously denied amount, so a
+// seller can't just resubmit the same (already-rejected) price.
+// ---------------------------------------------------------------------
+app.post("/api/seller-offers/:offerId/edit-after-denial", async (req, res) => {
+  try {
+    const offerId = asText(req.params.offerId);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const offerAmount = Number(req.body?.offer_amount);
+    const vatType = asText(req.body?.vat_type);
+    const previousDeniedAmount = Number(req.body?.previous_denied_amount);
+
+    if (!offerId || !sellerRecordId) {
+      return res.status(400).json({ error: "Missing offerId or seller_record_id" });
+    }
+
+    if (!Number.isFinite(offerAmount) || offerAmount <= 0) {
+      return res.status(400).json({ error: "Invalid offer amount" });
+    }
+
+    if (!Number.isInteger(offerAmount)) {
+      return res.status(400).json({ error: "Offers must be a whole number (no cents)." });
+    }
+
+    if (!["Margin", "VAT0", "VAT21"].includes(vatType)) {
+      return res.status(400).json({ error: "Invalid VAT type" });
+    }
+
+    // Minimum-decrease check: must be at least €2.50 below what was
+    // already denied, otherwise the seller is just resubmitting the same
+    // rejected price. Combined with the whole-number rule above, €441
+    // denied means the new offer must be €438 at most (438.50 rounds
+    // down, since 438.50 isn't a valid whole-number offer).
+    if (
+      Number.isFinite(previousDeniedAmount) &&
+      offerAmount > previousDeniedAmount - 2.5
+    ) {
+      const maxAllowed = Math.floor(previousDeniedAmount - 2.5);
+      return res.status(400).json({
+        error: `Your new offer must be a whole number at least €2.50 lower than your denied offer (€${previousDeniedAmount.toFixed(2)}). Maximum allowed: €${maxAllowed}.`
+      });
+    }
+
+    const offerRecord = await airtable(SELLER_OFFERS_TABLE).find(offerId);
+    const f = offerRecord.fields || {};
+
+    if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+
+    if (!linkedOrderId) {
+      return res.status(409).json({ error: "This offer is not linked to an order" });
+    }
+
+    const normalizedOffer = vatType === "VAT0" ? offerAmount * 1.21 : offerAmount;
+
+    await airtable(SELLER_OFFERS_TABLE).update(offerId, {
+      "Seller Offer": offerAmount,
+      "Offer VAT Type": vatType,
+      "Offer Cost (Normalized)": normalizedOffer,
+      "Offer Date": new Date().toISOString()
+    });
+
+    // Editing "Seller Offer" changes the rollup fields on Unfulfilled
+    // Orders Log (Lowest Seller Offer etc.), which is exactly what
+    // computeAndPushLowestOffer's watchFields listens for — so simply
+    // updating this record is enough to naturally re-trigger a fresh
+    // Offer Request to the store, same as any other new/changed offer.
+
+    return res.json({
+      ok: true,
+      offer_id: offerId,
+      order_record_id: linkedOrderId
+    });
+  } catch (err) {
+    console.error("Failed to edit offer after denial:", err);
+
+    res.status(500).json({
+      error: "Failed to edit offer",
+      details: err.message
+    });
+  }
+});
+
+// ---------------------------------------------------------------------
 // NEW — additive only: called from airtable-discord-updates-main when a
 // store denies a seller's current offer, so the seller gets a DM showing
 // their denied amount and a button to place a new offer. Reuses the
