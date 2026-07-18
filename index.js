@@ -3209,11 +3209,11 @@ function bindConsignmentDiscordButtons(client) {
     }
 
     if (customId.startsWith("place_new_offer:")) {
-      const [, orderRecordId, sellerRecordId, vatType] = customId.split(":");
+      const [, sellerOfferRecordId, sellerRecordId, vatType, deniedAmount] = customId.split(":");
 
       const modal = {
         title: "Place New Offer",
-        custom_id: `place_new_offer_modal:${orderRecordId}:${sellerRecordId}:${vatType}`,
+        custom_id: `place_new_offer_modal:${sellerOfferRecordId}:${sellerRecordId}:${vatType}:${deniedAmount}`,
         components: [
           {
             type: 1,
@@ -3241,7 +3241,7 @@ function bindConsignmentDiscordButtons(client) {
     }
 
     if (customId.startsWith("place_new_offer_modal:")) {
-      const [, orderRecordId, sellerRecordId, vatType] = customId.split(":");
+      const [, sellerOfferRecordId, sellerRecordId, vatType, deniedAmount] = customId.split(":");
       const rawAmount = interaction.fields.getTextInputValue("new_offer_amount");
       const offerAmount = Number(String(rawAmount).replace(/[^\d.,-]/g, "").replace(",", "."));
 
@@ -3253,26 +3253,29 @@ function bindConsignmentDiscordButtons(client) {
         return;
       }
 
-      // Reuses the EXISTING /api/place-offer relay — same endpoint the
-      // Portal website already uses to place offers. No new
-      // offer-placement logic is introduced here.
-      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/place-offer`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          orderRecordId,
-          sellerRecordId,
-          offerAmount,
-          vatType,
-          sourceType: "order"
-        })
-      });
+      // UPDATED: now calls the new edit-after-denial endpoint, which
+      // edits the EXISTING Seller Offer record (instead of creating a
+      // new one) and enforces the minimum-€2.50-lower / whole-number
+      // rules server-side.
+      const response = await fetch(
+        `${APP_PUBLIC_BASE_URL}/api/seller-offers/${sellerOfferRecordId}/edit-after-denial`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            seller_record_id: sellerRecordId,
+            offer_amount: offerAmount,
+            vat_type: vatType,
+            previous_denied_amount: Number(deniedAmount)
+          })
+        }
+      );
 
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
         await interaction.reply({
-          content: `❌ Failed to submit new offer.\n${data.details || data.error || "Unknown error"}`,
+          content: `❌ ${data.error || "Failed to submit new offer."}`,
           ephemeral: true
         }).catch(() => {});
         return;
@@ -6593,6 +6596,7 @@ async function sendCounterOfferDiscordDM({
 async function sendOfferDeniedDiscordDM({
   orderRecordId,
   orderId,
+  sellerOfferRecordId,
   sellerRecordId,
   sellerDiscordId,
   productName,
@@ -6643,9 +6647,12 @@ async function sendOfferDeniedDiscordDM({
             type: 2,
             style: 1,
             label: "Place New Offer",
-            // orderRecordId and sellerRecordId are both encoded here so the
-            // modal submit handler doesn't need a second lookup.
-            custom_id: `place_new_offer:${orderRecordId}:${sellerRecordId}:${vatType || ""}`
+            // UPDATED: now points at the existing Seller Offer record
+            // (sellerOfferRecordId) plus the denied amount, so the modal
+            // handler can call the new edit-after-denial endpoint with
+            // the minimum-decrease validation, instead of creating a
+            // brand new offer record.
+            custom_id: `place_new_offer:${sellerOfferRecordId || ""}:${sellerRecordId}:${vatType || ""}:${deniedAmount ?? ""}`
           }
         ]
       }
@@ -11939,6 +11946,7 @@ app.post("/api/notify-seller-offer-denied", async (req, res) => {
     const {
       orderRecordId,
       orderId,
+      sellerOfferRecordId,
       sellerRecordId,
       sellerDiscordId,
       productName,
@@ -11958,6 +11966,7 @@ app.post("/api/notify-seller-offer-denied", async (req, res) => {
     await sendOfferDeniedDiscordDM({
       orderRecordId,
       orderId,
+      sellerOfferRecordId,
       sellerRecordId,
       sellerDiscordId,
       productName,
