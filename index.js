@@ -3128,7 +3128,9 @@ function bindConsignmentDiscordButtons(client) {
       !customId.startsWith("deny_member_wtb_kc_offer:") &&
       !customId.startsWith("request_member_wtb_label:") &&
       !customId.startsWith("accept_member_wtb_buyer_offer:") &&
-      !customId.startsWith("decline_member_wtb_buyer_offer:")
+      !customId.startsWith("decline_member_wtb_buyer_offer:") &&
+      !customId.startsWith("place_new_offer:") &&
+      !customId.startsWith("place_new_offer_modal:")
     ) {
       return;
     }
@@ -3203,6 +3205,84 @@ function bindConsignmentDiscordButtons(client) {
         ephemeral: true
       }).catch(() => {});
     
+      return;
+    }
+
+    if (customId.startsWith("place_new_offer:")) {
+      const [, orderRecordId, sellerRecordId, vatType] = customId.split(":");
+
+      const modal = {
+        title: "Place New Offer",
+        custom_id: `place_new_offer_modal:${orderRecordId}:${sellerRecordId}:${vatType}`,
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 4,
+                custom_id: "new_offer_amount",
+                label: `Your new offer (${vatType || "same VAT type"})`,
+                style: 1,
+                min_length: 1,
+                max_length: 10,
+                placeholder: "Example: 120",
+                required: true
+              }
+            ]
+          }
+        ]
+      };
+
+      await interaction.showModal(modal).catch(async (err) => {
+        console.error("Failed to show place-new-offer modal:", err);
+      });
+
+      return;
+    }
+
+    if (customId.startsWith("place_new_offer_modal:")) {
+      const [, orderRecordId, sellerRecordId, vatType] = customId.split(":");
+      const rawAmount = interaction.fields.getTextInputValue("new_offer_amount");
+      const offerAmount = Number(String(rawAmount).replace(/[^\d.,-]/g, "").replace(",", "."));
+
+      if (!Number.isFinite(offerAmount) || offerAmount <= 0) {
+        await interaction.reply({
+          content: "⚠️ Please enter a valid offer amount.",
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      // Reuses the EXISTING /api/place-offer relay — same endpoint the
+      // Portal website already uses to place offers. No new
+      // offer-placement logic is introduced here.
+      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/place-offer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderRecordId,
+          sellerRecordId,
+          offerAmount,
+          vatType,
+          sourceType: "order"
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        await interaction.reply({
+          content: `❌ Failed to submit new offer.\n${data.details || data.error || "Unknown error"}`,
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      await interaction.reply({
+        content: `✅ New offer sent: €${offerAmount.toFixed(2)} · ${vatType || "—"}`,
+        ephemeral: true
+      }).catch(() => {});
+
       return;
     }
 
@@ -3598,6 +3678,43 @@ function bindConsignmentDiscordButtons(client) {
         interaction.message.id,
         "❌ Counter offer denied."
       );
+
+      // NEW — additive only: let the store know a seller denied their
+      // counter, so they know they can try a new counter. Wrapped in a
+      // try/catch so a notification failure can never break the existing
+      // deny flow above (record is already updated, buttons already
+      // disabled, regardless of whether this notification succeeds).
+      // Uses the SAME generic webhook pattern as every other Discord
+      // notification in this codebase (POST / with a trigger_type),
+      // not a new invented route.
+      try {
+        const deniedRecord = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
+        const deniedFields = deniedRecord.fields || {};
+        const deniedOrderId = firstLinkedRecordId(deniedFields["Order"]);
+        const deniedPrice = numberValue(deniedFields["Store Counter Price"]);
+
+        if (deniedOrderId && AIRTABLE_DISCORD_UPDATES_URL) {
+          const orderRecord = await airtable(ORDERS_TABLE).find(deniedOrderId);
+          const orderFields = orderRecord.fields || {};
+
+          await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              trigger_type: "counter-offer-denied",
+              store_name: asText(orderFields["Store Name"]),
+              record_id: deniedOrderId,
+              shopify_order_number: asText(orderFields["Shopify Order Number"]),
+              product_name: asText(deniedFields["Product Name"]),
+              sku: asText(deniedFields["SKU"]),
+              size: asText(deniedFields["Size"]),
+              denied_price: deniedPrice
+            })
+          });
+        }
+      } catch (notifyErr) {
+        console.error("Failed to notify store of counter denial (non-blocking):", notifyErr);
+      }
     
       return;
     }
@@ -6467,6 +6584,65 @@ async function sendCounterOfferDiscordDM({
     messageId: message.id,
     deliveryType: "dm"
   };
+}
+
+// NEW — additive only: DM sent when the STORE denies the seller's current
+// offer (not a counter). Shows the seller their own denied amount + VAT
+// type and a button to place a new offer, using the modal below which
+// calls the existing place-offer relay — no new offer-placement logic.
+async function sendOfferDeniedDiscordDM({
+  orderRecordId,
+  sellerRecordId,
+  sellerDiscordId,
+  productName,
+  sku,
+  size,
+  shopifyOrderNumber,
+  deniedAmount,
+  vatType
+}) {
+  await initKickzDealDiscord();
+
+  if (!sellerDiscordId) {
+    throw new Error("Missing seller Discord ID");
+  }
+
+  const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
+  const dm = await user.createDM();
+
+  await dm.send({
+    embeds: [
+      {
+        title: `❌ Offer Denied: ${sku} / ${size}`,
+        description: [
+          `**${productName || "—"}**`,
+          "",
+          `Order: ${shopifyOrderNumber || orderRecordId || "—"}`,
+          "",
+          `**Your denied offer**`,
+          `€${Number(deniedAmount).toFixed(2)} · ${vatType || "—"}`,
+          "",
+          "You can place a new offer below."
+        ].join("\n"),
+        color: 0xe74c3c
+      }
+    ],
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 1,
+            label: "Place New Offer",
+            // orderRecordId and sellerRecordId are both encoded here so the
+            // modal submit handler doesn't need a second lookup.
+            custom_id: `place_new_offer:${orderRecordId}:${sellerRecordId}:${vatType || ""}`
+          }
+        ]
+      }
+    ]
+  });
 }
 
 function roundUpToStep(value, step = 2.5) {
@@ -11650,6 +11826,52 @@ app.post("/api/place-offer", async (req, res) => {
       error: "Offer failed",
       details: err.message
     });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: called from airtable-discord-updates-main when a
+// store denies a seller's current offer, so the seller gets a DM showing
+// their denied amount and a button to place a new offer. Reuses the
+// existing /api/place-offer relay internally (via placeOfferFromPortal
+// below) — no new offer-placement logic is introduced.
+// ---------------------------------------------------------------------
+app.post("/api/notify-seller-offer-denied", async (req, res) => {
+  try {
+    const {
+      orderRecordId,
+      sellerRecordId,
+      sellerDiscordId,
+      productName,
+      sku,
+      size,
+      shopifyOrderNumber,
+      deniedAmount,
+      vatType
+    } = req.body || {};
+
+    if (!sellerDiscordId || !orderRecordId || !sellerRecordId) {
+      return res.status(400).json({
+        error: "Missing sellerDiscordId, orderRecordId, or sellerRecordId"
+      });
+    }
+
+    await sendOfferDeniedDiscordDM({
+      orderRecordId,
+      sellerRecordId,
+      sellerDiscordId,
+      productName,
+      sku,
+      size,
+      shopifyOrderNumber,
+      deniedAmount,
+      vatType
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to notify seller of offer denial:", err);
+    res.status(500).json({ error: "Failed to notify seller", details: err.message });
   }
 });
 
