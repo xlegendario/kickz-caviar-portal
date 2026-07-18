@@ -3130,7 +3130,9 @@ function bindConsignmentDiscordButtons(client) {
       !customId.startsWith("accept_member_wtb_buyer_offer:") &&
       !customId.startsWith("decline_member_wtb_buyer_offer:") &&
       !customId.startsWith("place_new_offer:") &&
-      !customId.startsWith("place_new_offer_modal:")
+      !customId.startsWith("place_new_offer_modal:") &&
+      !customId.startsWith("counter_offer_counter:") &&
+      !customId.startsWith("counter_offer_counter_modal:")
     ) {
       return;
     }
@@ -3664,6 +3666,84 @@ function bindConsignmentDiscordButtons(client) {
         components: []
       });
     
+      return;
+    }
+
+    if (customId.startsWith("counter_offer_counter:")) {
+      const counterOfferRecordId = customId.split(":")[1];
+
+      const modal = {
+        title: "Counter Offer",
+        custom_id: `counter_offer_counter_modal:${counterOfferRecordId}`,
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 4,
+                custom_id: "counter_price",
+                label: "Your counter (whole number)",
+                style: 1,
+                min_length: 1,
+                max_length: 10,
+                placeholder: "Example: 117",
+                required: true
+              }
+            ]
+          }
+        ]
+      };
+
+      await interaction.showModal(modal).catch((err) => {
+        console.error("Failed to show counter_offer_counter modal:", err);
+      });
+
+      return;
+    }
+
+    if (customId.startsWith("counter_offer_counter_modal:")) {
+      const counterOfferRecordId = customId.replace("counter_offer_counter_modal:", "");
+      const rawAmount = interaction.fields.getTextInputValue("counter_price");
+      const counterPrice = Number(String(rawAmount).replace(/[^\d.,-]/g, "").replace(",", "."));
+
+      if (!Number.isInteger(counterPrice) || counterPrice <= 0) {
+        await interaction.reply({
+          content: "⚠️ Please enter a valid whole-number counter.",
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      const response = await fetch(
+        `${APP_PUBLIC_BASE_URL}/api/counter-offers/${counterOfferRecordId}/seller-counter`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ price: counterPrice })
+        }
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        await interaction.reply({
+          content: `❌ ${data.error || "Failed to submit your counter."}`,
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      await interaction.reply({
+        content: `✅ Your counter of €${counterPrice} was sent to the store.`,
+        ephemeral: true
+      }).catch(() => {});
+
+      await disableCounterOfferDiscordButtons(
+        interaction.channelId,
+        interaction.message.id,
+        `🔁 You countered with €${counterPrice}.`
+      ).catch(() => {});
+
       return;
     }
 
@@ -5764,6 +5844,113 @@ app.post("/api/counter-offers/create", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------
+// NEW — additive only, first piece of the actual ping-pong: lets the
+// SELLER counter back on an existing Counter Offer thread, instead of
+// only Accept/Deny. Creates a NEW round (new row), linked to the
+// previous one via "Previous Record ID" — the original round-1 record
+// created by /api/counter-offers/create above is never edited.
+//
+// Requires 2 new fields on the Counter Offers table (must be added in
+// Airtable first): "Seller Counter Price" (currency) and
+// "Previous Record ID" (singleLineText). No "Turn" or "Seller Counter At"
+// field needed — both derivable from existing data (see below).
+// ---------------------------------------------------------------------
+app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
+  try {
+    const previousRecordId = asText(req.params.id);
+    const proposedPrice = Number(req.body?.price);
+
+    if (!Number.isInteger(proposedPrice) || proposedPrice <= 0) {
+      return res.status(400).json({ error: "Offer must be a valid whole number." });
+    }
+
+    const previousRecord = await airtable(COUNTER_OFFERS_TABLE).find(previousRecordId);
+    const f = previousRecord.fields || {};
+
+    if (asText(f["Status"]) !== "Open") {
+      return res.status(409).json({ error: "This counter offer is no longer open." });
+    }
+
+    // No "Turn" field needed: since every round is its own row, whether
+    // it's the seller's turn is directly derivable — if this row already
+    // has a Seller Counter Price, the seller already responded to it
+    // (also guards against a double-click submitting the same round twice).
+    const sellerAlreadyCountered =
+      f["Seller Counter Price"] !== undefined &&
+      f["Seller Counter Price"] !== null &&
+      f["Seller Counter Price"] !== "";
+
+    if (sellerAlreadyCountered) {
+      return res.status(403).json({ error: "You already countered on this round." });
+    }
+
+    // The narrowing band is formed by the seller's ORIGINAL price and
+    // the store's counter price currently on this row.
+    const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
+    const lastPrice = numberValue(f["Store Counter Price"]);
+
+    const validation = validateNextCounterPrice(sellerOriginalPrice, lastPrice, proposedPrice);
+    if (!validation.ok) {
+      return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    const linkedOrderId = firstLinkedRecordId(f["Order"]);
+    const linkedSellerId = firstLinkedRecordId(f["Seller ID"]);
+    const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
+    const orderFields = orderRecord.fields || {};
+
+    const sellerVatType = asText(f["Seller Original VAT Type"]);
+
+    const newRound = await airtable(COUNTER_OFFERS_TABLE).create({
+      "Order": [linkedOrderId],
+      "Seller ID": linkedSellerId ? [linkedSellerId] : undefined,
+      "Source Type": asText(f["Source Type"]) || "Seller Offer",
+      "Seller Original Price": sellerOriginalPrice,
+      "Seller Original VAT Type": sellerVatType,
+      "Seller Counter Price": proposedPrice,
+      "Previous Record ID": previousRecordId,
+      "Status": "Open"
+    });
+
+    // Close the previous round so it no longer shows as actionable —
+    // mirrors the existing "competingCounters" closing pattern used
+    // elsewhere in this file, just applied to the round we just
+    // superseded rather than to a competing seller.
+    await airtable(COUNTER_OFFERS_TABLE).update(previousRecordId, {
+      "Status": "Closed",
+      "Closed At": new Date().toISOString()
+    });
+
+    // Notify the store — this reuses the SAME notification path as a
+    // brand new counter, since from the store's perspective this is just
+    // a fresh number to respond to. Private-channel logic does not apply
+    // here (confirmed: only relevant for consignment sellers).
+    if (AIRTABLE_DISCORD_UPDATES_URL) {
+      await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trigger_type: "counter-offer-seller-countered",
+          store_name: asText(orderFields["Store Name"]),
+          record_id: linkedOrderId,
+          shopify_order_number: asText(orderFields["Shopify Order Number"]),
+          product_name: asText(f["Product Name"]),
+          sku: asText(f["SKU"]),
+          size: asText(f["Size"]),
+          counter_offer_record_id: newRound.id,
+          seller_counter_price: proposedPrice
+        })
+      }).catch((err) => console.error("Failed to notify store of seller counter (non-blocking):", err));
+    }
+
+    res.json({ ok: true, band: validation.band, new_round_id: newRound.id });
+  } catch (err) {
+    console.error("Failed to submit seller counter-back:", err);
+    res.status(500).json({ error: "Failed to submit counter", details: err.message });
+  }
+});
+
 app.post("/api/consignment/offers/create", async (req, res) => {
   try {
     const orderRecordId = asText(req.body?.order_record_id);
@@ -6396,6 +6583,40 @@ function numberValue(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+// NEW — additive only: shared narrowing-band validator for the
+// counter-offer ping-pong. Given the two most recent prices in a
+// negotiation thread, checks whether a proposed new price is strictly
+// between them (and therefore narrows the gap). Used by every
+// counter-back endpoint (Store Orders now, Member WTBs / Consignment
+// later) so the rule can never be bypassed from one entry point but not
+// another.
+function validateNextCounterPrice(previousPrice, lastPrice, proposed) {
+  if (!Number.isInteger(proposed)) {
+    return { ok: false, reason: "Counter offers must be a whole number." };
+  }
+
+  const low = Math.min(previousPrice, lastPrice);
+  const high = Math.max(previousPrice, lastPrice);
+
+  if (high - low < 1) {
+    return {
+      ok: false,
+      reason: "No room left to counter — please accept or deny.",
+      band: [low, high]
+    };
+  }
+
+  if (proposed <= low || proposed >= high) {
+    return {
+      ok: false,
+      reason: `Your counter must be strictly between €${low} and €${high}.`,
+      band: [low, high]
+    };
+  }
+
+  return { ok: true, band: [low, high] };
+}
+
 function moneyValue(value) {
   const n = numberValue(value);
 
@@ -6570,6 +6791,12 @@ async function sendCounterOfferDiscordDM({
             style: 3,
             label: "Accept",
             custom_id: `counter_offer_accept:${counterOfferRecordId}`
+          },
+          {
+            type: 2,
+            style: 1,
+            label: "Counter",
+            custom_id: `counter_offer_counter:${counterOfferRecordId}`
           },
           {
             type: 2,
