@@ -6592,6 +6592,7 @@ async function sendCounterOfferDiscordDM({
 // calls the existing place-offer relay — no new offer-placement logic.
 async function sendOfferDeniedDiscordDM({
   orderRecordId,
+  orderId,
   sellerRecordId,
   sellerDiscordId,
   productName,
@@ -6610,17 +6611,24 @@ async function sendOfferDeniedDiscordDM({
   const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
   const dm = await user.createDM();
 
+  const amountText =
+    deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== ""
+      ? `€${Number(deniedAmount).toFixed(2)}`
+      : "—";
+
   await dm.send({
     embeds: [
       {
-        title: `❌ Offer Denied: ${sku} / ${size}`,
+        title: "❌ Offer Denied",
         description: [
           `**${productName || "—"}**`,
+          `SKU: ${sku || "—"}`,
+          `Size: ${size || "—"}`,
           "",
-          `Order: ${shopifyOrderNumber || orderRecordId || "—"}`,
+          `Order: ${orderId || orderRecordId || "—"}`,
           "",
           `**Your denied offer**`,
-          `€${Number(deniedAmount).toFixed(2)} · ${vatType || "—"}`,
+          `${amountText} · ${vatType || "—"}`,
           "",
           "You can place a new offer below."
         ].join("\n"),
@@ -11840,6 +11848,7 @@ app.post("/api/notify-seller-offer-denied", async (req, res) => {
   try {
     const {
       orderRecordId,
+      orderId,
       sellerRecordId,
       sellerDiscordId,
       productName,
@@ -11858,6 +11867,7 @@ app.post("/api/notify-seller-offer-denied", async (req, res) => {
 
     await sendOfferDeniedDiscordDM({
       orderRecordId,
+      orderId,
       sellerRecordId,
       sellerDiscordId,
       productName,
