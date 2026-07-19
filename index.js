@@ -6401,10 +6401,15 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
     const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
     const sellerVatType = asText(f["Seller Original VAT Type"]);
 
+    // FIXED — this was passing an empty {} instead of the real order's
+    // margin fields (same bug pattern as edit-broadcast), so the margin
+    // lookup always came back empty and the payout silently came back
+    // as null → displayed as €0.00 to the seller. orderFieldsForBand was
+    // already fetched above for the band conversion — reuse it here.
     const recomputedPayout = calculateCounterPayoutForVatType(
       proposedPrice,
       sellerVatType,
-      {}
+      orderFieldsForBand
     );
 
     const newRound = await airtable(COUNTER_OFFERS_TABLE).create({
@@ -6717,6 +6722,7 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
     // formula), since the store is editing a store-scale number.
     let ownReferencePrice;
     let counterpartPrice;
+    let orderFieldsForEdit = null;
 
     if (hasSellerCounter) {
       ownReferencePrice = sellerOriginalPrice;
@@ -6724,7 +6730,7 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
     } else {
       const orderIdForEdit = firstLinkedRecordId(f["Order"]);
       const orderRecordForEdit = await airtable(ORDERS_TABLE).find(orderIdForEdit);
-      const orderFieldsForEdit = orderRecordForEdit.fields || {};
+      orderFieldsForEdit = orderRecordForEdit.fields || {};
       const sellerVatTypeForEdit = asText(f["Seller Original VAT Type"]);
 
       ownReferencePrice = calculateStoreCounterEquivalent(
@@ -6753,9 +6759,11 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
     const updates = { [priceField]: proposedPrice };
 
     if (!hasSellerCounter) {
-      // Store-side edit: recompute payout, same as store-counter does.
+      // FIXED — same empty-{} bug as the store-counter endpoint.
+      // orderFieldsForEdit was already fetched above for the band
+      // conversion — reuse it here too instead of passing {}.
       const sellerVatType = asText(f["Seller Original VAT Type"]);
-      updates["Counter Payout"] = calculateCounterPayoutForVatType(proposedPrice, sellerVatType, {});
+      updates["Counter Payout"] = calculateCounterPayoutForVatType(proposedPrice, sellerVatType, orderFieldsForEdit || {});
       updates["Counter Payout VAT Type"] = sellerVatType;
     }
 
@@ -7531,12 +7539,17 @@ function validateNextCounterPrice(ownReferencePrice, counterpartPrice, proposed,
   }
 
   if (proposed < minAllowed || proposed > maxAllowed) {
-    const stepNote = enforceMinStep
-      ? ` (must move at least €${MIN_COUNTER_STEP.toFixed(2)} from your previous €${ownReferencePrice}, and stay better than the other side's €${counterpartPrice})`
-      : "";
+    // FIXED — shortened per feedback: the unreachable bound (e.g. a
+    // store's theoretical upper limit near the seller's ask, which a
+    // store paying as little as possible will never approach) just adds
+    // noise. State only the bound that's actually relevant to which
+    // direction this mover is going.
+    const reason = movingDown
+      ? `Your counter must be lower than your previous €${ownReferencePrice} — maximum €${maxAllowed}.`
+      : `Your counter must be higher than your previous €${ownReferencePrice} — minimum €${minAllowed}.`;
     return {
       ok: false,
-      reason: `Your counter must be a whole number between €${minAllowed} and €${maxAllowed}${stepNote}.`,
+      reason,
       band: [minAllowed, maxAllowed]
     };
   }
