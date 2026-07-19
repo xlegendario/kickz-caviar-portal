@@ -6059,6 +6059,15 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
       return res.status(409).json({ error: "No open round-1 counters found for this order to edit." });
     }
 
+    // FIXED — this endpoint previously passed an empty {} as orderFields
+    // into calculateCounterPayoutForVatType, so the margin lookup
+    // (Offer Margin / Offer Percentage / Offer Method) always came back
+    // empty and every record silently fell into the "skipped" bucket.
+    // Fetching the real order once here (same order for every record in
+    // this loop) fixes that.
+    const orderRecordForBroadcast = await airtable(ORDERS_TABLE).find(orderRecordId);
+    const orderFieldsForBroadcast = orderRecordForBroadcast.fields || {};
+
     let updated = 0;
     let skipped = 0;
     const errors = [];
@@ -6068,14 +6077,23 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
       const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
       const sellerVatType = asText(f["Seller Original VAT Type"]);
 
-      // Each seller's own asking price is the upper bound — a store
-      // counter must always stay below what that specific seller asked.
-      if (!sellerOriginalPrice || proposedPrice >= sellerOriginalPrice) {
+      // FIXED — proposedPrice is a STORE price (what the store is
+      // willing to pay), while sellerOriginalPrice is in SELLER terms
+      // (what the seller asked for) — comparing them directly ignored
+      // our margin. Convert the seller's ask UP to what the store would
+      // need to pay for it, and compare on that scale instead.
+      const sellerAskInStoreTerms = calculateStoreCounterEquivalent(
+        sellerOriginalPrice,
+        sellerVatType,
+        orderFieldsForBroadcast
+      );
+
+      if (!sellerOriginalPrice || !Number.isFinite(sellerAskInStoreTerms) || proposedPrice >= sellerAskInStoreTerms) {
         skipped++;
         continue;
       }
 
-      const recomputedPayout = calculateCounterPayoutForVatType(proposedPrice, sellerVatType, {});
+      const recomputedPayout = calculateCounterPayoutForVatType(proposedPrice, sellerVatType, orderFieldsForBroadcast);
 
       if (!Number.isFinite(recomputedPayout) || recomputedPayout <= 0) {
         skipped++;
@@ -6178,27 +6196,18 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
       return res.status(403).json({ error: "You already countered on this round." });
     }
 
-    // The narrowing band is formed by the seller's ORIGINAL price and
-    // the store's counter price currently on this row.
+    // FIXED — scale mismatch: "Store Counter Price" is in STORE terms
+    // (what the store pays), while "Seller Original Price" is in SELLER
+    // terms (what the seller wants). Comparing them directly ignored our
+    // margin entirely, which could make the gap look like €0 even when
+    // there was plenty of real room. "Counter Payout" is already the
+    // store's counter converted DOWN to seller terms (margin removed) —
+    // exactly the number the seller sees in their DM — so comparing
+    // against that keeps everything on one consistent scale.
     const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
-    const lastPrice = numberValue(f["Store Counter Price"]);
-
-    // TEMP DEBUG — remove once we've confirmed the real numbers behind
-    // the "No room left" reports. Logs the raw Airtable field values and
-    // the parsed numbers going into the band calculation.
-    console.log("seller-counter DEBUG:", {
-      recordId: previousRecordId,
-      rawSellerOriginalPrice: f["Seller Original Price"],
-      rawStoreCounterPrice: f["Store Counter Price"],
-      parsedSellerOriginalPrice: sellerOriginalPrice,
-      parsedLastPrice: lastPrice,
-      proposedPrice
-    });
+    const lastPrice = numberValue(f["Counter Payout"]);
 
     const validation = validateNextCounterPrice(sellerOriginalPrice, lastPrice, proposedPrice);
-
-    console.log("seller-counter DEBUG validation result:", validation);
-
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
@@ -6316,7 +6325,28 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
     const priorStorePrice = numberValue(priorFields["Store Counter Price"]);
     const sellerCounterPrice = numberValue(f["Seller Counter Price"]);
 
-    const validation = validateNextCounterPrice(priorStorePrice, sellerCounterPrice, proposedPrice);
+    const linkedOrderIdForBand = firstLinkedRecordId(f["Order"]);
+    const orderRecordForBand = await airtable(ORDERS_TABLE).find(linkedOrderIdForBand);
+    const orderFieldsForBand = orderRecordForBand.fields || {};
+    const sellerVatTypeForBand = asText(f["Seller Original VAT Type"]);
+
+    // FIXED — same scale mismatch as the seller-counter endpoint, other
+    // direction: "priorStorePrice" is STORE terms, but "sellerCounterPrice"
+    // is SELLER terms. Convert the seller's counter UP to what the store
+    // would need to pay for it (adding margin back), so both sides of
+    // the comparison are in store terms — matching what the store
+    // actually types into the modal.
+    const sellerCounterInStoreTerms = calculateStoreCounterEquivalent(
+      sellerCounterPrice,
+      sellerVatTypeForBand,
+      orderFieldsForBand
+    );
+
+    if (!Number.isFinite(sellerCounterInStoreTerms)) {
+      return res.status(500).json({ error: "Could not compute margin conversion for this order." });
+    }
+
+    const validation = validateNextCounterPrice(priorStorePrice, sellerCounterInStoreTerms, proposedPrice);
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
@@ -6628,14 +6658,42 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
     const previousRound = await airtable(COUNTER_OFFERS_TABLE).find(previousRecordId);
     const previousFields = previousRound.fields || {};
 
-    // The "other" reference price is whichever price this round was
-    // originally responding to — same lookup the seller-counter /
-    // store-counter endpoints already do when a round is first created.
-    const otherReferencePrice = hasSellerCounter
-      ? numberValue(previousFields["Store Counter Price"])
-      : numberValue(previousFields["Seller Counter Price"]) || sellerOriginalPrice;
+    // FIXED — same scale mismatch as the two counter-back endpoints.
+    // Seller edits must be validated entirely in SELLER terms (their
+    // own ask vs. the store's counter converted down via Counter
+    // Payout). Store edits must be validated entirely in STORE terms
+    // (converting the seller's ask and counter UP via the margin
+    // formula), since the store is editing a store-scale number.
+    let ownReferencePrice;
+    let counterpartPrice;
 
-    const validation = validateNextCounterPrice(sellerOriginalPrice, otherReferencePrice, proposedPrice, { enforceMinStep: false });
+    if (hasSellerCounter) {
+      ownReferencePrice = sellerOriginalPrice;
+      counterpartPrice = numberValue(previousFields["Counter Payout"]);
+    } else {
+      const orderIdForEdit = firstLinkedRecordId(f["Order"]);
+      const orderRecordForEdit = await airtable(ORDERS_TABLE).find(orderIdForEdit);
+      const orderFieldsForEdit = orderRecordForEdit.fields || {};
+      const sellerVatTypeForEdit = asText(f["Seller Original VAT Type"]);
+
+      ownReferencePrice = calculateStoreCounterEquivalent(
+        sellerOriginalPrice,
+        sellerVatTypeForEdit,
+        orderFieldsForEdit
+      );
+
+      const previousSellerCounter = numberValue(previousFields["Seller Counter Price"]);
+
+      counterpartPrice = previousSellerCounter
+        ? calculateStoreCounterEquivalent(previousSellerCounter, sellerVatTypeForEdit, orderFieldsForEdit)
+        : ownReferencePrice;
+
+      if (!Number.isFinite(ownReferencePrice) || !Number.isFinite(counterpartPrice)) {
+        return res.status(500).json({ error: "Could not compute margin conversion for this order." });
+      }
+    }
+
+    const validation = validateNextCounterPrice(ownReferencePrice, counterpartPrice, proposedPrice, { enforceMinStep: false });
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
@@ -7549,6 +7607,50 @@ function calculateCounterPayoutForVatType(storeCounterAllInPrice, vatType, order
   }
 
   return roundDownToStep(payout, 2.5);
+}
+
+function roundToNearestStep(value, step = 2.5) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n / step) * step;
+}
+
+// NEW — additive only: the FORWARD direction of the margin conversion
+// above — given a seller's ask, what would the store need to pay so the
+// seller still receives (approximately) that ask after margin. This is
+// the exact inverse logic of the "Offer To Store" Airtable formula
+// (Firm Range: add the margin; Percentage: apply the percentage with a
+// minimum +€10 floor), rounded to the nearest €2.50 step rather than
+// floored, matching that formula's ROUND(...) behavior. Needed so the
+// ping-pong can compare the seller's and store's numbers on the SAME
+// scale — without this, a seller's raw ask and a store's raw counter
+// price look like two unrelated numbers even when the margin between
+// them is the only real difference.
+function calculateStoreCounterEquivalent(sellerAskPrice, vatType, orderFields = {}) {
+  const converted = getCounterEquivalentPriceForVatType(sellerAskPrice, vatType);
+
+  if (!Number.isFinite(converted) || converted <= 0) return null;
+
+  const margin = numberValue(orderFields["Offer Margin"]);
+  const percentage = numberValue(orderFields["Offer Percentage"]);
+  const method = asText(orderFields["Offer Method"]);
+
+  let storePrice;
+
+  if (method === "Firm Range" && Number.isFinite(margin) && margin > 0) {
+    storePrice = converted + margin;
+  } else if (Number.isFinite(percentage) && percentage > 0) {
+    storePrice = Math.max(
+      converted + 10,
+      converted * (1 + percentage)
+    );
+  } else if (Number.isFinite(margin) && margin > 0) {
+    storePrice = converted + margin;
+  } else {
+    return null;
+  }
+
+  return roundToNearestStep(storePrice, 2.5);
 }
 
 async function sendCounterOfferDiscordDM({
