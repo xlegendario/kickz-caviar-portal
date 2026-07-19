@@ -6620,7 +6620,7 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
       ? numberValue(previousFields["Store Counter Price"])
       : numberValue(previousFields["Seller Counter Price"]) || sellerOriginalPrice;
 
-    const validation = validateNextCounterPrice(sellerOriginalPrice, otherReferencePrice, proposedPrice);
+    const validation = validateNextCounterPrice(sellerOriginalPrice, otherReferencePrice, proposedPrice, { enforceMinStep: false });
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
@@ -7350,31 +7350,63 @@ function numberValue(value) {
 // counter-back endpoint (Store Orders now, Member WTBs / Consignment
 // later) so the rule can never be bypassed from one entry point but not
 // another.
-function validateNextCounterPrice(previousPrice, lastPrice, proposed) {
+// FIXED — the min-€2.50-step rule (established early in the design,
+// combined with whole-number-only offers to effectively become steps of
+// 3) was never actually enforced here — only the "strictly within the
+// band" check was. This let someone counter with almost no real
+// movement (e.g. €2 less), and gave a confusing "No room left" message
+// that didn't explain the actual rule. Now takes a directional
+// ownReferencePrice (the price the mover themselves last stated) vs
+// counterpartPrice (the other side's last price), and requires the
+// proposal to be at least MIN_STEP away from ownReferencePrice AND
+// strictly on the correct side of counterpartPrice. enforceMinStep can
+// be turned off for editing an already-placed price, where the person
+// isn't making a new negotiating move, just correcting their current
+// unanswered offer.
+const MIN_COUNTER_STEP = 2.5;
+
+function validateNextCounterPrice(ownReferencePrice, counterpartPrice, proposed, options = {}) {
+  const { enforceMinStep = true } = options;
+
   if (!Number.isInteger(proposed)) {
     return { ok: false, reason: "Counter offers must be a whole number." };
   }
 
-  const low = Math.min(previousPrice, lastPrice);
-  const high = Math.max(previousPrice, lastPrice);
+  const movingDown = ownReferencePrice > counterpartPrice;
+  const low = Math.min(ownReferencePrice, counterpartPrice);
+  const high = Math.max(ownReferencePrice, counterpartPrice);
 
-  if (high - low < 1) {
+  let minAllowed = low + 1;
+  let maxAllowed = high - 1;
+
+  if (enforceMinStep) {
+    if (movingDown) {
+      maxAllowed = Math.floor(ownReferencePrice - MIN_COUNTER_STEP);
+    } else {
+      minAllowed = Math.ceil(ownReferencePrice + MIN_COUNTER_STEP);
+    }
+  }
+
+  if (minAllowed > maxAllowed) {
     return {
       ok: false,
-      reason: "No room left to counter — please accept or deny.",
+      reason: "No room left to counter — the gap is too small for another step, please accept or deny.",
       band: [low, high]
     };
   }
 
-  if (proposed <= low || proposed >= high) {
+  if (proposed < minAllowed || proposed > maxAllowed) {
+    const stepNote = enforceMinStep
+      ? ` (must move at least €${MIN_COUNTER_STEP.toFixed(2)} from your previous €${ownReferencePrice}, and stay better than the other side's €${counterpartPrice})`
+      : "";
     return {
       ok: false,
-      reason: `Your counter must be strictly between €${low} and €${high}.`,
-      band: [low, high]
+      reason: `Your counter must be a whole number between €${minAllowed} and €${maxAllowed}${stepNote}.`,
+      band: [minAllowed, maxAllowed]
     };
   }
 
-  return { ok: true, band: [low, high] };
+  return { ok: true, band: [minAllowed, maxAllowed] };
 }
 
 function moneyValue(value) {
