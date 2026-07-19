@@ -8025,8 +8025,8 @@ function getMemberWtbMargin() {
 // that exact branching so a buyer counter and its seller-payout
 // equivalent always match what "Offer To Buyer" would show.
 function memberWtbIsReverseCharge(memberWtbFields = {}) {
-  const buyerVatId = asText(getFirstValue(memberWtbFields["Buyer VAT ID"]));
-  const buyerCountry = asText(getFirstValue(memberWtbFields["Buyer Country"]));
+  const buyerVatId = asText(memberWtbFields["Buyer VAT ID"]);
+  const buyerCountry = asText(memberWtbFields["Buyer Country"]);
   return !!buyerVatId && buyerCountry !== "Netherlands" && buyerCountry !== "Nederland";
 }
 
