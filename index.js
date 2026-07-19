@@ -4044,15 +4044,27 @@ function bindConsignmentDiscordButtons(client) {
         "✅ Counter offer accepted."
       );
     
-      const competingCounters = await airtable(COUNTER_OFFERS_TABLE)
+      // FIXED — pre-existing bug (confirmed present in the original
+      // uploaded code): FIND(recordId, ARRAYJOIN({Order})) never
+      // actually matches, because Airtable formulas resolve a linked
+      // field to the LINKED RECORD'S DISPLAY TEXT (e.g. "ORD-019118"),
+      // not its raw record ID — so this filter silently returned zero
+      // competing counters every time, meaning they were never actually
+      // auto-closed. Fetching by the other filters and matching the
+      // Order link by raw ID in JavaScript (where the API does return
+      // real record IDs) fixes it.
+      const openCountersForOrderMatch = await airtable(COUNTER_OFFERS_TABLE)
         .select({
           filterByFormula: `AND(
             {Status} = 'Open',
-            RECORD_ID() != '${counterOfferRecordId}',
-            FIND('${linkedOrderId}', ARRAYJOIN({Order}))
+            RECORD_ID() != '${counterOfferRecordId}'
           )`
         })
         .all();
+
+      const competingCounters = openCountersForOrderMatch.filter((r) =>
+        firstLinkedRecordId(r.fields?.["Order"]) === linkedOrderId
+      );
       
       for (const competing of competingCounters) {
         await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
@@ -6045,61 +6057,27 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
     // "Previous Record ID" — that's what distinguishes them from
     // follow-up 1-to-1 rounds (seller-counter / store-counter).
     //
-    // FIXED — clicking Edit right after submitting the round-1 counter
-    // could hit this search before Airtable's read side had caught up
-    // with the just-created record (eventual-consistency lag between a
-    // Create and an immediately-following filterByFormula search).
-    // Retrying once after a short pause smooths that over without
-    // meaningfully slowing down the normal case where records are
-    // already old enough to be consistently indexed.
-    const fetchRoundOneRecords = () =>
-      airtable(COUNTER_OFFERS_TABLE)
-        .select({
-          filterByFormula: `AND(
-            {Status} = 'Open',
-            {Source Type} = 'Seller Offer',
-            {Previous Record ID} = '',
-            FIND('${orderRecordId}', ARRAYJOIN({Order}))
-          )`
-        })
-        .all();
+    // FIXED — the real bug (confirmed via debug logging, not a timing
+    // issue): FIND(orderRecordId, ARRAYJOIN({Order})) never matches,
+    // because Airtable formulas resolve a linked field to the LINKED
+    // RECORD'S DISPLAY TEXT, not its raw record ID. Fetching by the
+    // other filters and matching the Order link by raw ID in
+    // JavaScript (where the API does return real record IDs) fixes it.
+    const openRoundOneCandidates = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `AND(
+          {Status} = 'Open',
+          {Source Type} = 'Seller Offer',
+          {Previous Record ID} = ''
+        )`
+      })
+      .all();
 
-    let roundOneRecords = await fetchRoundOneRecords();
-
-    if (roundOneRecords.length === 0) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      roundOneRecords = await fetchRoundOneRecords();
-    }
+    const roundOneRecords = openRoundOneCandidates.filter(
+      (r) => firstLinkedRecordId(r.fields?.["Order"]) === orderRecordId
+    );
 
     if (roundOneRecords.length === 0) {
-      // TEMP DEBUG — the filtered search keeps coming back empty even
-      // without a timing issue, so pull EVERY Counter Offer record
-      // linked to this order, unfiltered, to see what's actually in
-      // Status/Source Type/Previous Record ID instead of guessing.
-      try {
-        const allForOrder = await airtable(COUNTER_OFFERS_TABLE)
-          .select({
-            filterByFormula: `FIND('${orderRecordId}', ARRAYJOIN({Order}))`
-          })
-          .all();
-
-        console.log(
-          "edit-broadcast DEBUG — all Counter Offer records for order",
-          orderRecordId,
-          ":",
-          allForOrder.map((r) => ({
-            id: r.id,
-            status: r.fields?.["Status"],
-            sourceType: r.fields?.["Source Type"],
-            previousRecordId: r.fields?.["Previous Record ID"],
-            sellerOriginalPrice: r.fields?.["Seller Original Price"],
-            storeCounterPrice: r.fields?.["Store Counter Price"]
-          }))
-        );
-      } catch (debugErr) {
-        console.error("edit-broadcast DEBUG fetch failed:", debugErr);
-      }
-
       return res.status(409).json({ error: "No open round-1 counters found for this order to edit." });
     }
 
@@ -6533,15 +6511,21 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
       });
     }
 
-    const competingCounters = await airtable(COUNTER_OFFERS_TABLE)
+    // FIXED — same formula bug as elsewhere: FIND(recordId,
+    // ARRAYJOIN({Order})) never matches a raw record ID, only display
+    // text. Matching the Order link by raw ID in JavaScript instead.
+    const openCountersForStoreAcceptMatch = await airtable(COUNTER_OFFERS_TABLE)
       .select({
         filterByFormula: `AND(
           {Status} = 'Open',
-          RECORD_ID() != '${counterOfferRecordId}',
-          FIND('${linkedOrderId}', ARRAYJOIN({Order}))
+          RECORD_ID() != '${counterOfferRecordId}'
         )`
       })
       .all();
+
+    const competingCounters = openCountersForStoreAcceptMatch.filter(
+      (r) => firstLinkedRecordId(r.fields?.["Order"]) === linkedOrderId
+    );
 
     for (const competing of competingCounters) {
       await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
