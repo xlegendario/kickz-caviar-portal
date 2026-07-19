@@ -3880,27 +3880,38 @@ function bindConsignmentDiscordButtons(client) {
         ephemeral: true
       }).catch(() => {});
 
-      // UPDATED: instead of disabling all buttons, swap the row to
-      // Accept (disabled) / Edit (active, points at the NEW round's
-      // record — data.new_round_id) / Deny (disabled). This lets the
-      // seller adjust their own just-placed counter while waiting on
-      // the store, per the agreed 3-button design.
-      const editRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("counter_offer_accept_disabled")
-          .setLabel("Accept")
-          .setStyle(ButtonStyle.Success)
-          .setDisabled(true),
-        new ButtonBuilder()
-          .setCustomId(`counter_offer_edit:${data.new_round_id || counterOfferRecordId}`)
-          .setLabel("Edit")
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId("counter_offer_deny_disabled")
-          .setLabel("Deny")
-          .setStyle(ButtonStyle.Danger)
-          .setDisabled(true)
-      );
+      // FIXED — CRASH: this used the discord.js ActionRowBuilder/
+      // ButtonBuilder classes, which are never imported anywhere in
+      // this file (only in airtable-discord-updates-main/server.js —
+      // this file uses raw component objects everywhere else). That
+      // caused a ReferenceError that crashed the entire bot process on
+      // every single seller counter. Rewritten as a raw object to match
+      // this file's actual pattern.
+      const editRow = {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 3,
+            label: "Accept",
+            custom_id: "counter_offer_accept_disabled",
+            disabled: true
+          },
+          {
+            type: 2,
+            style: 1,
+            label: "Edit",
+            custom_id: `counter_offer_edit:${data.new_round_id || counterOfferRecordId}`
+          },
+          {
+            type: 2,
+            style: 4,
+            label: "Deny",
+            custom_id: "counter_offer_deny_disabled",
+            disabled: true
+          }
+        ]
+      };
 
       await interaction.message.edit({
         content: `🔁 You countered with €${counterPrice}. Waiting on the store.`,
@@ -6266,6 +6277,16 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
     // a fresh number to respond to. Private-channel logic does not apply
     // here (confirmed: only relevant for consignment sellers).
     if (AIRTABLE_DISCORD_UPDATES_URL) {
+      // FIXED — the store must see what THEY would pay (store terms,
+      // with margin added back), not the seller's raw ask. This was
+      // sending proposedPrice straight through, making the margin
+      // appear to vanish entirely in what the store saw.
+      const sellerCounterInStoreTerms = calculateStoreCounterEquivalent(
+        proposedPrice,
+        sellerVatType,
+        orderFields
+      );
+
       await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -6278,7 +6299,9 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
           sku: asText(f["SKU"]),
           size: asText(f["Size"]),
           counter_offer_record_id: newRound.id,
-          seller_counter_price: proposedPrice
+          selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
+          your_previous_counter: numberValue(f["Store Counter Price"]),
+          seller_counter_price: sellerCounterInStoreTerms ?? proposedPrice
         })
       }).catch((err) => console.error("Failed to notify store of seller counter (non-blocking):", err));
     }
@@ -6746,6 +6769,15 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
       // Seller edited — notify the store with the revised number, same
       // channel/format as a fresh seller-counter notification.
       if (AIRTABLE_DISCORD_UPDATES_URL) {
+        // FIXED — same as the seller-counter endpoint: the store must
+        // see the store-equivalent (margin-adjusted) price, not the
+        // seller's raw edited ask.
+        const editedSellerPriceInStoreTerms = calculateStoreCounterEquivalent(
+          proposedPrice,
+          asText(f["Seller Original VAT Type"]),
+          orderFields
+        );
+
         await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -6758,7 +6790,9 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
             sku: asText(f["SKU"]),
             size: asText(f["Size"]),
             counter_offer_record_id: recordId,
-            seller_counter_price: proposedPrice
+            selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
+            your_previous_counter: numberValue(previousFields["Store Counter Price"]),
+            seller_counter_price: editedSellerPriceInStoreTerms ?? proposedPrice
           })
         }).catch((err) => console.error("Failed to notify store of edited counter (non-blocking):", err));
       }
