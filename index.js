@@ -6183,7 +6183,22 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
     const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
     const lastPrice = numberValue(f["Store Counter Price"]);
 
+    // TEMP DEBUG — remove once we've confirmed the real numbers behind
+    // the "No room left" reports. Logs the raw Airtable field values and
+    // the parsed numbers going into the band calculation.
+    console.log("seller-counter DEBUG:", {
+      recordId: previousRecordId,
+      rawSellerOriginalPrice: f["Seller Original Price"],
+      rawStoreCounterPrice: f["Store Counter Price"],
+      parsedSellerOriginalPrice: sellerOriginalPrice,
+      parsedLastPrice: lastPrice,
+      proposedPrice
+    });
+
     const validation = validateNextCounterPrice(sellerOriginalPrice, lastPrice, proposedPrice);
+
+    console.log("seller-counter DEBUG validation result:", validation);
+
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
