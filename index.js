@@ -5787,7 +5787,9 @@ app.post("/api/counter-offers/create", async (req, res) => {
           size,
           orderId,
           payout: finalSellerCounterPayout,
-          vatType: sellerVatType
+          vatType: sellerVatType,
+          sellerOriginalPrice,
+          sellerOriginalVatType: sellerVatType
         });
 
         await airtable(COUNTER_OFFERS_TABLE).update(createdCounter.id, {
@@ -5945,6 +5947,133 @@ app.post("/api/counter-offers/create", async (req, res) => {
       error: "Failed to create counter offers",
       details: err.message
     });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: lets the store edit its round-1 counter (the
+// very first broadcast created by /api/counter-offers/create above)
+// while sellers haven't responded yet. Round 1 fans out to potentially
+// several sellers as separate records, so this loops through all of
+// them for the order rather than editing a single record like the
+// 1-to-1 edit endpoint does. Each seller's own record is validated
+// against THEIR OWN original price (sellers can have different asks).
+// ---------------------------------------------------------------------
+app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (
+      !process.env.COUNTER_OFFERS_SECRET ||
+      secret !== process.env.COUNTER_OFFERS_SECRET
+    ) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const orderRecordId = asText(req.body?.order_record_id);
+    const proposedPrice = Number(req.body?.price);
+
+    if (!orderRecordId) {
+      return res.status(400).json({ error: "Missing order_record_id" });
+    }
+
+    if (!Number.isInteger(proposedPrice) || proposedPrice <= 0) {
+      return res.status(400).json({ error: "Offer must be a valid whole number." });
+    }
+
+    // Round-1 records: still Open, belong to this order, and have no
+    // "Previous Record ID" — that's what distinguishes them from
+    // follow-up 1-to-1 rounds (seller-counter / store-counter).
+    const roundOneRecords = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `AND(
+          {Status} = 'Open',
+          {Source Type} = 'Seller Offer',
+          {Previous Record ID} = '',
+          FIND('${orderRecordId}', ARRAYJOIN({Order}))
+        )`
+      })
+      .all();
+
+    if (roundOneRecords.length === 0) {
+      return res.status(409).json({ error: "No open round-1 counters found for this order to edit." });
+    }
+
+    let updated = 0;
+    let skipped = 0;
+    const errors = [];
+
+    for (const record of roundOneRecords) {
+      const f = record.fields || {};
+      const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
+      const sellerVatType = asText(f["Seller Original VAT Type"]);
+
+      // Each seller's own asking price is the upper bound — a store
+      // counter must always stay below what that specific seller asked.
+      if (!sellerOriginalPrice || proposedPrice >= sellerOriginalPrice) {
+        skipped++;
+        continue;
+      }
+
+      const recomputedPayout = calculateCounterPayoutForVatType(proposedPrice, sellerVatType, {});
+
+      if (!Number.isFinite(recomputedPayout) || recomputedPayout <= 0) {
+        skipped++;
+        continue;
+      }
+
+      await airtable(COUNTER_OFFERS_TABLE).update(record.id, {
+        "Store Counter Price": proposedPrice,
+        "Counter Payout": recomputedPayout,
+        "Counter Payout VAT Type": sellerVatType
+      });
+
+      const oldChannelId = asText(f["Discord Channel ID"]);
+      const oldMessageId = asText(f["Discord Message ID"]);
+
+      if (oldChannelId && oldMessageId) {
+        await disableCounterOfferDiscordButtons(
+          oldChannelId,
+          oldMessageId,
+          "✏️ The store revised this counter — see the new message below."
+        ).catch(() => {});
+      }
+
+      const sellerDiscordId = asText(f["Seller Discord ID"]);
+
+      if (sellerDiscordId) {
+        const discordResult = await sendCounterOfferDiscordDM({
+          counterOfferRecordId: record.id,
+          sellerDiscordId,
+          productName: asText(f["Product Name"]),
+          sku: asText(f["SKU"]),
+          size: asText(f["Size"]),
+          orderId: asText(f["Order ID"]),
+          payout: recomputedPayout,
+          vatType: sellerVatType,
+          sellerOriginalPrice,
+          sellerOriginalVatType: sellerVatType
+        }).catch((err) => {
+          errors.push(err.message);
+          return null;
+        });
+
+        if (discordResult) {
+          await airtable(COUNTER_OFFERS_TABLE).update(record.id, {
+            "Discord Channel ID": discordResult.channelId,
+            "Discord Message ID": discordResult.messageId,
+            "Discord Delivery Type": discordResult.deliveryType
+          });
+        }
+      }
+
+      updated++;
+    }
+
+    res.json({ ok: true, updated, skipped, errors });
+  } catch (err) {
+    console.error("Failed to edit broadcast counter offer:", err);
+    res.status(500).json({ error: "Failed to edit counter offer", details: err.message });
   }
 });
 
@@ -6163,7 +6292,9 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
         size: asText(f["Size"]),
         orderId,
         payout: recomputedPayout,
-        vatType: sellerVatType
+        vatType: sellerVatType,
+        sellerOriginalPrice,
+        sellerOriginalVatType: sellerVatType
       }).catch((err) => {
         console.error("Failed to DM seller of store counter-back (non-blocking):", err);
         return null;
@@ -6495,7 +6626,9 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
           size: asText(f["Size"]),
           orderId: asText(orderFields["Order ID"]),
           payout: updates["Counter Payout"],
-          vatType: asText(f["Seller Original VAT Type"])
+          vatType: asText(f["Seller Original VAT Type"]),
+          sellerOriginalPrice: numberValue(f["Seller Original Price"]),
+          sellerOriginalVatType: asText(f["Seller Original VAT Type"])
         }).catch((err) => {
           console.error("Failed to DM seller of edited counter (non-blocking):", err);
           return null;
@@ -6515,142 +6648,6 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
   } catch (err) {
     console.error("Failed to edit counter offer:", err);
     res.status(500).json({ error: "Failed to edit counter offer", details: err.message });
-  }
-});
-
-// ---------------------------------------------------------------------
-// NEW — additive only: the symmetric edit rule from the original design
-// that never got built. Whoever placed the CURRENT price on an Open
-// round may revise it in place — up or down within the same narrowing
-// band it was validated against when first placed — as long as the
-// other party hasn't responded yet (i.e. this row is still Open and no
-// successor round exists). Works for both a seller's counter and a
-// store's counter, since the logic is symmetric.
-// ---------------------------------------------------------------------
-app.post("/api/counter-offers/:id/edit", async (req, res) => {
-  try {
-    const secret = asText(req.headers["x-kc-secret"]);
-
-    if (
-      !process.env.COUNTER_OFFERS_SECRET ||
-      secret !== process.env.COUNTER_OFFERS_SECRET
-    ) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-
-    const recordId = asText(req.params.id);
-    const actor = asText(req.body?.actor); // "seller" or "store"
-    const proposedPrice = Number(req.body?.price);
-
-    if (!["seller", "store"].includes(actor)) {
-      return res.status(400).json({ error: "actor must be 'seller' or 'store'" });
-    }
-
-    if (!Number.isInteger(proposedPrice) || proposedPrice <= 0) {
-      return res.status(400).json({ error: "Offer must be a valid whole number." });
-    }
-
-    const record = await airtable(COUNTER_OFFERS_TABLE).find(recordId);
-    const f = record.fields || {};
-
-    if (asText(f["Status"]) !== "Open") {
-      return res.status(409).json({ error: "This counter offer is no longer open — it can't be edited." });
-    }
-
-    // Confirm this row actually holds THIS actor's price to edit.
-    const hasSellerPrice =
-      f["Seller Counter Price"] !== undefined && f["Seller Counter Price"] !== null && f["Seller Counter Price"] !== "";
-    const hasStorePrice =
-      f["Store Counter Price"] !== undefined && f["Store Counter Price"] !== null && f["Store Counter Price"] !== "";
-
-    if (actor === "seller" && !hasSellerPrice) {
-      return res.status(403).json({ error: "There's no seller counter on this round to edit." });
-    }
-
-    if (actor === "store" && !hasStorePrice) {
-      return res.status(403).json({ error: "There's no store counter on this round to edit." });
-    }
-
-    // Reconstruct the SAME band this price was validated against when
-    // first placed: the seller's original price, and whichever price
-    // preceded this round (from the previous round, if any).
-    const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
-    const previousRoundId = asText(f["Previous Record ID"]);
-
-    let referencePrice = sellerOriginalPrice;
-
-    if (previousRoundId) {
-      const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(previousRoundId);
-      const priorFields = priorRound.fields || {};
-      referencePrice = actor === "seller"
-        ? numberValue(priorFields["Store Counter Price"]) || sellerOriginalPrice
-        : numberValue(priorFields["Seller Counter Price"]) || sellerOriginalPrice;
-    }
-
-    const validation = validateNextCounterPrice(sellerOriginalPrice, referencePrice, proposedPrice);
-    if (!validation.ok) {
-      return res.status(400).json({ error: validation.reason, band: validation.band });
-    }
-
-    const field = actor === "seller" ? "Seller Counter Price" : "Store Counter Price";
-    const updates = { [field]: proposedPrice };
-
-    if (actor === "store") {
-      const sellerVatType = asText(f["Seller Original VAT Type"]);
-      updates["Counter Payout"] = calculateCounterPayoutForVatType(proposedPrice, sellerVatType, {});
-      updates["Counter Payout VAT Type"] = sellerVatType;
-    }
-
-    await airtable(COUNTER_OFFERS_TABLE).update(recordId, updates);
-
-    // Re-notify whoever is waiting — same as a fresh counter would.
-    const linkedOrderId = firstLinkedRecordId(f["Order"]);
-    const orderRecord = linkedOrderId ? await airtable(ORDERS_TABLE).find(linkedOrderId) : null;
-    const orderFields = orderRecord?.fields || {};
-
-    if (actor === "seller" && AIRTABLE_DISCORD_UPDATES_URL) {
-      // Seller edited their own counter — re-notify the store, same
-      // trigger as when they first countered.
-      await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          trigger_type: "counter-offer-seller-countered",
-          store_name: asText(orderFields["Store Name"]),
-          record_id: linkedOrderId,
-          shopify_order_number: asText(orderFields["Shopify Order Number"]),
-          product_name: asText(f["Product Name"]),
-          sku: asText(f["SKU"]),
-          size: asText(f["Size"]),
-          counter_offer_record_id: recordId,
-          seller_counter_price: proposedPrice
-        })
-      }).catch((err) => console.error("Failed to re-notify store of edited seller counter (non-blocking):", err));
-    }
-
-    if (actor === "store") {
-      // Store edited their own counter — re-notify the seller with a
-      // fresh DM, same as sendCounterOfferDiscordDM does for a new round.
-      const sellerDiscordId = asText(f["Seller Discord ID"]);
-
-      if (sellerDiscordId) {
-        await sendCounterOfferDiscordDM({
-          counterOfferRecordId: recordId,
-          sellerDiscordId,
-          productName: asText(f["Product Name"]),
-          sku: asText(f["SKU"]),
-          size: asText(f["Size"]),
-          orderId: asText(orderFields["Order ID"]),
-          payout: updates["Counter Payout"],
-          vatType: updates["Counter Payout VAT Type"]
-        }).catch((err) => console.error("Failed to re-notify seller of edited store counter (non-blocking):", err));
-      }
-    }
-
-    res.json({ ok: true, band: validation.band });
-  } catch (err) {
-    console.error("Failed to edit counter offer:", err);
-    res.status(500).json({ error: "Failed to edit counter", details: err.message });
   }
 });
 
@@ -7455,7 +7452,9 @@ async function sendCounterOfferDiscordDM({
   size,
   orderId,
   payout,
-  vatType
+  vatType,
+  sellerOriginalPrice,
+  sellerOriginalVatType
 }) {
   await initKickzDealDiscord();
 
@@ -7465,6 +7464,16 @@ async function sendCounterOfferDiscordDM({
 
   const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
   const dm = await user.createDM();
+
+  const originalText =
+    sellerOriginalPrice !== undefined && sellerOriginalPrice !== null && sellerOriginalPrice !== ""
+      ? `€${Number(sellerOriginalPrice).toFixed(2)} · ${sellerOriginalVatType || "—"}`
+      : null;
+
+  const diffText =
+    originalText && Number.isFinite(Number(sellerOriginalPrice)) && Number.isFinite(Number(payout))
+      ? ` (${Number(payout) - Number(sellerOriginalPrice) >= 0 ? "+" : ""}€${(Number(payout) - Number(sellerOriginalPrice)).toFixed(2)})`
+      : "";
 
   const message = await dm.send({
     embeds: [
@@ -7477,8 +7486,9 @@ async function sendCounterOfferDiscordDM({
           "",
           `The store sent a counter offer.`,
           "",
-          `**Your payout**`,
-          `€${Number(payout).toFixed(2)} · ${vatType || "—"}`,
+          ...(originalText ? [`**Your original offer**`, originalText, ""] : []),
+          `**Counter payout**`,
+          `€${Number(payout).toFixed(2)} · ${vatType || "—"}${diffText}`,
           "",
           "Accept if you can fulfill this order at the counter price."
         ].join("\n"),
