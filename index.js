@@ -3337,7 +3337,23 @@ function bindConsignmentDiscordButtons(client) {
       return;
     }
 
-    await interaction.deferUpdate().catch(() => {});
+    // FIXED — pre-existing bug (confirmed present in the original
+    // uploaded code): this deferUpdate ran unconditionally for EVERY
+    // customId that fell through to this point, not just the two it was
+    // actually written for. Once counter_offer_counter:/
+    // counter_offer_edit: (and their modal submits) were added further
+    // down the file, they started falling through here too — and since
+    // they need to call showModal()/reply() as their FIRST response,
+    // an interaction that's already been deferred here fails with
+    // "InteractionAlreadyReplied". Scoping this to only the two
+    // customIds it was designed for fixes that, without touching how
+    // those two behave.
+    if (
+      customId.startsWith("accept_member_wtb_buyer_offer:") ||
+      customId.startsWith("decline_member_wtb_buyer_offer:")
+    ) {
+      await interaction.deferUpdate().catch(() => {});
+    }
 
         if (customId.startsWith("accept_member_wtb_buyer_offer:")) {
           const [, memberWtbRecordId, sellerOfferRecordId] = customId.split(":");
