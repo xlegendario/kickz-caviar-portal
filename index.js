@@ -6684,7 +6684,7 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
     const f = record.fields || {};
 
     if (asText(f["Status"]) !== "Open") {
-      return res.status(409).json({ error: "This counter offer is no longer open — nothing to edit." });
+      return res.status(409).json({ error: "This counter offer is no longer open — please use the fresh offer embed below." });
     }
 
     const previousRecordId = asText(f["Previous Record ID"]);
