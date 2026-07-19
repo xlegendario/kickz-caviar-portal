@@ -3132,7 +3132,9 @@ function bindConsignmentDiscordButtons(client) {
       !customId.startsWith("place_new_offer:") &&
       !customId.startsWith("place_new_offer_modal:") &&
       !customId.startsWith("counter_offer_counter:") &&
-      !customId.startsWith("counter_offer_counter_modal:")
+      !customId.startsWith("counter_offer_counter_modal:") &&
+      !customId.startsWith("counter_offer_edit:") &&
+      !customId.startsWith("counter_offer_edit_modal:")
     ) {
       return;
     }
@@ -3669,6 +3671,86 @@ function bindConsignmentDiscordButtons(client) {
       return;
     }
 
+    if (customId.startsWith("counter_offer_edit:")) {
+      const recordId = customId.replace("counter_offer_edit:", "");
+
+      const modal = {
+        title: "Edit Your Counter",
+        custom_id: `counter_offer_edit_modal:${recordId}`,
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 4,
+                custom_id: "edited_price",
+                label: "New counter (whole number)",
+                style: 1,
+                min_length: 1,
+                max_length: 10,
+                required: true
+              }
+            ]
+          }
+        ]
+      };
+
+      await interaction.showModal(modal).catch((err) => {
+        console.error("Failed to show counter_offer_edit modal:", err);
+      });
+
+      return;
+    }
+
+    if (customId.startsWith("counter_offer_edit_modal:")) {
+      const recordId = customId.replace("counter_offer_edit_modal:", "");
+      const rawAmount = interaction.fields.getTextInputValue("edited_price");
+      const editedPrice = Number(String(rawAmount).replace(/[^\d.,-]/g, "").replace(",", "."));
+
+      if (!Number.isInteger(editedPrice) || editedPrice <= 0) {
+        await interaction.reply({
+          content: "⚠️ Please enter a valid whole-number counter.",
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      const response = await fetch(
+        `${APP_PUBLIC_BASE_URL}/api/counter-offers/${recordId}/edit`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-kc-secret": process.env.COUNTER_OFFERS_SECRET || ""
+          },
+          body: JSON.stringify({ actor: "seller", price: editedPrice })
+        }
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        await interaction.reply({
+          content: `❌ ${data.error || "Failed to edit your counter."}`,
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      await interaction.reply({
+        content: `✅ Your counter was updated to €${editedPrice}.`,
+        ephemeral: true
+      }).catch(() => {});
+
+      await interaction.message.edit({
+        content: `🔁 You countered with €${editedPrice}. Waiting on the store.`,
+        embeds: interaction.message.embeds,
+        components: interaction.message.components
+      }).catch(() => {});
+
+      return;
+    }
+
     if (customId.startsWith("counter_offer_counter:")) {
       const counterOfferRecordId = customId.split(":")[1];
 
@@ -3738,11 +3820,33 @@ function bindConsignmentDiscordButtons(client) {
         ephemeral: true
       }).catch(() => {});
 
-      await disableCounterOfferDiscordButtons(
-        interaction.channelId,
-        interaction.message.id,
-        `🔁 You countered with €${counterPrice}.`
-      ).catch(() => {});
+      // UPDATED: instead of disabling all buttons, swap the row to
+      // Accept (disabled) / Edit (active, points at the NEW round's
+      // record — data.new_round_id) / Deny (disabled). This lets the
+      // seller adjust their own just-placed counter while waiting on
+      // the store, per the agreed 3-button design.
+      const editRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("counter_offer_accept_disabled")
+          .setLabel("Accept")
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(true),
+        new ButtonBuilder()
+          .setCustomId(`counter_offer_edit:${data.new_round_id || counterOfferRecordId}`)
+          .setLabel("Edit")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId("counter_offer_deny_disabled")
+          .setLabel("Deny")
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(true)
+      );
+
+      await interaction.message.edit({
+        content: `🔁 You countered with €${counterPrice}. Waiting on the store.`,
+        embeds: interaction.message.embeds,
+        components: [editRow]
+      }).catch((err) => console.error("Failed to update message with Edit button:", err));
 
       return;
     }
@@ -6244,6 +6348,309 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
   } catch (err) {
     console.error("Failed to store-deny counter offer:", err);
     res.status(500).json({ error: "Failed to deny counter offer", details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: lets whoever placed the CURRENT price on an open
+// 1-to-1 counter round edit it, while the other side hasn't responded
+// yet. Scoped to rounds created by seller-counter/store-counter above
+// (records that have a "Previous Record ID") — the very first,
+// broadcast-to-many-sellers round-1 counter (created by
+// /api/counter-offers/create) is NOT covered here, since editing one
+// record there wouldn't cleanly map to a single Discord message.
+//
+// The valid range for the edit is recomputed the exact same way it was
+// when this round was first created — i.e. re-derived from the record
+// this one was responding to — so an edit can never accidentally widen
+// the negotiation outside what was already agreed as the boundary.
+// ---------------------------------------------------------------------
+app.post("/api/counter-offers/:id/edit", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (
+      !process.env.COUNTER_OFFERS_SECRET ||
+      secret !== process.env.COUNTER_OFFERS_SECRET
+    ) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const recordId = asText(req.params.id);
+    const actor = asText(req.body?.actor); // "seller" or "store"
+    const proposedPrice = Number(req.body?.price);
+
+    if (!["seller", "store"].includes(actor)) {
+      return res.status(400).json({ error: "actor must be 'seller' or 'store'" });
+    }
+
+    if (!Number.isInteger(proposedPrice) || proposedPrice <= 0) {
+      return res.status(400).json({ error: "Offer must be a valid whole number." });
+    }
+
+    const record = await airtable(COUNTER_OFFERS_TABLE).find(recordId);
+    const f = record.fields || {};
+
+    if (asText(f["Status"]) !== "Open") {
+      return res.status(409).json({ error: "This counter offer is no longer open — nothing to edit." });
+    }
+
+    const previousRecordId = asText(f["Previous Record ID"]);
+    if (!previousRecordId) {
+      return res.status(400).json({
+        error: "Editing isn't supported for the very first counter yet — only for follow-up rounds."
+      });
+    }
+
+    const hasSellerCounter =
+      f["Seller Counter Price"] !== undefined &&
+      f["Seller Counter Price"] !== null &&
+      f["Seller Counter Price"] !== "";
+    const hasStoreCounter =
+      f["Store Counter Price"] !== undefined &&
+      f["Store Counter Price"] !== null &&
+      f["Store Counter Price"] !== "";
+
+    if (hasSellerCounter && actor !== "seller") {
+      return res.status(403).json({ error: "Only the seller can edit this round." });
+    }
+    if (hasStoreCounter && actor !== "store") {
+      return res.status(403).json({ error: "Only the store can edit this round." });
+    }
+
+    const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
+    const previousRound = await airtable(COUNTER_OFFERS_TABLE).find(previousRecordId);
+    const previousFields = previousRound.fields || {};
+
+    // The "other" reference price is whichever price this round was
+    // originally responding to — same lookup the seller-counter /
+    // store-counter endpoints already do when a round is first created.
+    const otherReferencePrice = hasSellerCounter
+      ? numberValue(previousFields["Store Counter Price"])
+      : numberValue(previousFields["Seller Counter Price"]) || sellerOriginalPrice;
+
+    const validation = validateNextCounterPrice(sellerOriginalPrice, otherReferencePrice, proposedPrice);
+    if (!validation.ok) {
+      return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    const priceField = hasSellerCounter ? "Seller Counter Price" : "Store Counter Price";
+    const updates = { [priceField]: proposedPrice };
+
+    if (!hasSellerCounter) {
+      // Store-side edit: recompute payout, same as store-counter does.
+      const sellerVatType = asText(f["Seller Original VAT Type"]);
+      updates["Counter Payout"] = calculateCounterPayoutForVatType(proposedPrice, sellerVatType, {});
+      updates["Counter Payout VAT Type"] = sellerVatType;
+    }
+
+    await airtable(COUNTER_OFFERS_TABLE).update(recordId, updates);
+
+    const linkedOrderId = firstLinkedRecordId(f["Order"]);
+    const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
+    const orderFields = orderRecord.fields || {};
+
+    if (hasSellerCounter) {
+      // Seller edited — notify the store with the revised number, same
+      // channel/format as a fresh seller-counter notification.
+      if (AIRTABLE_DISCORD_UPDATES_URL) {
+        await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            trigger_type: "counter-offer-seller-countered",
+            store_name: asText(orderFields["Store Name"]),
+            record_id: linkedOrderId,
+            shopify_order_number: asText(orderFields["Shopify Order Number"]),
+            product_name: asText(f["Product Name"]),
+            sku: asText(f["SKU"]),
+            size: asText(f["Size"]),
+            counter_offer_record_id: recordId,
+            seller_counter_price: proposedPrice
+          })
+        }).catch((err) => console.error("Failed to notify store of edited counter (non-blocking):", err));
+      }
+    } else {
+      // Store edited — disable the old DM (we have its stored IDs) and
+      // send the seller a fresh DM with the revised number and buttons.
+      const oldChannelId = asText(f["Discord Channel ID"]);
+      const oldMessageId = asText(f["Discord Message ID"]);
+
+      if (oldChannelId && oldMessageId) {
+        await disableCounterOfferDiscordButtons(
+          oldChannelId,
+          oldMessageId,
+          "✏️ The store revised this counter — see the new message below."
+        ).catch(() => {});
+      }
+
+      const sellerDiscordId = asText(f["Seller Discord ID"]);
+
+      if (sellerDiscordId) {
+        const discordResult = await sendCounterOfferDiscordDM({
+          counterOfferRecordId: recordId,
+          sellerDiscordId,
+          productName: asText(f["Product Name"]),
+          sku: asText(f["SKU"]),
+          size: asText(f["Size"]),
+          orderId: asText(orderFields["Order ID"]),
+          payout: updates["Counter Payout"],
+          vatType: asText(f["Seller Original VAT Type"])
+        }).catch((err) => {
+          console.error("Failed to DM seller of edited counter (non-blocking):", err);
+          return null;
+        });
+
+        if (discordResult) {
+          await airtable(COUNTER_OFFERS_TABLE).update(recordId, {
+            "Discord Channel ID": discordResult.channelId,
+            "Discord Message ID": discordResult.messageId,
+            "Discord Delivery Type": discordResult.deliveryType
+          });
+        }
+      }
+    }
+
+    res.json({ ok: true, band: validation.band });
+  } catch (err) {
+    console.error("Failed to edit counter offer:", err);
+    res.status(500).json({ error: "Failed to edit counter offer", details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: the symmetric edit rule from the original design
+// that never got built. Whoever placed the CURRENT price on an Open
+// round may revise it in place — up or down within the same narrowing
+// band it was validated against when first placed — as long as the
+// other party hasn't responded yet (i.e. this row is still Open and no
+// successor round exists). Works for both a seller's counter and a
+// store's counter, since the logic is symmetric.
+// ---------------------------------------------------------------------
+app.post("/api/counter-offers/:id/edit", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (
+      !process.env.COUNTER_OFFERS_SECRET ||
+      secret !== process.env.COUNTER_OFFERS_SECRET
+    ) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const recordId = asText(req.params.id);
+    const actor = asText(req.body?.actor); // "seller" or "store"
+    const proposedPrice = Number(req.body?.price);
+
+    if (!["seller", "store"].includes(actor)) {
+      return res.status(400).json({ error: "actor must be 'seller' or 'store'" });
+    }
+
+    if (!Number.isInteger(proposedPrice) || proposedPrice <= 0) {
+      return res.status(400).json({ error: "Offer must be a valid whole number." });
+    }
+
+    const record = await airtable(COUNTER_OFFERS_TABLE).find(recordId);
+    const f = record.fields || {};
+
+    if (asText(f["Status"]) !== "Open") {
+      return res.status(409).json({ error: "This counter offer is no longer open — it can't be edited." });
+    }
+
+    // Confirm this row actually holds THIS actor's price to edit.
+    const hasSellerPrice =
+      f["Seller Counter Price"] !== undefined && f["Seller Counter Price"] !== null && f["Seller Counter Price"] !== "";
+    const hasStorePrice =
+      f["Store Counter Price"] !== undefined && f["Store Counter Price"] !== null && f["Store Counter Price"] !== "";
+
+    if (actor === "seller" && !hasSellerPrice) {
+      return res.status(403).json({ error: "There's no seller counter on this round to edit." });
+    }
+
+    if (actor === "store" && !hasStorePrice) {
+      return res.status(403).json({ error: "There's no store counter on this round to edit." });
+    }
+
+    // Reconstruct the SAME band this price was validated against when
+    // first placed: the seller's original price, and whichever price
+    // preceded this round (from the previous round, if any).
+    const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
+    const previousRoundId = asText(f["Previous Record ID"]);
+
+    let referencePrice = sellerOriginalPrice;
+
+    if (previousRoundId) {
+      const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(previousRoundId);
+      const priorFields = priorRound.fields || {};
+      referencePrice = actor === "seller"
+        ? numberValue(priorFields["Store Counter Price"]) || sellerOriginalPrice
+        : numberValue(priorFields["Seller Counter Price"]) || sellerOriginalPrice;
+    }
+
+    const validation = validateNextCounterPrice(sellerOriginalPrice, referencePrice, proposedPrice);
+    if (!validation.ok) {
+      return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    const field = actor === "seller" ? "Seller Counter Price" : "Store Counter Price";
+    const updates = { [field]: proposedPrice };
+
+    if (actor === "store") {
+      const sellerVatType = asText(f["Seller Original VAT Type"]);
+      updates["Counter Payout"] = calculateCounterPayoutForVatType(proposedPrice, sellerVatType, {});
+      updates["Counter Payout VAT Type"] = sellerVatType;
+    }
+
+    await airtable(COUNTER_OFFERS_TABLE).update(recordId, updates);
+
+    // Re-notify whoever is waiting — same as a fresh counter would.
+    const linkedOrderId = firstLinkedRecordId(f["Order"]);
+    const orderRecord = linkedOrderId ? await airtable(ORDERS_TABLE).find(linkedOrderId) : null;
+    const orderFields = orderRecord?.fields || {};
+
+    if (actor === "seller" && AIRTABLE_DISCORD_UPDATES_URL) {
+      // Seller edited their own counter — re-notify the store, same
+      // trigger as when they first countered.
+      await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trigger_type: "counter-offer-seller-countered",
+          store_name: asText(orderFields["Store Name"]),
+          record_id: linkedOrderId,
+          shopify_order_number: asText(orderFields["Shopify Order Number"]),
+          product_name: asText(f["Product Name"]),
+          sku: asText(f["SKU"]),
+          size: asText(f["Size"]),
+          counter_offer_record_id: recordId,
+          seller_counter_price: proposedPrice
+        })
+      }).catch((err) => console.error("Failed to re-notify store of edited seller counter (non-blocking):", err));
+    }
+
+    if (actor === "store") {
+      // Store edited their own counter — re-notify the seller with a
+      // fresh DM, same as sendCounterOfferDiscordDM does for a new round.
+      const sellerDiscordId = asText(f["Seller Discord ID"]);
+
+      if (sellerDiscordId) {
+        await sendCounterOfferDiscordDM({
+          counterOfferRecordId: recordId,
+          sellerDiscordId,
+          productName: asText(f["Product Name"]),
+          sku: asText(f["SKU"]),
+          size: asText(f["Size"]),
+          orderId: asText(orderFields["Order ID"]),
+          payout: updates["Counter Payout"],
+          vatType: updates["Counter Payout VAT Type"]
+        }).catch((err) => console.error("Failed to re-notify seller of edited store counter (non-blocking):", err));
+      }
+    }
+
+    res.json({ ok: true, band: validation.band });
+  } catch (err) {
+    console.error("Failed to edit counter offer:", err);
+    res.status(500).json({ error: "Failed to edit counter", details: err.message });
   }
 });
 
