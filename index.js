@@ -6733,11 +6733,15 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
       orderFieldsForEdit = orderRecordForEdit.fields || {};
       const sellerVatTypeForEdit = asText(f["Seller Original VAT Type"]);
 
-      ownReferencePrice = calculateStoreCounterEquivalent(
-        sellerOriginalPrice,
-        sellerVatTypeForEdit,
-        orderFieldsForEdit
-      );
+      // FIXED — this was recomputing "own reference" from the seller's
+      // ORIGINAL price via margin conversion, producing a theoretical
+      // number (e.g. €467.50) that had nothing to do with what the
+      // store actually last countered with. The store's own previous
+      // position is simply whatever is already stored in THIS record's
+      // "Store Counter Price" field — no recomputation needed, it's
+      // already in store terms. Mirrors exactly how the seller-editing
+      // branch above uses sellerOriginalPrice straight from the record.
+      ownReferencePrice = numberValue(f["Store Counter Price"]);
 
       const previousSellerCounter = numberValue(previousFields["Seller Counter Price"]);
 
