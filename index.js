@@ -6240,7 +6240,30 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
     const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
     const lastPrice = numberValue(f["Counter Payout"]);
 
-    const validation = validateNextCounterPrice(sellerOriginalPrice, lastPrice, proposedPrice);
+    // FIXED — second bug, same root cause as the store-editing one:
+    // this always used "Seller Original Price" (the very first ask) as
+    // the seller's own reference point, even when the seller had ALREADY
+    // countered in an earlier round of this same back-and-forth. Once
+    // they've countered once, their real own position is that counter,
+    // not their original ask from several rounds ago — otherwise the
+    // min-step check gets computed against a stale number and lets
+    // through a "counter" that doesn't actually move from where they
+    // last stood. If the round this record responds to (via its own
+    // Previous Record ID) has a Seller Counter Price, that's the
+    // seller's true last position; only fall back to the original ask
+    // when this is genuinely their first-ever counter-back.
+    let sellerOwnReference = sellerOriginalPrice;
+    const priorRoundIdForSeller = asText(f["Previous Record ID"]);
+
+    if (priorRoundIdForSeller) {
+      const priorRoundForSeller = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundIdForSeller);
+      const priorSellerCounter = numberValue(priorRoundForSeller.fields?.["Seller Counter Price"]);
+      if (priorSellerCounter) {
+        sellerOwnReference = priorSellerCounter;
+      }
+    }
+
+    const validation = validateNextCounterPrice(sellerOwnReference, lastPrice, proposedPrice);
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
@@ -6684,7 +6707,7 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
     const f = record.fields || {};
 
     if (asText(f["Status"]) !== "Open") {
-      return res.status(409).json({ error: "This counter offer is no longer open — please use the fresh offer embed below." });
+      return res.status(409).json({ error: "This counter offer is no longer open — nothing to edit." });
     }
 
     const previousRecordId = asText(f["Previous Record ID"]);
@@ -6725,7 +6748,22 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
     let orderFieldsForEdit = null;
 
     if (hasSellerCounter) {
+      // FIXED — same bug as the seller-counter endpoint: always using
+      // sellerOriginalPrice ignores that the seller may have already
+      // countered in an earlier round of this back-and-forth. Walk back
+      // one more hop (the round being responded to's own Previous
+      // Record ID) to find the seller's true last counter, if any.
       ownReferencePrice = sellerOriginalPrice;
+      const grandparentRoundId = asText(previousFields["Previous Record ID"]);
+
+      if (grandparentRoundId) {
+        const grandparentRound = await airtable(COUNTER_OFFERS_TABLE).find(grandparentRoundId);
+        const grandparentSellerCounter = numberValue(grandparentRound.fields?.["Seller Counter Price"]);
+        if (grandparentSellerCounter) {
+          ownReferencePrice = grandparentSellerCounter;
+        }
+      }
+
       counterpartPrice = numberValue(previousFields["Counter Payout"]);
     } else {
       const orderIdForEdit = firstLinkedRecordId(f["Order"]);
