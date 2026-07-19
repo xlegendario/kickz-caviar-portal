@@ -217,6 +217,24 @@ let kickzDealButtonsBound = false;
 let memberWtbCreationBound = false;
 let memberWtbCsvUploadsBound = false;
 
+// FIXED — pre-existing race condition (confirmed present in the original
+// uploaded code, not introduced here): both init functions below used a
+// "ready" boolean that was only set AFTER `await client.login(...)`
+// resolved. If two requests called initKickzDealDiscord() around the
+// same time, both could see `kickzDealDiscordReady === false` and BOTH
+// proceed to call .login() and bind the interaction handler — resulting
+// in the SAME button click being processed twice by two separate
+// listeners on the same client, which is exactly what produces
+// "InteractionAlreadyReplied" errors (first listener succeeds, second
+// fails because the interaction was already acknowledged).
+//
+// Fix: cache the in-flight PROMISE itself, not just a boolean. Every
+// concurrent caller then awaits the exact same promise, so login and
+// button-binding can only ever happen once, no matter how many requests
+// arrive while it's still starting up.
+let discordInitPromise = null;
+let kickzDealDiscordInitPromise = null;
+
 const memberWtbDiscordInventoryTypes = new Map();
 
 const MEMBER_WTB_DISCORD_DEFAULT_INVENTORY_TYPE = "all";
@@ -233,57 +251,83 @@ const MEMBER_WTB_DISCORD_MODAL_PREFIX =
 async function initDiscord() {
   if (discordReady) return;
 
-  if (!process.env.DISCORD_BOT_TOKEN) {
-    throw new Error("Missing DISCORD_BOT_TOKEN");
+  if (discordInitPromise) {
+    await discordInitPromise;
+    return;
   }
 
-  await discordClient.login(process.env.DISCORD_BOT_TOKEN);
+  discordInitPromise = (async () => {
+    if (!process.env.DISCORD_BOT_TOKEN) {
+      throw new Error("Missing DISCORD_BOT_TOKEN");
+    }
 
-  discordReady = true;
+    await discordClient.login(process.env.DISCORD_BOT_TOKEN);
 
-  if (!consignmentButtonsBound) {
-    bindConsignmentDiscordButtons(discordClient);
-    consignmentButtonsBound = true;
+    discordReady = true;
+
+    if (!consignmentButtonsBound) {
+      bindConsignmentDiscordButtons(discordClient);
+      consignmentButtonsBound = true;
+    }
+
+    console.log("✅ Discord bot logged in");
+  })();
+
+  try {
+    await discordInitPromise;
+  } finally {
+    discordInitPromise = null;
   }
-
-  console.log("✅ Discord bot logged in");
 }
 
 async function initKickzDealDiscord() {
   if (kickzDealDiscordReady) return;
 
-  if (!process.env.KICKZ_DEAL_DISCORD_BOT_TOKEN) {
-    throw new Error("Missing KICKZ_DEAL_DISCORD_BOT_TOKEN");
+  if (kickzDealDiscordInitPromise) {
+    await kickzDealDiscordInitPromise;
+    return;
   }
 
-  await kickzDealDiscordClient.login(
-    process.env.KICKZ_DEAL_DISCORD_BOT_TOKEN
-  );
+  kickzDealDiscordInitPromise = (async () => {
+    if (!process.env.KICKZ_DEAL_DISCORD_BOT_TOKEN) {
+      throw new Error("Missing KICKZ_DEAL_DISCORD_BOT_TOKEN");
+    }
 
-  kickzDealDiscordReady = true;
-
-  if (!kickzDealButtonsBound) {
-    bindConsignmentDiscordButtons(kickzDealDiscordClient);
-    kickzDealButtonsBound = true;
-  }
-
-  if (!memberWtbCreationBound) {
-    bindMemberWtbDiscordCreation(
-      kickzDealDiscordClient
+    await kickzDealDiscordClient.login(
+      process.env.KICKZ_DEAL_DISCORD_BOT_TOKEN
     );
-  
-    memberWtbCreationBound = true;
-  }
-  
-  if (!memberWtbCsvUploadsBound) {
-    bindMemberWtbDiscordCsvUploads(
-      kickzDealDiscordClient
-    );
-  
-    memberWtbCsvUploadsBound = true;
-  }
 
-  console.log("✅ Kickz deal Discord bot logged in");
+    kickzDealDiscordReady = true;
+
+    if (!kickzDealButtonsBound) {
+      bindConsignmentDiscordButtons(kickzDealDiscordClient);
+      kickzDealButtonsBound = true;
+    }
+
+    if (!memberWtbCreationBound) {
+      bindMemberWtbDiscordCreation(
+        kickzDealDiscordClient
+      );
+    
+      memberWtbCreationBound = true;
+    }
+    
+    if (!memberWtbCsvUploadsBound) {
+      bindMemberWtbDiscordCsvUploads(
+        kickzDealDiscordClient
+      );
+    
+      memberWtbCsvUploadsBound = true;
+    }
+
+    console.log("✅ Kickz deal Discord bot logged in");
+  })();
+
+  try {
+    await kickzDealDiscordInitPromise;
+  } finally {
+    kickzDealDiscordInitPromise = null;
+  }
 }
 
 async function createConsignmentInventoryUnitFromOffer(offer) {
@@ -3834,7 +3878,7 @@ function bindConsignmentDiscordButtons(client) {
         new ButtonBuilder()
           .setCustomId(`counter_offer_edit:${data.new_round_id || counterOfferRecordId}`)
           .setLabel("Edit")
-          .setStyle(ButtonStyle.Secondary),
+          .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
           .setCustomId("counter_offer_deny_disabled")
           .setLabel("Deny")
@@ -7478,9 +7522,11 @@ async function sendCounterOfferDiscordDM({
   const message = await dm.send({
     embeds: [
       {
-        title: `🔁 Counter Offer: ${sku} / ${size}`,
+        title: "🔁 Counter Offer",
         description: [
           `**${productName || "—"}**`,
+          `SKU: ${sku || "—"}`,
+          `Size: ${size || "—"}`,
           "",
           `Order: ${orderId || "—"}`,
           "",
