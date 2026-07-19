@@ -6044,18 +6044,62 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
     // Round-1 records: still Open, belong to this order, and have no
     // "Previous Record ID" — that's what distinguishes them from
     // follow-up 1-to-1 rounds (seller-counter / store-counter).
-    const roundOneRecords = await airtable(COUNTER_OFFERS_TABLE)
-      .select({
-        filterByFormula: `AND(
-          {Status} = 'Open',
-          {Source Type} = 'Seller Offer',
-          {Previous Record ID} = '',
-          FIND('${orderRecordId}', ARRAYJOIN({Order}))
-        )`
-      })
-      .all();
+    //
+    // FIXED — clicking Edit right after submitting the round-1 counter
+    // could hit this search before Airtable's read side had caught up
+    // with the just-created record (eventual-consistency lag between a
+    // Create and an immediately-following filterByFormula search).
+    // Retrying once after a short pause smooths that over without
+    // meaningfully slowing down the normal case where records are
+    // already old enough to be consistently indexed.
+    const fetchRoundOneRecords = () =>
+      airtable(COUNTER_OFFERS_TABLE)
+        .select({
+          filterByFormula: `AND(
+            {Status} = 'Open',
+            {Source Type} = 'Seller Offer',
+            {Previous Record ID} = '',
+            FIND('${orderRecordId}', ARRAYJOIN({Order}))
+          )`
+        })
+        .all();
+
+    let roundOneRecords = await fetchRoundOneRecords();
 
     if (roundOneRecords.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      roundOneRecords = await fetchRoundOneRecords();
+    }
+
+    if (roundOneRecords.length === 0) {
+      // TEMP DEBUG — the filtered search keeps coming back empty even
+      // without a timing issue, so pull EVERY Counter Offer record
+      // linked to this order, unfiltered, to see what's actually in
+      // Status/Source Type/Previous Record ID instead of guessing.
+      try {
+        const allForOrder = await airtable(COUNTER_OFFERS_TABLE)
+          .select({
+            filterByFormula: `FIND('${orderRecordId}', ARRAYJOIN({Order}))`
+          })
+          .all();
+
+        console.log(
+          "edit-broadcast DEBUG — all Counter Offer records for order",
+          orderRecordId,
+          ":",
+          allForOrder.map((r) => ({
+            id: r.id,
+            status: r.fields?.["Status"],
+            sourceType: r.fields?.["Source Type"],
+            previousRecordId: r.fields?.["Previous Record ID"],
+            sellerOriginalPrice: r.fields?.["Seller Original Price"],
+            storeCounterPrice: r.fields?.["Store Counter Price"]
+          }))
+        );
+      } catch (debugErr) {
+        console.error("edit-broadcast DEBUG fetch failed:", debugErr);
+      }
+
       return res.status(409).json({ error: "No open round-1 counters found for this order to edit." });
     }
 
