@@ -3937,38 +3937,83 @@ function bindConsignmentDiscordButtons(client) {
         "❌ Counter offer denied."
       );
 
-      // NEW — additive only: let the store know a seller denied their
-      // counter, so they know they can try a new counter. Wrapped in a
-      // try/catch so a notification failure can never break the existing
-      // deny flow above (record is already updated, buttons already
-      // disabled, regardless of whether this notification succeeds).
-      // Uses the SAME generic webhook pattern as every other Discord
-      // notification in this codebase (POST / with a trigger_type),
-      // not a new invented route.
+      // FIXED — same redesign as the symmetric store-deny endpoint: if
+      // this denied counter was itself responding to an earlier SELLER
+      // counter (i.e. this isn't the very first round-1 counter), that
+      // seller counter never went away — the store just couldn't get
+      // past it. Reopen it and resend the standard interactive
+      // notification so the store can accept it or try a lower counter,
+      // instead of only getting an informational, action-less message.
+      // Round-1 counters (no Previous Record ID) have no prior round to
+      // reopen — those fall back to the plain informational notice,
+      // since the store's only option there is a fresh round-1 counter,
+      // which they can already do via the existing broadcast flow.
       try {
         const deniedRecord = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
         const deniedFields = deniedRecord.fields || {};
         const deniedOrderId = firstLinkedRecordId(deniedFields["Order"]);
         const deniedPrice = numberValue(deniedFields["Store Counter Price"]);
+        const priorRoundId = asText(deniedFields["Previous Record ID"]);
 
         if (deniedOrderId && AIRTABLE_DISCORD_UPDATES_URL) {
           const orderRecord = await airtable(ORDERS_TABLE).find(deniedOrderId);
           const orderFields = orderRecord.fields || {};
 
-          await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              trigger_type: "counter-offer-denied",
-              store_name: asText(orderFields["Store Name"]),
-              record_id: deniedOrderId,
-              shopify_order_number: asText(orderFields["Shopify Order Number"]),
-              product_name: asText(deniedFields["Product Name"]),
-              sku: asText(deniedFields["SKU"]),
-              size: asText(deniedFields["Size"]),
-              denied_price: deniedPrice
-            })
-          });
+          if (priorRoundId) {
+            const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
+
+            if (priorRound) {
+              await airtable(COUNTER_OFFERS_TABLE).update(priorRoundId, {
+                "Status": "Open"
+              });
+
+              const priorFields = priorRound.fields || {};
+
+              // Store-equivalent of the seller's counter on the
+              // reopened round, for both the band and the display.
+              const priorSellerCounter = numberValue(priorFields["Seller Counter Price"]);
+              const priorVatType = asText(priorFields["Seller Original VAT Type"] || deniedFields["Seller Original VAT Type"]);
+              const priorSellerCounterInStoreTerms = calculateStoreCounterEquivalent(
+                priorSellerCounter,
+                priorVatType,
+                orderFields
+              );
+
+              await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  trigger_type: "counter-offer-seller-countered",
+                  store_name: asText(orderFields["Store Name"]),
+                  record_id: deniedOrderId,
+                  shopify_order_number: asText(orderFields["Shopify Order Number"]),
+                  product_name: asText(deniedFields["Product Name"]),
+                  sku: asText(deniedFields["SKU"]),
+                  size: asText(deniedFields["Size"]),
+                  counter_offer_record_id: priorRoundId,
+                  selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
+                  your_previous_counter: deniedPrice,
+                  seller_counter_price: priorSellerCounterInStoreTerms ?? priorSellerCounter,
+                  denied_price: deniedPrice
+                })
+              });
+            }
+          } else {
+            await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                trigger_type: "counter-offer-denied",
+                store_name: asText(orderFields["Store Name"]),
+                record_id: deniedOrderId,
+                shopify_order_number: asText(orderFields["Shopify Order Number"]),
+                product_name: asText(deniedFields["Product Name"]),
+                sku: asText(deniedFields["SKU"]),
+                size: asText(deniedFields["Size"]),
+                denied_price: deniedPrice
+              })
+            });
+          }
         }
       } catch (notifyErr) {
         console.error("Failed to notify store of counter denial (non-blocking):", notifyErr);
@@ -6310,6 +6355,16 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
         orderFields
       );
 
+      // NEW — proactively check whether the STORE would have any room
+      // left to counter again, so the notification can show "no room,
+      // accept or deny" upfront instead of the store discovering it
+      // only after trying and getting an error.
+      const storeOwnPosition = numberValue(f["Store Counter Price"]);
+      const noRoomToCounter =
+        Number.isFinite(storeOwnPosition) &&
+        Number.isFinite(sellerCounterInStoreTerms) &&
+        !hasRoomForNextStep(storeOwnPosition, sellerCounterInStoreTerms);
+
       await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -6324,7 +6379,8 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
           counter_offer_record_id: newRound.id,
           selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
           your_previous_counter: numberValue(f["Store Counter Price"]),
-          seller_counter_price: sellerCounterInStoreTerms ?? proposedPrice
+          seller_counter_price: sellerCounterInStoreTerms ?? proposedPrice,
+          no_room_to_counter: noRoomToCounter
         })
       }).catch((err) => console.error("Failed to notify store of seller counter (non-blocking):", err));
     }
@@ -6462,6 +6518,17 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
     const orderId = asText(orderFields["Order ID"]);
 
     if (sellerDiscordId) {
+      // NEW — same proactive check, mirrored: whether the SELLER would
+      // have any room left to counter again. Both values are already in
+      // seller terms (their own stored counter, and the store's new
+      // counter already converted via recomputedPayout), so no extra
+      // conversion needed here.
+      const sellerOwnPosition = numberValue(f["Seller Counter Price"]);
+      const noRoomToCounter =
+        Number.isFinite(sellerOwnPosition) &&
+        Number.isFinite(recomputedPayout) &&
+        !hasRoomForNextStep(sellerOwnPosition, recomputedPayout);
+
       const discordResult = await sendCounterOfferDiscordDM({
         counterOfferRecordId: newRound.id,
         sellerDiscordId,
@@ -6472,7 +6539,8 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
         payout: recomputedPayout,
         vatType: sellerVatType,
         sellerOriginalPrice,
-        sellerOriginalVatType: sellerVatType
+        sellerOriginalVatType: sellerVatType,
+        noRoomToCounter
       }).catch((err) => {
         console.error("Failed to DM seller of store counter-back (non-blocking):", err);
         return null;
@@ -6639,24 +6707,66 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
     const sellerRecordId = firstLinkedRecordId(f["Seller ID"]);
     const sellerDiscordId = asText(f["Seller Discord ID"]);
 
+    // FIXED — completely redesigned. This used to call
+    // sendOfferDeniedDiscordDM with the Counter Offer record's ID passed
+    // as if it were a Seller Offer record ID, wired to
+    // /api/seller-offers/:offerId/edit-after-denial — a totally
+    // different table, which is why "Place New Offer" failed with
+    // "This offer is not linked to an order". A denied COUNTER isn't the
+    // same thing as a denied original offer (scenario 1) — there's no
+    // Seller Offer record to edit here.
+    //
+    // The correct, fair behavior: the round this denied counter was
+    // itself responding to (via Previous Record ID) is the store's last
+    // real counter — that offer never went away, the seller just
+    // couldn't get past it. Reopen that round and resend the seller the
+    // exact same standard Accept/Counter/Deny notification for it, so
+    // they can either accept the store's standing counter or try a new,
+    // lower counter against it — reusing the existing, already-tested
+    // seller-counter mechanism rather than inventing a new one.
     if (sellerDiscordId && linkedOrderId) {
+      const priorRoundId = asText(f["Previous Record ID"]);
+      const deniedSellerCounter = numberValue(f["Seller Counter Price"]);
       const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
       const orderFields = orderRecord.fields || {};
+      const orderId = asText(orderFields["Order ID"]);
 
-      await sendOfferDeniedDiscordDM({
-        orderRecordId: linkedOrderId,
-        orderId: asText(orderFields["Order ID"]),
-        sellerOfferRecordId: counterOfferRecordId,
-        sellerRecordId,
-        sellerDiscordId,
-        productName: asText(f["Product Name"]),
-        sku: asText(f["SKU"]),
-        size: asText(f["Size"]),
-        deniedAmount: numberValue(f["Seller Counter Price"]),
-        vatType: asText(f["Seller Original VAT Type"])
-      }).catch((err) => {
-        console.error("Failed to notify seller of store-denied counter (non-blocking):", err);
-      });
+      if (priorRoundId) {
+        const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
+
+        if (priorRound) {
+          await airtable(COUNTER_OFFERS_TABLE).update(priorRoundId, {
+            "Status": "Open"
+          });
+
+          const priorFields = priorRound.fields || {};
+
+          const discordResult = await sendCounterOfferDiscordDM({
+            counterOfferRecordId: priorRoundId,
+            sellerDiscordId,
+            productName: asText(f["Product Name"]),
+            sku: asText(f["SKU"]),
+            size: asText(f["Size"]),
+            orderId,
+            payout: numberValue(priorFields["Counter Payout"]),
+            vatType: asText(priorFields["Seller Original VAT Type"] || f["Seller Original VAT Type"]),
+            sellerOriginalPrice: numberValue(f["Seller Original Price"]),
+            sellerOriginalVatType: asText(f["Seller Original VAT Type"]),
+            deniedAmount: deniedSellerCounter
+          }).catch((err) => {
+            console.error("Failed to re-notify seller after store-deny (non-blocking):", err);
+            return null;
+          });
+
+          if (discordResult) {
+            await airtable(COUNTER_OFFERS_TABLE).update(priorRoundId, {
+              "Discord Channel ID": discordResult.channelId,
+              "Discord Message ID": discordResult.messageId,
+              "Discord Delivery Type": discordResult.deliveryType
+            });
+          }
+        }
+      }
     }
 
     res.json({ ok: true });
@@ -6792,7 +6902,12 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
       }
     }
 
-    const validation = validateNextCounterPrice(ownReferencePrice, counterpartPrice, proposedPrice, { enforceMinStep: false });
+    // UPDATED — editing now follows the exact same min-€2.50-step rule
+    // as countering (previously exempt). Agreed for consistency: once
+    // the gap is too small for a real counter, it's also too small to
+    // "sneak through" via an edit — everyone hits the same wall at the
+    // same time, rather than Edit being a quiet exception to the rule.
+    const validation = validateNextCounterPrice(ownReferencePrice, counterpartPrice, proposedPrice);
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
@@ -7599,6 +7714,29 @@ function validateNextCounterPrice(ownReferencePrice, counterpartPrice, proposed,
   return { ok: true, band: [minAllowed, maxAllowed] };
 }
 
+// NEW — additive only: proactively checks whether the NEXT party to act
+// would have any valid counter available at all, without needing a
+// specific proposed amount — used right when sending a notification, so
+// we can show "no room left, accept or deny" upfront instead of only
+// discovering it after someone tries and fails. Same math as
+// validateNextCounterPrice's internal room check, factored out.
+function hasRoomForNextStep(ownReferencePrice, counterpartPrice) {
+  const low = Math.min(ownReferencePrice, counterpartPrice);
+  const high = Math.max(ownReferencePrice, counterpartPrice);
+  const movingDown = ownReferencePrice > counterpartPrice;
+
+  let minAllowed = low + 1;
+  let maxAllowed = high - 1;
+
+  if (movingDown) {
+    maxAllowed = Math.floor(ownReferencePrice - MIN_COUNTER_STEP);
+  } else {
+    minAllowed = Math.ceil(ownReferencePrice + MIN_COUNTER_STEP);
+  }
+
+  return minAllowed <= maxAllowed;
+}
+
 function moneyValue(value) {
   const n = numberValue(value);
 
@@ -7780,7 +7918,9 @@ async function sendCounterOfferDiscordDM({
   payout,
   vatType,
   sellerOriginalPrice,
-  sellerOriginalVatType
+  sellerOriginalVatType,
+  noRoomToCounter,
+  deniedAmount
 }) {
   await initKickzDealDiscord();
 
@@ -7801,6 +7941,23 @@ async function sendCounterOfferDiscordDM({
       ? ` (${Number(payout) - Number(sellerOriginalPrice) >= 0 ? "+" : ""}€${(Number(payout) - Number(sellerOriginalPrice)).toFixed(2)})`
       : "";
 
+  // NEW — when there's no valid step left for either side, say so
+  // plainly and only offer Accept/Deny, instead of showing a Counter
+  // button that would just fail if clicked.
+  const closingLine = noRoomToCounter
+    ? "You're now very close to each other's price — there's no room for another counter. Please accept or deny."
+    : "Accept if you can fulfill this order at the counter price.";
+
+  // NEW — used when this notification is a RE-SEND of an already-open
+  // round after the seller's own follow-up counter got denied. Makes
+  // clear this isn't a brand new counter from the store — it's the
+  // same standing offer as before, still available to accept or
+  // counter again, lower this time.
+  const deniedNote =
+    deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== ""
+      ? [`❌ Your counter of €${Number(deniedAmount).toFixed(2)} was denied.`, ""]
+      : [];
+
   const message = await dm.send({
     embeds: [
       {
@@ -7812,13 +7969,14 @@ async function sendCounterOfferDiscordDM({
           "",
           `Order: ${orderId || "—"}`,
           "",
+          ...deniedNote,
           `The store sent a counter offer.`,
           "",
           ...(originalText ? [`**Your original offer**`, originalText, ""] : []),
           `**Counter payout**`,
           `€${Number(payout).toFixed(2)} · ${vatType || "—"}${diffText}`,
           "",
-          "Accept if you can fulfill this order at the counter price."
+          closingLine
         ].join("\n"),
         color: 0xf1c40f
       }
@@ -7826,7 +7984,22 @@ async function sendCounterOfferDiscordDM({
     components: [
       {
         type: 1,
-        components: [
+        components: noRoomToCounter
+          ? [
+              {
+                type: 2,
+                style: 3,
+                label: "Accept",
+                custom_id: `counter_offer_accept:${counterOfferRecordId}`
+              },
+              {
+                type: 2,
+                style: 4,
+                label: "Deny",
+                custom_id: `counter_offer_deny:${counterOfferRecordId}`
+              }
+            ]
+          : [
           {
             type: 2,
             style: 3,
