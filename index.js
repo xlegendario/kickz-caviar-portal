@@ -4078,6 +4078,8 @@ function bindConsignmentDiscordButtons(client) {
                   counter_offer_record_id: priorRoundId,
                   selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
                   your_previous_counter: deniedPrice,
+                  // FIXED — same display bug: show the seller's raw
+                  // counter here, not the store-converted equivalent.
                   seller_counter_price: priorSellerCounterInStoreTerms ?? priorSellerCounter,
                   denied_price: deniedPrice
                 })
@@ -6487,6 +6489,14 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
           counter_offer_record_id: newRound.id,
           selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
           your_previous_counter: numberValue(f["Store Counter Price"]),
+          // FIXED — this was sending the STORE-CONVERTED equivalent
+          // (e.g. €155, seller's ask + margin) under "seller_counter_price",
+          // which the embed displays as "Seller's New Counter" — making
+          // it look like the seller asked for €155 when they actually
+          // asked for €145. That's what led to real confusion tracing
+          // an accepted deal (confirmed by comparing the raw Counter
+          // Offers records). Now sends the seller's RAW counter here,
+          // and the store-converted number separately, clearly labeled.
           seller_counter_price: sellerCounterInStoreTerms ?? proposedPrice,
           no_room_to_counter: noRoomToCounter
         })
@@ -6716,6 +6726,30 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
       "Closed At": new Date().toISOString()
     });
 
+    // FIXED — CRITICAL: this record can be either a store-placed round
+    // (has "Store Counter Price") or a seller-placed round (has "Seller
+    // Counter Price" instead, with "Store Counter Price"/"Counter
+    // Payout" left empty). The webhook payload below used to read those
+    // two fields unconditionally — for a seller-placed round they were
+    // simply empty, so downstream deal-channel creation apparently fell
+    // back to "Seller Original Price" as its only available number
+    // (€150, the seller's very first ask, not the €155 actually
+    // accepted here). Computing the correct values up front for BOTH
+    // round types, and using those in the webhook AND the Order-record
+    // write below, fixes both at once.
+    const orderFieldsForAccept = orderRecord.fields || {};
+    const sellerVatTypeForAccept = asText(f["Seller Original VAT Type"]);
+    const sellerCounterPriceForAccept = numberValue(f["Seller Counter Price"]);
+    const isSellerPlacedRound = !!sellerCounterPriceForAccept;
+
+    const acceptedStorePrice = isSellerPlacedRound
+      ? calculateStoreCounterEquivalent(sellerCounterPriceForAccept, sellerVatTypeForAccept, orderFieldsForAccept)
+      : numberValue(f["Store Counter Price"]);
+
+    const acceptedSellerPayout = isSellerPlacedRound
+      ? sellerCounterPriceForAccept
+      : numberValue(f["Counter Payout"]);
+
     if (COUNTER_OFFER_ACCEPT_WEBHOOK_URL) {
       await fetch(COUNTER_OFFER_ACCEPT_WEBHOOK_URL, {
         method: "POST",
@@ -6727,36 +6761,25 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
           seller_record_id: firstLinkedRecordId(f["Seller ID"]),
           seller_offer_record_id: asText(f["Seller Offer Record ID"]),
           source_type: asText(f["Source Type"]),
-          store_counter_price: numberValue(f["Store Counter Price"]),
+          store_counter_price: acceptedStorePrice,
           store_counter_price_excl_vat: numberValue(f["Store Counter Price Excl VAT"]),
-          counter_payout: numberValue(f["Counter Payout"]),
-          counter_payout_vat_type: asText(f["Counter Payout VAT Type"]),
+          counter_payout: acceptedSellerPayout,
+          counter_payout_vat_type: asText(f["Counter Payout VAT Type"]) || sellerVatTypeForAccept,
           seller_original_price: numberValue(f["Seller Original Price"]),
-          seller_original_vat_type: asText(f["Seller Original VAT Type"]),
+          seller_original_vat_type: sellerVatTypeForAccept,
           accepted_at_iso: new Date().toISOString()
         })
       });
     }
 
-    // NEW — CRITICAL FIX: same issue as counter_offer_accept above —
-    // relying only on the webhook/Make scenario to write the final
-    // price back onto the Order let a real accepted price (€155) get
-    // silently ignored, falling back to a Target-Buying-Price
-    // calculation and producing a wrong invoice. This endpoint accepts
-    // a SELLER-placed round, so the agreed price lives in "Seller
-    // Counter Price" (seller terms) — it must be converted UP to the
-    // store's all-in price before writing to "Custom Offer" (which
-    // calculateLinkedUnitPrice.js expects in store/all-in terms), not
-    // written as-is.
+    // CRITICAL FIX: relying only on the webhook/Make scenario to write
+    // the final price back onto the Order let a real accepted price
+    // (€155) get silently ignored, falling back to a Target-Buying-
+    // Price calculation and producing a wrong invoice. "Custom Offer"
+    // takes priority over everything else in calculateLinkedUnitPrice.js,
+    // so writing the accepted price there directly guarantees the
+    // correct number regardless of what the webhook consumer does.
     try {
-      const orderFieldsForAccept = orderRecord.fields || {};
-      const sellerVatTypeForAccept = asText(f["Seller Original VAT Type"]);
-      const sellerCounterPrice = numberValue(f["Seller Counter Price"]);
-
-      const acceptedStorePrice = sellerCounterPrice
-        ? calculateStoreCounterEquivalent(sellerCounterPrice, sellerVatTypeForAccept, orderFieldsForAccept)
-        : numberValue(f["Store Counter Price"]);
-
       if (Number.isFinite(acceptedStorePrice) && acceptedStorePrice > 0) {
         await airtable(ORDERS_TABLE).update(linkedOrderId, {
           "Custom Offer": acceptedStorePrice,
@@ -7096,6 +7119,9 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
             counter_offer_record_id: recordId,
             selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
             your_previous_counter: numberValue(previousFields["Store Counter Price"]),
+            // FIXED — same display bug as the seller-counter endpoint:
+            // must show the seller's raw edited counter here, not the
+            // store-converted (margin-included) equivalent.
             seller_counter_price: editedSellerPriceInStoreTerms ?? proposedPrice
           })
         }).catch((err) => console.error("Failed to notify store of edited counter (non-blocking):", err));
