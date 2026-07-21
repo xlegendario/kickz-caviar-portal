@@ -4178,6 +4178,29 @@ function bindConsignmentDiscordButtons(client) {
           accepted_at_iso: new Date().toISOString()
         })
       });
+
+      // NEW — CRITICAL FIX: this accept flow previously only updated the
+      // Counter Offer record and fired a webhook, relying entirely on
+      // whatever consumes that webhook (a Make scenario) to write the
+      // final price back onto the Order. For a multi-round negotiated
+      // deal, that clearly wasn't happening reliably — a store accepted
+      // €155 here, but calculateLinkedUnitPrice.js (which reads "Custom
+      // Offer"/"Offer To Store" on the Order, not the Counter Offers
+      // table) never saw that number, fell through to its Target/Max
+      // buying-price fallback, and produced a wrong €185 invoice.
+      // "Custom Offer" takes priority over everything else in that
+      // script, so writing the accepted Store Counter Price there
+      // directly — regardless of what the Make webhook does — makes
+      // sure the correct price is always used, with no dependency on a
+      // downstream system we don't control.
+      try {
+        await airtable(ORDERS_TABLE).update(linkedOrderId, {
+          "Custom Offer": numberValue(f["Store Counter Price"]),
+          "Offer Accepted?": true
+        });
+      } catch (priceWriteErr) {
+        console.error("Failed to write accepted price to Order record (non-blocking):", priceWriteErr);
+      }
     
       await disableCounterOfferDiscordButtons(
         interaction.channelId,
@@ -6713,6 +6736,37 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
           accepted_at_iso: new Date().toISOString()
         })
       });
+    }
+
+    // NEW — CRITICAL FIX: same issue as counter_offer_accept above —
+    // relying only on the webhook/Make scenario to write the final
+    // price back onto the Order let a real accepted price (€155) get
+    // silently ignored, falling back to a Target-Buying-Price
+    // calculation and producing a wrong invoice. This endpoint accepts
+    // a SELLER-placed round, so the agreed price lives in "Seller
+    // Counter Price" (seller terms) — it must be converted UP to the
+    // store's all-in price before writing to "Custom Offer" (which
+    // calculateLinkedUnitPrice.js expects in store/all-in terms), not
+    // written as-is.
+    try {
+      const orderFieldsForAccept = orderRecord.fields || {};
+      const sellerVatTypeForAccept = asText(f["Seller Original VAT Type"]);
+      const sellerCounterPrice = numberValue(f["Seller Counter Price"]);
+
+      const acceptedStorePrice = sellerCounterPrice
+        ? calculateStoreCounterEquivalent(sellerCounterPrice, sellerVatTypeForAccept, orderFieldsForAccept)
+        : numberValue(f["Store Counter Price"]);
+
+      if (Number.isFinite(acceptedStorePrice) && acceptedStorePrice > 0) {
+        await airtable(ORDERS_TABLE).update(linkedOrderId, {
+          "Custom Offer": acceptedStorePrice,
+          "Offer Accepted?": true
+        });
+      } else {
+        console.error("Could not compute a valid accepted store price to write back for order:", linkedOrderId);
+      }
+    } catch (priceWriteErr) {
+      console.error("Failed to write accepted price to Order record (non-blocking):", priceWriteErr);
     }
 
     // FIXED — same formula bug as elsewhere: FIND(recordId,
