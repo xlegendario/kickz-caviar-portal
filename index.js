@@ -6762,7 +6762,21 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
           seller_offer_record_id: asText(f["Seller Offer Record ID"]),
           source_type: asText(f["Source Type"]),
           store_counter_price: acceptedStorePrice,
-          store_counter_price_excl_vat: numberValue(f["Store Counter Price Excl VAT"]),
+          // FIXED — same class of bug as store_counter_price/
+          // counter_payout above: this read "Store Counter Price Excl
+          // VAT" straight from the Counter Offer record, but that's a
+          // formula derived from "Store Counter Price" — which is
+          // empty on a seller-placed round (only "Seller Counter Price"
+          // is set there), so it silently sent an empty value whenever
+          // the seller's VAT type was VAT0/VAT21 (the Make scenario's
+          // "If VAT" branch, not the "If Margin" one). Computing it
+          // from the already-correct acceptedStorePrice instead, using
+          // the exact same Dutch+VAT21-only exclusion rule that
+          // calculateLinkedUnitPrice.js itself applies downstream, so
+          // both sides of that pipeline agree on what this number means.
+          store_counter_price_excl_vat: isSellerPlacedRound
+            ? computeStoreExclVatForOrder(acceptedStorePrice, sellerVatTypeForAccept, orderFieldsForAccept)
+            : numberValue(f["Store Counter Price Excl VAT"]),
           counter_payout: acceptedSellerPayout,
           counter_payout_vat_type: asText(f["Counter Payout VAT Type"]) || sellerVatTypeForAccept,
           seller_original_price: numberValue(f["Seller Original Price"]),
@@ -8071,6 +8085,29 @@ function calculateStoreCounterEquivalent(sellerAskPrice, vatType, orderFields = 
   }
 
   return roundToNearestStep(storePrice, 2.5);
+}
+
+// NEW — additive only: replicates the EXACT VAT-exclusion rule used
+// downstream in calculateLinkedUnitPrice.js (the Airtable automation
+// that sets the order's Final Buying Price): only divide by 1.21 when
+// the client is Dutch AND the seller's VAT type is VAT21 — otherwise
+// leave the number as-is. Used to compute a correct
+// store_counter_price_excl_vat for the accept webhook when the
+// Airtable formula field it would normally read is empty (seller-
+// placed rounds never populate "Store Counter Price", so the formula
+// derived from it comes back empty too).
+function computeStoreExclVatForOrder(storeAllInPrice, vatType, orderFields = {}) {
+  const price = Number(storeAllInPrice);
+  if (!Number.isFinite(price)) return null;
+
+  const clientCountry = asText(orderFields["Client Country"]).toLowerCase();
+  const type = asText(vatType).toUpperCase().replace(/\s+/g, "");
+
+  if (clientCountry.includes("netherland") && type === "VAT21") {
+    return Math.round((price / 1.21) * 100) / 100;
+  }
+
+  return Math.round(price * 100) / 100;
 }
 
 // NEW — Member WTB margin conversion. Much simpler than Store Orders:
