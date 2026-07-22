@@ -3175,6 +3175,8 @@ function bindConsignmentDiscordButtons(client) {
       !customId.startsWith("decline_member_wtb_buyer_offer:") &&
       !customId.startsWith("counter_member_wtb_buyer:") &&
       !customId.startsWith("counter_member_wtb_buyer_modal:") &&
+      !customId.startsWith("member_wtb_counter_accept:") &&
+      !customId.startsWith("member_wtb_counter_deny:") &&
       !customId.startsWith("place_new_offer:") &&
       !customId.startsWith("place_new_offer_modal:") &&
       !customId.startsWith("counter_offer_counter:") &&
@@ -3507,6 +3509,119 @@ function bindConsignmentDiscordButtons(client) {
 
       await safeEditInteractionMessage(interaction, {
         content: `🔁 You countered with €${counterPrice}. Waiting on the seller(s).`,
+        embeds: interaction.message.embeds,
+        components: []
+      }).catch(() => {});
+
+      return;
+    }
+
+    // NEW — additive only: seller accepts the buyer's counter offer.
+    // Calls the SAME deal-channel endpoint the original accept flow
+    // uses, but with the negotiated counter amount as an override —
+    // never overwrites the Seller Offer record's own price (that
+    // record can be linked to more than one Member WTB).
+    if (customId.startsWith("member_wtb_counter_accept:")) {
+      const counterOfferRecordId = customId.split(":")[1];
+
+      const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
+      const f = counterOffer.fields || {};
+
+      if (asText(f["Status"]) !== "Open") {
+        await safeEditInteractionMessage(interaction, {
+          content: "❌ This counter offer is no longer available.",
+          embeds: interaction.message.embeds,
+          components: []
+        }).catch(() => {});
+        return;
+      }
+
+      await safeEditInteractionMessage(interaction, {
+        content: "⏳ Processing your acceptance...",
+        embeds: interaction.message.embeds,
+        components: []
+      }).catch(() => {});
+
+      const memberWtbRecordId = firstLinkedRecordId(f["Member WTB"]);
+      const sellerOfferRecordId = asText(f["Seller Offer Record ID"]);
+      const acceptedPayout = numberValue(f["Counter Payout"]);
+      const acceptedVatType = asText(f["Counter Payout VAT Type"]);
+
+      if (!memberWtbRecordId || !sellerOfferRecordId) {
+        await safeEditInteractionMessage(interaction, {
+          content: "❌ Missing linked Member WTB or Seller Offer.",
+          embeds: interaction.message.embeds,
+          components: []
+        }).catch(() => {});
+        return;
+      }
+
+      await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+        "Status": "Accepted",
+        "Accepted At": new Date().toISOString(),
+        "Closed At": new Date().toISOString()
+      });
+
+      const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
+
+      if (!wtbBotBaseUrl) {
+        await safeEditInteractionMessage(interaction, {
+          content: "❌ KICKZ_WTB_BOT_BASE_URL is missing.",
+          embeds: interaction.message.embeds,
+          components: []
+        }).catch(() => {});
+        return;
+      }
+
+      const response = await fetch(`${wtbBotBaseUrl}/member-wtb/deal-channel`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.KC_PORTAL_SECRET
+        },
+        body: JSON.stringify({
+          member_wtb_record_id: memberWtbRecordId,
+          seller_offer_record_id: sellerOfferRecordId,
+          override_price: acceptedPayout,
+          override_vat_type: acceptedVatType
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        console.error("member_wtb_counter_accept failed:", { status: response.status, data });
+        await safeEditInteractionMessage(interaction, {
+          content: `❌ Failed to accept offer. ${data.error || ""}`,
+          embeds: interaction.message.embeds,
+          components: []
+        }).catch(() => {});
+        return;
+      }
+
+      await safeEditInteractionMessage(interaction, {
+        content: "✅ Counter offer accepted. Payment will be requested once confirmed.",
+        embeds: interaction.message.embeds,
+        components: []
+      }).catch(() => {});
+
+      return;
+    }
+
+    // NEW — additive only: seller denies the buyer's counter offer.
+    // Kept intentionally simple for this stage (no reopen-prior-round
+    // logic yet) — that comes with the full back-and-forth build next.
+    if (customId.startsWith("member_wtb_counter_deny:")) {
+      const counterOfferRecordId = customId.split(":")[1];
+
+      await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+        "Status": "Denied",
+        "Denied At": new Date().toISOString(),
+        "Closed At": new Date().toISOString()
+      });
+
+      await safeEditInteractionMessage(interaction, {
+        content: "❌ Counter offer denied.",
         embeds: interaction.message.embeds,
         components: []
       }).catch(() => {});
@@ -15654,6 +15769,7 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
     const createdCounter = await airtable(COUNTER_OFFERS_TABLE).create({
       "Member WTB": [memberWtbRecordId],
       "Seller ID": [sellerRecordId],
+      "Seller Offer Record ID": sellerOfferId,
       "Source Type": "Member WTB",
       "Seller Original Price": sellerOriginalPrice,
       "Seller Original VAT Type": sellerVatType,
