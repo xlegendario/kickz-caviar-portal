@@ -3177,6 +3177,12 @@ function bindConsignmentDiscordButtons(client) {
       !customId.startsWith("counter_member_wtb_buyer_modal:") &&
       !customId.startsWith("member_wtb_counter_accept:") &&
       !customId.startsWith("member_wtb_counter_deny:") &&
+      !customId.startsWith("member_wtb_counter_counter:") &&
+      !customId.startsWith("member_wtb_counter_counter_modal:") &&
+      !customId.startsWith("member_wtb_buyer_counter_accept:") &&
+      !customId.startsWith("member_wtb_buyer_counter_deny:") &&
+      !customId.startsWith("member_wtb_buyer_counter_counter:") &&
+      !customId.startsWith("member_wtb_buyer_counter_counter_modal:") &&
       !customId.startsWith("place_new_offer:") &&
       !customId.startsWith("place_new_offer_modal:") &&
       !customId.startsWith("counter_offer_counter:") &&
@@ -3622,6 +3628,285 @@ function bindConsignmentDiscordButtons(client) {
 
       await safeEditInteractionMessage(interaction, {
         content: "❌ Counter offer denied.",
+        embeds: interaction.message.embeds,
+        components: []
+      }).catch(() => {});
+
+      return;
+    }
+
+    // NEW — additive only: seller counters back on the buyer's counter.
+    if (customId.startsWith("member_wtb_counter_counter:")) {
+      const counterOfferRecordId = customId.split(":")[1];
+
+      const modal = {
+        title: "Counter Offer",
+        custom_id: `member_wtb_counter_counter_modal:${counterOfferRecordId}`,
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 4,
+                custom_id: "counter_price",
+                label: "Your counter (whole number)",
+                style: 1,
+                min_length: 1,
+                max_length: 10,
+                required: true
+              }
+            ]
+          }
+        ]
+      };
+
+      await interaction.showModal(modal).catch((err) => {
+        console.error("Failed to show member_wtb_counter_counter modal:", err);
+      });
+
+      return;
+    }
+
+    if (customId.startsWith("member_wtb_counter_counter_modal:")) {
+      const counterOfferRecordId = customId.replace("member_wtb_counter_counter_modal:", "");
+      const rawAmount = interaction.fields.getTextInputValue("counter_price");
+      const counterPrice = Number(String(rawAmount).replace(/[^\d.,-]/g, "").replace(",", "."));
+
+      if (!Number.isInteger(counterPrice) || counterPrice <= 0) {
+        await interaction.reply({
+          content: "⚠️ Please enter a valid whole-number counter.",
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/${counterOfferRecordId}/seller-counter`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+        },
+        body: JSON.stringify({ price: counterPrice })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        await interaction.reply({
+          content: `❌ ${data.error || "Failed to submit your counter."}`,
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      await interaction.reply({
+        content: `✅ Your counter of €${counterPrice} was sent to the buyer.`,
+        ephemeral: true
+      }).catch(() => {});
+
+      await safeEditInteractionMessage(interaction, {
+        content: `🔁 You countered with €${counterPrice}. Waiting on the buyer.`,
+        embeds: interaction.message.embeds,
+        components: []
+      }).catch(() => {});
+
+      return;
+    }
+
+    // NEW — additive only: buyer accepts the seller's counter-back.
+    // CRITICAL: must go through the exact same deal-channel /
+    // process-seller-offer override chain as the seller-accepts-buyer
+    // path, using the SELLER'S PAYOUT as the override amount in both
+    // directions (process-seller-offer always computes the buyer's
+    // final price FROM the seller payout + margin, regardless of which
+    // side is being accepted) — otherwise this round's negotiated price
+    // would silently be lost, exactly like the Store Orders bug found
+    // earlier this session.
+    if (customId.startsWith("member_wtb_buyer_counter_accept:")) {
+      const counterOfferRecordId = customId.split(":")[1];
+
+      const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
+      const f = counterOffer.fields || {};
+
+      if (asText(f["Status"]) !== "Open") {
+        await safeEditInteractionMessage(interaction, {
+          content: "❌ This counter offer is no longer available.",
+          embeds: interaction.message.embeds,
+          components: []
+        }).catch(() => {});
+        return;
+      }
+
+      await safeEditInteractionMessage(interaction, {
+        content: "⏳ Processing your acceptance...",
+        embeds: interaction.message.embeds,
+        components: []
+      }).catch(() => {});
+
+      const memberWtbRecordId = firstLinkedRecordId(f["Member WTB"]);
+      const sellerOfferRecordId = asText(f["Seller Offer Record ID"]);
+      // This round has "Seller Counter Price" set (a seller-placed
+      // round) — that IS the seller's payout directly, already in
+      // seller terms, no conversion needed (unlike Store Orders, where
+      // an extra store-vs-seller scale conversion was needed — here the
+      // seller's own counter number already means "what I want to
+      // receive").
+      const acceptedPayout = numberValue(f["Seller Counter Price"]);
+      const acceptedVatType = asText(f["Seller Original VAT Type"]);
+
+      if (!memberWtbRecordId || !sellerOfferRecordId) {
+        await safeEditInteractionMessage(interaction, {
+          content: "❌ Missing linked Member WTB or Seller Offer.",
+          embeds: interaction.message.embeds,
+          components: []
+        }).catch(() => {});
+        return;
+      }
+
+      await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+        "Status": "Accepted",
+        "Accepted At": new Date().toISOString(),
+        "Closed At": new Date().toISOString()
+      });
+
+      const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
+
+      if (!wtbBotBaseUrl) {
+        await safeEditInteractionMessage(interaction, {
+          content: "❌ KICKZ_WTB_BOT_BASE_URL is missing.",
+          embeds: interaction.message.embeds,
+          components: []
+        }).catch(() => {});
+        return;
+      }
+
+      const response = await fetch(`${wtbBotBaseUrl}/member-wtb/deal-channel`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.KC_PORTAL_SECRET
+        },
+        body: JSON.stringify({
+          member_wtb_record_id: memberWtbRecordId,
+          seller_offer_record_id: sellerOfferRecordId,
+          override_price: acceptedPayout,
+          override_vat_type: acceptedVatType
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        console.error("member_wtb_buyer_counter_accept failed:", { status: response.status, data });
+        await safeEditInteractionMessage(interaction, {
+          content: `❌ Failed to accept offer. ${data.error || ""}`,
+          embeds: interaction.message.embeds,
+          components: []
+        }).catch(() => {});
+        return;
+      }
+
+      await safeEditInteractionMessage(interaction, {
+        content: "✅ Counter offer accepted. Payment will be requested once confirmed.",
+        embeds: interaction.message.embeds,
+        components: []
+      }).catch(() => {});
+
+      return;
+    }
+
+    // NEW — additive only: buyer denies the seller's counter-back. Kept
+    // simple for this stage (no reopen-prior-round logic yet).
+    if (customId.startsWith("member_wtb_buyer_counter_deny:")) {
+      const counterOfferRecordId = customId.split(":")[1];
+
+      await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+        "Status": "Denied",
+        "Denied At": new Date().toISOString(),
+        "Closed At": new Date().toISOString()
+      });
+
+      await safeEditInteractionMessage(interaction, {
+        content: "❌ Counter offer denied.",
+        embeds: interaction.message.embeds,
+        components: []
+      }).catch(() => {});
+
+      return;
+    }
+
+    // NEW — additive only: buyer counters again on the seller's
+    // counter-back.
+    if (customId.startsWith("member_wtb_buyer_counter_counter:")) {
+      const counterOfferRecordId = customId.split(":")[1];
+
+      const modal = {
+        title: "Counter Offer",
+        custom_id: `member_wtb_buyer_counter_counter_modal:${counterOfferRecordId}`,
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 4,
+                custom_id: "counter_price",
+                label: "Your counter (whole number)",
+                style: 1,
+                min_length: 1,
+                max_length: 10,
+                required: true
+              }
+            ]
+          }
+        ]
+      };
+
+      await interaction.showModal(modal).catch((err) => {
+        console.error("Failed to show member_wtb_buyer_counter_counter modal:", err);
+      });
+
+      return;
+    }
+
+    if (customId.startsWith("member_wtb_buyer_counter_counter_modal:")) {
+      const counterOfferRecordId = customId.replace("member_wtb_buyer_counter_counter_modal:", "");
+      const rawAmount = interaction.fields.getTextInputValue("counter_price");
+      const counterPrice = Number(String(rawAmount).replace(/[^\d.,-]/g, "").replace(",", "."));
+
+      if (!Number.isInteger(counterPrice) || counterPrice <= 0) {
+        await interaction.reply({
+          content: "⚠️ Please enter a valid whole-number counter.",
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/${counterOfferRecordId}/buyer-counter`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+        },
+        body: JSON.stringify({ price: counterPrice })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        await interaction.reply({
+          content: `❌ ${data.error || "Failed to submit your counter."}`,
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      await interaction.reply({
+        content: `✅ Your counter of €${counterPrice} was sent to the seller.`,
+        ephemeral: true
+      }).catch(() => {});
+
+      await safeEditInteractionMessage(interaction, {
+        content: `🔁 You countered with €${counterPrice}. Waiting on the seller.`,
         embeds: interaction.message.embeds,
         components: []
       }).catch(() => {});
@@ -8549,8 +8834,111 @@ async function sendMemberWtbCounterOfferDiscordDM({
   };
 }
 
+// NEW — additive only: notifies the BUYER when the seller counters
+// back. Mirrors the Store Orders "Seller Countered" pattern (own
+// previous counter + new counter, Accept/Counter/Deny) but as a DM
+// (Member WTB buyers/sellers only ever use DMs, no channels) — and,
+// same confidentiality rule as Store Orders: only ever shows the
+// BUYER-FACING (already margin-converted) amount, never the seller's
+// raw ask or our margin.
+async function sendMemberWtbBuyerCounterOfferDiscordDM({
+  counterOfferRecordId,
+  buyerDiscordId,
+  productName,
+  sku,
+  size,
+  memberWtbId,
+  newPrice,
+  yourPreviousCounter,
+  noRoomToCounter
+}) {
+  await initKickzDealDiscord();
 
-// NEW — additive only: DM sent when the STORE denies the seller's current
+  if (!buyerDiscordId) {
+    throw new Error("Missing buyer Discord ID");
+  }
+
+  const user = await kickzDealDiscordClient.users.fetch(buyerDiscordId);
+  const dm = await user.createDM();
+
+  const closingLine = noRoomToCounter
+    ? "You're now very close to each other's price — there's no room for another counter. Please accept or deny."
+    : "Please accept, counter, or deny below.";
+
+  const message = await dm.send({
+    embeds: [
+      {
+        title: "🔁 Seller Countered",
+        description: [
+          `**${productName || "—"}**`,
+          `SKU: ${sku || "—"}`,
+          `Size: ${size || "—"}`,
+          "",
+          `Member WTB: ${memberWtbId || "—"}`,
+          "",
+          `The seller sent a counter offer.`,
+          "",
+          `**Your Previous Counter**`,
+          `€${Number(yourPreviousCounter).toFixed(2)}`,
+          "",
+          `**New Counter**`,
+          `€${Number(newPrice).toFixed(2)}`,
+          "",
+          closingLine
+        ].join("\n"),
+        color: 0xf1c40f
+      }
+    ],
+    components: [
+      {
+        type: 1,
+        components: noRoomToCounter
+          ? [
+              {
+                type: 2,
+                style: 3,
+                label: "Accept",
+                custom_id: `member_wtb_buyer_counter_accept:${counterOfferRecordId}`
+              },
+              {
+                type: 2,
+                style: 4,
+                label: "Deny",
+                custom_id: `member_wtb_buyer_counter_deny:${counterOfferRecordId}`
+              }
+            ]
+          : [
+              {
+                type: 2,
+                style: 3,
+                label: "Accept",
+                custom_id: `member_wtb_buyer_counter_accept:${counterOfferRecordId}`
+              },
+              {
+                type: 2,
+                style: 1,
+                label: "Counter",
+                custom_id: `member_wtb_buyer_counter_counter:${counterOfferRecordId}`
+              },
+              {
+                type: 2,
+                style: 4,
+                label: "Deny",
+                custom_id: `member_wtb_buyer_counter_deny:${counterOfferRecordId}`
+              }
+            ]
+      }
+    ]
+  });
+
+  return {
+    channelId: message.channelId,
+    messageId: message.id,
+    deliveryType: "dm"
+  };
+}
+
+
 // offer (not a counter). Shows the seller their own denied amount + VAT
 // type and a button to place a new offer, using the modal below which
 // calls the existing place-offer relay — no new offer-placement logic.
@@ -15834,6 +16222,277 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
   } catch (err) {
     console.error("Failed to create member WTB counter offers:", err);
     res.status(500).json({ error: "Failed to create counter offers", details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: Step 2 of the Member WTB ping-pong. The seller
+// counters back on the buyer's counter, mirroring the Store Orders
+// seller-counter endpoint (same chain-aware own-reference lookup, same
+// min-step validation), but converting between buyer/seller terms with
+// the Member WTB flat-€10-margin functions instead of Store Orders'
+// dynamic margin formula.
+// ---------------------------------------------------------------------
+app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (!process.env.KC_PORTAL_SECRET || secret !== process.env.KC_PORTAL_SECRET) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const previousRecordId = asText(req.params.id);
+    const proposedPrice = Number(req.body?.price);
+
+    if (!Number.isInteger(proposedPrice) || proposedPrice <= 0) {
+      return res.status(400).json({ error: "Counter must be a valid whole number." });
+    }
+
+    const previousRecord = await airtable(COUNTER_OFFERS_TABLE).find(previousRecordId);
+    const f = previousRecord.fields || {};
+
+    if (asText(f["Status"]) !== "Open") {
+      return res.status(409).json({ error: "This counter offer is no longer open." });
+    }
+
+    const memberWtbRecordId = firstLinkedRecordId(f["Member WTB"]);
+    const sellerRecordId = firstLinkedRecordId(f["Seller ID"]);
+    const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
+    const sellerVatType = asText(f["Seller Original VAT Type"]);
+    const buyerCounterPrice = numberValue(f["Store Counter Price"]);
+
+    if (!memberWtbRecordId || !sellerRecordId) {
+      return res.status(400).json({ error: "Missing linked Member WTB or Seller." });
+    }
+
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+    const wtbFields = memberWtb.fields || {};
+
+    // Chain-aware own reference — same fix as Store Orders: if the
+    // seller has already countered earlier in this back-and-forth, their
+    // true own position is that counter, not the very original ask.
+    let sellerOwnReference = sellerOriginalPrice;
+    const priorRoundIdForSeller = asText(f["Previous Record ID"]);
+
+    if (priorRoundIdForSeller) {
+      const priorRoundForSeller = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundIdForSeller).catch(() => null);
+      const priorSellerCounter = numberValue(priorRoundForSeller?.fields?.["Seller Counter Price"]);
+      if (priorSellerCounter) {
+        sellerOwnReference = priorSellerCounter;
+      }
+    }
+
+    // Scale mismatch guard: buyerCounterPrice is in BUYER terms, must
+    // convert to SELLER terms before comparing against the seller's own
+    // reference (which is already seller-scale).
+    const buyerPriceInSellerTerms = calculateMemberWtbSellerPayout(buyerCounterPrice, sellerVatType, wtbFields);
+
+    if (!Number.isFinite(buyerPriceInSellerTerms)) {
+      return res.status(500).json({ error: "Could not compute margin conversion for this WTB." });
+    }
+
+    const validation = validateNextCounterPrice(sellerOwnReference, buyerPriceInSellerTerms, proposedPrice);
+    if (!validation.ok) {
+      return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    await airtable(COUNTER_OFFERS_TABLE).update(previousRecordId, {
+      "Status": "Closed",
+      "Closed At": new Date().toISOString()
+    });
+
+    const newRound = await airtable(COUNTER_OFFERS_TABLE).create({
+      "Member WTB": [memberWtbRecordId],
+      "Seller ID": [sellerRecordId],
+      "Seller Offer Record ID": asText(f["Seller Offer Record ID"]),
+      "Source Type": "Member WTB",
+      "Seller Original Price": sellerOriginalPrice,
+      "Seller Original VAT Type": sellerVatType,
+      "Seller Counter Price": proposedPrice,
+      "Previous Record ID": previousRecordId,
+      "Status": "Open"
+    });
+
+    const buyerRecordId = firstLinkedRecordId(wtbFields["Buyer Seller ID"]);
+    const buyerRecord = buyerRecordId ? await airtable(SELLERS_TABLE).find(buyerRecordId).catch(() => null) : null;
+    const buyerDiscordId = asText(
+      buyerRecord?.fields?.["Discord ID"] || buyerRecord?.fields?.["Discord User ID"]
+    );
+
+    let dmSent = false;
+
+    if (buyerDiscordId) {
+      // Proactive no-room check, mirroring Store Orders: is there any
+      // valid step left for the buyer to counter again after this?
+      const sellerCounterInBuyerTerms = calculateMemberWtbBuyerEquivalent(proposedPrice, sellerVatType, wtbFields);
+      const noRoomToCounter =
+        Number.isFinite(sellerCounterInBuyerTerms) &&
+        !hasRoomForNextStep(buyerCounterPrice, sellerCounterInBuyerTerms);
+
+      const discordResult = await sendMemberWtbBuyerCounterOfferDiscordDM({
+        counterOfferRecordId: newRound.id,
+        buyerDiscordId,
+        productName: asText(wtbFields["Product Name"]),
+        sku: asText(wtbFields["SKU"]),
+        size: asText(wtbFields["Size"]),
+        memberWtbId: asText(wtbFields["Member WTB ID"]) || memberWtbRecordId,
+        newPrice: sellerCounterInBuyerTerms,
+        yourPreviousCounter: buyerCounterPrice,
+        noRoomToCounter
+      }).catch((err) => {
+        console.error("Failed to DM buyer of seller counter-back (non-blocking):", err);
+        return null;
+      });
+
+      if (discordResult) {
+        dmSent = true;
+        await airtable(COUNTER_OFFERS_TABLE).update(newRound.id, {
+          "Discord Channel ID": discordResult.channelId,
+          "Discord Message ID": discordResult.messageId,
+          "Discord Delivery Type": discordResult.deliveryType
+        });
+      }
+    }
+
+    res.json({ ok: true, counter_offer_record_id: newRound.id, dm_sent: dmSent });
+  } catch (err) {
+    console.error("Failed to process member WTB seller-counter:", err);
+    res.status(500).json({ error: "Failed to process seller counter", details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: buyer counters again on the seller's counter-
+// back, mirroring the Store Orders store-counter endpoint (chain-aware
+// own reference, one hop back via Previous Record ID since that always
+// lands on the buyer's own prior round in an alternating chain).
+// ---------------------------------------------------------------------
+app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (!process.env.KC_PORTAL_SECRET || secret !== process.env.KC_PORTAL_SECRET) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const previousRoundId = asText(req.params.id);
+    const proposedPrice = Number(req.body?.price);
+
+    if (!Number.isInteger(proposedPrice) || proposedPrice <= 0) {
+      return res.status(400).json({ error: "Counter must be a valid whole number." });
+    }
+
+    const previousRound = await airtable(COUNTER_OFFERS_TABLE).find(previousRoundId);
+    const f = previousRound.fields || {};
+
+    if (asText(f["Status"]) !== "Open") {
+      return res.status(409).json({ error: "This counter offer is no longer open." });
+    }
+
+    const memberWtbRecordId = firstLinkedRecordId(f["Member WTB"]);
+    const sellerRecordId = firstLinkedRecordId(f["Seller ID"]);
+    const sellerVatType = asText(f["Seller Original VAT Type"]);
+    const sellerCounterPrice = numberValue(f["Seller Counter Price"]);
+
+    if (!memberWtbRecordId || !sellerRecordId) {
+      return res.status(400).json({ error: "Missing linked Member WTB or Seller." });
+    }
+
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+    const wtbFields = memberWtb.fields || {};
+
+    // One hop back via Previous Record ID always lands on the buyer's
+    // own prior round in this alternating chain (same reasoning as the
+    // Store Orders store-counter endpoint).
+    const priorRoundId = asText(f["Previous Record ID"]);
+
+    if (!priorRoundId) {
+      return res.status(409).json({ error: "Missing previous round reference." });
+    }
+
+    const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId);
+    const priorFields = priorRound.fields || {};
+    const buyerOwnReference = numberValue(priorFields["Store Counter Price"]);
+
+    // Scale mismatch guard: sellerCounterPrice is in SELLER terms, must
+    // convert to BUYER terms before comparing.
+    const sellerCounterInBuyerTerms = calculateMemberWtbBuyerEquivalent(sellerCounterPrice, sellerVatType, wtbFields);
+
+    if (!Number.isFinite(sellerCounterInBuyerTerms)) {
+      return res.status(500).json({ error: "Could not compute margin conversion for this WTB." });
+    }
+
+    const validation = validateNextCounterPrice(buyerOwnReference, sellerCounterInBuyerTerms, proposedPrice);
+    if (!validation.ok) {
+      return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    await airtable(COUNTER_OFFERS_TABLE).update(previousRoundId, {
+      "Status": "Closed",
+      "Closed At": new Date().toISOString()
+    });
+
+    const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
+    const recomputedPayout = calculateMemberWtbSellerPayout(proposedPrice, sellerVatType, wtbFields);
+
+    if (!Number.isFinite(recomputedPayout) || recomputedPayout <= 0) {
+      return res.status(400).json({ error: "Could not compute a valid payout for this counter." });
+    }
+
+    const newRound = await airtable(COUNTER_OFFERS_TABLE).create({
+      "Member WTB": [memberWtbRecordId],
+      "Seller ID": [sellerRecordId],
+      "Seller Offer Record ID": asText(f["Seller Offer Record ID"]),
+      "Source Type": "Member WTB",
+      "Seller Original Price": sellerOriginalPrice,
+      "Seller Original VAT Type": sellerVatType,
+      "Store Counter Price": proposedPrice,
+      "Counter Payout": recomputedPayout,
+      "Counter Payout VAT Type": sellerVatType,
+      "Status": "Open"
+    });
+
+    const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+    const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
+    let dmSent = false;
+
+    if (sellerDiscordId) {
+      const buyerOwnPosition = proposedPrice;
+      const noRoomToCounter =
+        Number.isFinite(recomputedPayout) &&
+        !hasRoomForNextStep(sellerOriginalPrice, recomputedPayout);
+
+      const discordResult = await sendMemberWtbCounterOfferDiscordDM({
+        counterOfferRecordId: newRound.id,
+        sellerDiscordId,
+        productName: asText(f["Product Name"]) || asText(wtbFields["Product Name"]),
+        sku: asText(wtbFields["SKU"]),
+        size: asText(wtbFields["Size"]),
+        memberWtbId: asText(wtbFields["Member WTB ID"]) || memberWtbRecordId,
+        payout: recomputedPayout,
+        vatType: sellerVatType,
+        sellerOriginalPrice,
+        sellerOriginalVatType: sellerVatType,
+        noRoomToCounter
+      }).catch((err) => {
+        console.error("Failed to DM seller of buyer counter-back (non-blocking):", err);
+        return null;
+      });
+
+      if (discordResult) {
+        dmSent = true;
+        await airtable(COUNTER_OFFERS_TABLE).update(newRound.id, {
+          "Discord Channel ID": discordResult.channelId,
+          "Discord Message ID": discordResult.messageId,
+          "Discord Delivery Type": discordResult.deliveryType
+        });
+      }
+    }
+
+    res.json({ ok: true, counter_offer_record_id: newRound.id, dm_sent: dmSent });
+  } catch (err) {
+    console.error("Failed to process member WTB buyer-counter:", err);
+    res.status(500).json({ error: "Failed to process buyer counter", details: err.message });
   }
 });
 
