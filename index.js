@@ -15439,8 +15439,28 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       return res.status(400).json({ error: 'Seller Offer missing Seller ID' });
     }
 
-    const purchasePrice = Number(offerFields['Seller Offer'] || 0);
-    const vatType = asText(offerFields['Offer VAT Type']);
+    // FIXED — CRITICAL: this always re-read the Seller Offer record's
+    // own raw price, completely ignoring any counter-offer
+    // negotiation — the seller's DM/channel could show a correctly
+    // negotiated payout, but the actual payment/inventory processing
+    // step here would silently fall back to the ORIGINAL, uncountered
+    // price. The "Process Deal" button now carries the negotiated
+    // payout through (see discord-wtb-bot-main), and an override here
+    // takes priority when present — falls back to the exact existing
+    // behavior otherwise, so the original (non-countered) accept flow
+    // is completely unaffected.
+    const overridePurchasePrice = req.body?.override_purchase_price != null
+      ? Number(req.body.override_purchase_price)
+      : null;
+    const overrideVatTypeForProcessing = req.body?.override_vat_type
+      ? asText(req.body.override_vat_type)
+      : null;
+
+    const purchasePrice = Number.isFinite(overridePurchasePrice) && overridePurchasePrice > 0
+      ? overridePurchasePrice
+      : Number(offerFields['Seller Offer'] || 0);
+
+    const vatType = overrideVatTypeForProcessing || asText(offerFields['Offer VAT Type']);
 
     const isOpenWtbFlow = memberFields['Auto Accept Seller Offers?'] !== true;
 
