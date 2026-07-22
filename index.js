@@ -16668,6 +16668,7 @@ app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) =>
       "Store Counter Price": proposedPrice,
       "Counter Payout": recomputedPayout,
       "Counter Payout VAT Type": sellerVatType,
+      "Previous Record ID": previousRoundId,
       "Status": "Open"
     });
 
