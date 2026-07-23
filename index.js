@@ -8816,6 +8816,50 @@ app.post("/api/consignment/offers/:id/confirm", async (req, res) => {
       });
     }
 
+    // FIXED — CRITICAL: this previously called confirmConsignmentOffer
+    // straight away, which reads offer_price for "Purchase Price" on
+    // the created Inventory Unit (and the Make webhook payload).
+    // offer_price is only ever carried forward on new counter rounds —
+    // for a STORE-placed round (created by the new store-counter
+    // endpoint) being accepted directly by the consignor via this
+    // endpoint, it never got synced to the negotiated amount, so this
+    // would have written a stale, wrong (original round-1) purchase
+    // price. /store-accept already does this exact sync for the other
+    // direction (consignor round → offer_price) — mirroring that here.
+    // Scoped strictly to previous_offer_id being set (a genuinely NEW
+    // chain round) — round 1 itself already gets offer_price set
+    // correctly at creation via a different, pre-existing formula
+    // (calculateCounterPayoutForVatType), and must not be touched here.
+    if (
+      offer.previous_offer_id &&
+      offer.is_counter_offer &&
+      !(Number(offer.consignor_counter_price) > 0) &&
+      Number(offer.store_counter_price) > 0
+    ) {
+      const orderRecordForSync = await airtable(ORDERS_TABLE).find(offer.order_record_id);
+      const orderFieldsForSync = orderRecordForSync.fields || {};
+      const clientCountryForSync = asText(orderFieldsForSync["Client Country"]);
+
+      const storeCounterBaseForSync = calculateConsignmentBaseFromStoreOffer(
+        Number(offer.store_counter_price),
+        orderFieldsForSync
+      );
+      const consignorEquivalentForSync = convertStoreBasePriceToConsignorPrice(
+        storeCounterBaseForSync,
+        offer.vat_type,
+        clientCountryForSync
+      );
+
+      if (!Number.isFinite(consignorEquivalentForSync) || consignorEquivalentForSync <= 0) {
+        return res.status(500).json({ error: "Could not compute consignor payout for this counter." });
+      }
+
+      await supabase
+        .from("consignment_offers")
+        .update({ offer_price: consignorEquivalentForSync, updated_at: new Date().toISOString() })
+        .eq("id", offerId);
+    }
+
     const result = await confirmConsignmentOffer(offerId);
 
     if (!result.ok) {
