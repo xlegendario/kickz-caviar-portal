@@ -3394,7 +3394,7 @@ function bindConsignmentDiscordButtons(client) {
     if (customId.startsWith("consignment_counter_accept:")) {
       const offerId = customId.split(":")[1];
 
-      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/consignment/offers/${offerId}/accept`, {
+      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/consignment/offers/${offerId}/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" }
       });
