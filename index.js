@@ -663,6 +663,123 @@ async function sendConsignmentOfferDiscordMessage({
   };
 }
 
+// NEW — additive only: notifies the consignor when the store counters
+// back on their counter (starting round 2+ of the ping-pong). Same
+// private-channel-vs-DM routing as sendConsignmentOfferDiscordMessage
+// above, and same confidentiality rule as Store Orders/Member WTB: only
+// shows the consignor-facing (already margin-converted) amount, never
+// the store's raw all-in price or our margin.
+async function sendConsignmentCounterOfferDiscordMessage({
+  offer,
+  storeOfferPrice,
+  storeOfferVatType,
+  yourPreviousCounter,
+  noRoomToCounter,
+  deniedAmount
+}) {
+  await initDiscord();
+
+  const sellerRecord = await airtable(SELLERS_TABLE).find(offer.seller_record_id);
+  const seller = normalizeSeller(sellerRecord);
+
+  const privateChannelId = getSellerOfferChannelId(seller, false);
+
+  let target = null;
+  let deliveryType = "private_channel";
+
+  if (privateChannelId) {
+    target = await discordClient.channels.fetch(privateChannelId);
+    if (!target) {
+      throw new Error(`Discord channel not found: ${privateChannelId}`);
+    }
+  } else {
+    await initKickzDealDiscord();
+
+    const discordUserId = asText(seller?.discord_id);
+    if (!discordUserId) {
+      throw new Error(`Missing Discord ID for seller ${seller?.seller_id || offer.seller_id}`);
+    }
+
+    const user = await kickzDealDiscordClient.users.fetch(discordUserId);
+    target = await user.createDM();
+    deliveryType = "dm";
+  }
+
+  // FIXED — caught my own mistake before shipping it: this must NOT
+  // pass an empty {} for orderFields, since that's the exact same
+  // silent-margin-lookup-failure bug found and fixed multiple times
+  // earlier in this build (Store Orders, Member WTB). Fetch the real
+  // order fields so the margin/percentage lookup actually works.
+  const orderRecordForNotify = await airtable(ORDERS_TABLE).find(offer.order_record_id);
+  const orderFieldsForNotify = orderRecordForNotify.fields || {};
+  const clientCountryForNotify = asText(orderFieldsForNotify["Client Country"]);
+
+  const consignorEquivalent = convertStoreBasePriceToConsignorPrice(
+    calculateConsignmentBaseFromStoreOffer(storeOfferPrice, orderFieldsForNotify),
+    offer.vat_type,
+    clientCountryForNotify
+  );
+
+  const closingLine = noRoomToCounter
+    ? "You're now very close to each other's price — there's no room for another counter. Please accept or deny."
+    : "Please accept, counter, or deny below.";
+
+  const deniedNote =
+    deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== ""
+      ? [`❌ Your counter of €${Number(deniedAmount).toFixed(2)} was denied.`, ""]
+      : [];
+
+  const embed = {
+    title: "🔁 Store Countered",
+    description: [
+      `**${offer.product_name || "—"}**`,
+      `SKU: ${offer.sku || "—"}`,
+      `Size: ${offer.size || "—"}`,
+      "",
+      `Order: ${offer.order_id || offer.order_record_id || "—"}`,
+      "",
+      ...deniedNote,
+      `The store sent a counter offer.`,
+      "",
+      `**Your Previous Counter**`,
+      `€${Number(yourPreviousCounter).toFixed(2)}`,
+      "",
+      `**New Counter**`,
+      `€${Number(consignorEquivalent).toFixed(2)}`,
+      "",
+      closingLine
+    ].join("\n"),
+    color: 0xf1c40f
+  };
+
+  const message = await target.send({
+    content: deliveryType === "dm" ? null : undefined,
+    embeds: [embed],
+    components: [
+      {
+        type: 1,
+        components: noRoomToCounter
+          ? [
+              { type: 2, style: 3, label: "Accept", custom_id: `consignment_counter_accept:${offer.id}` },
+              { type: 2, style: 4, label: "Deny", custom_id: `consignment_counter_deny:${offer.id}` }
+            ]
+          : [
+              { type: 2, style: 3, label: "Accept", custom_id: `consignment_counter_accept:${offer.id}` },
+              { type: 2, style: 1, label: "Counter", custom_id: `consignment_counter_counter:${offer.id}` },
+              { type: 2, style: 4, label: "Deny", custom_id: `consignment_counter_deny:${offer.id}` }
+            ]
+      }
+    ]
+  });
+
+  return {
+    channelId: message.channelId,
+    messageId: message.id,
+    deliveryType
+  };
+}
+
+
 async function disableCounterOfferDiscordButtons(channelId, messageId, note) {
   await initKickzDealDiscord();
 
@@ -3166,6 +3283,10 @@ function bindConsignmentDiscordButtons(client) {
       !customId.startsWith("counter_offer_deny:") &&
       !customId.startsWith("counter_consignment_offer:") &&
       !customId.startsWith("counter_consignment_offer_modal:") &&
+      !customId.startsWith("consignment_counter_accept:") &&
+      !customId.startsWith("consignment_counter_deny:") &&
+      !customId.startsWith("consignment_counter_counter:") &&
+      !customId.startsWith("consignment_counter_counter_modal:") &&
       !customId.startsWith("confirm_member_wtb_kc:") &&
       !customId.startsWith("deny_member_wtb_kc:") &&
       !customId.startsWith("accept_member_wtb_kc_offer:") &&
@@ -3265,6 +3386,127 @@ function bindConsignmentDiscordButtons(client) {
         ephemeral: true
       }).catch(() => {});
     
+      return;
+    }
+
+    // NEW — additive only: consignor's Accept/Deny/Counter response to
+    // the store's counter-back (round 2+ of the Consignment ping-pong).
+    if (customId.startsWith("consignment_counter_accept:")) {
+      const offerId = customId.split(":")[1];
+
+      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/consignment/offers/${offerId}/accept`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        await safeEditInteractionMessage(interaction, {
+          content: `❌ ${data.error || "Failed to accept offer."}`,
+          embeds: interaction.message.embeds,
+          components: []
+        }).catch(() => {});
+        return;
+      }
+
+      await safeEditInteractionMessage(interaction, {
+        content: "✅ Counter offer accepted.",
+        embeds: interaction.message.embeds,
+        components: []
+      }).catch(() => {});
+
+      return;
+    }
+
+    if (customId.startsWith("consignment_counter_deny:")) {
+      const offerId = customId.split(":")[1];
+
+      await fetch(`${APP_PUBLIC_BASE_URL}/api/consignment/offers/${offerId}/deny`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      }).catch((err) => console.error("Failed to deny consignment counter offer:", err));
+
+      await safeEditInteractionMessage(interaction, {
+        content: "❌ Counter offer denied.",
+        embeds: interaction.message.embeds,
+        components: []
+      }).catch(() => {});
+
+      return;
+    }
+
+    if (customId.startsWith("consignment_counter_counter:")) {
+      const offerId = customId.split(":")[1];
+
+      const modal = {
+        title: "Counter Offer",
+        custom_id: `consignment_counter_counter_modal:${offerId}`,
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 4,
+                custom_id: "counter_price",
+                label: "Your requested payout",
+                style: 1,
+                min_length: 1,
+                max_length: 10,
+                required: true
+              }
+            ]
+          }
+        ]
+      };
+
+      await interaction.showModal(modal).catch((err) => {
+        console.error("Failed to show consignment_counter_counter modal:", err);
+      });
+
+      return;
+    }
+
+    if (customId.startsWith("consignment_counter_counter_modal:")) {
+      const offerId = customId.replace("consignment_counter_counter_modal:", "");
+      const rawAmount = interaction.fields.getTextInputValue("counter_price");
+      const counterPrice = Number(String(rawAmount).replace(/[^\d.,-]/g, "").replace(",", "."));
+
+      if (!Number.isFinite(counterPrice) || counterPrice <= 0) {
+        await interaction.reply({
+          content: "⚠️ Please enter a valid counter price.",
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/consignment/offers/${offerId}/consignor-counter`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ price: counterPrice })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        await interaction.reply({
+          content: `❌ ${data.error || "Failed to submit your counter."}`,
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      await interaction.reply({
+        content: `🔁 Counter offer sent to store: €${counterPrice.toFixed(2)}.`,
+        ephemeral: true
+      }).catch(() => {});
+
+      await safeEditInteractionMessage(interaction, {
+        content: `🔁 You countered with €${counterPrice.toFixed(2)}. Waiting on the store.`,
+        embeds: interaction.message.embeds,
+        components: []
+      }).catch(() => {});
+
       return;
     }
 
@@ -8194,6 +8436,326 @@ app.post("/api/consignment/offers/:id/counter", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------
+// NEW — additive only: store counters back on the consignor's counter,
+// starting the full Consignment ping-pong. The EXISTING /counter
+// endpoint above is untouched — it still handles the first consignor
+// counter exactly as before (updating the same row). This endpoint
+// creates a NEW row via previous_offer_id whenever the ping-pong goes
+// deeper than that first exchange, mirroring the Store Orders/Member
+// WTB chain pattern.
+// ---------------------------------------------------------------------
+app.post("/api/consignment/offers/:id/store-counter", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (!COUNTER_OFFERS_SECRET || secret !== COUNTER_OFFERS_SECRET) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const previousOfferId = asText(req.params.id);
+    const proposedPrice = Number(req.body?.price);
+
+    if (!Number.isInteger(proposedPrice) || proposedPrice <= 0) {
+      return res.status(400).json({ error: "Counter must be a valid whole number." });
+    }
+
+    const { data: previousOffer, error: fetchError } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("id", previousOfferId)
+      .single();
+
+    if (fetchError || !previousOffer) {
+      return res.status(404).json({ error: "Offer not found." });
+    }
+
+    if (!["open", "store_pending"].includes(previousOffer.status)) {
+      return res.status(409).json({ error: "This counter offer is no longer open." });
+    }
+
+    if (!(Number(previousOffer.consignor_counter_price) > 0)) {
+      return res.status(409).json({ error: "This offer has no consignor counter to respond to yet." });
+    }
+
+    const orderRecord = await airtable(ORDERS_TABLE).find(previousOffer.order_record_id);
+    const orderFields = orderRecord.fields || {};
+    const clientCountry = asText(orderFields["Client Country"]);
+
+    // Chain-aware own reference: if this round itself already has a
+    // store_counter_price (the combined "round 1 + first consignor
+    // counter" row, where both fields live on one record), that IS the
+    // store's own last position. Otherwise walk back one hop via
+    // previous_offer_id to find the store's true prior round.
+    let storeOwnReference = Number(previousOffer.store_counter_price);
+
+    if (!(storeOwnReference > 0) && previousOffer.previous_offer_id) {
+      const { data: grandparent } = await supabase
+        .from("consignment_offers")
+        .select("store_counter_price")
+        .eq("id", previousOffer.previous_offer_id)
+        .single();
+
+      storeOwnReference = Number(grandparent?.store_counter_price) || null;
+    }
+
+    if (!(storeOwnReference > 0)) {
+      return res.status(500).json({ error: "Could not determine the store's previous counter." });
+    }
+
+    // Counterpart: consignor's counter, converted UP to store terms
+    // (forward direction — same functions the initial broadcast uses).
+    const consignorCounterBase = convertConsignorPriceToStoreBasePrice(
+      Number(previousOffer.consignor_counter_price),
+      previousOffer.vat_type,
+      clientCountry
+    );
+    const consignorCounterInStoreTerms = calculateStoreCustomOfferFromConsignmentBase(
+      consignorCounterBase,
+      orderFields
+    );
+
+    if (!Number.isFinite(consignorCounterInStoreTerms)) {
+      return res.status(500).json({ error: "Could not compute margin conversion for this order." });
+    }
+
+    const validation = validateNextCounterPrice(storeOwnReference, consignorCounterInStoreTerms, proposedPrice);
+    if (!validation.ok) {
+      return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    await supabase
+      .from("consignment_offers")
+      .update({ status: "closed", closed_at: new Date().toISOString() })
+      .eq("id", previousOfferId);
+
+    const storeOfferVatType = getStoreOfferVatTypeFromConsignmentVat(previousOffer.vat_type, clientCountry);
+    const proposedExclVat = storeOfferVatType === "VAT21"
+      ? Math.round((proposedPrice / 1.21) * 100) / 100
+      : proposedPrice;
+
+    const nowIso = new Date().toISOString();
+
+    const { data: newOffer, error: createError } = await supabase
+      .from("consignment_offers")
+      .insert({
+        order_record_id: previousOffer.order_record_id,
+        order_id: previousOffer.order_id,
+        inventory_id: previousOffer.inventory_id,
+
+        seller_record_id: previousOffer.seller_record_id,
+        seller_id: previousOffer.seller_id,
+
+        product_name: previousOffer.product_name,
+        sku: previousOffer.sku,
+        size: previousOffer.size,
+        brand: previousOffer.brand,
+
+        vat_type: previousOffer.vat_type,
+        seller_price: previousOffer.seller_price,
+        offer_price: previousOffer.offer_price,
+
+        is_counter_offer: true,
+        store_counter_price: proposedPrice,
+        store_counter_price_excl_vat: proposedExclVat,
+
+        previous_offer_id: previousOfferId,
+        status: "open",
+        created_at: nowIso,
+        updated_at: nowIso
+      })
+      .select()
+      .single();
+
+    if (createError) throw createError;
+
+    let discordResult = null;
+
+    try {
+      discordResult = await sendConsignmentCounterOfferDiscordMessage({
+        offer: newOffer,
+        storeOfferPrice: proposedPrice,
+        storeOfferVatType,
+        yourPreviousCounter: Number(previousOffer.consignor_counter_price)
+      });
+
+      await supabase
+        .from("consignment_offers")
+        .update({
+          discord_channel_id: discordResult.channelId,
+          discord_message_id: discordResult.messageId,
+          discord_delivery_type: discordResult.deliveryType,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", newOffer.id);
+    } catch (err) {
+      console.error("Failed to notify consignor of store counter-back (non-blocking):", err);
+    }
+
+    res.json({ ok: true, new_offer_id: newOffer.id, dm_sent: !!discordResult });
+  } catch (err) {
+    console.error("Failed to process consignment store-counter:", err);
+    res.status(500).json({ error: "Failed to process store counter", details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: consignor counters again on the store's
+// counter-back, mirroring the Member WTB buyer-counter pattern.
+// ---------------------------------------------------------------------
+app.post("/api/consignment/offers/:id/consignor-counter", async (req, res) => {
+  try {
+    const previousOfferId = asText(req.params.id);
+    const proposedPrice = Number(req.body?.price);
+
+    if (!Number.isFinite(proposedPrice) || proposedPrice <= 0) {
+      return res.status(400).json({ error: "Invalid counter price" });
+    }
+
+    const { data: previousOffer, error: fetchError } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("id", previousOfferId)
+      .single();
+
+    if (fetchError || !previousOffer) {
+      return res.status(404).json({ error: "Offer not found." });
+    }
+
+    if (previousOffer.status !== "open") {
+      return res.status(409).json({ error: "This counter offer is no longer open." });
+    }
+
+    if (!(Number(previousOffer.store_counter_price) > 0)) {
+      return res.status(409).json({ error: "This offer has no store counter to respond to yet." });
+    }
+
+    if (!previousOffer.previous_offer_id) {
+      return res.status(409).json({ error: "Missing previous round reference." });
+    }
+
+    const { data: priorConsignorRound, error: priorError } = await supabase
+      .from("consignment_offers")
+      .select("consignor_counter_price")
+      .eq("id", previousOffer.previous_offer_id)
+      .single();
+
+    if (priorError || !priorConsignorRound) {
+      return res.status(500).json({ error: "Could not find the consignor's previous counter." });
+    }
+
+    const consignorOwnReference = Number(priorConsignorRound.consignor_counter_price);
+
+    if (!(consignorOwnReference > 0)) {
+      return res.status(500).json({ error: "Could not determine the consignor's previous counter." });
+    }
+
+    const orderRecord = await airtable(ORDERS_TABLE).find(previousOffer.order_record_id);
+    const orderFields = orderRecord.fields || {};
+    const clientCountry = asText(orderFields["Client Country"]);
+
+    // Counterpart: store's counter, converted DOWN to consignor terms
+    // (the new inverse functions).
+    const storeCounterBase = calculateConsignmentBaseFromStoreOffer(
+      Number(previousOffer.store_counter_price),
+      orderFields
+    );
+    const storeCounterInConsignorTerms = convertStoreBasePriceToConsignorPrice(
+      storeCounterBase,
+      previousOffer.vat_type,
+      clientCountry
+    );
+
+    if (!Number.isFinite(storeCounterInConsignorTerms)) {
+      return res.status(500).json({ error: "Could not compute margin conversion for this order." });
+    }
+
+    const validation = validateNextCounterPrice(consignorOwnReference, storeCounterInConsignorTerms, proposedPrice);
+    if (!validation.ok) {
+      return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    await supabase
+      .from("consignment_offers")
+      .update({ status: "closed", closed_at: new Date().toISOString() })
+      .eq("id", previousOfferId);
+
+    const storeBaseForProposed = convertConsignorPriceToStoreBasePrice(proposedPrice, previousOffer.vat_type, clientCountry);
+    const proposedInStoreTerms = calculateStoreCustomOfferFromConsignmentBase(storeBaseForProposed, orderFields);
+    const proposedInStoreTermsExclVat = getStoreOfferVatTypeFromConsignmentVat(previousOffer.vat_type, clientCountry) === "VAT21"
+      ? Math.round((proposedInStoreTerms / 1.21) * 100) / 100
+      : proposedInStoreTerms;
+
+    if (!Number.isFinite(proposedInStoreTerms)) {
+      return res.status(500).json({ error: "Could not compute a valid store price for this counter." });
+    }
+
+    const nowIso = new Date().toISOString();
+
+    const { data: newOffer, error: createError } = await supabase
+      .from("consignment_offers")
+      .insert({
+        order_record_id: previousOffer.order_record_id,
+        order_id: previousOffer.order_id,
+        inventory_id: previousOffer.inventory_id,
+
+        seller_record_id: previousOffer.seller_record_id,
+        seller_id: previousOffer.seller_id,
+
+        product_name: previousOffer.product_name,
+        sku: previousOffer.sku,
+        size: previousOffer.size,
+        brand: previousOffer.brand,
+
+        vat_type: previousOffer.vat_type,
+        seller_price: previousOffer.seller_price,
+        offer_price: previousOffer.offer_price,
+
+        is_counter_offer: true,
+        consignor_counter_price: proposedPrice,
+        consignor_counter_store_price: proposedInStoreTerms,
+        consignor_counter_store_price_excl_vat: proposedInStoreTermsExclVat,
+        consignor_counter_at: nowIso,
+
+        previous_offer_id: previousOfferId,
+        status: "store_pending",
+        created_at: nowIso,
+        updated_at: nowIso
+      })
+      .select()
+      .single();
+
+    if (createError) throw createError;
+
+    let discordResult = null;
+
+    try {
+      discordResult = await postConsignmentCounterStoreOffer({
+        offer: newOffer,
+        orderFields,
+        storeOfferPrice: proposedInStoreTerms,
+        storeOfferVatType: getStoreOfferVatTypeFromConsignmentVat(previousOffer.vat_type, clientCountry)
+      });
+
+      await supabase
+        .from("consignment_offers")
+        .update({
+          store_offer_channel_id: discordResult.channel_id || null,
+          store_offer_message_id: discordResult.message_id || null,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", newOffer.id);
+    } catch (err) {
+      console.error("Failed to notify store of consignor counter-back (non-blocking):", err);
+    }
+
+    res.json({ ok: true, new_offer_id: newOffer.id, dm_sent: !!discordResult });
+  } catch (err) {
+    console.error("Failed to process consignment consignor-counter:", err);
+    res.status(500).json({ error: "Failed to process consignor counter", details: err.message });
+  }
+});
+
 app.post("/api/consignment/offers/:id/deny", async (req, res) => {
   try {
     const offerId = asText(req.params.id);
@@ -9292,6 +9854,55 @@ function calculateStoreCustomOfferFromConsignmentBase(basePrice, orderFields = {
   }
 
   return roundUpToStep(rawOffer, 2.5);
+}
+
+// NEW — additive only: the exact inverse of the two functions above,
+// needed so a STORE counter (entered in store/all-in terms) can be
+// compared against and converted back to consignor terms. Reversing
+// each step in the opposite order (undo the margin first, then undo
+// the VAT/country conversion) mirrors exactly how the forward
+// direction was built, so both sides of the ping-pong agree on what
+// a given number means.
+function calculateConsignmentBaseFromStoreOffer(storeOfferPrice, orderFields = {}) {
+  const store = Number(storeOfferPrice);
+
+  if (!Number.isFinite(store) || store <= 0) return null;
+
+  const method = asText(firstLookupValue(orderFields["Offer Method"]));
+  const percentage = Number(firstLookupValue(orderFields["Offer Percentage"]));
+  const margin = Number(firstLookupValue(orderFields["Offer Margin"]));
+
+  let base;
+
+  if (method === "Firm Range") {
+    if (!Number.isFinite(margin)) return null;
+    base = store - margin;
+  } else {
+    if (!Number.isFinite(percentage) || percentage >= 1) return null;
+    base = store * (1 - percentage) - 5;
+  }
+
+  return base;
+}
+
+function convertStoreBasePriceToConsignorPrice(basePrice, consignorVatType, clientCountry) {
+  const base = Number(basePrice);
+  const vatType = asText(consignorVatType);
+  const isDutch = isDutchClientCountry(clientCountry);
+
+  if (!Number.isFinite(base) || base <= 0) return null;
+
+  if (vatType === "Margin") return roundDownToStep(base, 2.5);
+
+  if (vatType === "VAT0" && isDutch) {
+    return roundDownToStep(base / 1.21, 2.5);
+  }
+
+  if (vatType === "VAT21" && !isDutch) {
+    return roundDownToStep(base * 1.21, 2.5);
+  }
+
+  return roundDownToStep(base, 2.5);
 }
 
 async function postConsignmentCounterStoreOffer({
