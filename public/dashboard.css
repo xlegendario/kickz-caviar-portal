@@ -3247,3 +3247,48 @@
   color: #ff7b7b;
   border-color: rgba(231, 76, 60, 0.45);
 }
+
+.dashboard-pill-row {
+  display: flex;
+  gap: 8px;
+  padding: 0 24px 16px;
+  flex-wrap: wrap;
+}
+
+.dashboard-pill-row.hidden {
+  display: none;
+}
+
+.dashboard-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.65);
+
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.dashboard-pill-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.dashboard-pill-btn.active {
+  background: rgba(88, 166, 255, 0.16);
+  border-color: rgba(88, 166, 255, 0.5);
+  color: #58a6ff;
+}
+
+.dashboard-pill-btn .dashboard-pill-count {
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.8;
+}
