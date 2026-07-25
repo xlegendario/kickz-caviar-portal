@@ -5216,10 +5216,20 @@ function bindConsignmentDiscordButtons(client) {
       // directly — regardless of what the Make webhook does — makes
       // sure the correct price is always used, with no dependency on a
       // downstream system we don't control.
+      // FIXED — writing "Custom Offer" recalculates the "Offer To
+      // Store" FORMULA field (it's derived from Custom Offer), which
+      // is exactly what the pre-existing sendOfferRequestWebhook
+      // automation watches — so this write was inadvertently
+      // re-triggering a brand new "Offer Request" to the store for an
+      // already-accepted deal. The Consignment accept flow (pre-
+      // existing code) already sets "Offer Sent?": false for this
+      // exact reason — mirroring that here closes the same gap for
+      // Store Orders.
       try {
         await airtable(ORDERS_TABLE).update(linkedOrderId, {
           "Custom Offer": numberValue(f["Store Counter Price"]),
-          "Offer Accepted?": true
+          "Offer Accepted?": true,
+          "Offer Sent?": false
         });
       } catch (priceWriteErr) {
         console.error("Failed to write accepted price to Order record (non-blocking):", priceWriteErr);
@@ -7814,11 +7824,18 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
     // takes priority over everything else in calculateLinkedUnitPrice.js,
     // so writing the accepted price there directly guarantees the
     // correct number regardless of what the webhook consumer does.
+    // FIXED — same fix as the other accept handler: writing "Custom
+    // Offer" recalculates the "Offer To Store" formula field, which
+    // re-triggers the pre-existing sendOfferRequestWebhook automation,
+    // sending a fresh "Offer Request" for an already-accepted deal.
+    // Setting "Offer Sent?": false prevents that (and matches the
+    // pre-existing Consignment accept flow's own handling of this).
     try {
       if (Number.isFinite(acceptedStorePrice) && acceptedStorePrice > 0) {
         await airtable(ORDERS_TABLE).update(linkedOrderId, {
           "Custom Offer": acceptedStorePrice,
-          "Offer Accepted?": true
+          "Offer Accepted?": true,
+          "Offer Sent?": false
         });
       } else {
         console.error("Could not compute a valid accepted store price to write back for order:", linkedOrderId);
