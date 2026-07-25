@@ -3287,6 +3287,8 @@ function bindConsignmentDiscordButtons(client) {
       !customId.startsWith("consignment_counter_deny:") &&
       !customId.startsWith("consignment_counter_counter:") &&
       !customId.startsWith("consignment_counter_counter_modal:") &&
+      !customId.startsWith("consignment_consignor_edit:") &&
+      !customId.startsWith("consignment_consignor_edit_modal:") &&
       !customId.startsWith("confirm_member_wtb_kc:") &&
       !customId.startsWith("deny_member_wtb_kc:") &&
       !customId.startsWith("accept_member_wtb_kc_offer:") &&
@@ -3422,6 +3424,16 @@ function bindConsignmentDiscordButtons(client) {
     if (customId.startsWith("consignment_counter_deny:")) {
       const offerId = customId.split(":")[1];
 
+      const { data: deniedOffer, error: deniedFetchError } = await supabase
+        .from("consignment_offers")
+        .select("*")
+        .eq("id", offerId)
+        .single();
+
+      if (deniedFetchError) {
+        console.error("Consignment reopen: failed to fetch denied offer:", offerId, deniedFetchError);
+      }
+
       await fetch(`${APP_PUBLIC_BASE_URL}/api/consignment/offers/${offerId}/deny`, {
         method: "POST",
         headers: { "Content-Type": "application/json" }
@@ -3432,6 +3444,71 @@ function bindConsignmentDiscordButtons(client) {
         embeds: interaction.message.embeds,
         components: []
       }).catch(() => {});
+
+      // NEW — additive only: same reopen-prior-round pattern as the
+      // other two flows. The denied round (store's counter) was itself
+      // responding to a CONSIGNOR round (if any) — reopen it and resend
+      // the standard store-facing notification so the store can accept
+      // it or try again. Round-1 store counters (no previous_offer_id)
+      // have nothing to reopen — handled by the existing informational
+      // flow already in place for that case.
+      try {
+        if (deniedOffer?.previous_offer_id) {
+          const { data: priorOffer, error: priorFetchError } = await supabase
+            .from("consignment_offers")
+            .select("*")
+            .eq("id", deniedOffer.previous_offer_id)
+            .single();
+
+          if (priorFetchError) {
+            console.error("Consignment reopen: failed to fetch prior offer:", deniedOffer.previous_offer_id, priorFetchError);
+          }
+
+          if (priorOffer) {
+            const { error: reopenUpdateError } = await supabase
+              .from("consignment_offers")
+              .update({ status: "store_pending" })
+              .eq("id", priorOffer.id);
+
+            if (reopenUpdateError) {
+              console.error("Consignment reopen: failed to set prior offer status to store_pending:", priorOffer.id, reopenUpdateError);
+            }
+
+            const orderRecordForReopen = await airtable(ORDERS_TABLE).find(priorOffer.order_record_id);
+            const orderFieldsForReopen = orderRecordForReopen.fields || {};
+            const clientCountryForReopen = asText(orderFieldsForReopen["Client Country"]);
+            const storeOfferVatTypeForReopen = getStoreOfferVatTypeFromConsignmentVat(priorOffer.vat_type, clientCountryForReopen);
+
+            const priorConsignorBase = convertConsignorPriceToStoreBasePrice(
+              Number(priorOffer.consignor_counter_price),
+              priorOffer.vat_type,
+              clientCountryForReopen
+            );
+            const priorConsignorInStoreTerms = calculateStoreCustomOfferFromConsignmentBase(
+              priorConsignorBase,
+              orderFieldsForReopen
+            );
+
+            console.log("Consignment reopen: sending re-notification to store for prior offer:", priorOffer.id);
+
+            await postConsignmentCounterStoreOffer({
+              offer: priorOffer,
+              orderFields: orderFieldsForReopen,
+              storeOfferPrice: priorConsignorInStoreTerms,
+              storeOfferVatType: storeOfferVatTypeForReopen,
+              deniedAmount: Number(deniedOffer.store_counter_price)
+            });
+
+            console.log("Consignment reopen: re-notification sent successfully for:", priorOffer.id);
+          } else {
+            console.error("Consignment reopen: priorOffer not found (no error, but empty result) for id:", deniedOffer.previous_offer_id);
+          }
+        } else {
+          console.log("Consignment reopen: no previous_offer_id on denied offer, nothing to reopen:", offerId);
+        }
+      } catch (reopenErr) {
+        console.error("Failed to reopen prior round after consignment consignor-deny (non-blocking):", reopenErr);
+      }
 
       return;
     }
@@ -3482,7 +3559,10 @@ function bindConsignmentDiscordButtons(client) {
 
       const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/consignment/offers/${offerId}/consignor-counter`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.COUNTER_OFFERS_SECRET || ""
+        },
         body: JSON.stringify({ price: counterPrice })
       });
 
@@ -3503,6 +3583,94 @@ function bindConsignmentDiscordButtons(client) {
 
       await safeEditInteractionMessage(interaction, {
         content: `🔁 You countered with €${counterPrice.toFixed(2)}. Waiting on the store.`,
+        embeds: interaction.message.embeds,
+        components: [
+          {
+            type: 1,
+            components: [
+              { type: 2, style: 3, label: "Accept", custom_id: "consignment_consignor_accept_disabled", disabled: true },
+              { type: 2, style: 1, label: "Edit", custom_id: `consignment_consignor_edit:${data.new_offer_id || offerId}` },
+              { type: 2, style: 4, label: "Deny", custom_id: "consignment_consignor_deny_disabled", disabled: true }
+            ]
+          }
+        ]
+      }).catch(() => {});
+
+      return;
+    }
+
+    // NEW — additive only: consignor's Edit button/modal for
+    // Consignment.
+    if (customId.startsWith("consignment_consignor_edit:")) {
+      const offerId = customId.split(":")[1];
+
+      const modal = {
+        title: "Edit Your Counter",
+        custom_id: `consignment_consignor_edit_modal:${offerId}`,
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 4,
+                custom_id: "counter_price",
+                label: "Your requested payout",
+                style: 1,
+                min_length: 1,
+                max_length: 10,
+                required: true
+              }
+            ]
+          }
+        ]
+      };
+
+      await interaction.showModal(modal).catch((err) => {
+        console.error("Failed to show consignment_consignor_edit modal:", err);
+      });
+
+      return;
+    }
+
+    if (customId.startsWith("consignment_consignor_edit_modal:")) {
+      const offerId = customId.replace("consignment_consignor_edit_modal:", "");
+      const rawAmount = interaction.fields.getTextInputValue("counter_price");
+      const editedPrice = Number(String(rawAmount).replace(/[^\d.,-]/g, "").replace(",", "."));
+
+      if (!Number.isFinite(editedPrice) || editedPrice <= 0) {
+        await interaction.reply({
+          content: "⚠️ Please enter a valid counter price.",
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/consignment/offers/${offerId}/edit`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.COUNTER_OFFERS_SECRET || ""
+        },
+        body: JSON.stringify({ price: editedPrice })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        await interaction.reply({
+          content: `❌ ${data.error || "Failed to edit your counter."}`,
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+
+      await interaction.reply({
+        content: `✅ Your counter was updated to €${editedPrice.toFixed(2)}.`,
+        ephemeral: true
+      }).catch(() => {});
+
+      await safeEditInteractionMessage(interaction, {
+        content: `✏️ You edited your counter to €${editedPrice.toFixed(2)}. Waiting on the store.`,
         embeds: interaction.message.embeds,
         components: []
       }).catch(() => {});
@@ -8571,12 +8739,25 @@ app.post("/api/consignment/offers/:id/store-counter", async (req, res) => {
 
     let discordResult = null;
 
+    // NEW — proactive no-room check: after this counter, would the
+    // consignor have any valid step left to respond with?
+    const consignorOwnPosition = Number(previousOffer.consignor_counter_price);
+    const storeCounterInConsignorTermsForRoomCheck = convertStoreBasePriceToConsignorPrice(
+      calculateConsignmentBaseFromStoreOffer(proposedPrice, orderFields),
+      previousOffer.vat_type,
+      clientCountry
+    );
+    const noRoomToCounter =
+      Number.isFinite(storeCounterInConsignorTermsForRoomCheck) &&
+      !hasRoomForNextStep(consignorOwnPosition, storeCounterInConsignorTermsForRoomCheck);
+
     try {
       discordResult = await sendConsignmentCounterOfferDiscordMessage({
         offer: newOffer,
         storeOfferPrice: proposedPrice,
         storeOfferVatType,
-        yourPreviousCounter: Number(previousOffer.consignor_counter_price)
+        yourPreviousCounter: Number(previousOffer.consignor_counter_price),
+        noRoomToCounter
       });
 
       await supabase
@@ -8605,6 +8786,14 @@ app.post("/api/consignment/offers/:id/store-counter", async (req, res) => {
 // ---------------------------------------------------------------------
 app.post("/api/consignment/offers/:id/consignor-counter", async (req, res) => {
   try {
+    // FIXED — consistency gap: store-counter and edit both check
+    // COUNTER_OFFERS_SECRET, this endpoint didn't. Added to match.
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (!COUNTER_OFFERS_SECRET || secret !== COUNTER_OFFERS_SECRET) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
     const previousOfferId = asText(req.params.id);
     const proposedPrice = Number(req.body?.price);
 
@@ -8729,12 +8918,20 @@ app.post("/api/consignment/offers/:id/consignor-counter", async (req, res) => {
 
     let discordResult = null;
 
+    // NEW — proactive no-room check: after this counter, would the
+    // store have any valid step left to respond with?
+    const storeOwnPositionForRoomCheck = Number(previousOffer.store_counter_price);
+    const noRoomToCounter =
+      Number.isFinite(proposedInStoreTerms) &&
+      !hasRoomForNextStep(storeOwnPositionForRoomCheck, proposedInStoreTerms);
+
     try {
       discordResult = await postConsignmentCounterStoreOffer({
         offer: newOffer,
         orderFields,
         storeOfferPrice: proposedInStoreTerms,
-        storeOfferVatType: getStoreOfferVatTypeFromConsignmentVat(previousOffer.vat_type, clientCountry)
+        storeOfferVatType: getStoreOfferVatTypeFromConsignmentVat(previousOffer.vat_type, clientCountry),
+        noRoomToCounter
       });
 
       await supabase
@@ -8753,6 +8950,182 @@ app.post("/api/consignment/offers/:id/consignor-counter", async (req, res) => {
   } catch (err) {
     console.error("Failed to process consignment consignor-counter:", err);
     res.status(500).json({ error: "Failed to process consignor counter", details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: shared edit endpoint for Consignment, mirroring
+// Store Orders/Member WTB exactly — same chain-aware own-reference
+// lookup for both directions, same min-step rule as countering.
+// ---------------------------------------------------------------------
+app.post("/api/consignment/offers/:id/edit", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (!COUNTER_OFFERS_SECRET || secret !== COUNTER_OFFERS_SECRET) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const recordId = asText(req.params.id);
+    const proposedPrice = Number(req.body?.price);
+
+    if (!Number.isFinite(proposedPrice) || proposedPrice <= 0) {
+      return res.status(400).json({ error: "Invalid counter price" });
+    }
+
+    const { data: offer, error: fetchError } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("id", recordId)
+      .single();
+
+    if (fetchError || !offer) {
+      return res.status(404).json({ error: "Offer not found." });
+    }
+
+    if (offer.status !== "open" && offer.status !== "store_pending") {
+      return res.status(409).json({ error: "This counter offer is no longer open." });
+    }
+
+    if (!offer.previous_offer_id) {
+      return res.status(409).json({ error: "Editing isn't supported for the very first counter yet." });
+    }
+
+    const { data: previousOffer, error: prevError } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("id", offer.previous_offer_id)
+      .single();
+
+    if (prevError || !previousOffer) {
+      return res.status(500).json({ error: "Could not find the previous round." });
+    }
+
+    const orderRecord = await airtable(ORDERS_TABLE).find(offer.order_record_id);
+    const orderFields = orderRecord.fields || {};
+    const clientCountry = asText(orderFields["Client Country"]);
+
+    const hasStoreCounter = Number(offer.store_counter_price) > 0;
+
+    let ownReference;
+    let counterpart;
+
+    if (hasStoreCounter) {
+      // Store editing — same chain-aware own-reference lookup as the
+      // store-counter endpoint.
+      ownReference = Number(previousOffer.store_counter_price);
+
+      if (!(ownReference > 0) && previousOffer.previous_offer_id) {
+        const { data: grandparent } = await supabase
+          .from("consignment_offers")
+          .select("store_counter_price")
+          .eq("id", previousOffer.previous_offer_id)
+          .single();
+        ownReference = Number(grandparent?.store_counter_price) || null;
+      }
+
+      const consignorBase = convertConsignorPriceToStoreBasePrice(
+        Number(previousOffer.consignor_counter_price),
+        offer.vat_type,
+        clientCountry
+      );
+      counterpart = calculateStoreCustomOfferFromConsignmentBase(consignorBase, orderFields);
+    } else {
+      // Consignor editing — own reference is one hop further back (the
+      // round being responded to is always store-placed, so it never
+      // carries the consignor's own reference itself).
+      if (!previousOffer.previous_offer_id) {
+        return res.status(500).json({ error: "Could not determine the consignor's previous counter." });
+      }
+
+      const { data: grandparent } = await supabase
+        .from("consignment_offers")
+        .select("consignor_counter_price")
+        .eq("id", previousOffer.previous_offer_id)
+        .single();
+
+      ownReference = Number(grandparent?.consignor_counter_price) || null;
+
+      const storeBase = calculateConsignmentBaseFromStoreOffer(
+        Number(previousOffer.store_counter_price),
+        orderFields
+      );
+      counterpart = convertStoreBasePriceToConsignorPrice(storeBase, offer.vat_type, clientCountry);
+    }
+
+    if (!Number.isFinite(ownReference) || !Number.isFinite(counterpart)) {
+      return res.status(500).json({ error: "Could not compute reference prices for this edit." });
+    }
+
+    const validation = validateNextCounterPrice(ownReference, counterpart, proposedPrice);
+    if (!validation.ok) {
+      return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    const nowIso = new Date().toISOString();
+
+    if (hasStoreCounter) {
+      const proposedExclVat = getStoreOfferVatTypeFromConsignmentVat(offer.vat_type, clientCountry) === "VAT21"
+        ? Math.round((proposedPrice / 1.21) * 100) / 100
+        : proposedPrice;
+
+      await supabase
+        .from("consignment_offers")
+        .update({
+          store_counter_price: proposedPrice,
+          store_counter_price_excl_vat: proposedExclVat,
+          updated_at: nowIso
+        })
+        .eq("id", recordId);
+
+      try {
+        await sendConsignmentCounterOfferDiscordMessage({
+          offer: { ...offer, store_counter_price: proposedPrice },
+          storeOfferPrice: proposedPrice,
+          storeOfferVatType: getStoreOfferVatTypeFromConsignmentVat(offer.vat_type, clientCountry),
+          yourPreviousCounter: Number(previousOffer.consignor_counter_price)
+        });
+      } catch (err) {
+        console.error("Failed to notify consignor of edited counter (non-blocking):", err);
+      }
+    } else {
+      const storeBaseForProposed = convertConsignorPriceToStoreBasePrice(proposedPrice, offer.vat_type, clientCountry);
+      const proposedInStoreTerms = calculateStoreCustomOfferFromConsignmentBase(storeBaseForProposed, orderFields);
+      const proposedInStoreTermsExclVat = getStoreOfferVatTypeFromConsignmentVat(offer.vat_type, clientCountry) === "VAT21"
+        ? Math.round((proposedInStoreTerms / 1.21) * 100) / 100
+        : proposedInStoreTerms;
+
+      if (!Number.isFinite(proposedInStoreTerms)) {
+        return res.status(500).json({ error: "Could not compute a valid store price for this counter." });
+      }
+
+      await supabase
+        .from("consignment_offers")
+        .update({
+          consignor_counter_price: proposedPrice,
+          consignor_counter_store_price: proposedInStoreTerms,
+          consignor_counter_store_price_excl_vat: proposedInStoreTermsExclVat,
+          consignor_counter_at: nowIso,
+          updated_at: nowIso
+        })
+        .eq("id", recordId);
+
+      try {
+        await postConsignmentCounterStoreOffer({
+          offer: { ...offer, consignor_counter_price: proposedPrice },
+          orderFields,
+          storeOfferPrice: proposedInStoreTerms,
+          storeOfferVatType: getStoreOfferVatTypeFromConsignmentVat(offer.vat_type, clientCountry)
+        });
+      } catch (err) {
+        console.error("Failed to notify store of edited counter (non-blocking):", err);
+      }
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to edit consignment offer:", err);
+    res.status(500).json({ error: "Failed to edit counter offer", details: err.message });
   }
 });
 
@@ -8981,6 +9354,70 @@ app.post("/api/consignment/offers/:id/store-deny", async (req, res) => {
       return res.status(409).json({
         error: "Counter offer is no longer pending"
       });
+    }
+
+    // NEW — additive only: same reopen-prior-round pattern as the other
+    // direction and the other two flows. The denied round (consignor's
+    // counter) was itself responding to a STORE round (if any) —
+    // reopen it and resend the standard consignor-facing notification
+    // so the consignor can accept it or try a lower counter.
+    try {
+      if (offer.previous_offer_id) {
+        const { data: priorOffer, error: priorFetchError } = await supabase
+          .from("consignment_offers")
+          .select("*")
+          .eq("id", offer.previous_offer_id)
+          .single();
+
+        if (priorFetchError) {
+          console.error("Consignment reopen: failed to fetch prior offer:", offer.previous_offer_id, priorFetchError);
+        }
+
+        if (priorOffer) {
+          const { error: reopenUpdateError } = await supabase
+            .from("consignment_offers")
+            .update({ status: "open" })
+            .eq("id", priorOffer.id);
+
+          if (reopenUpdateError) {
+            console.error("Consignment reopen: failed to set prior offer status to open:", priorOffer.id, reopenUpdateError);
+          }
+
+          let consignorOwnPreviousPosition = null;
+
+          if (priorOffer.previous_offer_id) {
+            const { data: grandparentOffer, error: grandparentError } = await supabase
+              .from("consignment_offers")
+              .select("consignor_counter_price")
+              .eq("id", priorOffer.previous_offer_id)
+              .single();
+
+            if (grandparentError) {
+              console.error("Consignment reopen: failed to fetch grandparent offer:", priorOffer.previous_offer_id, grandparentError);
+            }
+
+            consignorOwnPreviousPosition = Number(grandparentOffer?.consignor_counter_price) || null;
+          }
+
+          console.log("Consignment reopen: sending re-notification for prior offer:", priorOffer.id);
+
+          await sendConsignmentCounterOfferDiscordMessage({
+            offer: priorOffer,
+            storeOfferPrice: Number(priorOffer.store_counter_price),
+            storeOfferVatType: null,
+            yourPreviousCounter: consignorOwnPreviousPosition,
+            deniedAmount: Number(offer.consignor_counter_price)
+          });
+
+          console.log("Consignment reopen: re-notification sent successfully for:", priorOffer.id);
+        } else {
+          console.error("Consignment reopen: priorOffer not found (no error, but empty result) for id:", offer.previous_offer_id);
+        }
+      } else {
+        console.log("Consignment reopen: no previous_offer_id on denied offer, nothing to reopen:", offer.id);
+      }
+    } catch (reopenErr) {
+      console.error("Failed to reopen prior round after consignment store-deny (non-blocking):", reopenErr);
     }
 
     res.json({
@@ -9953,7 +10390,9 @@ async function postConsignmentCounterStoreOffer({
   offer,
   orderFields,
   storeOfferPrice,
-  storeOfferVatType
+  storeOfferVatType,
+  noRoomToCounter,
+  deniedAmount
 }) {
   const secret = COUNTER_OFFERS_SECRET || process.env.COUNTER_OFFERS_SECRET || "";
 
@@ -9992,7 +10431,9 @@ async function postConsignmentCounterStoreOffer({
       store_offer_vat_type: storeOfferVatType,
 
       consignor_counter_price: Number(offer.consignor_counter_price),
-      consignor_vat_type: offer.vat_type
+      consignor_vat_type: offer.vat_type,
+      no_room_to_counter: !!noRoomToCounter,
+      denied_amount: deniedAmount ?? null
     })
   });
 
