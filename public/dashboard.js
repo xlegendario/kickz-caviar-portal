@@ -29,7 +29,7 @@ const dashboardConfig = {
     label: "Consignment",
     tabs: [
       { key: "inventory", label: "Inventory" },
-      { key: "offers", label: "Offers" },
+      { key: "offers", label: "Offers", statusFilters: ["open", "counter", "denied"] },
       { key: "confirmed", label: "Confirmed" },
       { key: "label_requested", label: "Label Requested" },
       { key: "ready_to_ship", label: "Ready To Ship" },
@@ -101,6 +101,15 @@ const consignmentOfferColumns = [
 let dashboardSeller = JSON.parse(localStorage.getItem("kc_seller") || "null");
 let activeSection = localStorage.getItem("kc_dashboard_section") || "quick";
 let activeTab = localStorage.getItem("kc_dashboard_tab") || "open_claims";
+// NEW — additive only: which status pill (open/counter/denied) is
+// active, for any tab that has statusFilters configured. Shared across
+// sections/tabs — each tab's own fetch reads this when building its
+// request, and switching tabs resets it back to "open".
+let activeOfferStatusFilter = "open";
+// NEW — additive only: pill counts (per section:tab, per status), kept
+// entirely separate from dashboardCountsCache so they never get summed
+// into that object's section totals (see setConsignmentCount).
+let dashboardPillCountsCache = {};
 
 const dashboardTitle = document.getElementById("dashboardTitle");
 const dashboardSellerName = document.getElementById("dashboardSellerName");
@@ -117,6 +126,7 @@ const dashboardStats = document.getElementById("dashboardStats");
 const dashboardStatsToggle = document.getElementById("dashboardStatsToggle");
 const dashboardSubtabTitle = document.getElementById("dashboardSubtabTitle");
 const dashboardSubtabDescription = document.getElementById("dashboardSubtabDescription");
+const dashboardPillRow = document.getElementById("dashboardPillRow");
 const dashboardTableHead = document.getElementById("dashboardTableHead");
 const dashboardTableBody = document.getElementById("dashboardTableBody");
 const dashboardRefreshBtn = document.getElementById("dashboardRefreshBtn");
@@ -262,6 +272,7 @@ function bindNavigation() {
 function setActiveView(section, tab) {
   activeSection = safeSection(section);
   activeTab = safeTab(activeSection, tab);
+  activeOfferStatusFilter = "open";
 
   localStorage.setItem("kc_dashboard_section", activeSection);
   localStorage.setItem("kc_dashboard_tab", activeTab);
@@ -271,6 +282,62 @@ function setActiveView(section, tab) {
 
 function getActiveTabConfig() {
   return dashboardConfig[activeSection].tabs.find((tab) => tab.key === activeTab);
+}
+
+// NEW — additive only: generic pill row for any tab with statusFilters
+// configured (currently just consignment's merged "Offers" tab; the
+// same mechanism will be reused for the other sections next). Pill
+// labels/counts are generic across all statusFilters tabs — the count
+// per pill comes from the same fetch as the active pill's data, so an
+// inactive pill's count only updates once you've visited it at least
+// once this session (avoiding N extra requests just to show numbers
+// you haven't asked to see yet).
+const pillLabels = { open: "Open", counter: "Counter", denied: "Denied" };
+
+function renderPillRow(tabConfig) {
+  if (!tabConfig?.statusFilters?.length) {
+    dashboardPillRow.classList.add("hidden");
+    dashboardPillRow.innerHTML = "";
+    return;
+  }
+
+  dashboardPillRow.classList.remove("hidden");
+
+  dashboardPillRow.innerHTML = tabConfig.statusFilters.map((statusKey) => {
+    const countKey = `${activeSection}:${activeTab}:${statusKey}`;
+    const count = dashboardPillCountsCache?.[`${activeSection}:${activeTab}`]?.[statusKey] ?? "";
+
+    return `
+      <button
+        class="dashboard-pill-btn ${statusKey === activeOfferStatusFilter ? "active" : ""}"
+        type="button"
+        data-status-filter="${statusKey}"
+      >
+        <span>${pillLabels[statusKey] || statusKey}</span>
+        <span class="dashboard-pill-count" data-pill-count-key="${countKey}">${count}</span>
+      </button>
+    `;
+  }).join("");
+
+  dashboardPillRow.querySelectorAll("[data-status-filter]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (btn.dataset.statusFilter === activeOfferStatusFilter) return;
+      activeOfferStatusFilter = btn.dataset.statusFilter;
+      renderPillRow(tabConfig);
+
+      loadDashboardData().catch((err) => {
+        dashboardTableBody.innerHTML = `
+          <tr>
+            <td colspan="${skeletonColumns.length}">
+              <div class="dashboard-empty-state">
+                <strong>${escapeHtml(err.message)}</strong>
+              </div>
+            </td>
+          </tr>
+        `;
+      });
+    });
+  });
 }
 
 function syncDashboardUi() {
@@ -283,6 +350,8 @@ function syncDashboardUi() {
   dashboardTitle.textContent = sectionConfig.label;
   dashboardSubtabTitle.textContent = tabConfig.label;
   dashboardSubtabDescription.textContent = "";
+
+  renderPillRow(tabConfig);
 
   document.querySelectorAll("[data-dashboard-section]").forEach((button) => {
     const isActiveSection = button.dataset.dashboardSection === activeSection;
@@ -983,6 +1052,52 @@ function renderConsignmentOfferRows(items) {
   dashboardTableBody
     .closest(".dashboard-table")
     ?.classList.remove("open-offers-table");
+
+  // NEW — additive only: denied offers are closed, so the existing
+  // Accept/Counter/Deny action row (built for open/counter items,
+  // below) doesn't apply — those buttons would just fail against a
+  // no-longer-open record. Renders a simpler read-only table instead
+  // and returns early, leaving the rest of this function untouched for
+  // the open/counter filters.
+  if (activeOfferStatusFilter === "denied") {
+    setMobileTableMode(false);
+
+    const deniedColumns = ["Order ID", "Product", "SKU", "Size", "Brand", "Your Price", "Offer", "VAT Type", "Denied"];
+
+    dashboardTableHead.innerHTML = deniedColumns
+      .map((column) => `<th>${column}</th>`)
+      .join("");
+
+    if (!items.length) {
+      dashboardTableBody.innerHTML = `
+        <tr>
+          <td colspan="${deniedColumns.length}">
+            <div class="dashboard-empty-state">
+              <div class="dashboard-empty-icon">◇</div>
+              <strong>No denied offers</strong>
+            </div>
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    dashboardTableBody.innerHTML = items.map((item) => `
+      <tr>
+        <td>${escapeHtml(item.order_id || "-")}</td>
+        <td>${escapeHtml(item.product_name || "-")}</td>
+        <td>${escapeHtml(item.sku || "-")}</td>
+        <td>${escapeHtml(item.size || "-")}</td>
+        <td>${escapeHtml(item.brand || "-")}</td>
+        <td>${item.seller_price ? `€${escapeHtml(item.seller_price)}` : "-"}</td>
+        <td>${item.offer_price ? `€${escapeHtml(item.offer_price)}` : "-"}</td>
+        <td>${escapeHtml(item.vat_type || "-")}</td>
+        <td>${item.denied_at ? escapeHtml(new Date(item.denied_at).toLocaleDateString("en-GB")) : "-"}</td>
+      </tr>
+    `).join("");
+
+    return;
+  }
 
   dashboardTableHead.innerHTML = consignmentOfferColumns
     .map((column) => `<th>${column}</th>`)
@@ -2989,7 +3104,8 @@ async function loadDashboardData() {
     `;
   
     const params = new URLSearchParams({
-      seller_record_id: dashboardSeller.id
+      seller_record_id: dashboardSeller.id,
+      filter: activeOfferStatusFilter
     });
   
     const response = await fetch(
@@ -3008,7 +3124,27 @@ async function loadDashboardData() {
   
     renderConsignmentOfferRows(data.items || []);
   
-    setConsignmentCount("offers", data.count || 0);
+    // FIXED — must NOT write into dashboardCountsCache.consignment
+    // directly: that object gets summed for the sidebar's total badge
+    // (see setConsignmentCount), so adding offers_counter/offers_denied
+    // keys there would inflate that total. Pill counts live in their
+    // own cache instead; the legacy "offers" key (sidebar total, via
+    // setConsignmentCount) only updates from the Open count, same as
+    // before this pill row existed.
+    dashboardPillCountsCache["consignment:offers"] = {
+      ...(dashboardPillCountsCache["consignment:offers"] || {}),
+      [activeOfferStatusFilter]: data.count || 0
+    };
+
+    if (activeOfferStatusFilter === "open") {
+      setConsignmentCount("offers", data.count || 0);
+    }
+
+    document
+      .querySelectorAll(`[data-pill-count-key="consignment:offers:${activeOfferStatusFilter}"]`)
+      .forEach((el) => {
+        el.textContent = data.count || 0;
+      });
   
     return;
   }
