@@ -3395,6 +3395,11 @@ function bindConsignmentDiscordButtons(client) {
     if (customId.startsWith("consignment_counter_accept:")) {
       const offerId = customId.split(":")[1];
 
+      // FIXED — same 3-second-acknowledgment issue found and fixed
+      // elsewhere this session: this did slow work (a fetch to another
+      // service) before ever acknowledging the interaction.
+      await interaction.deferUpdate().catch(() => {});
+
       const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/consignment/offers/${offerId}/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" }
@@ -3422,6 +3427,9 @@ function bindConsignmentDiscordButtons(client) {
 
     if (customId.startsWith("consignment_counter_deny:")) {
       const offerId = customId.split(":")[1];
+
+      // FIXED — same 3-second-acknowledgment issue.
+      await interaction.deferUpdate().catch(() => {});
 
       const { data: deniedOffer, error: deniedFetchError } = await supabase
         .from("consignment_offers")
@@ -3941,6 +3949,9 @@ function bindConsignmentDiscordButtons(client) {
     if (customId.startsWith("member_wtb_counter_accept:")) {
       const counterOfferRecordId = customId.split(":")[1];
 
+      // FIXED — same 3-second-acknowledgment issue.
+      await interaction.deferUpdate().catch(() => {});
+
       const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
       const f = counterOffer.fields || {};
 
@@ -4030,6 +4041,9 @@ function bindConsignmentDiscordButtons(client) {
     // logic yet) — that comes with the full back-and-forth build next.
     if (customId.startsWith("member_wtb_counter_deny:")) {
       const counterOfferRecordId = customId.split(":")[1];
+
+      // FIXED — same 3-second-acknowledgment issue.
+      await interaction.deferUpdate().catch(() => {});
 
       const deniedRecord = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
       const deniedFields = deniedRecord.fields || {};
@@ -4205,6 +4219,9 @@ function bindConsignmentDiscordButtons(client) {
     if (customId.startsWith("member_wtb_buyer_counter_accept:")) {
       const counterOfferRecordId = customId.split(":")[1];
 
+      // FIXED — same 3-second-acknowledgment issue.
+      await interaction.deferUpdate().catch(() => {});
+
       const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
       const f = counterOffer.fields || {};
 
@@ -4299,6 +4316,9 @@ function bindConsignmentDiscordButtons(client) {
     // simple for this stage (no reopen-prior-round logic yet).
     if (customId.startsWith("member_wtb_buyer_counter_deny:")) {
       const counterOfferRecordId = customId.split(":")[1];
+
+      // FIXED — same 3-second-acknowledgment issue.
+      await interaction.deferUpdate().catch(() => {});
 
       const deniedRecord = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
       const deniedFields = deniedRecord.fields || {};
@@ -4537,6 +4557,9 @@ function bindConsignmentDiscordButtons(client) {
 
     if (customId.startsWith("request_member_wtb_label:")) {
       const memberWtbRecordId = customId.split(":")[1];
+
+      // FIXED — same 3-second-acknowledgment issue.
+      await interaction.deferUpdate().catch(() => {});
       
       const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
       const currentStatus = asText(memberWtb.fields?.["Fulfillment Status"]);
@@ -4627,6 +4650,9 @@ function bindConsignmentDiscordButtons(client) {
 
     if (customId.startsWith("confirm_member_wtb_kc:")) {
       const memberWtbRecordId = customId.split(":")[1];
+
+      // FIXED — same 3-second-acknowledgment issue.
+      await interaction.deferUpdate().catch(() => {});
     
       const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
       const f = memberWtb.fields || {};
@@ -4702,6 +4728,9 @@ function bindConsignmentDiscordButtons(client) {
     
     if (customId.startsWith("deny_member_wtb_kc:")) {
       const memberWtbRecordId = customId.split(":")[1];
+
+      // FIXED — same 3-second-acknowledgment issue.
+      await interaction.deferUpdate().catch(() => {});
     
       const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
       const f = memberWtb.fields || {};
@@ -4752,6 +4781,9 @@ function bindConsignmentDiscordButtons(client) {
 
     if (customId.startsWith("accept_member_wtb_kc_offer:")) {
       const memberWtbRecordId = customId.split(":")[1];
+
+      // FIXED — same 3-second-acknowledgment issue.
+      await interaction.deferUpdate().catch(() => {});
     
       const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
       const f = memberWtb.fields || {};
@@ -5030,6 +5062,9 @@ function bindConsignmentDiscordButtons(client) {
 
     if (customId.startsWith("counter_offer_deny:")) {
       const counterOfferRecordId = customId.split(":")[1];
+
+      // FIXED — same 3-second-acknowledgment issue.
+      await interaction.deferUpdate().catch(() => {});
     
       await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
         "Status": "Denied",
@@ -8476,22 +8511,29 @@ app.get("/api/consignment/offers", async (req, res) => {
         vat_type,
         status,
         is_counter_offer,
+        source_type,
+        member_wtb_record_id,
         denied_at,
         created_at
       `)
       .eq("seller_record_id", sellerRecordId);
 
     if (filter === "counter") {
-      query = query.eq("status", "open").eq("is_counter_offer", true);
+      // FIXED — this must mean "the consignor's OWN counter, currently
+      // awaiting the store" (status=store_pending) — not "anything
+      // that's ever been countered". The earlier is_counter_offer-based
+      // split conflated "store's turn to act" (which belongs in Open,
+      // since the consignor can accept/counter/deny it) with "my turn
+      // to wait", which are opposite things.
+      query = query.eq("status", "store_pending");
     } else if (filter === "denied") {
       query = query.in("status", ["denied", "store_denied"]);
     } else {
-      // "open" — a genuinely fresh offer, never countered. Matches
-      // both is_counter_offer being explicitly false AND it being
-      // unset/null on older rows from before that column was added.
-      query = query
-        .eq("status", "open")
-        .or("is_counter_offer.is.null,is_counter_offer.eq.false");
+      // "open" — anything currently awaiting the CONSIGNOR's action:
+      // a fresh offer they've never responded to, or the store's
+      // counter-back on a round they already responded to once. Either
+      // way, status=open means it's their move.
+      query = query.eq("status", "open");
     }
 
     const { data, error } = await query.order("created_at", { ascending: false });
@@ -9003,6 +9045,153 @@ app.post("/api/consignment/offers/:id/consignor-counter", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
+// NEW — additive only: consignor submits a fresh counter from the
+// Portal's Denied pill, after their counter was denied with nothing to
+// reopen (a genuine dead end — commonly the very first consignor
+// counter, since that one updates the round-1 row in place rather than
+// creating a new row, so it never gets its own previous_offer_id).
+// Portal-triggered only (no Discord RETRY button on this side per his
+// direction) — the store still gets notified the normal way, via the
+// same Discord mechanism used for every other consignor counter.
+// Requires the new counter to be at least MIN_COUNTER_STEP higher than
+// the denied one.
+// ---------------------------------------------------------------------
+app.post("/api/consignment/offers/:id/consignor-retry", async (req, res) => {
+  try {
+    const deniedOfferId = asText(req.params.id);
+    const retryPrice = Number(req.body?.price);
+
+    if (!Number.isFinite(retryPrice) || retryPrice <= 0) {
+      return res.status(400).json({ error: "Invalid counter price" });
+    }
+
+    const { data: deniedOffer, error: fetchError } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("id", deniedOfferId)
+      .single();
+
+    if (fetchError || !deniedOffer) {
+      return res.status(404).json({ error: "Offer not found." });
+    }
+
+    if (deniedOffer.previous_offer_id) {
+      return res.status(409).json({
+        error: "This offer has a prior round to reopen instead — use the normal deny-reopen flow, not retry."
+      });
+    }
+
+    const deniedPrice = Number(deniedOffer.consignor_counter_price);
+
+    if (Number.isFinite(deniedPrice) && retryPrice < deniedPrice + MIN_COUNTER_STEP) {
+      return res.status(400).json({
+        error: `Your new counter must be at least €${MIN_COUNTER_STEP.toFixed(2)} higher than the denied €${deniedPrice.toFixed(2)}.`
+      });
+    }
+
+    const orderRecord = await airtable(ORDERS_TABLE).find(deniedOffer.order_record_id);
+    const orderFields = orderRecord.fields || {};
+    const clientCountry = asText(orderFields["Client Country"]);
+
+    const storeBasePrice = convertConsignorPriceToStoreBasePrice(
+      retryPrice,
+      deniedOffer.vat_type,
+      clientCountry
+    );
+
+    const storeOfferVatType = getStoreOfferVatTypeFromConsignmentVat(
+      deniedOffer.vat_type,
+      clientCountry
+    );
+
+    const storeOfferPrice = calculateStoreCustomOfferFromConsignmentBase(
+      storeBasePrice,
+      orderFields
+    );
+
+    if (!Number.isFinite(storeBasePrice) || !Number.isFinite(storeOfferPrice)) {
+      return res.status(400).json({ error: "Could not calculate store offer price" });
+    }
+
+    const storeOfferPriceExclVat =
+      storeOfferVatType === "VAT21"
+        ? Math.round((storeOfferPrice / 1.21) * 100) / 100
+        : storeOfferPrice;
+
+    const nowIso = new Date().toISOString();
+
+    // Genuinely fresh round — no previous_offer_id, exactly like the
+    // original round-1 counter this replaces.
+    const { data: newOffer, error: createError } = await supabase
+      .from("consignment_offers")
+      .insert({
+        order_record_id: deniedOffer.order_record_id,
+        order_id: deniedOffer.order_id,
+        inventory_id: deniedOffer.inventory_id,
+
+        seller_record_id: deniedOffer.seller_record_id,
+        seller_id: deniedOffer.seller_id,
+
+        product_name: deniedOffer.product_name,
+        sku: deniedOffer.sku,
+        size: deniedOffer.size,
+        brand: deniedOffer.brand,
+
+        vat_type: deniedOffer.vat_type,
+        seller_price: deniedOffer.seller_price,
+        offer_price: deniedOffer.offer_price,
+
+        is_counter_offer: true,
+        consignor_counter_price: retryPrice,
+        consignor_counter_store_price: storeOfferPrice,
+        consignor_counter_store_price_excl_vat: storeOfferPriceExclVat,
+        consignor_counter_at: nowIso,
+
+        status: "store_pending",
+        store_response_status: "pending",
+        created_at: nowIso,
+        updated_at: nowIso
+      })
+      .select()
+      .single();
+
+    if (createError) throw createError;
+
+    const discordResult = await postConsignmentCounterStoreOffer({
+      offer: newOffer,
+      orderFields,
+      storeOfferPrice,
+      storeOfferVatType
+    }).catch((err) => {
+      console.error("Failed to notify store of consignor retry (non-blocking):", err);
+      return null;
+    });
+
+    if (discordResult) {
+      await supabase
+        .from("consignment_offers")
+        .update({
+          store_offer_channel_id: discordResult.channel_id || null,
+          store_offer_message_id: discordResult.message_id || null,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", newOffer.id);
+    }
+
+    res.json({
+      ok: true,
+      new_offer_id: newOffer.id,
+      store_offer_price: storeOfferPrice,
+      store_offer_vat_type: storeOfferVatType,
+      dm_sent: !!discordResult
+    });
+  } catch (err) {
+    console.error("Failed to process consignment consignor-retry:", err);
+    res.status(500).json({ error: "Failed to process consignor retry", details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------
 // NEW — additive only: shared edit endpoint for Consignment, mirroring
 // Store Orders/Member WTB exactly — same chain-aware own-reference
 // lookup for both directions, same min-step rule as countering.
@@ -9307,6 +9496,107 @@ app.post("/api/consignment/offers/:id/confirm", async (req, res) => {
 
     res.status(500).json({
       error: "Failed to confirm consignment offer",
+      details: err.message
+    });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: lets the consignor, while their own counter is
+// still pending (shown in the Portal's Countered pill), fall back to
+// accepting the store's PREVIOUS position instead of waiting on a
+// response that may never come. Reuses the existing, already-verified
+// confirmConsignmentOffer logic on the prior round — this is not a new
+// accept mechanism, just a new way to reach the existing one.
+// ---------------------------------------------------------------------
+app.post("/api/consignment/offers/:id/accept-previous", async (req, res) => {
+  try {
+    const pendingOfferId = asText(req.params.id);
+
+    const { data: pendingOffer, error: fetchError } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("id", pendingOfferId)
+      .single();
+
+    if (fetchError || !pendingOffer) {
+      return res.status(404).json({ error: "Offer not found." });
+    }
+
+    if (pendingOffer.status !== "store_pending") {
+      return res.status(409).json({ error: "This counter is no longer pending." });
+    }
+
+    if (!pendingOffer.previous_offer_id) {
+      return res.status(409).json({ error: "There is no previous offer to accept — this was a fresh counter with nothing before it." });
+    }
+
+    // Abandon the pending counter — the consignor is choosing the
+    // store's earlier position instead, so this one is no longer live.
+    await supabase
+      .from("consignment_offers")
+      .update({ status: "closed", closed_at: new Date().toISOString() })
+      .eq("id", pendingOfferId);
+
+    const result = await confirmConsignmentOffer(pendingOffer.previous_offer_id);
+
+    if (!result.ok) {
+      return res.status(409).json({
+        error: "The store's previous offer is no longer available to accept."
+      });
+    }
+
+    res.json({
+      ok: true,
+      offer: result.offer
+    });
+  } catch (err) {
+    console.error("Failed to accept previous consignment offer:", err);
+
+    res.status(500).json({
+      error: "Failed to accept previous offer",
+      details: err.message
+    });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: lets the consignor remove an item from their
+// Countered or Denied pill that they no longer want to pursue (either
+// their own pending counter, or a denied offer they don't want to
+// retry). Soft-delete only — sets status to "cancelled" rather than
+// destroying the row, so nothing downstream that might reference this
+// record (audit trail, etc.) breaks.
+// ---------------------------------------------------------------------
+app.post("/api/consignment/offers/:id/cancel", async (req, res) => {
+  try {
+    const offerId = asText(req.params.id);
+
+    const { data: offer, error: fetchError } = await supabase
+      .from("consignment_offers")
+      .select("id, status")
+      .eq("id", offerId)
+      .single();
+
+    if (fetchError || !offer) {
+      return res.status(404).json({ error: "Offer not found." });
+    }
+
+    if (!["store_pending", "denied", "store_denied"].includes(offer.status)) {
+      return res.status(409).json({ error: "Only a pending counter or a denied offer can be cancelled." });
+    }
+
+    await supabase
+      .from("consignment_offers")
+      .update({ status: "cancelled", closed_at: new Date().toISOString() })
+      .eq("id", offerId);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to cancel consignment offer:", err);
+
+    res.status(500).json({
+      error: "Failed to cancel offer",
       details: err.message
     });
   }
