@@ -5132,6 +5132,19 @@ function bindConsignmentDiscordButtons(client) {
     
     if (customId.startsWith("counter_offer_accept:")) {
       const counterOfferRecordId = customId.split(":")[1];
+
+      // FIXED — same class of bug found and fixed earlier this session
+      // elsewhere: this handler does a long chain of slow, sequential
+      // work (multiple Airtable reads/writes, an external webhook call)
+      // before ever acknowledging the interaction. Discord shows "The
+      // application didn't respond in time" to the user once that
+      // takes longer than ~3 seconds — even though the code keeps
+      // running and succeeds anyway, exactly what was reported (channel
+      // got created fine, but the error still showed). Acknowledging
+      // immediately here removes that race entirely; disableCounter-
+      // OfferDiscordButtons further down edits the message directly via
+      // the REST API, independent of this deferral, so it's unaffected.
+      await interaction.deferUpdate().catch(() => {});
     
       const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
       const f = counterOffer.fields || {};
