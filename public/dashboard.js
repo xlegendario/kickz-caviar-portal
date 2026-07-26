@@ -1053,52 +1053,110 @@ function renderConsignmentOfferRows(items) {
     .closest(".dashboard-table")
     ?.classList.remove("open-offers-table");
 
-  // NEW — additive only: denied offers are closed, so the existing
-  // Accept/Counter/Deny action row (built for open/counter items,
-  // below) doesn't apply — those buttons would just fail against a
-  // no-longer-open record. Renders a simpler read-only table instead
-  // and returns early, leaving the rest of this function untouched for
-  // the open/counter filters.
+  setMobileTableMode(false);
+
+  // NEW — additive only: three distinct pill renderers. Kept as one
+  // simple table for all screen sizes for now (no mobile-card split) —
+  // a full mobile-friendly redesign is planned as a separate pass.
+
   if (activeOfferStatusFilter === "denied") {
-    setMobileTableMode(false);
+    const deniedColumns = ["Order ID", "Product", "SKU", "Size", "Brand", "Your Counter", "Denied", "Actions"];
 
-    const deniedColumns = ["Order ID", "Product", "SKU", "Size", "Brand", "Your Price", "Offer", "VAT Type", "Denied"];
-
-    dashboardTableHead.innerHTML = deniedColumns
-      .map((column) => `<th>${column}</th>`)
-      .join("");
+    dashboardTableHead.innerHTML = deniedColumns.map((c) => `<th>${c}</th>`).join("");
 
     if (!items.length) {
       dashboardTableBody.innerHTML = `
-        <tr>
-          <td colspan="${deniedColumns.length}">
-            <div class="dashboard-empty-state">
-              <div class="dashboard-empty-icon">◇</div>
-              <strong>No denied offers</strong>
-            </div>
-          </td>
-        </tr>
+        <tr><td colspan="${deniedColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No denied offers</strong>
+          </div>
+        </td></tr>
       `;
       return;
     }
 
-    dashboardTableBody.innerHTML = items.map((item) => `
-      <tr>
-        <td>${escapeHtml(item.order_id || "-")}</td>
-        <td>${escapeHtml(item.product_name || "-")}</td>
-        <td>${escapeHtml(item.sku || "-")}</td>
-        <td>${escapeHtml(item.size || "-")}</td>
-        <td>${escapeHtml(item.brand || "-")}</td>
-        <td>${item.seller_price ? `€${escapeHtml(item.seller_price)}` : "-"}</td>
-        <td>${item.offer_price ? `€${escapeHtml(item.offer_price)}` : "-"}</td>
-        <td>${escapeHtml(item.vat_type || "-")}</td>
-        <td>${item.denied_at ? escapeHtml(new Date(item.denied_at).toLocaleDateString("en-GB")) : "-"}</td>
-      </tr>
-    `).join("");
+    dashboardTableBody.innerHTML = items.map((item) => {
+      // A denied item that DOES have a previous_offer_id already got
+      // auto-reopened onto that prior round (visible in Open/Countered
+      // now) — retrying here would create a confusing second thread,
+      // so only offer Retry for genuine dead ends.
+      const canRetry = !item.previous_offer_id;
+
+      return `
+        <tr>
+          <td>${escapeHtml(item.order_id || "-")}</td>
+          <td>${escapeHtml(item.product_name || "-")}</td>
+          <td>${escapeHtml(item.sku || "-")}</td>
+          <td>${escapeHtml(item.size || "-")}</td>
+          <td>${escapeHtml(item.brand || "-")}</td>
+          <td>${item.consignor_counter_price ? `€${escapeHtml(item.consignor_counter_price)}` : "-"}</td>
+          <td>${item.denied_at ? escapeHtml(new Date(item.denied_at).toLocaleDateString("en-GB")) : "-"}</td>
+          <td>
+            <div class="dashboard-action-row">
+              ${canRetry ? `
+                <button class="dashboard-confirm-btn" type="button" data-consignment-retry-offer-id="${escapeHtml(item.id || "")}">Retry</button>
+              ` : ""}
+              <button class="dashboard-deny-btn" type="button" data-consignment-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join("");
 
     return;
   }
 
+  if (activeOfferStatusFilter === "counter") {
+    const counterColumns = ["Order ID", "Product", "SKU", "Size", "Brand", "Your Counter", "Actions"];
+
+    dashboardTableHead.innerHTML = counterColumns.map((c) => `<th>${c}</th>`).join("");
+
+    if (!items.length) {
+      dashboardTableBody.innerHTML = `
+        <tr><td colspan="${counterColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>No pending counters</strong>
+          </div>
+        </td></tr>
+      `;
+      return;
+    }
+
+    dashboardTableBody.innerHTML = items.map((item) => {
+      // Edit and Accept-Previous both need a prior round to work
+      // against — the very first counter (created via Retry, or a
+      // legacy single-row round) has neither.
+      const hasPrior = !!item.previous_offer_id;
+
+      return `
+        <tr>
+          <td>${escapeHtml(item.order_id || "-")}</td>
+          <td>${escapeHtml(item.product_name || "-")}</td>
+          <td>${escapeHtml(item.sku || "-")}</td>
+          <td>${escapeHtml(item.size || "-")}</td>
+          <td>${escapeHtml(item.brand || "-")}</td>
+          <td>${item.consignor_counter_price ? `€${escapeHtml(item.consignor_counter_price)}` : "-"}</td>
+          <td>
+            <div class="dashboard-action-row">
+              ${hasPrior ? `
+                <button class="dashboard-counter-btn" type="button" data-consignment-offer-edit-id="${escapeHtml(item.id || "")}">Edit</button>
+                <button class="dashboard-confirm-btn" type="button" data-consignment-accept-previous-id="${escapeHtml(item.id || "")}">Accept Previous</button>
+              ` : ""}
+              <button class="dashboard-deny-btn" type="button" data-consignment-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    return;
+  }
+
+  // "open" — awaiting the consignor's own action: accept, counter
+  // (unless it's a Member Buy/Offer item, which never supports
+  // countering — matches the Discord behavior exactly), or deny.
   dashboardTableHead.innerHTML = consignmentOfferColumns
     .map((column) => `<th>${column}</th>`)
     .join("");
@@ -1118,65 +1176,10 @@ function renderConsignmentOfferRows(items) {
     return;
   }
 
-  if (isMobileDashboard()) {
-    renderMobileOrderCards(items, {
-      primaryLabel: "Your Price",
-      primaryValue: (item) =>
-        item.seller_price ? `€${item.seller_price}` : "-",
-      secondaryLabel: (items[0] && Number(items[0].offer_price || 0) < Number(items[0].seller_price || 0))
-        ? "Our Offer"
-        : "Matched At",
-      secondaryValue: (item) =>
-        item.offer_price ? `€${item.offer_price}` : "-",
-      actions: (item) => `
-        <button
-          class="dashboard-mobile-btn dashboard-mobile-confirm-btn"
-          type="button"
-          data-consignment-confirm-offer-id="${escapeHtml(item.id || "")}"
-        >
-          ${
-            Number(item.offer_price || 0) < Number(item.seller_price || 0)
-              ? "Accept"
-              : "Confirm"
-          }
-        </button>
+  dashboardTableBody.innerHTML = items.map((item) => {
+    const canCounter = item.source_type !== "member_wtb";
 
-        ${
-          Number(item.offer_price || 0) < Number(item.seller_price || 0)
-            ? `
-              <button
-                class="dashboard-mobile-btn dashboard-mobile-discord-btn"
-                type="button"
-                data-consignment-counter-offer-id="${escapeHtml(item.id || "")}"
-              >
-                Counter
-              </button>
-            `
-            : ""
-        }
-  
-        <button
-          class="dashboard-mobile-btn dashboard-mobile-deny-btn"
-          type="button"
-          data-consignment-deny-offer-id="${escapeHtml(item.id || "")}"
-        >
-          Deny
-        </button>
-      `
-    });
-  
-    dashboardTableBody.querySelectorAll(".dashboard-mobile-product")
-      .forEach((el, index) => {
-        const item = items[index];
-        el.textContent = item.product_name || "-";
-      });
-  
-    return;
-  }
-
-  setMobileTableMode(false);
-
-  dashboardTableBody.innerHTML = items.map((item) => `
+    return `
     <tr>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.product_name || "-")}</td>
@@ -1193,27 +1196,20 @@ function renderConsignmentOfferRows(items) {
             type="button"
             data-consignment-confirm-offer-id="${escapeHtml(item.id || "")}"
           >
-            ${
-              Number(item.offer_price || 0) < Number(item.seller_price || 0)
-                ? "Accept"
-                : "Confirm"
-            }
+            Accept
           </button>
-        
-          ${
-            Number(item.offer_price || 0) < Number(item.seller_price || 0)
-              ? `
-                <button
-                  class="dashboard-counter-btn"
-                  type="button"
-                  data-consignment-counter-offer-id="${escapeHtml(item.id || "")}"
-                >
-                  Counter
-                </button>
-              `
-              : ""
-          }
-          
+
+          ${canCounter ? `
+            <button
+              class="dashboard-counter-btn"
+              type="button"
+              data-consignment-counter-offer-id="${escapeHtml(item.id || "")}"
+              data-is-counter-offer="${item.is_counter_offer ? "true" : "false"}"
+            >
+              Counter
+            </button>
+          ` : ""}
+
           <button
             class="dashboard-deny-btn"
             type="button"
@@ -1224,7 +1220,8 @@ function renderConsignmentOfferRows(items) {
         </div>
       </td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
 }
 
 function renderBuyingPaymentAction(item) {
@@ -4392,7 +4389,13 @@ dashboardTableBody.addEventListener("click", async (event) => {
 
     if (consignmentCounterOfferButton) {
       const offerId = consignmentCounterOfferButton.dataset.consignmentCounterOfferId;
-    
+      // FIXED — this always called /counter, even when responding to a
+      // store's counter-back (is_counter_offer=true on the item),
+      // which needs /consignor-counter instead (a different endpoint
+      // that creates a new chained round rather than updating round 1
+      // in place).
+      const isStoreCounterBack = consignmentCounterOfferButton.dataset.isCounterOffer === "true";
+
       const raw = window.prompt("Enter your requested payout. Example: 250");
     
       if (!raw) return;
@@ -4412,14 +4415,17 @@ dashboardTableBody.addEventListener("click", async (event) => {
       consignmentCounterOfferButton.textContent = "Sending...";
     
       try {
-        const response = await fetch(`/api/consignment/offers/${offerId}/counter`, {
+        const endpoint = isStoreCounterBack ? "consignor-counter" : "counter";
+
+        const response = await fetch(`/api/consignment/offers/${offerId}/${endpoint}`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
             seller_record_id: dashboardSeller.id,
-            counter_price: counterPrice
+            counter_price: counterPrice,
+            price: counterPrice
           })
         });
     
@@ -4514,6 +4520,178 @@ dashboardTableBody.addEventListener("click", async (event) => {
   
       return;
     }
+
+    // NEW — additive only: Edit a pending counter (Countered pill).
+    const consignmentOfferEditButton = event.target.closest("[data-consignment-offer-edit-id]");
+
+    if (consignmentOfferEditButton) {
+      const offerId = consignmentOfferEditButton.dataset.consignmentOfferEditId;
+
+      const raw = window.prompt("Enter your new counter. Example: 250");
+      if (!raw) return;
+
+      const newPrice = Number(String(raw).replace(/[^\d.,-]/g, "").replace(",", "."));
+
+      if (!Number.isFinite(newPrice) || newPrice <= 0) {
+        alert("Please enter a valid price. Example: 250");
+        return;
+      }
+
+      consignmentOfferEditButton.disabled = true;
+      consignmentOfferEditButton.textContent = "Saving...";
+
+      try {
+        const response = await fetch(`/api/consignment/offers/${offerId}/edit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            seller_record_id: dashboardSeller.id,
+            price: newPrice
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.details || data.error || "Failed to update your counter");
+        }
+
+        await loadDashboardData();
+        await loadDashboardCounts();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        consignmentOfferEditButton.disabled = false;
+        consignmentOfferEditButton.textContent = "Edit";
+      }
+
+      return;
+    }
+
+    // NEW — additive only: fall back to accepting the store's previous
+    // position instead of waiting on a response to your own pending
+    // counter (Countered pill).
+    const consignmentAcceptPreviousButton = event.target.closest("[data-consignment-accept-previous-id]");
+
+    if (consignmentAcceptPreviousButton) {
+      const offerId = consignmentAcceptPreviousButton.dataset.consignmentAcceptPreviousId;
+
+      if (!confirm("Accept the store's previous offer instead of waiting for a response to your counter?")) {
+        return;
+      }
+
+      consignmentAcceptPreviousButton.disabled = true;
+      consignmentAcceptPreviousButton.textContent = "Accepting...";
+
+      try {
+        const response = await fetch(`/api/consignment/offers/${offerId}/accept-previous`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ seller_record_id: dashboardSeller.id })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.details || data.error || "Failed to accept the previous offer");
+        }
+
+        await loadDashboardData();
+        await loadDashboardCounts();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        consignmentAcceptPreviousButton.disabled = false;
+        consignmentAcceptPreviousButton.textContent = "Accept Previous";
+      }
+
+      return;
+    }
+
+    // NEW — additive only: soft-delete a pending counter (Countered)
+    // or a denied offer (Denied) the seller no longer wants to pursue.
+    const consignmentCancelOfferButton = event.target.closest("[data-consignment-cancel-offer-id]");
+
+    if (consignmentCancelOfferButton) {
+      const offerId = consignmentCancelOfferButton.dataset.consignmentCancelOfferId;
+
+      if (!confirm("Remove this offer? This can't be undone.")) return;
+
+      consignmentCancelOfferButton.disabled = true;
+
+      try {
+        const response = await fetch(`/api/consignment/offers/${offerId}/cancel`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ seller_record_id: dashboardSeller.id })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.details || data.error || "Failed to remove offer");
+        }
+
+        await loadDashboardData();
+        await loadDashboardCounts();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        consignmentCancelOfferButton.disabled = false;
+      }
+
+      return;
+    }
+
+    // NEW — additive only: Retry from the Denied pill — a fresh
+    // counter after a dead-end denial, must be higher than what was
+    // denied.
+    const consignmentRetryButton = event.target.closest("[data-consignment-retry-offer-id]");
+
+    if (consignmentRetryButton) {
+      const offerId = consignmentRetryButton.dataset.consignmentRetryOfferId;
+
+      const raw = window.prompt("Enter your new, higher counter. Example: 250");
+      if (!raw) return;
+
+      const retryPrice = Number(String(raw).replace(/[^\d.,-]/g, "").replace(",", "."));
+
+      if (!Number.isFinite(retryPrice) || retryPrice <= 0) {
+        alert("Please enter a valid price. Example: 250");
+        return;
+      }
+
+      consignmentRetryButton.disabled = true;
+      consignmentRetryButton.textContent = "Sending...";
+
+      try {
+        const response = await fetch(`/api/consignment/offers/${offerId}/consignor-retry`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            seller_record_id: dashboardSeller.id,
+            price: retryPrice
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.details || data.error || "Failed to submit your new counter");
+        }
+
+        await loadDashboardData();
+        await loadDashboardCounts();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        consignmentRetryButton.disabled = false;
+        consignmentRetryButton.textContent = "Retry";
+      }
+
+      return;
+    }
+
   const consignmentEditButton = event.target.closest("[data-consignment-edit-id]");
 
   if (consignmentEditButton) {
