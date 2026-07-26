@@ -8557,6 +8557,26 @@ app.post("/api/consignment/offers/:id/counter", async (req, res) => {
       });
     }
 
+    // FIXED — the previous check/write pair here compared and wrote an
+    // already-margined store price directly against/into "Lowest
+    // Offer", which is meant to hold the PRE-margin figure (the same
+    // scale a regular seller's raw offer uses) — the Airtable "Offer
+    // To Store" formula applies margin to whatever's in Lowest Offer,
+    // so writing an already-margined number there would double the
+    // margin once that formula runs. Now compares against "Offer To
+    // Store" (the correct, already-margined comparison point) and
+    // writes storeBasePrice (pre-margin) instead.
+    const lowestOfferCheck = await validateAndSyncConsignorPriceAgainstLowestOffer({
+      orderRecordId: offer.order_record_id,
+      orderFields,
+      storeBasePrice,
+      computedStoreOfferPrice: storeOfferPrice
+    });
+
+    if (!lowestOfferCheck.ok) {
+      return res.status(409).json({ error: lowestOfferCheck.error });
+    }
+
     const storeOfferPriceExclVat =
       storeOfferVatType === "VAT21"
         ? Math.round((storeOfferPrice / 1.21) * 100) / 100
@@ -8617,8 +8637,8 @@ app.post("/api/consignment/offers/:id/counter", async (req, res) => {
   } catch (err) {
     console.error("Failed to submit consignment counter offer:", err);
 
-    res.status(500).json({
-      error: "Failed to submit counter offer",
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to submit counter offer",
       details: err.message
     });
   }
@@ -8800,7 +8820,6 @@ app.post("/api/consignment/offers/:id/store-counter", async (req, res) => {
   }
 });
 
-
 // ---------------------------------------------------------------------
 // NEW — additive only: consignor counters again on the store's
 // counter-back, mirroring the Member WTB buyer-counter pattern.
@@ -8908,6 +8927,24 @@ app.post("/api/consignment/offers/:id/consignor-counter", async (req, res) => {
       return res.status(500).json({ error: "Could not compute a valid store price for this counter." });
     }
 
+    // FIXED — replaces two redundant, wrongly-scaled checks (one of
+    // which also wrote an already-margined price directly into
+    // "Lowest Offer", which would double the margin once the Airtable
+    // "Offer To Store" formula runs on it) with one correct call:
+    // compares against "Offer To Store" and writes the pre-margin
+    // storeBaseForProposed value, matching the scale a regular
+    // seller's raw offer uses.
+    const lowestOfferCheck = await validateAndSyncConsignorPriceAgainstLowestOffer({
+      orderRecordId: previousOffer.order_record_id,
+      orderFields,
+      storeBasePrice: storeBaseForProposed,
+      computedStoreOfferPrice: proposedInStoreTerms
+    });
+
+    if (!lowestOfferCheck.ok) {
+      return res.status(409).json({ error: lowestOfferCheck.error });
+    }
+
     const nowIso = new Date().toISOString();
 
     const { data: newOffer, error: createError } = await supabase
@@ -8978,7 +9015,10 @@ app.post("/api/consignment/offers/:id/consignor-counter", async (req, res) => {
     res.json({ ok: true, new_offer_id: newOffer.id, dm_sent: !!discordResult });
   } catch (err) {
     console.error("Failed to process consignment consignor-counter:", err);
-    res.status(500).json({ error: "Failed to process consignor counter", details: err.message });
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to process consignor counter",
+      details: err.message
+    });
   }
 });
 
@@ -9063,6 +9103,20 @@ app.post("/api/consignment/offers/:id/consignor-retry", async (req, res) => {
       storeOfferVatType === "VAT21"
         ? Math.round((storeOfferPrice / 1.21) * 100) / 100
         : storeOfferPrice;
+
+    // NEW — additive only: same shared-competition check as the other
+    // consignor counter endpoints — a retry must still beat whatever's
+    // currently the best price available from any source.
+    const lowestOfferCheck = await validateAndSyncConsignorPriceAgainstLowestOffer({
+      orderRecordId: deniedOffer.order_record_id,
+      orderFields,
+      storeBasePrice,
+      computedStoreOfferPrice: storeOfferPrice
+    });
+
+    if (!lowestOfferCheck.ok) {
+      return res.status(409).json({ error: lowestOfferCheck.error });
+    }
 
     const nowIso = new Date().toISOString();
 
@@ -10701,8 +10755,15 @@ function calculateStoreCustomOfferFromConsignmentBase(basePrice, orderFields = {
     if (!Number.isFinite(margin)) return null;
     rawOffer = base + margin;
   } else {
-    if (!Number.isFinite(percentage) || percentage >= 1) return null;
-    rawOffer = (base + 5) / (1 - percentage);
+    // FIXED (again) — the correct formula includes a flat €5 base
+    // cost on top of the percentage markup: MAX(base+10, base*(1+pct)+5).
+    // Confirmed against a real example: consignor price €165 correctly
+    // becomes a €180 store offer. The official Airtable "Offer To
+    // Store" formula is missing this +5 in its Percentage branch (to
+    // be fixed there too) — this was only ever correctly present in
+    // this function's original, pre-session version.
+    if (!Number.isFinite(percentage)) return null;
+    rawOffer = Math.max(base + 10, base * (1 + percentage) + 5);
   }
 
   return roundUpToStep(rawOffer, 2.5);
@@ -10730,11 +10791,66 @@ function calculateConsignmentBaseFromStoreOffer(storeOfferPrice, orderFields = {
     if (!Number.isFinite(margin)) return null;
     base = store - margin;
   } else {
-    if (!Number.isFinite(percentage) || percentage >= 1) return null;
-    base = store * (1 - percentage) - 5;
+    // FIXED (again) — must invert MAX(base+10, base*(1+pct)+5). The
+    // floor branch (base+10) wins whenever base is at or below
+    // 5/percentage (solve base+10 = base*(1+pct)+5); the percentage
+    // branch wins above that threshold.
+    if (!Number.isFinite(percentage) || percentage <= 0) return null;
+
+    const threshold = 5 / percentage;
+    const candidateFromFloor = store - 10;
+    const candidateFromPercentage = (store - 5) / (1 + percentage);
+
+    base = candidateFromFloor <= threshold ? candidateFromFloor : candidateFromPercentage;
   }
 
   return base;
+}
+
+// ---------------------------------------------------------------------
+// NEW — additive only: lets consignors and regular sellers correctly
+// compete on the SAME order without stepping on each other. "Lowest
+// Offer" (Airtable) is the shared pool regular sellers already use —
+// this makes consignment counters participate in it too, instead of
+// running as a fully separate, unaware system.
+//
+// - Compares in STORE-FACING terms (reads "Offer To Store", the
+//   formula field that's already correctly whichever price is
+//   currently winning, from any source) — this is an apples-to-apples
+//   comparison regardless of VAT type or margin method.
+// - On success, writes storeBasePrice (the PRE-margin figure, same
+//   scale as what a regular seller's raw offer represents) to "Lowest
+//   Offer" — NOT the already-margined computedStoreOfferPrice, which
+//   would double-apply margin once the Offer To Store formula runs.
+// - Also clears "Offer Sent?" so this doesn't ALSO trigger a duplicate
+//   "Offer Request" via the separate sendOfferRequestWebhook automation
+//   — same fix pattern used at accept-time earlier this session.
+// ---------------------------------------------------------------------
+async function validateAndSyncConsignorPriceAgainstLowestOffer({
+  orderRecordId,
+  orderFields,
+  storeBasePrice,
+  computedStoreOfferPrice
+}) {
+  const currentOfferToStore = numberValue(orderFields["Offer To Store"]);
+
+  if (Number.isFinite(currentOfferToStore) && computedStoreOfferPrice >= currentOfferToStore) {
+    return {
+      ok: false,
+      error: `Your counter isn't low enough — there's currently a better offer available to the store (€${currentOfferToStore.toFixed(2)}). You'll need to go lower than that.`
+    };
+  }
+
+  try {
+    await airtable(ORDERS_TABLE).update(orderRecordId, {
+      "Lowest Offer": storeBasePrice,
+      "Offer Sent?": false
+    });
+  } catch (err) {
+    console.error("Failed to sync consignor counter to Lowest Offer (non-blocking):", err);
+  }
+
+  return { ok: true };
 }
 
 function convertStoreBasePriceToConsignorPrice(basePrice, consignorVatType, clientCountry) {
@@ -10896,7 +11012,18 @@ function calculateConsignmentOfferPrice(
   if (method === "Firm Range") {
     rawOffer = max - margin;
   } else {
-    rawOffer = max * (1 - percentage) - 5;
+    // FIXED — must invert MAX(base+10, base*(1+pct)+5), matching the
+    // fix in calculateConsignmentBaseFromStoreOffer. Previously used
+    // max*(1-percentage)-5, an unrelated formula.
+    if (!Number.isFinite(percentage) || percentage <= 0) {
+      return null;
+    }
+
+    const threshold = 5 / percentage;
+    const candidateFromFloor = max - 10;
+    const candidateFromPercentage = (max - 5) / (1 + percentage);
+
+    rawOffer = candidateFromFloor <= threshold ? candidateFromFloor : candidateFromPercentage;
   }
 
   return roundUpToStep(rawOffer, 2.5);
