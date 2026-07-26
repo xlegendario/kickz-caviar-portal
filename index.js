@@ -3431,16 +3431,9 @@ function bindConsignmentDiscordButtons(client) {
       // FIXED — same 3-second-acknowledgment issue.
       await interaction.deferUpdate().catch(() => {});
 
-      const { data: deniedOffer, error: deniedFetchError } = await supabase
-        .from("consignment_offers")
-        .select("*")
-        .eq("id", offerId)
-        .single();
-
-      if (deniedFetchError) {
-        console.error("Consignment reopen: failed to fetch denied offer:", offerId, deniedFetchError);
-      }
-
+      // FIXED — the reopen-prior-round logic used to be duplicated
+      // here; it now lives in /deny itself (shared with the Portal),
+      // so this just calls it and updates the message.
       await fetch(`${APP_PUBLIC_BASE_URL}/api/consignment/offers/${offerId}/deny`, {
         method: "POST",
         headers: { "Content-Type": "application/json" }
@@ -3451,71 +3444,6 @@ function bindConsignmentDiscordButtons(client) {
         embeds: interaction.message.embeds,
         components: []
       }).catch(() => {});
-
-      // NEW — additive only: same reopen-prior-round pattern as the
-      // other two flows. The denied round (store's counter) was itself
-      // responding to a CONSIGNOR round (if any) — reopen it and resend
-      // the standard store-facing notification so the store can accept
-      // it or try again. Round-1 store counters (no previous_offer_id)
-      // have nothing to reopen — handled by the existing informational
-      // flow already in place for that case.
-      try {
-        if (deniedOffer?.previous_offer_id) {
-          const { data: priorOffer, error: priorFetchError } = await supabase
-            .from("consignment_offers")
-            .select("*")
-            .eq("id", deniedOffer.previous_offer_id)
-            .single();
-
-          if (priorFetchError) {
-            console.error("Consignment reopen: failed to fetch prior offer:", deniedOffer.previous_offer_id, priorFetchError);
-          }
-
-          if (priorOffer) {
-            const { error: reopenUpdateError } = await supabase
-              .from("consignment_offers")
-              .update({ status: "store_pending" })
-              .eq("id", priorOffer.id);
-
-            if (reopenUpdateError) {
-              console.error("Consignment reopen: failed to set prior offer status to store_pending:", priorOffer.id, reopenUpdateError);
-            }
-
-            const orderRecordForReopen = await airtable(ORDERS_TABLE).find(priorOffer.order_record_id);
-            const orderFieldsForReopen = orderRecordForReopen.fields || {};
-            const clientCountryForReopen = asText(orderFieldsForReopen["Client Country"]);
-            const storeOfferVatTypeForReopen = getStoreOfferVatTypeFromConsignmentVat(priorOffer.vat_type, clientCountryForReopen);
-
-            const priorConsignorBase = convertConsignorPriceToStoreBasePrice(
-              Number(priorOffer.consignor_counter_price),
-              priorOffer.vat_type,
-              clientCountryForReopen
-            );
-            const priorConsignorInStoreTerms = calculateStoreCustomOfferFromConsignmentBase(
-              priorConsignorBase,
-              orderFieldsForReopen
-            );
-
-            console.log("Consignment reopen: sending re-notification to store for prior offer:", priorOffer.id);
-
-            await postConsignmentCounterStoreOffer({
-              offer: priorOffer,
-              orderFields: orderFieldsForReopen,
-              storeOfferPrice: priorConsignorInStoreTerms,
-              storeOfferVatType: storeOfferVatTypeForReopen,
-              deniedAmount: Number(deniedOffer.store_counter_price)
-            });
-
-            console.log("Consignment reopen: re-notification sent successfully for:", priorOffer.id);
-          } else {
-            console.error("Consignment reopen: priorOffer not found (no error, but empty result) for id:", deniedOffer.previous_offer_id);
-          }
-        } else {
-          console.log("Consignment reopen: no previous_offer_id on denied offer, nothing to reopen:", offerId);
-        }
-      } catch (reopenErr) {
-        console.error("Failed to reopen prior round after consignment consignor-deny (non-blocking):", reopenErr);
-      }
 
       return;
     }
@@ -8508,11 +8436,13 @@ app.get("/api/consignment/offers", async (req, res) => {
         brand,
         seller_price,
         offer_price,
+        consignor_counter_price,
         vat_type,
         status,
         is_counter_offer,
         source_type,
         member_wtb_record_id,
+        previous_offer_id,
         denied_at,
         created_at
       `)
@@ -8877,13 +8807,15 @@ app.post("/api/consignment/offers/:id/store-counter", async (req, res) => {
 // ---------------------------------------------------------------------
 app.post("/api/consignment/offers/:id/consignor-counter", async (req, res) => {
   try {
-    // FIXED — consistency gap: store-counter and edit both check
-    // COUNTER_OFFERS_SECRET, this endpoint didn't. Added to match.
+    // FIXED — the Portal calls this too, and can't safely embed
+    // COUNTER_OFFERS_SECRET client-side (anyone could read it from the
+    // page source and act on any seller's offers). Now accepts EITHER
+    // the secret (for server-to-server calls, e.g. curl testing) OR a
+    // seller_record_id that matches the offer's own owner — same
+    // pattern already used by /deny, /confirm, and /counter.
     const secret = asText(req.headers["x-kc-secret"]);
-
-    if (!COUNTER_OFFERS_SECRET || secret !== COUNTER_OFFERS_SECRET) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
+    const hasValidSecret = !!COUNTER_OFFERS_SECRET && secret === COUNTER_OFFERS_SECRET;
+    const requestingSellerRecordId = asText(req.body?.seller_record_id);
 
     const previousOfferId = asText(req.params.id);
     const proposedPrice = Number(req.body?.price);
@@ -8900,6 +8832,12 @@ app.post("/api/consignment/offers/:id/consignor-counter", async (req, res) => {
 
     if (fetchError || !previousOffer) {
       return res.status(404).json({ error: "Offer not found." });
+    }
+
+    if (!hasValidSecret) {
+      if (!requestingSellerRecordId || requestingSellerRecordId !== previousOffer.seller_record_id) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
     }
 
     if (previousOffer.status !== "open") {
@@ -9060,6 +8998,7 @@ app.post("/api/consignment/offers/:id/consignor-retry", async (req, res) => {
   try {
     const deniedOfferId = asText(req.params.id);
     const retryPrice = Number(req.body?.price);
+    const requestingSellerRecordId = asText(req.body?.seller_record_id);
 
     if (!Number.isFinite(retryPrice) || retryPrice <= 0) {
       return res.status(400).json({ error: "Invalid counter price" });
@@ -9073,6 +9012,13 @@ app.post("/api/consignment/offers/:id/consignor-retry", async (req, res) => {
 
     if (fetchError || !deniedOffer) {
       return res.status(404).json({ error: "Offer not found." });
+    }
+
+    // FIXED — this had no auth check at all; anyone who guessed/saw an
+    // offer id could retry on someone else's behalf. Same
+    // seller_record_id-ownership pattern used elsewhere in this file.
+    if (!requestingSellerRecordId || requestingSellerRecordId !== deniedOffer.seller_record_id) {
+      return res.status(401).json({ error: "Unauthorized" });
     }
 
     if (deniedOffer.previous_offer_id) {
@@ -9198,11 +9144,13 @@ app.post("/api/consignment/offers/:id/consignor-retry", async (req, res) => {
 // ---------------------------------------------------------------------
 app.post("/api/consignment/offers/:id/edit", async (req, res) => {
   try {
+    // FIXED — this endpoint is shared by both the store side (Discord,
+    // uses the secret — stores have no seller_record_id to check
+    // ownership against) and now also the consignor Portal, which
+    // can't safely embed the secret client-side. Accepts either.
     const secret = asText(req.headers["x-kc-secret"]);
-
-    if (!COUNTER_OFFERS_SECRET || secret !== COUNTER_OFFERS_SECRET) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
+    const hasValidSecret = !!COUNTER_OFFERS_SECRET && secret === COUNTER_OFFERS_SECRET;
+    const requestingSellerRecordId = asText(req.body?.seller_record_id);
 
     const recordId = asText(req.params.id);
     const proposedPrice = Number(req.body?.price);
@@ -9219,6 +9167,12 @@ app.post("/api/consignment/offers/:id/edit", async (req, res) => {
 
     if (fetchError || !offer) {
       return res.status(404).json({ error: "Offer not found." });
+    }
+
+    if (!hasValidSecret) {
+      if (!requestingSellerRecordId || requestingSellerRecordId !== offer.seller_record_id) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
     }
 
     if (offer.status !== "open" && offer.status !== "store_pending") {
@@ -9372,6 +9326,16 @@ app.post("/api/consignment/offers/:id/deny", async (req, res) => {
     const offerId = asText(req.params.id);
     const sellerRecordId = asText(req.body?.seller_record_id);
 
+    // FIXED — reopen-the-prior-round logic used to live only in the
+    // Discord button handler for this action, meaning anything else
+    // that called this endpoint directly (like the Portal) would skip
+    // it entirely. Moved here so both share the same behavior.
+    const { data: deniedOfferForReopen } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("id", offerId)
+      .single();
+
     const offer = await getOpenConsignmentOffer(offerId);
 
     if (!offer) {
@@ -9392,6 +9356,64 @@ app.post("/api/consignment/offers/:id/deny", async (req, res) => {
       return res.status(409).json({
         error: "Offer is no longer available"
       });
+    }
+
+    try {
+      if (deniedOfferForReopen?.previous_offer_id) {
+        const { data: priorOffer, error: priorFetchError } = await supabase
+          .from("consignment_offers")
+          .select("*")
+          .eq("id", deniedOfferForReopen.previous_offer_id)
+          .single();
+
+        if (priorFetchError) {
+          console.error("Consignment reopen: failed to fetch prior offer:", deniedOfferForReopen.previous_offer_id, priorFetchError);
+        }
+
+        if (priorOffer) {
+          const { error: reopenUpdateError } = await supabase
+            .from("consignment_offers")
+            .update({ status: "store_pending" })
+            .eq("id", priorOffer.id);
+
+          if (reopenUpdateError) {
+            console.error("Consignment reopen: failed to set prior offer status to store_pending:", priorOffer.id, reopenUpdateError);
+          }
+
+          const orderRecordForReopen = await airtable(ORDERS_TABLE).find(priorOffer.order_record_id);
+          const orderFieldsForReopen = orderRecordForReopen.fields || {};
+          const clientCountryForReopen = asText(orderFieldsForReopen["Client Country"]);
+          const storeOfferVatTypeForReopen = getStoreOfferVatTypeFromConsignmentVat(priorOffer.vat_type, clientCountryForReopen);
+
+          const priorConsignorBase = convertConsignorPriceToStoreBasePrice(
+            Number(priorOffer.consignor_counter_price),
+            priorOffer.vat_type,
+            clientCountryForReopen
+          );
+          const priorConsignorInStoreTerms = calculateStoreCustomOfferFromConsignmentBase(
+            priorConsignorBase,
+            orderFieldsForReopen
+          );
+
+          console.log("Consignment reopen: sending re-notification to store for prior offer:", priorOffer.id);
+
+          await postConsignmentCounterStoreOffer({
+            offer: priorOffer,
+            orderFields: orderFieldsForReopen,
+            storeOfferPrice: priorConsignorInStoreTerms,
+            storeOfferVatType: storeOfferVatTypeForReopen,
+            deniedAmount: Number(deniedOfferForReopen.store_counter_price)
+          });
+
+          console.log("Consignment reopen: re-notification sent successfully for:", priorOffer.id);
+        } else {
+          console.error("Consignment reopen: priorOffer not found (no error, but empty result) for id:", deniedOfferForReopen.previous_offer_id);
+        }
+      } else {
+        console.log("Consignment reopen: no previous_offer_id on denied offer, nothing to reopen:", offerId);
+      }
+    } catch (reopenErr) {
+      console.error("Failed to reopen prior round after consignment deny (non-blocking):", reopenErr);
     }
 
     res.json({
@@ -9512,6 +9534,7 @@ app.post("/api/consignment/offers/:id/confirm", async (req, res) => {
 app.post("/api/consignment/offers/:id/accept-previous", async (req, res) => {
   try {
     const pendingOfferId = asText(req.params.id);
+    const requestingSellerRecordId = asText(req.body?.seller_record_id);
 
     const { data: pendingOffer, error: fetchError } = await supabase
       .from("consignment_offers")
@@ -9521,6 +9544,10 @@ app.post("/api/consignment/offers/:id/accept-previous", async (req, res) => {
 
     if (fetchError || !pendingOffer) {
       return res.status(404).json({ error: "Offer not found." });
+    }
+
+    if (!requestingSellerRecordId || requestingSellerRecordId !== pendingOffer.seller_record_id) {
+      return res.status(401).json({ error: "Unauthorized" });
     }
 
     if (pendingOffer.status !== "store_pending") {
@@ -9571,15 +9598,20 @@ app.post("/api/consignment/offers/:id/accept-previous", async (req, res) => {
 app.post("/api/consignment/offers/:id/cancel", async (req, res) => {
   try {
     const offerId = asText(req.params.id);
+    const requestingSellerRecordId = asText(req.body?.seller_record_id);
 
     const { data: offer, error: fetchError } = await supabase
       .from("consignment_offers")
-      .select("id, status")
+      .select("id, status, seller_record_id")
       .eq("id", offerId)
       .single();
 
     if (fetchError || !offer) {
       return res.status(404).json({ error: "Offer not found." });
+    }
+
+    if (!requestingSellerRecordId || requestingSellerRecordId !== offer.seller_record_id) {
+      return res.status(401).json({ error: "Unauthorized" });
     }
 
     if (!["store_pending", "denied", "store_denied"].includes(offer.status)) {
