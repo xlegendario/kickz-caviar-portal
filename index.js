@@ -11774,16 +11774,30 @@ function normalizeMemberWtbDeal(record) {
 app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
+    // NEW — additive only: supports the merged Offers tab's three
+    // pills. "countered" = a counter FROM the store/buyer that the
+    // seller needs to act on (Store Counter Price populated).
+    // "own_counter" = the seller's OWN pending counter, awaiting the
+    // store/buyer (Store Counter Price empty) — this belongs in the
+    // Open pill alongside fresh, never-countered offers. "denied" =
+    // anything denied. Defaults to "countered" so any existing caller
+    // that doesn't pass this keeps working unchanged.
+    const filter = asText(req.query.filter) || "countered";
 
     if (!sellerRecordId) {
       return res.status(400).json({ error: "Missing seller_record_id" });
     }
 
+    const statusFormula = filter === "denied" ? `{Status} = 'Denied'` : `{Status} = 'Open'`;
+
     const records = await airtable(COUNTER_OFFERS_TABLE)
       .select({
         filterByFormula: `AND(
-          {Status} = 'Open',
-          {Source Type} = 'Seller Offer'
+          ${statusFormula},
+          OR(
+            {Source Type} = 'Seller Offer',
+            {Source Type} = 'Member WTB'
+          )
         )`
       })
       .all();
@@ -11792,6 +11806,20 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       .filter((record) =>
         linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
       )
+      .filter((record) => {
+        if (filter === "denied") return true;
+
+        const f = record.fields || {};
+        const storeAlreadyCountered =
+          f["Store Counter Price"] !== undefined &&
+          f["Store Counter Price"] !== null &&
+          f["Store Counter Price"] !== "";
+
+        // "countered" wants rows where the STORE/buyer just moved
+        // (seller must respond); "open" wants the opposite — the
+        // seller's own pending counter, awaiting them.
+        return filter === "countered" ? storeAlreadyCountered : !storeAlreadyCountered;
+      })
       .map((record) => {
         const f = record.fields || {};
 
@@ -11805,7 +11833,9 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           original_offer: moneyValue(f["Seller Original Price"]),
           counter_payout: moneyValue(f["Counter Payout"]),
           vat_type: displayValue(f["Counter Payout VAT Type"]),
-          raw_date: displayValue(f["Created At"])
+          previous_record_id: firstLinkedRecordId(f["Previous Record ID"]),
+          raw_date: displayValue(f["Created At"]),
+          denied_at: displayValue(f["Denied At"] || f["Last Modified"])
         };
       });
 
