@@ -6889,11 +6889,69 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
       });
     }
 
+    const storeOfferPriceExclVatForRow =
+      best.storeOfferVatType === "VAT21"
+        ? Math.round((best.customOffer / 1.21) * 100) / 100
+        : best.customOffer;
+
+    // NEW — additive only: this pre-offer used to only write fields
+    // directly onto the Order record, with no backing Supabase row —
+    // meaning there was nothing for a later store Accept/Counter/Deny
+    // to attach to. Shaped like a round the CONSIGNOR already
+    // countered (status="store_pending", consignor_counter_price
+    // populated, no store_counter_price) rather than a fresh "offer to
+    // the consignor" round-1, since here the consignor's price is
+    // already fixed (their listing price) and it's the STORE's turn
+    // to respond — the same direction as an actual consignor counter
+    // elsewhere in this system, not the original "store proposes,
+    // consignor responds" shape.
+    const nowIso = new Date().toISOString();
+
+    const { data: newOffer, error: createOfferError } = await supabase
+      .from("consignment_offers")
+      .insert({
+        order_record_id: orderRecordId,
+        order_id: asText(orderFields["Order ID"]),
+        inventory_id: best.row.id,
+
+        seller_record_id: best.row.seller_record_id,
+        seller_id: best.row.seller_id,
+
+        product_name: best.row.product_name,
+        sku: best.row.sku,
+        size: best.row.size,
+        brand: best.row.brand,
+
+        vat_type: best.row.vat_type,
+        seller_price: best.sellerPrice,
+        offer_price: best.sellerPrice,
+
+        is_counter_offer: false,
+        consignor_counter_price: best.sellerPrice,
+        consignor_counter_store_price: best.customOffer,
+        consignor_counter_store_price_excl_vat: storeOfferPriceExclVatForRow,
+        consignor_counter_at: nowIso,
+
+        status: "store_pending",
+        store_response_status: "pending",
+        source_type: "order",
+        created_at: nowIso,
+        updated_at: nowIso
+      })
+      .select()
+      .single();
+
+    if (createOfferError) {
+      console.error("Failed to create backing consignment_offers row for pre-offer (non-blocking):", createOfferError);
+    }
+
     res.json({
       ok: true,
       order_record_id: orderRecordId,
       sku,
       size,
+
+      consignment_offer_id: newOffer?.id || null,
 
       custom_offer: best.customOffer,
       offer_vat_type: best.storeOfferVatType,
@@ -8208,6 +8266,39 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
   } catch (err) {
     console.error("Failed to edit counter offer:", err);
     res.status(500).json({ error: "Failed to edit counter offer", details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: lets the store's Discord bot (airtable-discord-
+// updates-main) check, before handling an Accept/Counter/Deny click on
+// the standard "Offer Request" message, whether this order actually
+// has an active consignment offer to route to — instead of always
+// assuming it's a regular seller offer and going to the wrong backend.
+// ---------------------------------------------------------------------
+app.get("/api/consignment/offers/active-for-order", async (req, res) => {
+  try {
+    const orderRecordId = asText(req.query.order_record_id);
+
+    if (!orderRecordId) {
+      return res.status(400).json({ error: "Missing order_record_id" });
+    }
+
+    const { data, error } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("order_record_id", orderRecordId)
+      .in("status", ["open", "store_pending"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    res.json({ ok: true, offer: data || null });
+  } catch (err) {
+    console.error("Failed to look up active consignment offer for order:", err);
+    res.status(500).json({ error: "Failed to look up active consignment offer" });
   }
 });
 
