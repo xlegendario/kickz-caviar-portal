@@ -14,8 +14,7 @@ const dashboardConfig = {
   wtb: {
     label: "Want To Buys",
     tabs: [
-      { key: "open_offers", label: "Open Offers" },
-      { key: "counter_offers", label: "Counter Offers" },
+      { key: "offers", label: "Offers", statusFilters: ["open", "counter", "denied"] },
       { key: "accepted", label: "Accepted" },
       { key: "confirmed", label: "Confirmed" },
       { key: "label_requested", label: "Label Requested" },
@@ -293,7 +292,7 @@ function getActiveTabConfig() {
 // inactive pill's count only updates once you've visited it at least
 // once this session (avoiding N extra requests just to show numbers
 // you haven't asked to see yet).
-const pillLabels = { open: "Open", counter: "Counter", denied: "Denied" };
+const pillLabels = { open: "Open", counter: "Countered", denied: "Denied" };
 
 function renderPillRow(tabConfig) {
   if (!tabConfig?.statusFilters?.length) {
@@ -1963,6 +1962,85 @@ function renderWtbOpenOffersRows(offers) {
   `).join("");
 }
 
+// NEW — additive only: renders the merged Want To Buys "Offers" tab.
+// Items come tagged with _kind: "fresh" (never countered, from Seller
+// Offers), "own_counter" (seller's own pending counter, awaiting the
+// store/buyer), "counter" (store/buyer's counter, seller must
+// respond), or "denied". Displayed with one common column set since
+// they're conceptually the same thing at different stages.
+function renderWtbUnifiedOfferRows(items) {
+  setMobileTableMode(false);
+
+  const isDenied = activeOfferStatusFilter === "denied";
+  const columns = isDenied
+    ? ["Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "Denied", "Actions"]
+    : ["Order ID", "Product", "SKU", "Size", "Brand", "Amount", "VAT Type", "Date", "Actions"];
+
+  dashboardTableHead.innerHTML = columns.map((c) => `<th>${c}</th>`).join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr><td colspan="${columns.length}">
+        <div class="dashboard-empty-state">
+          <div class="dashboard-empty-icon">◇</div>
+          <strong>Nothing here yet</strong>
+        </div>
+      </td></tr>
+    `;
+    return;
+  }
+
+  dashboardTableBody.innerHTML = items.map((item) => {
+    const amount = item._kind === "fresh"
+      ? item.offer
+      : (item.counter_payout ?? item.original_offer);
+
+    const dateValue = item._kind === "fresh" ? item.raw_date : (item.denied_at || item.raw_date);
+
+    if (isDenied) {
+      return `
+        <tr>
+          <td>${escapeHtml(item.order_id || "-")}</td>
+          <td>${escapeHtml(item.product || "-")}</td>
+          <td>${escapeHtml(item.sku || "-")}</td>
+          <td>${escapeHtml(item.size || "-")}</td>
+          <td>${escapeHtml(item.brand || "-")}</td>
+          <td>${amount ? `€${escapeHtml(amount)}` : "-"}</td>
+          <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
+          <td>
+            <div class="dashboard-action-row">
+              <button class="dashboard-deny-btn" type="button" data-wtb-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }
+
+    // For the Open/Countered display, action buttons depend on _kind:
+    // "fresh" and "own_counter" only need an indicator (no action —
+    // these already have their own Accept/Counter/Deny surfaces
+    // elsewhere); "counter" (store/buyer just moved) needs real
+    // actions once wired up.
+    return `
+      <tr>
+        <td>${escapeHtml(item.order_id || "-")}</td>
+        <td>${escapeHtml(item.product || "-")}</td>
+        <td>${escapeHtml(item.sku || "-")}</td>
+        <td>${escapeHtml(item.size || "-")}</td>
+        <td>${escapeHtml(item.brand || "-")}</td>
+        <td>${amount ? `€${escapeHtml(amount)}` : "-"}</td>
+        <td>${escapeHtml(item.vat_type || "-")}</td>
+        <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
+        <td>
+          <div class="dashboard-action-row">
+            <span class="dashboard-status-pill">${item._kind === "counter" ? "Awaiting you" : "Awaiting them"}</span>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join("");
+}
+
 function renderWtbCounterOfferRows(items) {
   dashboardTableHead.innerHTML = wtbCounterOfferColumns
     .map((column) => `<th>${column}</th>`)
@@ -3247,6 +3325,91 @@ async function loadDashboardData() {
   
   if (activeSection === "consignment") {
     renderTableShell();
+    return;
+  }
+
+  if (activeSection === "wtb" && activeTab === "offers") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="7">
+          <div class="dashboard-empty-state">
+            <strong>Loading offers...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+
+    if (activeOfferStatusFilter === "open") {
+      // "Open" combines two sources: genuinely fresh, never-countered
+      // offers (Seller Offers table) AND the seller's own pending
+      // counter awaiting the store/buyer (Counter Offers table, Store
+      // Counter Price empty) — both belong here per his clarification.
+      const [freshRes, ownCounterRes] = await Promise.all([
+        fetch(`/api/dashboard/wtb-open-offers?${new URLSearchParams({
+          seller_record_id: dashboardSeller.id,
+          seller_id: dashboardSeller.seller_id
+        }).toString()}`),
+        fetch(`/api/dashboard/wtb-counter-offers?${new URLSearchParams({
+          seller_record_id: dashboardSeller.id,
+          filter: "open"
+        }).toString()}`)
+      ]);
+
+      const freshData = await freshRes.json();
+      const ownCounterData = await ownCounterRes.json();
+
+      if (!freshRes.ok || !ownCounterRes.ok) {
+        throw new Error(
+          freshData.error || ownCounterData.error || "Failed to load offers"
+        );
+      }
+
+      const merged = [
+        ...(freshData.items || []).map((item) => ({ ...item, _kind: "fresh" })),
+        ...(ownCounterData.items || []).map((item) => ({ ...item, _kind: "own_counter" }))
+      ];
+
+      renderWtbUnifiedOfferRows(merged);
+
+      const count = merged.length;
+      dashboardPillCountsCache["wtb:offers"] = {
+        ...(dashboardPillCountsCache["wtb:offers"] || {}),
+        open: count
+      };
+      document
+        .querySelectorAll('[data-pill-count-key="wtb:offers:open"]')
+        .forEach((el) => { el.textContent = count; });
+
+      return;
+    }
+
+    // "counter" (displayed as "Countered") and "denied" both come from
+    // the same Counter Offers query, just filtered differently.
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id,
+      filter: activeOfferStatusFilter === "denied" ? "denied" : "countered"
+    });
+
+    const response = await fetch(`/api/dashboard/wtb-counter-offers?${params.toString()}`);
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to load offers");
+    }
+
+    renderWtbUnifiedOfferRows(
+      (data.items || []).map((item) => ({ ...item, _kind: activeOfferStatusFilter === "denied" ? "denied" : "counter" }))
+    );
+
+    const count = data.count || 0;
+    dashboardPillCountsCache["wtb:offers"] = {
+      ...(dashboardPillCountsCache["wtb:offers"] || {}),
+      [activeOfferStatusFilter]: count
+    };
+    document
+      .querySelectorAll(`[data-pill-count-key="wtb:offers:${activeOfferStatusFilter}"]`)
+      .forEach((el) => { el.textContent = count; });
+
     return;
   }
 
