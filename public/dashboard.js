@@ -1090,7 +1090,7 @@ function renderConsignmentOfferRows(items) {
           <td>${escapeHtml(item.sku || "-")}</td>
           <td>${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.brand || "-")}</td>
-          <td>${item.consignor_counter_price ? `€${escapeHtml(item.consignor_counter_price)}` : "-"}</td>
+          <td>${item.consignor_counter_price ? `€${escapeHtml(item.consignor_counter_price)}` : (item.seller_price ? `€${escapeHtml(item.seller_price)}` : "-")}</td>
           <td>${item.denied_at ? escapeHtml(new Date(item.denied_at).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
@@ -1137,7 +1137,7 @@ function renderConsignmentOfferRows(items) {
           <td>${escapeHtml(item.sku || "-")}</td>
           <td>${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.brand || "-")}</td>
-          <td>${item.consignor_counter_price ? `€${escapeHtml(item.consignor_counter_price)}` : "-"}</td>
+          <td>${item.consignor_counter_price ? `€${escapeHtml(item.consignor_counter_price)}` : (item.seller_price ? `€${escapeHtml(item.seller_price)}` : "-")}</td>
           <td>
             <div class="dashboard-action-row">
               ${hasPrior ? `
