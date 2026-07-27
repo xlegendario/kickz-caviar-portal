@@ -11853,6 +11853,43 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------
+// NEW — additive only: lets a seller delete their own pending counter
+// (Countered→Open pill) or a denied counter offer (Denied pill) they
+// don't want to pursue further. Matches the same delete-permanently
+// approach already used for wtb-open-offers (Seller Offers table) —
+// these Counter Offers records aren't referenced anywhere downstream
+// once denied/superseded, so a hard delete is safe here.
+// ---------------------------------------------------------------------
+app.post("/api/dashboard/wtb-counter-offers/:offerId/cancel", async (req, res) => {
+  try {
+    const offerId = asText(req.params.offerId);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+
+    if (!offerId || !sellerRecordId) {
+      return res.status(400).json({ error: "Missing offerId or seller_record_id" });
+    }
+
+    const record = await airtable(COUNTER_OFFERS_TABLE).find(offerId);
+    const f = record.fields || {};
+
+    if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    await airtable(COUNTER_OFFERS_TABLE).destroy(offerId);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to cancel WTB counter offer:", err);
+
+    res.status(500).json({
+      error: "Failed to cancel offer",
+      details: err.message
+    });
+  }
+});
+
 app.get("/api/dashboard/wtb-accepted", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
