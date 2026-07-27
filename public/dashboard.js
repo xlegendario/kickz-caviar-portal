@@ -1060,7 +1060,7 @@ function renderConsignmentOfferRows(items) {
   // a full mobile-friendly redesign is planned as a separate pass.
 
   if (activeOfferStatusFilter === "denied") {
-    const deniedColumns = ["Order ID", "Product", "SKU", "Size", "Brand", "Your Counter", "Denied", "Actions"];
+    const deniedColumns = ["Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "Denied", "Actions"];
 
     dashboardTableHead.innerHTML = deniedColumns.map((c) => `<th>${c}</th>`).join("");
 
@@ -1108,7 +1108,7 @@ function renderConsignmentOfferRows(items) {
   }
 
   if (activeOfferStatusFilter === "counter") {
-    const counterColumns = ["Order ID", "Product", "SKU", "Size", "Brand", "Your Counter", "Actions"];
+    const counterColumns = ["Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "Actions"];
 
     dashboardTableHead.innerHTML = counterColumns.map((c) => `<th>${c}</th>`).join("");
 
