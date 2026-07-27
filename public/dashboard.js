@@ -1964,17 +1964,17 @@ function renderWtbOpenOffersRows(offers) {
 
 // NEW — additive only: renders the merged Want To Buys "Offers" tab.
 // Items come tagged with _kind: "fresh" (never countered, from Seller
-// Offers), "own_counter" (seller's own pending counter, awaiting the
-// store/buyer), "counter" (store/buyer's counter, seller must
-// respond), or "denied". Displayed with one common column set since
-// they're conceptually the same thing at different stages.
+// Offers — has the lowest-offer dot indicator + normalized current
+// lowest column, both restored from the old separate tab), "own_counter"
+// (seller's own pending counter, awaiting the store/buyer), "counter"
+// (store/buyer's counter, seller must respond), or "denied".
 function renderWtbUnifiedOfferRows(items) {
   setMobileTableMode(false);
 
   const isDenied = activeOfferStatusFilter === "denied";
   const columns = isDenied
     ? ["Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "Denied", "Actions"]
-    : ["Order ID", "Product", "SKU", "Size", "Brand", "Amount", "VAT Type", "Date", "Actions"];
+    : ["", "Order ID", "Product", "SKU", "Size", "Brand", "Amount", "VAT Type", "Current Lowest", "Date", "Actions"];
 
   dashboardTableHead.innerHTML = columns.map((c) => `<th>${c}</th>`).join("");
 
@@ -1991,6 +1991,8 @@ function renderWtbUnifiedOfferRows(items) {
   }
 
   dashboardTableBody.innerHTML = items.map((item) => {
+    // FIXED — moneyValue()/moneyWholeValue() (backend) already format
+    // with a € sign — prepending another one here caused "€€ 150".
     const amount = item._kind === "fresh"
       ? item.offer
       : (item.counter_payout ?? item.original_offer);
@@ -2005,7 +2007,7 @@ function renderWtbUnifiedOfferRows(items) {
           <td>${escapeHtml(item.sku || "-")}</td>
           <td>${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.brand || "-")}</td>
-          <td>${amount ? `€${escapeHtml(amount)}` : "-"}</td>
+          <td>${escapeHtml(amount || "-")}</td>
           <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
@@ -2016,24 +2018,62 @@ function renderWtbUnifiedOfferRows(items) {
       `;
     }
 
-    // For the Open/Countered display, action buttons depend on _kind:
-    // "fresh" and "own_counter" only need an indicator (no action —
-    // these already have their own Accept/Counter/Deny surfaces
-    // elsewhere); "counter" (store/buyer just moved) needs real
-    // actions once wired up.
+    // RESTORED — the dot indicator and Current Lowest column only
+    // apply to "fresh" items: that's the only case where the backend
+    // computes a same-VAT-scale comparison (wtb-open-offers already
+    // normalizes to the offer's own VAT type — VAT0 vs VAT0, never
+    // comparing a VAT0 offer against a VAT-inclusive lowest, which
+    // would misleadingly look "not lower" even when it actually is).
+    // "own_counter"/"counter" items don't have this data computed yet.
+    const dotCell = item._kind === "fresh"
+      ? `<div class="dashboard-status-dot ${item.status === "Lowest" ? "dashboard-status-dot-lowest" : "dashboard-status-dot-beaten"}"></div>`
+      : "";
+
+    const currentLowestCell = item._kind === "fresh" ? (item.current_lowest || "-") : "-";
+
+    let actionsCell;
+    if (item._kind === "fresh") {
+      actionsCell = `
+        <button
+          class="dashboard-edit-btn"
+          type="button"
+          data-edit-offer-id="${escapeHtml(item.id || "")}"
+          data-member-wtb-record-id="${escapeHtml(item.member_wtb_record_id || "")}"
+          data-order-record-id="${escapeHtml(item.order_record_id || "")}"
+          data-vat-type="${escapeHtml(item.vat_type || "")}"
+          data-current-offer="${escapeHtml(item.offer_raw || "")}"
+          data-current-lowest="${escapeHtml(item.current_lowest || "-")}"
+        >Edit</button>
+        <button class="dashboard-deny-btn" type="button" data-delete-offer-id="${escapeHtml(item.id || "")}">Delete</button>
+      `;
+    } else if (item._kind === "own_counter") {
+      // Edit for an already-placed counter isn't wired up yet (needs
+      // its own investigation into the Store Orders counter-edit
+      // flow) — Delete is available now.
+      actionsCell = `
+        <button class="dashboard-deny-btn" type="button" data-wtb-cancel-counter-id="${escapeHtml(item.id || "")}">Delete</button>
+      `;
+    } else {
+      // "counter" — store/buyer just moved, seller must respond.
+      // Real Accept/Counter/Deny actions for this aren't wired up yet.
+      actionsCell = `<span class="dashboard-status-pill">Awaiting you</span>`;
+    }
+
     return `
       <tr>
+        <td>${dotCell}</td>
         <td>${escapeHtml(item.order_id || "-")}</td>
         <td>${escapeHtml(item.product || "-")}</td>
         <td>${escapeHtml(item.sku || "-")}</td>
         <td>${escapeHtml(item.size || "-")}</td>
         <td>${escapeHtml(item.brand || "-")}</td>
-        <td>${amount ? `€${escapeHtml(amount)}` : "-"}</td>
+        <td>${escapeHtml(amount || "-")}</td>
         <td>${escapeHtml(item.vat_type || "-")}</td>
+        <td>${escapeHtml(currentLowestCell)}</td>
         <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
         <td>
           <div class="dashboard-action-row">
-            <span class="dashboard-status-pill">${item._kind === "counter" ? "Awaiting you" : "Awaiting them"}</span>
+            ${actionsCell}
           </div>
         </td>
       </tr>
@@ -4997,6 +5037,106 @@ dashboardTableBody.addEventListener("click", async (event) => {
 
   if (editButton) {
     openEditOfferModal(editButton);
+    return;
+  }
+
+  // FIXED — this button existed in the HTML (and the variable was
+  // declared above) but was never actually wired to anything — Delete
+  // silently did nothing. The backend endpoint already existed.
+  if (deleteButton) {
+    const offerId = deleteButton.dataset.deleteOfferId;
+    if (!offerId) return;
+
+    if (!confirm("Delete this offer? This can't be undone.")) return;
+
+    deleteButton.disabled = true;
+
+    try {
+      const response = await fetch(
+        `/api/dashboard/wtb-open-offers/${offerId}?${new URLSearchParams({ seller_record_id: dashboardSeller.id }).toString()}`,
+        { method: "DELETE" }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to delete offer");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      deleteButton.disabled = false;
+    }
+
+    return;
+  }
+
+  // NEW — additive only: delete the seller's own pending counter
+  // (Counter Offers table record), which has no existing delete path.
+  const wtbCancelCounterButton = event.target.closest("[data-wtb-cancel-counter-id]");
+  if (wtbCancelCounterButton) {
+    const offerId = wtbCancelCounterButton.dataset.wtbCancelCounterId;
+    if (!offerId) return;
+
+    if (!confirm("Delete this counter? This can't be undone.")) return;
+
+    wtbCancelCounterButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/dashboard/wtb-counter-offers/${offerId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seller_record_id: dashboardSeller.id })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to delete counter");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      wtbCancelCounterButton.disabled = false;
+    }
+
+    return;
+  }
+
+  // NEW — additive only: Delete for a denied WTB counter offer.
+  const wtbCancelOfferButton = event.target.closest("[data-wtb-cancel-offer-id]");
+  if (wtbCancelOfferButton) {
+    const offerId = wtbCancelOfferButton.dataset.wtbCancelOfferId;
+    if (!offerId) return;
+
+    if (!confirm("Delete this offer? This can't be undone.")) return;
+
+    wtbCancelOfferButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/dashboard/wtb-counter-offers/${offerId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seller_record_id: dashboardSeller.id })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to delete offer");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      wtbCancelOfferButton.disabled = false;
+    }
+
     return;
   }
 
