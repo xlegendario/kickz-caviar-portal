@@ -6897,7 +6897,14 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
 
       custom_offer: best.customOffer,
       offer_vat_type: best.storeOfferVatType,
-      estimated_time: 2,
+      // FIXED (again) — now that the consignment pre-offer writes to
+      // "Lowest Offer" and competes in the same pool as regular
+      // sellers, its Estimated Time should match that same convention
+      // ("24 - 72 hours", exactly matching computeAndPushLowestOffer.js's
+      // ESTIMATED_TIME_SELLER) rather than a separate consignment-only
+      // string — the store shouldn't see a different time format just
+      // because the current best offer happens to be from a consignor.
+      estimated_time: "24 - 72 hours",
 
       consignment_offer_price: best.sellerComparePrice,
 
