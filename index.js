@@ -6889,6 +6889,21 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
       });
     }
 
+    // FIXED — additive only: without this check, if autoAllocateBestUnit.js
+    // runs more than once for the same order (which it can, while the
+    // order stays in the Outsource/pending state — the same pattern
+    // that caused duplicate rows earlier), this would create a fresh
+    // Supabase row every time, resulting in multiple simultaneously
+    // "active" rows for the same order in the Portal.
+    const { data: existingActiveOffer } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("order_record_id", orderRecordId)
+      .in("status", ["open", "store_pending"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
     const storeOfferPriceExclVatForRow =
       best.storeOfferVatType === "VAT21"
         ? Math.round((best.customOffer / 1.21) * 100) / 100
@@ -6907,7 +6922,9 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
     // consignor responds" shape.
     const nowIso = new Date().toISOString();
 
-    const { data: newOffer, error: createOfferError } = await supabase
+    const { data: newOffer, error: createOfferError } = existingActiveOffer
+      ? { data: existingActiveOffer, error: null }
+      : await supabase
       .from("consignment_offers")
       .insert({
         order_record_id: orderRecordId,
@@ -8542,6 +8559,7 @@ app.get("/api/consignment/offers", async (req, res) => {
         member_wtb_record_id,
         previous_offer_id,
         denied_at,
+        consignor_counter_at,
         created_at
       `)
       .eq("seller_record_id", sellerRecordId);
@@ -19489,7 +19507,13 @@ app.post("/api/consignment/offers/close-for-source", async (req, res) => {
         closed_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       })
-      .eq("status", "open");
+      // FIXED — this only closed status="open" rows. Anything sitting
+      // in "store_pending" (a consignor's counter awaiting the store,
+      // including every pre-offer row built today) would never get
+      // closed here, so it would keep showing in the Portal forever
+      // even after the order was fulfilled through a different
+      // channel entirely.
+      .in("status", ["open", "store_pending"]);
 
     if (sourceType === "member_wtb") {
       query = query
