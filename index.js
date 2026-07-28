@@ -11664,7 +11664,8 @@ async function loadOrderFieldsMap(orderRecordIds) {
           "Channel Created?",
           "Shipping Label URL (Permanent)",
           "Shipping Label",
-          "Tracking URL"
+          "Tracking URL",
+          "Fulfillment Status"
         ],
         filterByFormula: formula
       })
@@ -11836,7 +11837,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
     );
 
-    const preFiltered = filteredRecords.filter((record) => {
+    const preFilteredByStatus = filteredRecords.filter((record) => {
       if (filter === "denied") return true;
 
       const f = record.fields || {};
@@ -11851,15 +11852,60 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       return filter === "countered" ? storeAlreadyCountered : !storeAlreadyCountered;
     });
 
+    // NEW — additive only: confirmed business rule — an offer should
+    // only ever disappear from the Portal via an explicit Delete, or
+    // because the order/Member WTB is no longer "Outsource" (fulfilled
+    // elsewhere, by the store or by us via another channel). Nothing
+    // previously kept Counter Offers records in sync with that — a
+    // record could sit at Status="Open" forever even after the order
+    // moved on. Excludes any item whose linked Order/Member WTB is no
+    // longer Outsource.
+    const orderIdsForStatusCheck = [...new Set(
+      preFilteredByStatus
+        .filter((r) => !firstLinkedRecordId(r.fields?.["Member WTB"]))
+        .map((r) => firstLinkedRecordId(r.fields?.["Order"]))
+        .filter(Boolean)
+    )];
+    const memberWtbIdsForStatusCheck = [...new Set(
+      preFilteredByStatus
+        .map((r) => firstLinkedRecordId(r.fields?.["Member WTB"]))
+        .filter(Boolean)
+    )];
+
+    const statusCheckOrderMap = orderIdsForStatusCheck.length
+      ? await loadOrderFieldsMap(orderIdsForStatusCheck)
+      : new Map();
+
+    let memberWtbStatusMap = new Map();
+    if (memberWtbIdsForStatusCheck.length) {
+      const mwtbFormula = `OR(${memberWtbIdsForStatusCheck.map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`).join(",")})`;
+      const mwtbRecords = await airtable(MEMBER_WTBS_TABLE)
+        .select({ filterByFormula: mwtbFormula, fields: ["Fulfillment Status"] })
+        .all();
+      memberWtbStatusMap = new Map(mwtbRecords.map((r) => [r.id, asText(r.fields?.["Fulfillment Status"])]));
+    }
+
+    const preFiltered = preFilteredByStatus.filter((record) => {
+      const f = record.fields || {};
+      const memberWtbId = firstLinkedRecordId(f["Member WTB"]);
+
+      if (memberWtbId) {
+        return memberWtbStatusMap.get(memberWtbId) === "Outsource";
+      }
+
+      const orderId = firstLinkedRecordId(f["Order"]);
+      const orderStatus = asText(statusCheckOrderMap.get(orderId)?.["Fulfillment Status"]);
+      return orderStatus === "Outsource";
+    });
+
     // NEW — additive only: for "open" (the seller's own pending
     // counter), also compute the same lowest-offer dot/comparison used
     // for fresh offers, and look up the previous round's amount so the
     // Accept-Previous button can show the actual price ("Accept
-    // €150") — same pattern as Consignment.
-    const linkedOrderIds = filter === "open"
-      ? [...new Set(preFiltered.map((r) => firstLinkedRecordId(r.fields?.["Order"])).filter(Boolean))]
-      : [];
-    const orderMap = filter === "open" ? await loadOrderFieldsMap(linkedOrderIds) : new Map();
+    // €150") — same pattern as Consignment. Reuses statusCheckOrderMap
+    // (already fetched above, covers the same order IDs) instead of a
+    // second redundant fetch.
+    const orderMap = statusCheckOrderMap;
 
     const previousIds = filter === "open"
       ? [...new Set(preFiltered.map((r) => firstLinkedRecordId(r.fields?.["Previous Record ID"])).filter(Boolean))]
@@ -13255,9 +13301,34 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
       linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
     );
 
+    // FIXED — a Seller Offer's own "Fulfillment Status" stays
+    // "Outsource" for the entire duration of a counter-offer
+    // negotiation (it only changes at final accept/deny), so this
+    // endpoint kept showing it as "still fresh" even after a counter
+    // chain had already started on it — causing the SAME item to show
+    // in both Open (from here) and Countered (from wtb-counter-offers)
+    // at once. Excludes any Seller Offer that already has a currently-
+    // open Counter Offers record referencing it.
+    const activeCounterFormula = `AND(
+      {Status} = 'Open',
+      OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')
+    )`;
+    const activeCounterRecords = await airtable(COUNTER_OFFERS_TABLE)
+      .select({ filterByFormula: activeCounterFormula, fields: ["Seller Offer Record ID"] })
+      .all();
+    const sellerOfferIdsWithActiveCounter = new Set(
+      activeCounterRecords
+        .map((r) => asText(r.fields?.["Seller Offer Record ID"]))
+        .filter(Boolean)
+    );
+
+    const filteredOffersWithoutActiveCounter = filteredOffers.filter(
+      (record) => !sellerOfferIdsWithActiveCounter.has(record.id)
+    );
+
     const linkedOrderIds = [
       ...new Set(
-        filteredOffers
+        filteredOffersWithoutActiveCounter
           .map((record) => firstLinkedRecordId(record.fields?.["Linked Orders"]))
           .filter(Boolean)
       )
@@ -13265,7 +13336,7 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
 
     const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
-    const items = filteredOffers.map((record) => {
+    const items = filteredOffersWithoutActiveCounter.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
       const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
