@@ -1991,11 +1991,13 @@ function renderWtbUnifiedOfferRows(items) {
   }
 
   dashboardTableBody.innerHTML = items.map((item) => {
-    // FIXED — moneyValue()/moneyWholeValue() (backend) already format
-    // with a € sign — prepending another one here caused "€€ 150".
-    const amount = item._kind === "fresh"
-      ? item.offer
-      : (item.counter_payout ?? item.original_offer);
+    // FIXED — "Your Offer" was showing counter_payout (the STORE's
+    // counter, converted to seller-payout terms) for "counter" items,
+    // which is confusing — it made it look like the seller had
+    // offered the store's own counter price. "Your Offer" must always
+    // be the SELLER's own position (their initial offer, or the last
+    // thing THEY placed) — original_offer, never counter_payout.
+    const amount = item._kind === "fresh" ? item.offer : item.original_offer;
 
     const dateValue = item._kind === "fresh" ? item.raw_date : (item.denied_at || item.raw_date);
 
@@ -2028,7 +2030,14 @@ function renderWtbUnifiedOfferRows(items) {
       : "";
 
     const currentLowestCell = hasLowestData ? (item.current_lowest || "-") : "-";
-    const buyersLastOfferCell = item._kind === "own_counter" ? (item.previous_store_price || "-") : "-";
+    // FIXED — this column now covers both: for "own_counter" it's the
+    // store's PREVIOUS position (before the seller's own counter,
+    // used for Accept-Previous); for "counter" it's the store's
+    // CURRENT counter — the thing the seller now needs to respond to.
+    // Same concept either way: the buyer's latest figure on the table.
+    const buyersLastOfferCell = item._kind === "own_counter"
+      ? (item.previous_store_price || "-")
+      : (item._kind === "counter" ? (item.counter_payout || "-") : "-");
 
     let actionsCell;
     if (item._kind === "fresh") {
