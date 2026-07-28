@@ -11832,26 +11832,73 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       })
       .all();
 
-    const items = records
-      .filter((record) =>
-        linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
-      )
-      .filter((record) => {
-        if (filter === "denied") return true;
+    const filteredRecords = records.filter((record) =>
+      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+    );
 
-        const f = record.fields || {};
-        const storeAlreadyCountered =
-          f["Store Counter Price"] !== undefined &&
-          f["Store Counter Price"] !== null &&
-          f["Store Counter Price"] !== "";
+    const preFiltered = filteredRecords.filter((record) => {
+      if (filter === "denied") return true;
 
-        // "countered" wants rows where the STORE/buyer just moved
-        // (seller must respond); "open" wants the opposite — the
-        // seller's own pending counter, awaiting them.
-        return filter === "countered" ? storeAlreadyCountered : !storeAlreadyCountered;
-      })
+      const f = record.fields || {};
+      const storeAlreadyCountered =
+        f["Store Counter Price"] !== undefined &&
+        f["Store Counter Price"] !== null &&
+        f["Store Counter Price"] !== "";
+
+      // "countered" wants rows where the STORE/buyer just moved
+      // (seller must respond); "open" wants the opposite — the
+      // seller's own pending counter, awaiting them.
+      return filter === "countered" ? storeAlreadyCountered : !storeAlreadyCountered;
+    });
+
+    // NEW — additive only: for "open" (the seller's own pending
+    // counter), also compute the same lowest-offer dot/comparison used
+    // for fresh offers, and look up the previous round's amount so the
+    // Accept-Previous button can show the actual price ("Accept
+    // €150") — same pattern as Consignment.
+    const linkedOrderIds = filter === "open"
+      ? [...new Set(preFiltered.map((r) => firstLinkedRecordId(r.fields?.["Order"])).filter(Boolean))]
+      : [];
+    const orderMap = filter === "open" ? await loadOrderFieldsMap(linkedOrderIds) : new Map();
+
+    const previousIds = filter === "open"
+      ? [...new Set(preFiltered.map((r) => firstLinkedRecordId(r.fields?.["Previous Record ID"])).filter(Boolean))]
+      : [];
+
+    let previousPriceById = new Map();
+    if (previousIds.length) {
+      const previousFormula = `OR(${previousIds.map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`).join(",")})`;
+      const previousRecords = await airtable(COUNTER_OFFERS_TABLE)
+        .select({ filterByFormula: previousFormula, fields: ["Store Counter Price"] })
+        .all();
+      previousPriceById = new Map(
+        previousRecords.map((r) => [r.id, numberValue(r.fields?.["Store Counter Price"])])
+      );
+    }
+
+    const items = preFiltered
       .map((record) => {
         const f = record.fields || {};
+        const linkedOrderId = firstLinkedRecordId(f["Order"]);
+        const linkedMemberWtbId = firstLinkedRecordId(f["Member WTB"]);
+        const isMemberWtb = !!linkedMemberWtbId;
+        const orderFields = orderMap.get(linkedOrderId) || {};
+
+        const vatType = displayValue(f["Counter Payout VAT Type"]);
+        const counterAmount = numberValue(f["Seller Original Price"]);
+
+        const currentLowest = filter === "open" && !isMemberWtb
+          ? (vatType === "VAT0"
+              ? numberValue(orderFields["Current Lowest (VAT0)"])
+              : numberValue(orderFields["Current Lowest (Normalized)"]))
+          : null;
+
+        const isLowest = filter === "open" && !isMemberWtb
+          ? displayValue(orderFields["Lowest Offer Seller ID"]) === displayValue(req.query.seller_id)
+          : null;
+
+        const previousOfferId = firstLinkedRecordId(f["Previous Record ID"]);
+        const previousStorePrice = previousOfferId ? previousPriceById.get(previousOfferId) : null;
 
         return {
           id: record.id,
@@ -11862,8 +11909,11 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           brand: displayValue(f["Brand"]),
           original_offer: moneyValue(f["Seller Original Price"]),
           counter_payout: moneyValue(f["Counter Payout"]),
-          vat_type: displayValue(f["Counter Payout VAT Type"]),
-          previous_record_id: firstLinkedRecordId(f["Previous Record ID"]),
+          vat_type: vatType,
+          previous_record_id: previousOfferId,
+          previous_store_price: Number.isFinite(previousStorePrice) ? moneyWholeValue(previousStorePrice) : null,
+          current_lowest: Number.isFinite(currentLowest) ? moneyWholeValue(currentLowest) : null,
+          status: filter === "open" ? (isLowest ? "Lowest" : "Beaten") : null,
           raw_date: displayValue(f["Created At"]),
           denied_at: displayValue(f["Denied At"] || f["Last Modified"])
         };
@@ -11915,6 +11965,115 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/cancel", async (req, res) =
 
     res.status(500).json({
       error: "Failed to cancel offer",
+      details: err.message
+    });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: lets a seller fall back to accepting the
+// store/buyer's PREVIOUS counter instead of waiting on a response to
+// their own pending counter (Countered→Open pill, "Accept €X" button)
+// — same idea as Consignment's accept-previous, reusing the core
+// accept logic already used by the Discord counter_offer_accept:
+// handler (status checks, the Make webhook, and the Custom-Offer
+// write-back fix), just without the Discord-message-editing parts a
+// Portal action doesn't need.
+// ---------------------------------------------------------------------
+app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (req, res) => {
+  try {
+    const pendingOfferId = asText(req.params.offerId);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+
+    if (!pendingOfferId || !sellerRecordId) {
+      return res.status(400).json({ error: "Missing offerId or seller_record_id" });
+    }
+
+    const pendingOffer = await airtable(COUNTER_OFFERS_TABLE).find(pendingOfferId);
+    const pendingFields = pendingOffer.fields || {};
+
+    if (!linkedRecordIncludes(pendingFields["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    const previousOfferId = firstLinkedRecordId(pendingFields["Previous Record ID"]);
+
+    if (!previousOfferId) {
+      return res.status(409).json({ error: "There is no previous offer to accept." });
+    }
+
+    const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(previousOfferId);
+    const f = counterOffer.fields || {};
+
+    if (asText(f["Status"]) !== "Open") {
+      return res.status(409).json({ error: "That previous offer is no longer available." });
+    }
+
+    const linkedOrderId = firstLinkedRecordId(f["Order"]);
+
+    if (!linkedOrderId) {
+      return res.status(500).json({ error: "Counter Offer missing linked Order" });
+    }
+
+    const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
+    const orderStatus = asText(orderRecord.fields?.["Fulfillment Status"]);
+
+    if (orderStatus !== "Outsource") {
+      return res.status(409).json({ error: "This order is no longer available." });
+    }
+
+    await airtable(COUNTER_OFFERS_TABLE).update(previousOfferId, {
+      "Status": "Accepted",
+      "Accepted At": new Date().toISOString(),
+      "Closed At": new Date().toISOString()
+    });
+
+    // Abandon the seller's own pending counter — they're choosing the
+    // buyer's earlier position instead.
+    await airtable(COUNTER_OFFERS_TABLE).update(pendingOfferId, {
+      "Status": "Denied",
+      "Denied At": new Date().toISOString(),
+      "Closed At": new Date().toISOString()
+    }).catch((err) => console.error("Failed to close abandoned own counter (non-blocking):", err));
+
+    if (COUNTER_OFFER_ACCEPT_WEBHOOK_URL) {
+      await fetch(COUNTER_OFFER_ACCEPT_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trigger_type: "counter-offer-accepted",
+          counter_offer_record_id: previousOfferId,
+          order_record_id: linkedOrderId,
+          seller_record_id: firstLinkedRecordId(f["Seller ID"]),
+          seller_offer_record_id: asText(f["Seller Offer Record ID"]),
+          source_type: asText(f["Source Type"]),
+          store_counter_price: numberValue(f["Store Counter Price"]),
+          store_counter_price_excl_vat: numberValue(f["Store Counter Price Excl VAT"]),
+          counter_payout: numberValue(f["Counter Payout"]),
+          counter_payout_vat_type: asText(f["Counter Payout VAT Type"]),
+          seller_original_price: numberValue(f["Seller Original Price"]),
+          seller_original_vat_type: asText(f["Seller Original VAT Type"]),
+          accepted_at_iso: new Date().toISOString()
+        })
+      }).catch((err) => console.error("Failed to fire accept webhook (non-blocking):", err));
+    }
+
+    try {
+      await airtable(ORDERS_TABLE).update(linkedOrderId, {
+        "Custom Offer": numberValue(f["Store Counter Price"]),
+        "Offer Accepted?": true,
+        "Offer Sent?": false
+      });
+    } catch (priceWriteErr) {
+      console.error("Failed to write accepted price to Order record (non-blocking):", priceWriteErr);
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to accept previous WTB counter offer:", err);
+
+    res.status(500).json({
+      error: "Failed to accept previous offer",
       details: err.message
     });
   }
