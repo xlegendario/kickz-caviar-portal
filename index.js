@@ -11907,18 +11907,30 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     // second redundant fetch.
     const orderMap = statusCheckOrderMap;
 
-    const previousIds = filter === "open"
+    // FIXED — needed for both "open" (Accept-Previous needs the
+    // store's prior price) AND "countered" (the seller's own current
+    // position — "Your Offer" — for a store-created round isn't on
+    // that round itself; it's whatever the seller last placed on the
+    // PRIOR round, which "Seller Original Price" alone doesn't
+    // reliably capture once more than one round of back-and-forth has
+    // happened, since that field never changes from the very first
+    // ask).
+    const previousIds = (filter === "open" || filter === "countered")
       ? [...new Set(preFiltered.map((r) => firstLinkedRecordId(r.fields?.["Previous Record ID"])).filter(Boolean))]
       : [];
 
     let previousPriceById = new Map();
+    let previousSellerCounterById = new Map();
     if (previousIds.length) {
       const previousFormula = `OR(${previousIds.map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`).join(",")})`;
       const previousRecords = await airtable(COUNTER_OFFERS_TABLE)
-        .select({ filterByFormula: previousFormula, fields: ["Store Counter Price"] })
+        .select({ filterByFormula: previousFormula, fields: ["Store Counter Price", "Seller Counter Price"] })
         .all();
       previousPriceById = new Map(
         previousRecords.map((r) => [r.id, numberValue(r.fields?.["Store Counter Price"])])
+      );
+      previousSellerCounterById = new Map(
+        previousRecords.map((r) => [r.id, numberValue(r.fields?.["Seller Counter Price"])])
       );
     }
 
@@ -11931,7 +11943,6 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         const orderFields = orderMap.get(linkedOrderId) || {};
 
         const vatType = displayValue(f["Counter Payout VAT Type"]);
-        const counterAmount = numberValue(f["Seller Original Price"]);
 
         const currentLowest = filter === "open" && !isMemberWtb
           ? (vatType === "VAT0"
@@ -11946,6 +11957,22 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         const previousOfferId = firstLinkedRecordId(f["Previous Record ID"]);
         const previousStorePrice = previousOfferId ? previousPriceById.get(previousOfferId) : null;
 
+        // FIXED — "Your Offer" must be the SELLER's actual current
+        // position, not the fixed, never-updated "Seller Original
+        // Price". For "open" (own_counter): this round's own "Seller
+        // Counter Price" IS what the seller just placed. For
+        // "countered" (store just moved): this round has no seller
+        // counter on it — the seller's last position is whatever they
+        // placed on the PRIOR round (its Seller Counter Price if they'd
+        // countered before, else fall back to Seller Original Price
+        // for a genuinely first-ever response).
+        const ownSellerCounter = numberValue(f["Seller Counter Price"]);
+        const sellerLastOffer = filter === "open"
+          ? (Number.isFinite(ownSellerCounter) ? ownSellerCounter : numberValue(f["Seller Original Price"]))
+          : (previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
+              ? previousSellerCounterById.get(previousOfferId)
+              : numberValue(f["Seller Original Price"]));
+
         return {
           id: record.id,
           order_id: displayValue(f["Order ID"]) || displayValue(f["Order"]),
@@ -11953,7 +11980,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           sku: displayValue(f["SKU"]),
           size: displayValue(f["Size"]),
           brand: displayValue(f["Brand"]),
-          original_offer: moneyValue(f["Seller Original Price"]),
+          original_offer: Number.isFinite(sellerLastOffer) ? moneyValue(sellerLastOffer) : moneyValue(f["Seller Original Price"]),
           counter_payout: moneyValue(f["Counter Payout"]),
           vat_type: vatType,
           previous_record_id: previousOfferId,
