@@ -8586,10 +8586,40 @@ app.get("/api/consignment/offers", async (req, res) => {
 
     if (error) throw error;
 
+    // NEW — additive only: for the Countered pill specifically, look up
+    // the previous round's store price so the Accept-Previous button
+    // can show the actual amount ("Accept €150") instead of a generic
+    // label — needed everywhere this button appears.
+    let items = data || [];
+
+    if (filter === "counter" && items.length) {
+      const previousIds = items
+        .map((item) => item.previous_offer_id)
+        .filter(Boolean);
+
+      if (previousIds.length) {
+        const { data: previousRows } = await supabase
+          .from("consignment_offers")
+          .select("id, store_counter_price")
+          .in("id", previousIds);
+
+        const previousPriceById = new Map(
+          (previousRows || []).map((row) => [row.id, row.store_counter_price])
+        );
+
+        items = items.map((item) => ({
+          ...item,
+          previous_store_price: item.previous_offer_id
+            ? previousPriceById.get(item.previous_offer_id) ?? null
+            : null
+        }));
+      }
+    }
+
     res.json({
       ok: true,
-      count: data?.length || 0,
-      items: data || []
+      count: items.length,
+      items
     });
   } catch (err) {
     console.error("Failed to load consignment offers:", err);
