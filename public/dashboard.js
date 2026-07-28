@@ -1143,7 +1143,7 @@ function renderConsignmentOfferRows(items) {
             <div class="dashboard-action-row">
               ${hasPrior ? `
                 <button class="dashboard-counter-btn" type="button" data-consignment-offer-edit-id="${escapeHtml(item.id || "")}">Edit</button>
-                <button class="dashboard-confirm-btn" type="button" data-consignment-accept-previous-id="${escapeHtml(item.id || "")}">Accept Previous</button>
+                <button class="dashboard-confirm-btn" type="button" data-consignment-accept-previous-id="${escapeHtml(item.id || "")}">${item.previous_store_price ? `Accept €${escapeHtml(item.previous_store_price)}` : "Accept Previous"}</button>
               ` : ""}
               <button class="dashboard-deny-btn" type="button" data-consignment-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
             </div>
@@ -4781,6 +4781,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
 
     if (consignmentAcceptPreviousButton) {
       const offerId = consignmentAcceptPreviousButton.dataset.consignmentAcceptPreviousId;
+      const originalLabel = consignmentAcceptPreviousButton.textContent;
 
       if (!confirm("Accept the store's previous offer instead of waiting for a response to your counter?")) {
         return;
@@ -4808,7 +4809,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
         alert(err.message);
       } finally {
         consignmentAcceptPreviousButton.disabled = false;
-        consignmentAcceptPreviousButton.textContent = "Accept Previous";
+        consignmentAcceptPreviousButton.textContent = originalLabel;
       }
 
       return;
