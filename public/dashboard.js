@@ -1974,7 +1974,7 @@ function renderWtbUnifiedOfferRows(items) {
   const isDenied = activeOfferStatusFilter === "denied";
   const columns = isDenied
     ? ["Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "Denied", "Actions"]
-    : ["", "Order ID", "Product", "SKU", "Size", "Brand", "Amount", "VAT Type", "Current Lowest", "Date", "Actions"];
+    : ["", "Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "Buyer's Last Offer", "VAT Type", "Current Lowest", "Date", "Actions"];
 
   dashboardTableHead.innerHTML = columns.map((c) => `<th>${c}</th>`).join("");
 
@@ -2018,18 +2018,17 @@ function renderWtbUnifiedOfferRows(items) {
       `;
     }
 
-    // RESTORED — the dot indicator and Current Lowest column only
-    // apply to "fresh" items: that's the only case where the backend
-    // computes a same-VAT-scale comparison (wtb-open-offers already
-    // normalizes to the offer's own VAT type — VAT0 vs VAT0, never
-    // comparing a VAT0 offer against a VAT-inclusive lowest, which
-    // would misleadingly look "not lower" even when it actually is).
-    // "own_counter"/"counter" items don't have this data computed yet.
-    const dotCell = item._kind === "fresh"
+    // The dot indicator and Current Lowest column now apply to BOTH
+    // "fresh" AND "own_counter" items — the backend computes the same
+    // same-VAT-scale comparison for both, so a seller mid-counter can
+    // still see if someone else has undercut them in the meantime.
+    const hasLowestData = item._kind === "fresh" || item._kind === "own_counter";
+    const dotCell = hasLowestData
       ? `<div class="dashboard-status-dot ${item.status === "Lowest" ? "dashboard-status-dot-lowest" : "dashboard-status-dot-beaten"}"></div>`
       : "";
 
-    const currentLowestCell = item._kind === "fresh" ? (item.current_lowest || "-") : "-";
+    const currentLowestCell = hasLowestData ? (item.current_lowest || "-") : "-";
+    const buyersLastOfferCell = item._kind === "own_counter" ? (item.previous_store_price || "-") : "-";
 
     let actionsCell;
     if (item._kind === "fresh") {
@@ -2049,8 +2048,11 @@ function renderWtbUnifiedOfferRows(items) {
     } else if (item._kind === "own_counter") {
       // Edit for an already-placed counter isn't wired up yet (needs
       // its own investigation into the Store Orders counter-edit
-      // flow) — Delete is available now.
+      // flow). Accept-Previous and Delete are available now.
       actionsCell = `
+        ${item.previous_record_id ? `
+          <button class="dashboard-confirm-btn" type="button" data-wtb-accept-previous-id="${escapeHtml(item.id || "")}">${item.previous_store_price ? `Accept ${escapeHtml(item.previous_store_price)}` : "Accept Previous"}</button>
+        ` : ""}
         <button class="dashboard-deny-btn" type="button" data-wtb-cancel-counter-id="${escapeHtml(item.id || "")}">Delete</button>
       `;
     } else {
@@ -2068,6 +2070,7 @@ function renderWtbUnifiedOfferRows(items) {
         <td>${escapeHtml(item.size || "-")}</td>
         <td>${escapeHtml(item.brand || "-")}</td>
         <td>${escapeHtml(amount || "-")}</td>
+        <td>${escapeHtml(buyersLastOfferCell)}</td>
         <td>${escapeHtml(item.vat_type || "-")}</td>
         <td>${escapeHtml(currentLowestCell)}</td>
         <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
@@ -5069,6 +5072,44 @@ dashboardTableBody.addEventListener("click", async (event) => {
     } catch (err) {
       alert(err.message);
       deleteButton.disabled = false;
+    }
+
+    return;
+  }
+
+  // NEW — additive only: accept the store/buyer's previous counter
+  // instead of waiting on a response to the seller's own pending one.
+  const wtbAcceptPreviousButton = event.target.closest("[data-wtb-accept-previous-id]");
+  if (wtbAcceptPreviousButton) {
+    const offerId = wtbAcceptPreviousButton.dataset.wtbAcceptPreviousId;
+    const originalLabel = wtbAcceptPreviousButton.textContent;
+
+    if (!confirm("Accept the buyer's previous offer instead of waiting for a response to your counter?")) {
+      return;
+    }
+
+    wtbAcceptPreviousButton.disabled = true;
+    wtbAcceptPreviousButton.textContent = "Accepting...";
+
+    try {
+      const response = await fetch(`/api/dashboard/wtb-counter-offers/${offerId}/accept-previous`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seller_record_id: dashboardSeller.id })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to accept the previous offer");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      wtbAcceptPreviousButton.disabled = false;
+      wtbAcceptPreviousButton.textContent = originalLabel;
     }
 
     return;
