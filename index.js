@@ -7549,6 +7549,10 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
       "Seller Original VAT Type": sellerVatType,
       "Seller Counter Price": proposedPrice,
       "Previous Record ID": previousRecordId,
+      // FIXED — only round 1 ever set this; every subsequent round
+      // (seller-counter or store-counter) left it empty, showing "-"
+      // in the Date column.
+      "Created At": new Date().toISOString(),
       "Status": "Open"
     });
 
@@ -7732,6 +7736,8 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
       "Counter Payout": recomputedPayout,
       "Counter Payout VAT Type": sellerVatType,
       "Previous Record ID": previousRecordId,
+      // FIXED — same Date fix as seller-counter above.
+      "Created At": new Date().toISOString(),
       "Status": "Open"
     });
 
@@ -11974,14 +11980,33 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         // every round consistently carries.
         const vatType = displayValue(f["Counter Payout VAT Type"]) || displayValue(f["Seller Original VAT Type"]);
 
-        const currentLowest = filter === "open" && !isMemberWtb
+        // FIXED — the rollup fields below ("Current Lowest ...") are
+        // Airtable rollups over the raw Seller Offers table price,
+        // which an in-progress Counter Offers negotiation never
+        // touches — so a seller's own fresh counter (this round) never
+        // showed up there, making it look like they were still
+        // "Beaten" even when their new counter was actually the best
+        // price on the table. This doesn't fix the full picture (a
+        // DIFFERENT seller's own in-progress counter still won't be
+        // reflected here either — that's a separate, bigger question),
+        // but at minimum this seller's own current position is now
+        // correctly factored in as a candidate for the lowest.
+        const ownCounterForLowestCheck = filter === "open" ? numberValue(f["Seller Counter Price"]) : null;
+        const rollupLowest = filter === "open" && !isMemberWtb
           ? (vatType === "VAT0"
               ? numberValue(orderFields["Current Lowest (VAT0)"])
               : numberValue(orderFields["Current Lowest (Normalized)"]))
           : null;
 
+        const currentLowest = Number.isFinite(rollupLowest) && Number.isFinite(ownCounterForLowestCheck)
+          ? Math.min(rollupLowest, ownCounterForLowestCheck)
+          : (rollupLowest ?? ownCounterForLowestCheck);
+
         const isLowest = filter === "open" && !isMemberWtb
-          ? displayValue(orderFields["Lowest Offer Seller ID"]) === displayValue(req.query.seller_id)
+          ? (
+              displayValue(orderFields["Lowest Offer Seller ID"]) === displayValue(req.query.seller_id) ||
+              (Number.isFinite(ownCounterForLowestCheck) && Number.isFinite(rollupLowest) && ownCounterForLowestCheck <= rollupLowest)
+            )
           : null;
 
         const previousOfferId = firstLinkedRecordId(f["Previous Record ID"]);
