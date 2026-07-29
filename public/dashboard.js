@@ -2067,8 +2067,11 @@ function renderWtbUnifiedOfferRows(items) {
       `;
     } else {
       // "counter" — store/buyer just moved, seller must respond.
-      // Real Accept/Counter/Deny actions for this aren't wired up yet.
-      actionsCell = `<span class="dashboard-status-pill">Awaiting you</span>`;
+      actionsCell = `
+        <button class="dashboard-confirm-btn" type="button" data-wtb-seller-accept-id="${escapeHtml(item.id || "")}">${item.counter_payout ? `Accept ${escapeHtml(item.counter_payout)}` : "Accept"}</button>
+        <button class="dashboard-counter-btn" type="button" data-wtb-seller-counter-id="${escapeHtml(item.id || "")}">Counter</button>
+        <button class="dashboard-deny-btn" type="button" data-wtb-seller-deny-id="${escapeHtml(item.id || "")}">Deny</button>
+      `;
     }
 
     return `
@@ -5082,6 +5085,120 @@ dashboardTableBody.addEventListener("click", async (event) => {
     } catch (err) {
       alert(err.message);
       deleteButton.disabled = false;
+    }
+
+    return;
+  }
+
+  // NEW — additive only: seller directly accepts the store/buyer's
+  // current counter.
+  const wtbSellerAcceptButton = event.target.closest("[data-wtb-seller-accept-id]");
+  if (wtbSellerAcceptButton) {
+    const offerId = wtbSellerAcceptButton.dataset.wtbSellerAcceptId;
+    const originalLabel = wtbSellerAcceptButton.textContent;
+
+    if (!confirm("Accept this offer?")) return;
+
+    wtbSellerAcceptButton.disabled = true;
+    wtbSellerAcceptButton.textContent = "Accepting...";
+
+    try {
+      const response = await fetch(`/api/dashboard/wtb-counter-offers/${offerId}/seller-accept`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seller_record_id: dashboardSeller.id })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to accept the offer");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      wtbSellerAcceptButton.disabled = false;
+      wtbSellerAcceptButton.textContent = originalLabel;
+    }
+
+    return;
+  }
+
+  // NEW — additive only: seller denies the store/buyer's current
+  // counter — reopens the prior round if there is one, matching the
+  // existing Discord deny behavior.
+  const wtbSellerDenyButton = event.target.closest("[data-wtb-seller-deny-id]");
+  if (wtbSellerDenyButton) {
+    const offerId = wtbSellerDenyButton.dataset.wtbSellerDenyId;
+
+    if (!confirm("Deny this offer?")) return;
+
+    wtbSellerDenyButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/dashboard/wtb-counter-offers/${offerId}/seller-deny`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seller_record_id: dashboardSeller.id })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to deny the offer");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      wtbSellerDenyButton.disabled = false;
+    }
+
+    return;
+  }
+
+  // NEW — additive only: seller counters back on the store/buyer's
+  // current counter, reusing the existing (already band-validated)
+  // seller-counter endpoint. Simple prompt() for the price, matching
+  // the same deliberately-basic input pattern used elsewhere this
+  // session — the real design pass comes later.
+  const wtbSellerCounterButton = event.target.closest("[data-wtb-seller-counter-id]");
+  if (wtbSellerCounterButton) {
+    const offerId = wtbSellerCounterButton.dataset.wtbSellerCounterId;
+    const priceInput = prompt("Your counter offer (€):");
+
+    if (!priceInput) return;
+
+    const price = Number(priceInput);
+
+    if (!Number.isFinite(price) || price <= 0) {
+      alert("Enter a valid amount.");
+      return;
+    }
+
+    wtbSellerCounterButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/counter-offers/${offerId}/seller-counter`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ price, seller_record_id: dashboardSeller.id })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to submit counter");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      wtbSellerCounterButton.disabled = false;
     }
 
     return;
