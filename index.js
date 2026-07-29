@@ -7456,6 +7456,20 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
     const previousRecord = await airtable(COUNTER_OFFERS_TABLE).find(previousRecordId);
     const f = previousRecord.fields || {};
 
+    // NEW — additive only: this endpoint was only ever called from
+    // Discord before, where the interaction itself implicitly proves
+    // who's clicking (only the intended seller receives that specific
+    // DM). Now that the Portal also calls it directly over HTTP, that
+    // implicit protection doesn't carry over — anyone with network
+    // access could otherwise submit a counter using someone else's
+    // record ID. Only enforced when seller_record_id is provided, so
+    // the existing Discord caller (which doesn't send it) is
+    // unaffected.
+    const requestingSellerRecordId = asText(req.body?.seller_record_id);
+    if (requestingSellerRecordId && !linkedRecordIncludes(f["Seller ID"], requestingSellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
     if (asText(f["Status"]) !== "Open") {
       return res.status(409).json({ error: "This counter offer is no longer open." });
     }
@@ -12147,6 +12161,202 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
 
     res.status(500).json({
       error: "Failed to accept previous offer",
+      details: err.message
+    });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: lets a seller directly Accept the store/buyer's
+// current counter from the Countered pill — the last missing action
+// for Want To Buys. Reuses the exact same core logic (status checks,
+// the Make webhook, the Custom-Offer write-back fix) as the existing
+// Discord counter_offer_accept: handler and the accept-previous
+// endpoint above, just applied to THIS round directly.
+// ---------------------------------------------------------------------
+app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-accept", async (req, res) => {
+  try {
+    const counterOfferRecordId = asText(req.params.offerId);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+
+    if (!counterOfferRecordId || !sellerRecordId) {
+      return res.status(400).json({ error: "Missing offerId or seller_record_id" });
+    }
+
+    const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
+    const f = counterOffer.fields || {};
+
+    if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    if (asText(f["Status"]) !== "Open") {
+      return res.status(409).json({ error: "This counter offer is no longer available." });
+    }
+
+    const linkedOrderId = firstLinkedRecordId(f["Order"]);
+
+    if (!linkedOrderId) {
+      return res.status(500).json({ error: "Counter Offer missing linked Order" });
+    }
+
+    const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
+    const orderStatus = asText(orderRecord.fields?.["Fulfillment Status"]);
+
+    if (orderStatus !== "Outsource") {
+      return res.status(409).json({ error: "This order is no longer available." });
+    }
+
+    await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+      "Status": "Accepted",
+      "Accepted At": new Date().toISOString(),
+      "Closed At": new Date().toISOString()
+    });
+
+    if (COUNTER_OFFER_ACCEPT_WEBHOOK_URL) {
+      await fetch(COUNTER_OFFER_ACCEPT_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trigger_type: "counter-offer-accepted",
+          counter_offer_record_id: counterOfferRecordId,
+          order_record_id: linkedOrderId,
+          seller_record_id: firstLinkedRecordId(f["Seller ID"]),
+          seller_offer_record_id: asText(f["Seller Offer Record ID"]),
+          source_type: asText(f["Source Type"]),
+          store_counter_price: numberValue(f["Store Counter Price"]),
+          store_counter_price_excl_vat: numberValue(f["Store Counter Price Excl VAT"]),
+          counter_payout: numberValue(f["Counter Payout"]),
+          counter_payout_vat_type: asText(f["Counter Payout VAT Type"]),
+          seller_original_price: numberValue(f["Seller Original Price"]),
+          seller_original_vat_type: asText(f["Seller Original VAT Type"]),
+          accepted_at_iso: new Date().toISOString()
+        })
+      }).catch((err) => console.error("Failed to fire accept webhook (non-blocking):", err));
+    }
+
+    try {
+      await airtable(ORDERS_TABLE).update(linkedOrderId, {
+        "Custom Offer": numberValue(f["Store Counter Price"]),
+        "Offer Accepted?": true,
+        "Offer Sent?": false
+      });
+    } catch (priceWriteErr) {
+      console.error("Failed to write accepted price to Order record (non-blocking):", priceWriteErr);
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to accept WTB counter offer:", err);
+
+    res.status(500).json({
+      error: "Failed to accept offer",
+      details: err.message
+    });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: lets a seller Deny the store/buyer's current
+// counter from the Countered pill. Reuses the exact same reopen-prior-
+// round logic as the existing Discord counter_offer_deny: handler —
+// if this counter was itself responding to an earlier seller counter,
+// that prior round reopens (back to Open) instead of just dead-ending,
+// and the store gets notified via the same Discord mechanism the
+// Discord-side deny already uses.
+// ---------------------------------------------------------------------
+app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, res) => {
+  try {
+    const counterOfferRecordId = asText(req.params.offerId);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+
+    if (!counterOfferRecordId || !sellerRecordId) {
+      return res.status(400).json({ error: "Missing offerId or seller_record_id" });
+    }
+
+    const deniedRecord = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
+    const deniedFields = deniedRecord.fields || {};
+
+    if (!linkedRecordIncludes(deniedFields["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    if (asText(deniedFields["Status"]) !== "Open") {
+      return res.status(409).json({ error: "This counter offer is no longer available." });
+    }
+
+    await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+      "Status": "Denied",
+      "Denied At": new Date().toISOString(),
+      "Closed At": new Date().toISOString()
+    });
+
+    const deniedOrderId = firstLinkedRecordId(deniedFields["Order"]);
+    const deniedPrice = numberValue(deniedFields["Store Counter Price"]);
+    const priorRoundId = asText(deniedFields["Previous Record ID"]);
+
+    if (deniedOrderId && AIRTABLE_DISCORD_UPDATES_URL) {
+      const orderRecord = await airtable(ORDERS_TABLE).find(deniedOrderId);
+      const orderFields = orderRecord.fields || {};
+
+      if (priorRoundId) {
+        const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
+
+        if (priorRound) {
+          await airtable(COUNTER_OFFERS_TABLE).update(priorRoundId, { "Status": "Open" });
+
+          const priorFields = priorRound.fields || {};
+          const priorSellerCounter = numberValue(priorFields["Seller Counter Price"]);
+          const priorVatType = asText(priorFields["Seller Original VAT Type"] || deniedFields["Seller Original VAT Type"]);
+          const priorSellerCounterInStoreTerms = calculateStoreCounterEquivalent(
+            priorSellerCounter,
+            priorVatType,
+            orderFields
+          );
+
+          await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              trigger_type: "counter-offer-seller-countered",
+              store_name: asText(orderFields["Store Name"]),
+              record_id: deniedOrderId,
+              shopify_order_number: asText(orderFields["Shopify Order Number"]),
+              product_name: asText(deniedFields["Product Name"]),
+              sku: asText(deniedFields["SKU"]),
+              size: asText(deniedFields["Size"]),
+              counter_offer_record_id: priorRoundId,
+              selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
+              your_previous_counter: deniedPrice,
+              seller_counter_price: priorSellerCounterInStoreTerms ?? priorSellerCounter,
+              denied_price: deniedPrice
+            })
+          }).catch((err) => console.error("Failed to notify store of reopened round (non-blocking):", err));
+        }
+      } else {
+        await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            trigger_type: "counter-offer-denied",
+            store_name: asText(orderFields["Store Name"]),
+            record_id: deniedOrderId,
+            shopify_order_number: asText(orderFields["Shopify Order Number"]),
+            product_name: asText(deniedFields["Product Name"]),
+            sku: asText(deniedFields["SKU"]),
+            size: asText(deniedFields["Size"]),
+            denied_price: deniedPrice
+          })
+        }).catch((err) => console.error("Failed to notify store of denial (non-blocking):", err));
+      }
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to deny WTB counter offer:", err);
+
+    res.status(500).json({
+      error: "Failed to deny offer",
       details: err.message
     });
   }
