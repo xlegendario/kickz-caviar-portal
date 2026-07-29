@@ -2056,11 +2056,9 @@ function renderWtbUnifiedOfferRows(items) {
         <button class="dashboard-deny-btn" type="button" data-delete-offer-id="${escapeHtml(item.id || "")}">Delete</button>
       `;
     } else if (item._kind === "own_counter") {
-      // Edit for an already-placed counter isn't wired up yet (needs
-      // its own investigation into the Store Orders counter-edit
-      // flow). Accept-Previous and Delete are available now.
       actionsCell = `
         ${item.previous_record_id ? `
+          <button class="dashboard-counter-btn" type="button" data-wtb-edit-counter-id="${escapeHtml(item.id || "")}">Edit</button>
           <button class="dashboard-confirm-btn" type="button" data-wtb-accept-previous-id="${escapeHtml(item.id || "")}">${item.previous_store_price ? `Accept ${escapeHtml(item.previous_store_price)}` : "Accept Previous"}</button>
         ` : ""}
         <button class="dashboard-deny-btn" type="button" data-wtb-cancel-counter-id="${escapeHtml(item.id || "")}">Delete</button>
@@ -5244,6 +5242,48 @@ dashboardTableBody.addEventListener("click", async (event) => {
 
   // NEW — additive only: delete the seller's own pending counter
   // (Counter Offers table record), which has no existing delete path.
+  // NEW — additive only: edit the seller's own already-placed counter
+  // to a lower amount, using the pre-existing (now Portal-wrapped)
+  // edit endpoint.
+  const wtbEditCounterButton = event.target.closest("[data-wtb-edit-counter-id]");
+  if (wtbEditCounterButton) {
+    const offerId = wtbEditCounterButton.dataset.wtbEditCounterId;
+    const priceInput = prompt("Your new counter offer (€):");
+
+    if (!priceInput) return;
+
+    const price = Number(priceInput);
+
+    if (!Number.isFinite(price) || price <= 0) {
+      alert("Enter a valid amount.");
+      return;
+    }
+
+    wtbEditCounterButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/dashboard/wtb-counter-offers/${offerId}/seller-edit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ price, seller_record_id: dashboardSeller.id })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to edit the counter");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      wtbEditCounterButton.disabled = false;
+    }
+
+    return;
+  }
+
   const wtbCancelCounterButton = event.target.closest("[data-wtb-cancel-counter-id]");
   if (wtbCancelCounterButton) {
     const offerId = wtbCancelCounterButton.dataset.wtbCancelCounterId;
