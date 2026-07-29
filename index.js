@@ -7537,6 +7537,14 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
       "Order": [linkedOrderId],
       "Seller ID": linkedSellerId ? [linkedSellerId] : undefined,
       "Source Type": asText(f["Source Type"]) || "Seller Offer",
+      // FIXED — this field was never carried forward past round 1,
+      // which broke the duplicate-visibility exclusion in
+      // wtb-open-offers (it looks for an active Counter Offers record
+      // referencing the original Seller Offer — with this missing,
+      // round 2+ was invisible to that check, so the same order showed
+      // in Open twice: once as the stale "fresh" item, once as this
+      // round).
+      "Seller Offer Record ID": asText(f["Seller Offer Record ID"]),
       "Seller Original Price": sellerOriginalPrice,
       "Seller Original VAT Type": sellerVatType,
       "Seller Counter Price": proposedPrice,
@@ -7716,6 +7724,8 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
       "Order": [linkedOrderId],
       "Seller ID": linkedSellerId ? [linkedSellerId] : undefined,
       "Source Type": asText(f["Source Type"]) || "Seller Offer",
+      // FIXED — same carry-forward fix as seller-counter above.
+      "Seller Offer Record ID": asText(f["Seller Offer Record ID"]),
       "Seller Original Price": sellerOriginalPrice,
       "Seller Original VAT Type": sellerVatType,
       "Store Counter Price": proposedPrice,
@@ -11956,7 +11966,13 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         const isMemberWtb = !!linkedMemberWtbId;
         const orderFields = orderMap.get(linkedOrderId) || {};
 
-        const vatType = displayValue(f["Counter Payout VAT Type"]);
+        // FIXED — "Counter Payout VAT Type" is only ever set on a
+        // STORE-created round (store-counter writes it, seller-counter
+        // never does) — so an own_counter round (created by the
+        // seller countering) always had this empty, showing "-" for
+        // VAT Type. Falls back to "Seller Original VAT Type", which
+        // every round consistently carries.
+        const vatType = displayValue(f["Counter Payout VAT Type"]) || displayValue(f["Seller Original VAT Type"]);
 
         const currentLowest = filter === "open" && !isMemberWtb
           ? (vatType === "VAT0"
@@ -13551,17 +13567,41 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
       OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')
     )`;
     const activeCounterRecords = await airtable(COUNTER_OFFERS_TABLE)
-      .select({ filterByFormula: activeCounterFormula, fields: ["Seller Offer Record ID"] })
+      .select({ filterByFormula: activeCounterFormula, fields: ["Seller Offer Record ID", "Order", "Member WTB", "Seller ID"] })
       .all();
     const sellerOfferIdsWithActiveCounter = new Set(
       activeCounterRecords
         .map((r) => asText(r.fields?.["Seller Offer Record ID"]))
         .filter(Boolean)
     );
-
-    const filteredOffersWithoutActiveCounter = filteredOffers.filter(
-      (record) => !sellerOfferIdsWithActiveCounter.has(record.id)
+    // FIXED — "Seller Offer Record ID" is only reliably set on a
+    // round's very first row (round 1) — every subsequent counter
+    // round (seller-counter or store-counter) never carried it
+    // forward, so this exclusion alone missed anything past round 1,
+    // showing the same order in both Open and Countered at once. Now
+    // also cross-references by Order+Seller, which every round always
+    // has set correctly, covering existing records too (not just ones
+    // created after the carry-forward fix above).
+    const orderSellerKeysWithActiveCounter = new Set(
+      activeCounterRecords
+        .map((r) => {
+          const orderId = firstLinkedRecordId(r.fields?.["Order"]) || firstLinkedRecordId(r.fields?.["Member WTB"]);
+          const sellerId = firstLinkedRecordId(r.fields?.["Seller ID"]);
+          return orderId && sellerId ? `${orderId}::${sellerId}` : null;
+        })
+        .filter(Boolean)
     );
+
+    const filteredOffersWithoutActiveCounter = filteredOffers.filter((record) => {
+      if (sellerOfferIdsWithActiveCounter.has(record.id)) return false;
+
+      const f = record.fields || {};
+      const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]) || firstLinkedRecordId(f["Member WTBs"]);
+      const linkedSellerId = firstLinkedRecordId(f["Seller ID"]);
+      const key = linkedOrderId && linkedSellerId ? `${linkedOrderId}::${linkedSellerId}` : null;
+
+      return !(key && orderSellerKeysWithActiveCounter.has(key));
+    });
 
     const linkedOrderIds = [
       ...new Set(
