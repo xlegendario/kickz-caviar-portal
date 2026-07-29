@@ -12403,6 +12403,59 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
   }
 });
 
+// ---------------------------------------------------------------------
+// NEW — additive only: lets a seller edit their own already-placed
+// counter (own_counter items in the Open pill) to a lower amount. The
+// existing /api/counter-offers/:id/edit endpoint already supports this
+// (actor: "seller") but is secured with a server-side secret header,
+// not something the Portal can safely call directly — this wrapper
+// checks Portal ownership (seller_record_id) first, then calls that
+// endpoint internally with the secret added server-side, so the
+// secret never reaches the browser.
+// ---------------------------------------------------------------------
+app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-edit", async (req, res) => {
+  try {
+    const offerId = asText(req.params.offerId);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const price = req.body?.price;
+
+    if (!offerId || !sellerRecordId) {
+      return res.status(400).json({ error: "Missing offerId or seller_record_id" });
+    }
+
+    const record = await airtable(COUNTER_OFFERS_TABLE).find(offerId);
+    const f = record.fields || {};
+
+    if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    const response = await fetch(`http://localhost:${PORT}/api/counter-offers/${offerId}/edit`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-kc-secret": process.env.COUNTER_OFFERS_SECRET || ""
+      },
+      body: JSON.stringify({ actor: "seller", price })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error("Failed to edit WTB counter offer:", err);
+
+    res.status(500).json({
+      error: "Failed to edit offer",
+      details: err.message
+    });
+  }
+});
+
 app.get("/api/dashboard/wtb-accepted", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
