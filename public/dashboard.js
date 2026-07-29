@@ -1108,7 +1108,7 @@ function renderConsignmentOfferRows(items) {
   }
 
   if (activeOfferStatusFilter === "counter") {
-    const counterColumns = ["Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "Date", "Actions"];
+    const counterColumns = ["Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "Buyer's Last Offer", "Date", "Actions"];
 
     dashboardTableHead.innerHTML = counterColumns.map((c) => `<th>${c}</th>`).join("");
 
@@ -1138,6 +1138,7 @@ function renderConsignmentOfferRows(items) {
           <td>${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.brand || "-")}</td>
           <td>${item.consignor_counter_price ? `€${escapeHtml(item.consignor_counter_price)}` : (item.seller_price ? `€${escapeHtml(item.seller_price)}` : "-")}</td>
+          <td>${item.previous_store_price ? `€${escapeHtml(item.previous_store_price)}` : "-"}</td>
           <td>${(item.consignor_counter_at || item.created_at) ? escapeHtml(new Date(item.consignor_counter_at || item.created_at).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
@@ -1974,7 +1975,7 @@ function renderWtbUnifiedOfferRows(items) {
   const isDenied = activeOfferStatusFilter === "denied";
   const columns = isDenied
     ? ["Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "Denied", "Actions"]
-    : ["", "Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "Buyer's Last Offer", "VAT Type", "Current Lowest", "Date", "Actions"];
+    : ["", "Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", (activeOfferStatusFilter === "counter" ? "Counter Offer" : "Buyer's Last Offer"), "VAT Type", "Current Lowest", "Date", "Actions"];
 
   dashboardTableHead.innerHTML = columns.map((c) => `<th>${c}</th>`).join("");
 
