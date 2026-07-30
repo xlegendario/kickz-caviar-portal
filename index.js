@@ -11991,24 +11991,6 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         // reflected here either — that's a separate, bigger question),
         // but at minimum this seller's own current position is now
         // correctly factored in as a candidate for the lowest.
-        const ownCounterForLowestCheck = filter === "open" ? numberValue(f["Seller Counter Price"]) : null;
-        const rollupLowest = filter === "open" && !isMemberWtb
-          ? (vatType === "VAT0"
-              ? numberValue(orderFields["Current Lowest (VAT0)"])
-              : numberValue(orderFields["Current Lowest (Normalized)"]))
-          : null;
-
-        const currentLowest = Number.isFinite(rollupLowest) && Number.isFinite(ownCounterForLowestCheck)
-          ? Math.min(rollupLowest, ownCounterForLowestCheck)
-          : (rollupLowest ?? ownCounterForLowestCheck);
-
-        const isLowest = filter === "open" && !isMemberWtb
-          ? (
-              displayValue(orderFields["Lowest Offer Seller ID"]) === displayValue(req.query.seller_id) ||
-              (Number.isFinite(ownCounterForLowestCheck) && Number.isFinite(rollupLowest) && ownCounterForLowestCheck <= rollupLowest)
-            )
-          : null;
-
         const previousOfferId = firstLinkedRecordId(f["Previous Record ID"]);
         const previousStorePrice = previousOfferId ? previousPriceById.get(previousOfferId) : null;
 
@@ -12028,6 +12010,34 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
               ? previousSellerCounterById.get(previousOfferId)
               : numberValue(f["Seller Original Price"]));
 
+        // FIXED — the rollup fields below ("Current Lowest ...") are
+        // Airtable rollups over the raw Seller Offers table price,
+        // which an in-progress Counter Offers negotiation never
+        // touches — so a seller's own current position (own pending
+        // counter, OR their last position while the store's counter
+        // sits with them) never showed up there. This previously only
+        // applied to "open" — extended to "countered" too, since that
+        // pill needs the exact same comparison (this doesn't fix the
+        // full picture: a DIFFERENT seller's own in-progress counter
+        // still won't be reflected here either — that's a separate,
+        // bigger question).
+        const rollupLowest = !isMemberWtb
+          ? (vatType === "VAT0"
+              ? numberValue(orderFields["Current Lowest (VAT0)"])
+              : numberValue(orderFields["Current Lowest (Normalized)"]))
+          : null;
+
+        const currentLowest = Number.isFinite(rollupLowest) && Number.isFinite(sellerLastOffer)
+          ? Math.min(rollupLowest, sellerLastOffer)
+          : (rollupLowest ?? sellerLastOffer);
+
+        const isLowest = !isMemberWtb
+          ? (
+              displayValue(orderFields["Lowest Offer Seller ID"]) === displayValue(req.query.seller_id) ||
+              (Number.isFinite(sellerLastOffer) && Number.isFinite(rollupLowest) && sellerLastOffer <= rollupLowest)
+            )
+          : null;
+
         return {
           id: record.id,
           order_id: displayValue(f["Order ID"]) || displayValue(f["Order"]),
@@ -12041,7 +12051,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           previous_record_id: previousOfferId,
           previous_store_price: Number.isFinite(previousStorePrice) ? moneyWholeValue(previousStorePrice) : null,
           current_lowest: Number.isFinite(currentLowest) ? moneyWholeValue(currentLowest) : null,
-          status: filter === "open" ? (isLowest ? "Lowest" : "Beaten") : null,
+          status: isLowest === null ? null : (isLowest ? "Lowest" : "Beaten"),
           raw_date: displayValue(f["Created At"]),
           denied_at: displayValue(f["Denied At"] || f["Last Modified"])
         };
@@ -12123,7 +12133,45 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/cancel", async (req, res) =
       return res.status(403).json({ error: "Not allowed" });
     }
 
+    // FIXED — deleting a Counter Offers round previously only removed
+    // that negotiation layer, leaving the underlying Seller Offer
+    // record untouched — so it reappeared in Open right after, making
+    // it look like Delete didn't work. Deleting your own counter means
+    // withdrawing from the sale entirely (his words: "dan verkoop ik
+    // niet"), so the original Seller Offer must go too, not just the
+    // counter round. Looks up via "Seller Offer Record ID" (reliable
+    // going forward after an earlier fix), falling back to an
+    // Order+Seller match for older records that predate it.
+    let sellerOfferRecordId = asText(f["Seller Offer Record ID"]);
+
+    if (!sellerOfferRecordId) {
+      const linkedOrderId = firstLinkedRecordId(f["Order"]);
+      const linkedMemberWtbId = firstLinkedRecordId(f["Member WTB"]);
+
+      if (linkedOrderId || linkedMemberWtbId) {
+        const linkField = linkedMemberWtbId ? "Linked Member WTBs" : "Linked Orders";
+        const targetId = linkedMemberWtbId || linkedOrderId;
+        const matchFormula = `FIND('${escapeFormulaValue(targetId)}', ARRAYJOIN({${linkField}}))`;
+
+        const candidateOffers = await airtable(SELLER_OFFERS_TABLE)
+          .select({ filterByFormula: matchFormula })
+          .all();
+
+        const match = candidateOffers.find((r) =>
+          linkedRecordIncludes(r.fields?.["Seller ID"], sellerRecordId)
+        );
+
+        sellerOfferRecordId = match?.id || null;
+      }
+    }
+
     await airtable(COUNTER_OFFERS_TABLE).destroy(offerId);
+
+    if (sellerOfferRecordId) {
+      await airtable(SELLER_OFFERS_TABLE).destroy(sellerOfferRecordId).catch((err) =>
+        console.error("Failed to cascade-delete underlying Seller Offer (non-blocking):", err)
+      );
+    }
 
     res.json({ ok: true });
   } catch (err) {
