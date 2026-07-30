@@ -12047,9 +12047,47 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         };
       });
 
+    // NEW — additive only: "denied" must also include fresh,
+    // never-countered offers that were denied outright — those never
+    // touch the Counter Offers table at all, so the query above alone
+    // always missed this whole category. Merged in with _kind:
+    // "fresh_denied" so the frontend can route Retry/Delete correctly
+    // (via the pre-existing edit-after-denial and wtb-open-offers
+    // delete endpoints, which operate on Seller Offers, not Counter
+    // Offers).
+    let mergedItems = items;
+
+    if (filter === "denied") {
+      const deniedSellerOffersFormula = `{Denied?} = TRUE()`;
+      const deniedSellerOfferRecords = await airtable(SELLER_OFFERS_TABLE)
+        .select({ filterByFormula: deniedSellerOffersFormula })
+        .all();
+
+      const deniedFreshItems = deniedSellerOfferRecords
+        .filter((record) => linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId))
+        .map((record) => {
+          const f = record.fields || {};
+
+          return {
+            id: record.id,
+            _kind: "fresh_denied",
+            order_id: displayValue(f["Order ID"]),
+            product: displayValue(f["Product Name"]),
+            sku: displayValue(f["SKU"]),
+            size: displayValue(f["Size"]),
+            brand: displayValue(f["Brand"]),
+            original_offer: moneyValue(f["Denied Amount"]),
+            vat_type: displayValue(f["Denied VAT Type"]),
+            denied_at: displayValue(f["Denied At"])
+          };
+        });
+
+      mergedItems = [...items, ...deniedFreshItems];
+    }
+
     res.json({
-      count: items.length,
-      items: sortDashboardItemsNewestFirst(items)
+      count: mergedItems.length,
+      items: sortDashboardItemsNewestFirst(mergedItems)
     });
   } catch (err) {
     console.error("Failed to load WTB counter offers:", err);
@@ -16921,6 +16959,22 @@ app.post("/api/notify-seller-offer-denied", async (req, res) => {
       return res.status(400).json({
         error: "Missing sellerDiscordId, orderRecordId, or sellerRecordId"
       });
+    }
+
+    // NEW — additive only: this denial previously only existed as a
+    // one-time Discord DM (sendOfferDeniedDiscordDM below) — nothing
+    // structured was ever written anywhere, so the Portal's Denied
+    // pill had no way to know this happened at all. Writes a proper
+    // Denied flag onto the Seller Offer record itself, matching the
+    // fields /api/seller-offers/:offerId/edit-after-denial already
+    // expects/reads (deniedAmount, vatType) for the Retry flow.
+    if (sellerOfferRecordId) {
+      await airtable(SELLER_OFFERS_TABLE).update(sellerOfferRecordId, {
+        "Denied?": true,
+        "Denied At": new Date().toISOString(),
+        "Denied Amount": Number(deniedAmount) || null,
+        "Denied VAT Type": asText(vatType)
+      }).catch((err) => console.error("Failed to write structured denial to Seller Offer (non-blocking):", err));
     }
 
     await sendOfferDeniedDiscordDM({
