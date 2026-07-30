@@ -12173,6 +12173,23 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/cancel", async (req, res) =
       );
     }
 
+    // FIXED — same stale-"Lowest Offer" issue as the wtb-open-offers
+    // delete endpoint: without this, a seller's next (higher) offer
+    // after deleting their counter would incorrectly get compared
+    // against the now-defunct amount and never reach the store. Only
+    // applies to Store Orders (not Member WTB, which has its own
+    // separate field naming/logic).
+    const linkedOrderIdForClear = !firstLinkedRecordId(f["Member WTB"])
+      ? firstLinkedRecordId(f["Order"])
+      : null;
+
+    if (linkedOrderIdForClear) {
+      await airtable(ORDERS_TABLE).update(linkedOrderIdForClear, {
+        "Lowest Offer": null,
+        "Offer Sent?": false
+      }).catch((err) => console.error("Failed to clear stale Lowest Offer after cancel (non-blocking):", err));
+    }
+
     res.json({ ok: true });
   } catch (err) {
     console.error("Failed to cancel WTB counter offer:", err);
@@ -14037,7 +14054,30 @@ app.delete("/api/dashboard/wtb-open-offers/:offerId", async (req, res) => {
       });
     }
 
+    const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+
     await airtable(SELLER_OFFERS_TABLE).destroy(offerId);
+
+    // FIXED — "Lowest Offer" on the Order is a manually-written field
+    // (by computeAndPushLowestOffer.js), not a rollup — deleting this
+    // Seller Offer doesn't clear it, so it kept holding the deleted
+    // offer's stale amount. When the seller then placed a NEW, higher
+    // offer (correctly, since the old one was gone), the "only
+    // overwrite if better" protection (added earlier this session)
+    // compared it against that stale number and incorrectly blocked
+    // it — the store never got a fresh "Offer Request" even though
+    // this was now the only, genuinely valid offer. Clearing it here
+    // resets that comparison baseline to null, so the very next offer
+    // (any amount) is correctly treated as an improvement. This is
+    // safe: the true current-best price is always separately tracked
+    // by Airtable's own live rollup ("Lowest Seller Offer"), which
+    // recomputes automatically on delete regardless of this field.
+    if (linkedOrderId) {
+      await airtable(ORDERS_TABLE).update(linkedOrderId, {
+        "Lowest Offer": null,
+        "Offer Sent?": false
+      }).catch((err) => console.error("Failed to clear stale Lowest Offer after delete (non-blocking):", err));
+    }
 
     res.json({ ok: true });
   } catch (err) {
