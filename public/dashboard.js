@@ -2003,6 +2003,8 @@ function renderWtbUnifiedOfferRows(items) {
     const dateValue = item._kind === "fresh" ? item.raw_date : (item.denied_at || item.raw_date);
 
     if (isDenied) {
+      const isFreshDenied = item._kind === "fresh_denied";
+
       return `
         <tr>
           <td>${escapeHtml(item.order_id || "-")}</td>
@@ -2014,7 +2016,12 @@ function renderWtbUnifiedOfferRows(items) {
           <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
-              <button class="dashboard-deny-btn" type="button" data-wtb-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
+              ${isFreshDenied ? `
+                <button class="dashboard-confirm-btn" type="button" data-wtb-retry-fresh-offer-id="${escapeHtml(item.id || "")}" data-vat-type="${escapeHtml(item.vat_type || "")}" data-denied-amount="${escapeHtml(item.original_offer || "")}">Retry</button>
+                <button class="dashboard-deny-btn" type="button" data-wtb-delete-fresh-offer-id="${escapeHtml(item.id || "")}">Delete</button>
+              ` : `
+                <button class="dashboard-deny-btn" type="button" data-wtb-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
+              `}
             </div>
           </td>
         </tr>
@@ -5163,6 +5170,90 @@ dashboardTableBody.addEventListener("click", async (event) => {
   // seller-counter endpoint. Simple prompt() for the price, matching
   // the same deliberately-basic input pattern used elsewhere this
   // session — the real design pass comes later.
+  // NEW — additive only: retry a fresh, never-countered offer that
+  // was denied outright, using the pre-existing edit-after-denial
+  // endpoint (already Portal-safe — seller_record_id, no secret).
+  const wtbRetryFreshOfferButton = event.target.closest("[data-wtb-retry-fresh-offer-id]");
+  if (wtbRetryFreshOfferButton) {
+    const offerId = wtbRetryFreshOfferButton.dataset.wtbRetryFreshOfferId;
+    const vatType = wtbRetryFreshOfferButton.dataset.vatType;
+    const deniedAmountText = wtbRetryFreshOfferButton.dataset.deniedAmount;
+    const deniedAmount = Number(String(deniedAmountText).replace(/[^\d.,-]/g, "").replace(",", "."));
+
+    const priceInput = prompt(`Your new offer (€, must be at least €2.50 lower than the denied €${deniedAmount || "?"}):`);
+
+    if (!priceInput) return;
+
+    const price = Number(priceInput);
+
+    if (!Number.isFinite(price) || price <= 0) {
+      alert("Enter a valid amount.");
+      return;
+    }
+
+    wtbRetryFreshOfferButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/seller-offers/${offerId}/edit-after-denial`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          seller_record_id: dashboardSeller.id,
+          offer_amount: price,
+          vat_type: vatType,
+          previous_denied_amount: deniedAmount
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to submit new offer");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      wtbRetryFreshOfferButton.disabled = false;
+    }
+
+    return;
+  }
+
+  // NEW — additive only: delete a fresh, never-countered denied offer,
+  // reusing the pre-existing wtb-open-offers delete endpoint (same
+  // Seller Offers table).
+  const wtbDeleteFreshOfferButton = event.target.closest("[data-wtb-delete-fresh-offer-id]");
+  if (wtbDeleteFreshOfferButton) {
+    const offerId = wtbDeleteFreshOfferButton.dataset.wtbDeleteFreshOfferId;
+
+    if (!confirm("Delete this offer? This can't be undone.")) return;
+
+    wtbDeleteFreshOfferButton.disabled = true;
+
+    try {
+      const response = await fetch(
+        `/api/dashboard/wtb-open-offers/${offerId}?${new URLSearchParams({ seller_record_id: dashboardSeller.id }).toString()}`,
+        { method: "DELETE" }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to delete offer");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      wtbDeleteFreshOfferButton.disabled = false;
+    }
+
+    return;
+  }
+
   const wtbSellerCounterButton = event.target.closest("[data-wtb-seller-counter-id]");
   if (wtbSellerCounterButton) {
     const offerId = wtbSellerCounterButton.dataset.wtbSellerCounterId;
