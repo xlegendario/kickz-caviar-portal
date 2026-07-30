@@ -2032,7 +2032,7 @@ function renderWtbUnifiedOfferRows(items) {
     // "fresh" AND "own_counter" items — the backend computes the same
     // same-VAT-scale comparison for both, so a seller mid-counter can
     // still see if someone else has undercut them in the meantime.
-    const hasLowestData = item._kind === "fresh" || item._kind === "own_counter";
+    const hasLowestData = item._kind === "fresh" || item._kind === "own_counter" || item._kind === "counter";
     const dotCell = hasLowestData
       ? `<div class="dashboard-status-dot ${item.status === "Lowest" ? "dashboard-status-dot-lowest" : "dashboard-status-dot-beaten"}"></div>`
       : "";
