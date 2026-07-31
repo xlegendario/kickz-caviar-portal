@@ -10501,7 +10501,13 @@ async function sendCounterOfferDiscordDM({
   const message = await dm.send({
     embeds: [
       {
-        title: "🔁 Counter Offer",
+        // FIXED — when this notification is specifically a re-send
+        // after the seller's own counter was denied (deniedAmount
+        // present), it should look like the denial it actually is —
+        // matching sendOfferDeniedDiscordDM's red "Offer Denied" style
+        // — not the neutral yellow "Counter Offer" look a genuinely
+        // fresh counter gets. Same content and buttons either way.
+        title: deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "" ? "❌ Offer Denied" : "🔁 Counter Offer",
         description: [
           `**${productName || "—"}**`,
           `SKU: ${sku || "—"}`,
@@ -10518,7 +10524,7 @@ async function sendCounterOfferDiscordDM({
           "",
           closingLine
         ].join("\n"),
-        color: 0xf1c40f
+        color: deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "" ? 0xe74c3c : 0xf1c40f
       }
     ],
     components: [
@@ -17283,8 +17289,30 @@ app.post("/api/notify-seller-offer-denied", async (req, res) => {
     // Denied flag onto the Seller Offer record itself, matching the
     // fields /api/seller-offers/:offerId/edit-after-denial already
     // expects/reads (deniedAmount, vatType) for the Retry flow.
-    if (sellerOfferRecordId) {
-      await airtable(SELLER_OFFERS_TABLE).update(sellerOfferRecordId, {
+    // FIXED — this previously silently skipped the structured write
+    // whenever sellerOfferRecordId wasn't passed in, even though the
+    // DM below sends fine without it — so a denial could correctly
+    // notify the seller on Discord while never showing up in the
+    // Portal's Denied pill at all. Falls back to an Order+Seller
+    // match in JS (never a raw-ID formula) when it's missing.
+    let resolvedSellerOfferRecordId = asText(sellerOfferRecordId);
+
+    if (!resolvedSellerOfferRecordId) {
+      const candidateOffers = await airtable(SELLER_OFFERS_TABLE)
+        .select({ fields: ["Seller ID", "Linked Orders"] })
+        .all();
+
+      const match = candidateOffers.find(
+        (r) =>
+          linkedRecordIncludes(r.fields?.["Seller ID"], sellerRecordId) &&
+          firstLinkedRecordId(r.fields?.["Linked Orders"]) === orderRecordId
+      );
+
+      resolvedSellerOfferRecordId = match?.id || null;
+    }
+
+    if (resolvedSellerOfferRecordId) {
+      await airtable(SELLER_OFFERS_TABLE).update(resolvedSellerOfferRecordId, {
         "Denied?": true,
         "Denied At": new Date().toISOString(),
         "Denied Amount": Number(deniedAmount) || null,
