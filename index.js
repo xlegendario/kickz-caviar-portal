@@ -12192,6 +12192,105 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
 // these Counter Offers records aren't referenced anywhere downstream
 // once denied/superseded, so a hard delete is safe here.
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// NEW — additive only: deleting a seller's offer/counter previously
+// only removed the ONE record clicked, leaving every OTHER round in
+// that same negotiation's history (superseded siblings, reopened store
+// rounds, etc.) sitting around and reappearing across pills — his
+// point: withdrawing means the whole thing should disappear, not leave
+// stray leftovers the seller has to keep deleting one at a time. This
+// finds every Counter Offers round that belongs to the same underlying
+// negotiation (matched via "Seller Offer Record ID" where available,
+// falling back to an Order/Member-WTB + Seller match in JS — NOT a
+// FIND()/ARRAYJOIN() formula on a raw record ID, which never matches),
+// deletes all of them, deletes the underlying Seller Offer, and clears
+// the linked Order's stale "Lowest Offer".
+// ---------------------------------------------------------------------
+async function cascadeDeleteWtbNegotiation({ seedCounterOfferId, seedSellerOfferId, sellerRecordId }) {
+  let sellerOfferRecordId = seedSellerOfferId || null;
+  let linkedOrderId = null;
+  let linkedMemberWtbId = null;
+  let isMemberWtb = false;
+
+  if (seedCounterOfferId) {
+    const seedRecord = await airtable(COUNTER_OFFERS_TABLE).find(seedCounterOfferId);
+    const f = seedRecord.fields || {};
+    sellerOfferRecordId = sellerOfferRecordId || asText(f["Seller Offer Record ID"]);
+    linkedOrderId = firstLinkedRecordId(f["Order"]);
+    linkedMemberWtbId = firstLinkedRecordId(f["Member WTB"]);
+    isMemberWtb = !!linkedMemberWtbId;
+  }
+
+  if (!linkedOrderId && !linkedMemberWtbId && sellerOfferRecordId) {
+    const sellerOfferRecord = await airtable(SELLER_OFFERS_TABLE).find(sellerOfferRecordId).catch(() => null);
+    if (sellerOfferRecord) {
+      linkedOrderId = firstLinkedRecordId(sellerOfferRecord.fields?.["Linked Orders"]);
+      linkedMemberWtbId = firstLinkedRecordId(sellerOfferRecord.fields?.["Linked Member WTBs"]);
+      isMemberWtb = !!linkedMemberWtbId;
+    }
+  }
+
+  // Fetch broadly (no ID-based formula), filter in JS — the reliable
+  // pattern, not FIND()/ARRAYJOIN() on a raw record ID.
+  const allCounterOffersForSeller = await airtable(COUNTER_OFFERS_TABLE)
+    .select({
+      filterByFormula: `OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')`,
+      fields: ["Seller ID", "Seller Offer Record ID", "Order", "Member WTB"]
+    })
+    .all()
+    .then((records) => records.filter((r) => linkedRecordIncludes(r.fields?.["Seller ID"], sellerRecordId)));
+
+  const relatedCounterOfferIds = allCounterOffersForSeller
+    .filter((r) => {
+      const rSellerOfferId = asText(r.fields?.["Seller Offer Record ID"]);
+      if (sellerOfferRecordId && rSellerOfferId === sellerOfferRecordId) return true;
+
+      const rOrderId = firstLinkedRecordId(r.fields?.["Order"]);
+      const rMemberWtbId = firstLinkedRecordId(r.fields?.["Member WTB"]);
+      if (linkedOrderId && rOrderId === linkedOrderId) return true;
+      if (linkedMemberWtbId && rMemberWtbId === linkedMemberWtbId) return true;
+
+      return false;
+    })
+    .map((r) => r.id);
+
+  if (!sellerOfferRecordId && (linkedOrderId || linkedMemberWtbId)) {
+    const linkField = isMemberWtb ? "Linked Member WTBs" : "Linked Orders";
+    const targetId = linkedMemberWtbId || linkedOrderId;
+
+    const candidateOffers = await airtable(SELLER_OFFERS_TABLE)
+      .select({ fields: ["Seller ID", linkField] })
+      .all();
+
+    const match = candidateOffers.find(
+      (r) =>
+        linkedRecordIncludes(r.fields?.["Seller ID"], sellerRecordId) &&
+        firstLinkedRecordId(r.fields?.[linkField]) === targetId
+    );
+
+    sellerOfferRecordId = match?.id || null;
+  }
+
+  for (const id of relatedCounterOfferIds) {
+    await airtable(COUNTER_OFFERS_TABLE).destroy(id).catch((err) =>
+      console.error(`Failed to delete related Counter Offers round ${id} (non-blocking):`, err)
+    );
+  }
+
+  if (sellerOfferRecordId) {
+    await airtable(SELLER_OFFERS_TABLE).destroy(sellerOfferRecordId).catch((err) =>
+      console.error("Failed to delete underlying Seller Offer (non-blocking):", err)
+    );
+  }
+
+  if (linkedOrderId && !isMemberWtb) {
+    await airtable(ORDERS_TABLE).update(linkedOrderId, {
+      "Lowest Offer": null,
+      "Offer Sent?": false
+    }).catch((err) => console.error("Failed to clear stale Lowest Offer after cascade delete (non-blocking):", err));
+  }
+}
+
 app.post("/api/dashboard/wtb-counter-offers/:offerId/cancel", async (req, res) => {
   try {
     const offerId = asText(req.params.offerId);
@@ -12208,62 +12307,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/cancel", async (req, res) =
       return res.status(403).json({ error: "Not allowed" });
     }
 
-    // FIXED — deleting a Counter Offers round previously only removed
-    // that negotiation layer, leaving the underlying Seller Offer
-    // record untouched — so it reappeared in Open right after, making
-    // it look like Delete didn't work. Deleting your own counter means
-    // withdrawing from the sale entirely (his words: "dan verkoop ik
-    // niet"), so the original Seller Offer must go too, not just the
-    // counter round. Looks up via "Seller Offer Record ID" (reliable
-    // going forward after an earlier fix), falling back to an
-    // Order+Seller match for older records that predate it.
-    let sellerOfferRecordId = asText(f["Seller Offer Record ID"]);
-
-    if (!sellerOfferRecordId) {
-      const linkedOrderId = firstLinkedRecordId(f["Order"]);
-      const linkedMemberWtbId = firstLinkedRecordId(f["Member WTB"]);
-
-      if (linkedOrderId || linkedMemberWtbId) {
-        const linkField = linkedMemberWtbId ? "Linked Member WTBs" : "Linked Orders";
-        const targetId = linkedMemberWtbId || linkedOrderId;
-        const matchFormula = `FIND('${escapeFormulaValue(targetId)}', ARRAYJOIN({${linkField}}))`;
-
-        const candidateOffers = await airtable(SELLER_OFFERS_TABLE)
-          .select({ filterByFormula: matchFormula })
-          .all();
-
-        const match = candidateOffers.find((r) =>
-          linkedRecordIncludes(r.fields?.["Seller ID"], sellerRecordId)
-        );
-
-        sellerOfferRecordId = match?.id || null;
-      }
-    }
-
-    await airtable(COUNTER_OFFERS_TABLE).destroy(offerId);
-
-    if (sellerOfferRecordId) {
-      await airtable(SELLER_OFFERS_TABLE).destroy(sellerOfferRecordId).catch((err) =>
-        console.error("Failed to cascade-delete underlying Seller Offer (non-blocking):", err)
-      );
-    }
-
-    // FIXED — same stale-"Lowest Offer" issue as the wtb-open-offers
-    // delete endpoint: without this, a seller's next (higher) offer
-    // after deleting their counter would incorrectly get compared
-    // against the now-defunct amount and never reach the store. Only
-    // applies to Store Orders (not Member WTB, which has its own
-    // separate field naming/logic).
-    const linkedOrderIdForClear = !firstLinkedRecordId(f["Member WTB"])
-      ? firstLinkedRecordId(f["Order"])
-      : null;
-
-    if (linkedOrderIdForClear) {
-      await airtable(ORDERS_TABLE).update(linkedOrderIdForClear, {
-        "Lowest Offer": null,
-        "Offer Sent?": false
-      }).catch((err) => console.error("Failed to clear stale Lowest Offer after cancel (non-blocking):", err));
-    }
+    await cascadeDeleteWtbNegotiation({ seedCounterOfferId: offerId, sellerRecordId });
 
     res.json({ ok: true });
   } catch (err) {
@@ -14252,30 +14296,15 @@ app.delete("/api/dashboard/wtb-open-offers/:offerId", async (req, res) => {
       });
     }
 
-    const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
-
-    await airtable(SELLER_OFFERS_TABLE).destroy(offerId);
-
-    // FIXED — "Lowest Offer" on the Order is a manually-written field
-    // (by computeAndPushLowestOffer.js), not a rollup — deleting this
-    // Seller Offer doesn't clear it, so it kept holding the deleted
-    // offer's stale amount. When the seller then placed a NEW, higher
-    // offer (correctly, since the old one was gone), the "only
-    // overwrite if better" protection (added earlier this session)
-    // compared it against that stale number and incorrectly blocked
-    // it — the store never got a fresh "Offer Request" even though
-    // this was now the only, genuinely valid offer. Clearing it here
-    // resets that comparison baseline to null, so the very next offer
-    // (any amount) is correctly treated as an improvement. This is
-    // safe: the true current-best price is always separately tracked
-    // by Airtable's own live rollup ("Lowest Seller Offer"), which
-    // recomputes automatically on delete regardless of this field.
-    if (linkedOrderId) {
-      await airtable(ORDERS_TABLE).update(linkedOrderId, {
-        "Lowest Offer": null,
-        "Offer Sent?": false
-      }).catch((err) => console.error("Failed to clear stale Lowest Offer after delete (non-blocking):", err));
-    }
+    // FIXED — now uses the shared cascade helper (see
+    // cascadeDeleteWtbNegotiation above) instead of only deleting this
+    // one Seller Offer record. Withdrawing an offer must clean up the
+    // WHOLE negotiation history tied to it — any Counter Offers rounds
+    // that ever existed for it too — not leave stray rounds that
+    // reappear across pills afterward. Also still clears the linked
+    // Order's stale "Lowest Offer" so the next genuine offer isn't
+    // incorrectly compared against a now-defunct number.
+    await cascadeDeleteWtbNegotiation({ seedSellerOfferId: offerId, sellerRecordId });
 
     res.json({ ok: true });
   } catch (err) {
