@@ -12472,6 +12472,13 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
       console.error("Failed to write accepted price to Order record (non-blocking):", priceWriteErr);
     }
 
+    // NEW — additive only: same as seller-accept above — matches the
+    // Discord accept handler's existing behavior of closing every
+    // other competing seller's open counter for this order.
+    await closeCompetingCountersForOrder(linkedOrderId, previousOfferId).catch((err) =>
+      console.error("Failed to close competing counters (non-blocking):", err)
+    );
+
     res.json({ ok: true });
   } catch (err) {
     console.error("Failed to accept previous WTB counter offer:", err);
@@ -12614,6 +12621,50 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
 // Discord counter_offer_accept: handler and the accept-previous
 // endpoint above, just applied to THIS round directly.
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// NEW — additive only: extracted from the Discord counter_offer_accept:
+// handler, which already closes every OTHER open Counter Offers round
+// for the same order once one seller/round is accepted — matching the
+// "everyone competes on one shared price" architecture built earlier
+// this session. The Portal's own accept endpoints (seller-accept,
+// accept-previous) were missing this entirely: accepting via the
+// Portal left every other competing seller's active negotiation
+// dangling open, unlike accepting the exact same thing via Discord.
+// ---------------------------------------------------------------------
+async function closeCompetingCountersForOrder(orderRecordId, acceptedCounterOfferRecordId) {
+  const openCountersForOrderMatch = await airtable(COUNTER_OFFERS_TABLE)
+    .select({
+      filterByFormula: `AND(
+        {Status} = 'Open',
+        RECORD_ID() != '${acceptedCounterOfferRecordId}'
+      )`
+    })
+    .all();
+
+  const competingCounters = openCountersForOrderMatch.filter((r) =>
+    firstLinkedRecordId(r.fields?.["Order"]) === orderRecordId
+  );
+
+  for (const competing of competingCounters) {
+    await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
+      "Status": "Closed",
+      "Closed At": new Date().toISOString()
+    });
+
+    const cf = competing.fields || {};
+    const channelId = asText(cf["Discord Channel ID"]);
+    const messageId = asText(cf["Discord Message ID"]);
+
+    if (channelId && messageId) {
+      await disableCounterOfferDiscordButtons(
+        channelId,
+        messageId,
+        "❌ Counter offer closed — another seller accepted."
+      ).catch((err) => console.error("Failed to disable competing counter's Discord buttons (non-blocking):", err));
+    }
+  }
+}
+
 app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-accept", async (req, res) => {
   try {
     const counterOfferRecordId = asText(req.params.offerId);
@@ -12684,6 +12735,13 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-accept", async (req,
     } catch (priceWriteErr) {
       console.error("Failed to write accepted price to Order record (non-blocking):", priceWriteErr);
     }
+
+    // NEW — additive only: matches the Discord accept handler, which
+    // already closes every other competing seller's open counter for
+    // this same order once one is accepted.
+    await closeCompetingCountersForOrder(linkedOrderId, counterOfferRecordId).catch((err) =>
+      console.error("Failed to close competing counters (non-blocking):", err)
+    );
 
     res.json({ ok: true });
   } catch (err) {
