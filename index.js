@@ -11867,7 +11867,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
     );
 
-    const preFilteredByStatus = filteredRecords.filter((record) => {
+    const preFilteredByStatusRaw = filteredRecords.filter((record) => {
       if (filter === "denied") return true;
 
       const f = record.fields || {};
@@ -11881,6 +11881,52 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       // seller's own pending counter, awaiting them.
       return filter === "countered" ? storeAlreadyCountered : !storeAlreadyCountered;
     });
+
+    // FIXED — every deny-with-reopen action (the seller denying a
+    // store counter) permanently leaves the just-denied round at
+    // Status="Denied" — nothing ever cleans that up, since the
+    // negotiation actually continues via the REOPENED round before it,
+    // not through this one. That old, now-irrelevant denial stuck
+    // around forever in the Denied pill alongside any genuinely final
+    // denial later on, showing the same order twice. A denied round is
+    // superseded if a different round shares its same "Previous Record
+    // ID" (i.e., a sibling counter placed later from that same
+    // reopened position) — only the round with no later sibling is the
+    // real, current dead end.
+    let preFilteredByStatus = preFilteredByStatusRaw;
+
+    if (filter === "denied" && preFilteredByStatusRaw.length) {
+      const sellerFormula = `FIND('${escapeFormulaValue(sellerRecordId)}', ARRAYJOIN({Seller ID}))`;
+      const allRoundsForSeller = await airtable(COUNTER_OFFERS_TABLE)
+        .select({ filterByFormula: sellerFormula, fields: ["Previous Record ID", "Created At"] })
+        .all();
+
+      const siblingsByPrevId = new Map();
+      for (const r of allRoundsForSeller) {
+        const prevId = firstLinkedRecordId(r.fields?.["Previous Record ID"]);
+        if (!prevId) continue;
+        if (!siblingsByPrevId.has(prevId)) siblingsByPrevId.set(prevId, []);
+        siblingsByPrevId.get(prevId).push({
+          id: r.id,
+          createdAt: displayValue(r.fields?.["Created At"])
+        });
+      }
+
+      preFilteredByStatus = preFilteredByStatusRaw.filter((record) => {
+        const f = record.fields || {};
+        const ownPrevId = firstLinkedRecordId(f["Previous Record ID"]);
+        const ownCreatedAt = displayValue(f["Created At"]);
+
+        if (!ownPrevId) return true;
+
+        const siblings = siblingsByPrevId.get(ownPrevId) || [];
+        const hasLaterSibling = siblings.some(
+          (s) => s.id !== record.id && s.createdAt && ownCreatedAt && s.createdAt > ownCreatedAt
+        );
+
+        return !hasLaterSibling;
+      });
+    }
 
     // NEW — additive only: confirmed business rule — an offer should
     // only ever disappear from the Portal via an explicit Delete, or
@@ -11945,7 +11991,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     // reliably capture once more than one round of back-and-forth has
     // happened, since that field never changes from the very first
     // ask).
-    const previousIds = (filter === "open" || filter === "countered")
+    const previousIds = (filter === "open" || filter === "countered" || filter === "denied")
       ? [...new Set(preFiltered.map((r) => firstLinkedRecordId(r.fields?.["Previous Record ID"])).filter(Boolean))]
       : [];
 
@@ -12003,8 +12049,17 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         // placed on the PRIOR round (its Seller Counter Price if they'd
         // countered before, else fall back to Seller Original Price
         // for a genuinely first-ever response).
+        // FIXED — for "denied", THIS round can itself be the seller's
+        // own counter that got denied directly (Status=Denied set on
+        // it via store-deny) — in that case its OWN "Seller Counter
+        // Price" is exactly what got rejected, and must be used first.
+        // The previous-round fallback below is only for "countered"
+        // semantics (where f is the STORE's round, and the seller's
+        // real position lives on the round before it) — using it for
+        // "denied" without checking this round's own value first was
+        // showing the wrong (much older) amount as "Your Offer".
         const ownSellerCounter = numberValue(f["Seller Counter Price"]);
-        const sellerLastOffer = filter === "open"
+        const sellerLastOffer = (filter === "open" || (filter === "denied" && Number.isFinite(ownSellerCounter)))
           ? (Number.isFinite(ownSellerCounter) ? ownSellerCounter : numberValue(f["Seller Original Price"]))
           : (previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
               ? previousSellerCounterById.get(previousOfferId)
@@ -12305,6 +12360,129 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
 
     res.status(500).json({
       error: "Failed to accept previous offer",
+      details: err.message
+    });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: lets a seller retry after a counter round dead-
+// ends in denial (no reopen happened — either there was nothing to
+// fall back to, or the denial was final). His requirement: the new
+// price must still respect the normal narrowing-band rule against the
+// STORE's last real position (the round this denied one was itself
+// responding to via Previous Record ID) — not just "beat my own denied
+// price" — so a retry can never accidentally go lower than what the
+// store had already shown willingness to pay. Reuses the exact same
+// band validation as the standard seller-counter endpoint by calling
+// it internally against that prior round.
+// ---------------------------------------------------------------------
+app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req, res) => {
+  try {
+    const offerId = asText(req.params.offerId);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const proposedPrice = Number(req.body?.price);
+
+    if (!offerId || !sellerRecordId) {
+      return res.status(400).json({ error: "Missing offerId or seller_record_id" });
+    }
+
+    if (!Number.isInteger(proposedPrice) || proposedPrice <= 0) {
+      return res.status(400).json({ error: "Offer must be a valid whole number." });
+    }
+
+    const deniedRecord = await airtable(COUNTER_OFFERS_TABLE).find(offerId);
+    const f = deniedRecord.fields || {};
+
+    if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    const priorRoundId = firstLinkedRecordId(f["Previous Record ID"]);
+
+    if (!priorRoundId) {
+      return res.status(409).json({ error: "There's no prior position to retry against." });
+    }
+
+    const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId);
+    const priorFields = priorRound.fields || {};
+
+    // The store's last real position — validated against directly, not
+    // the prior round's own status, since it's expected to already be
+    // Closed (correctly superseded by the denied round). His
+    // requirement: the retry must respect the normal narrowing band
+    // against THIS, not just beat the denied price, so it can never
+    // accidentally go lower than what the store already offered.
+    const storeLastPosition = numberValue(priorFields["Store Counter Price"]);
+    const deniedSellerCounter = numberValue(f["Seller Counter Price"]);
+
+    if (!Number.isFinite(storeLastPosition) || !Number.isFinite(deniedSellerCounter)) {
+      return res.status(500).json({ error: "Missing price data to validate against." });
+    }
+
+    const validation = validateNextCounterPrice(deniedSellerCounter, storeLastPosition, proposedPrice);
+    if (!validation.ok) {
+      return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    const linkedOrderId = firstLinkedRecordId(f["Order"]);
+    const linkedSellerId = firstLinkedRecordId(f["Seller ID"]);
+    const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
+    const orderFields = orderRecord.fields || {};
+    const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
+    const sellerVatType = asText(f["Seller Original VAT Type"]);
+
+    const newRound = await airtable(COUNTER_OFFERS_TABLE).create({
+      "Order": [linkedOrderId],
+      "Seller ID": linkedSellerId ? [linkedSellerId] : undefined,
+      "Source Type": asText(f["Source Type"]) || "Seller Offer",
+      "Seller Offer Record ID": asText(f["Seller Offer Record ID"]),
+      "Seller Original Price": sellerOriginalPrice,
+      "Seller Original VAT Type": sellerVatType,
+      "Seller Counter Price": proposedPrice,
+      "Previous Record ID": priorRoundId,
+      "Created At": new Date().toISOString(),
+      "Status": "Open"
+    });
+
+    if (AIRTABLE_DISCORD_UPDATES_URL) {
+      const sellerCounterInStoreTerms = calculateStoreCounterEquivalent(
+        proposedPrice,
+        sellerVatType,
+        orderFields
+      );
+
+      const noRoomToCounter =
+        Number.isFinite(storeLastPosition) &&
+        Number.isFinite(sellerCounterInStoreTerms) &&
+        !hasRoomForNextStep(storeLastPosition, sellerCounterInStoreTerms);
+
+      await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trigger_type: "counter-offer-seller-countered",
+          store_name: asText(orderFields["Store Name"]),
+          record_id: linkedOrderId,
+          shopify_order_number: asText(orderFields["Shopify Order Number"]),
+          product_name: asText(f["Product Name"]),
+          sku: asText(f["SKU"]),
+          size: asText(f["Size"]),
+          counter_offer_record_id: newRound.id,
+          selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
+          your_previous_counter: storeLastPosition,
+          seller_counter_price: sellerCounterInStoreTerms ?? proposedPrice,
+          no_room_to_counter: noRoomToCounter
+        })
+      }).catch((err) => console.error("Failed to notify store of retry counter (non-blocking):", err));
+    }
+
+    res.json({ ok: true, band: validation.band, new_round_id: newRound.id });
+  } catch (err) {
+    console.error("Failed to retry WTB counter offer:", err);
+
+    res.status(500).json({
+      error: "Failed to retry offer",
       details: err.message
     });
   }
