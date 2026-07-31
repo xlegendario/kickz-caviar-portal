@@ -12156,6 +12156,10 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
 
       const deniedFreshItems = deniedSellerOfferRecords
         .filter((record) => linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId))
+        // NEW — additive only: a soft-deleted ("Withdrawn?") offer must
+        // never show anywhere in the Portal — it only survives
+        // physically for the undercut-check in discord-wtb-bot-main.
+        .filter((record) => !record.fields?.["Withdrawn?"])
         .map((record) => {
           const f = record.fields || {};
 
@@ -12251,8 +12255,22 @@ async function cascadeDeleteWtbNegotiation({ seedCounterOfferId, seedSellerOffer
   }
 
   if (sellerOfferRecordId) {
-    await airtable(SELLER_OFFERS_TABLE).destroy(sellerOfferRecordId).catch((err) =>
-      console.error("Failed to delete underlying Seller Offer (non-blocking):", err)
+    // FIXED — this used to hard-destroy the Seller Offer record
+    // entirely. His point: if a seller withdraws an offer that had
+    // already been denied at, say, €235, then places a brand new offer
+    // at that SAME €235 afterward, nothing should let that go through
+    // silently — the store already said no to that price. A hard
+    // delete leaves nothing to validate a future offer against. Now
+    // soft-deletes instead (a "Withdrawn?" flag) — the record still
+    // exists, so discord-wtb-bot-main's existing getCurrentLowest/
+    // undercut-check (which scans ALL Seller Offer records with no
+    // status filter) correctly keeps enforcing "at least €2.50 lower"
+    // against it, while the Portal below hides it everywhere the
+    // seller would see it, same as a real delete from their view.
+    await airtable(SELLER_OFFERS_TABLE).update(sellerOfferRecordId, {
+      "Withdrawn?": true
+    }).catch((err) =>
+      console.error("Failed to soft-delete underlying Seller Offer (non-blocking):", err)
     );
   }
 
@@ -12302,8 +12320,10 @@ async function cascadeDeleteWtbNegotiation({ seedCounterOfferId, seedSellerOffer
       );
 
       if (match?.id) {
-        await airtable(SELLER_OFFERS_TABLE).destroy(match.id).catch((err) =>
-          console.error("Failed to delete fallback-matched underlying Seller Offer (non-blocking):", err)
+        await airtable(SELLER_OFFERS_TABLE).update(match.id, {
+          "Withdrawn?": true
+        }).catch((err) =>
+          console.error("Failed to soft-delete fallback-matched underlying Seller Offer (non-blocking):", err)
         );
       }
     }
@@ -13999,7 +14019,8 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
           "SKU (MWTB)",
           "Size (MWTB)",
           "Brand (MWTB)",
-          "Denied?"
+          "Denied?",
+          "Withdrawn?"
         ],
         filterByFormula: `OR(
           {Fulfillment Status} = 'Outsource',
@@ -14059,6 +14080,12 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
       // stay Outsource for other sellers even after denying this one),
       // so a denied offer kept showing in Open too, alongside Denied.
       if (f["Denied?"]) return false;
+
+      // NEW — additive only: a soft-deleted ("Withdrawn?") Seller
+      // Offer must never show in the Portal at all — it only survives
+      // physically so discord-wtb-bot-main's undercut-check can still
+      // validate a future re-offer against it.
+      if (f["Withdrawn?"]) return false;
 
       if (sellerOfferIdsWithActiveCounter.has(record.id)) return false;
 
