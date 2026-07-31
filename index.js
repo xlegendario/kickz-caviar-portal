@@ -17293,7 +17293,13 @@ app.post("/api/seller-offers/:offerId/edit-after-denial", async (req, res) => {
       "Seller Offer": offerAmount,
       "Offer VAT Type": vatType,
       "Offer Cost (Normalized)": normalizedOffer,
-      "Offer Date": new Date().toISOString()
+      "Offer Date": new Date().toISOString(),
+      // FIXED — this never cleared "Denied?", so a successful Retry
+      // still displayed in the Denied pill forever afterward (using
+      // the stale "Denied Amount", not the fresh price just placed),
+      // instead of correctly moving to Open with the new amount —
+      // same fix already applied to fresh-offer placement.
+      "Denied?": false
     });
 
     // Editing "Seller Offer" changes the rollup fields on Unfulfilled
