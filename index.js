@@ -12000,10 +12000,18 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     if (previousIds.length) {
       const previousFormula = `OR(${previousIds.map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`).join(",")})`;
       const previousRecords = await airtable(COUNTER_OFFERS_TABLE)
-        .select({ filterByFormula: previousFormula, fields: ["Store Counter Price", "Seller Counter Price"] })
+        .select({ filterByFormula: previousFormula, fields: ["Store Counter Price", "Counter Payout", "Seller Counter Price"] })
         .all();
+      // FIXED — "Buyer's Last Offer" must show what the SELLER would
+      // actually receive, not the raw store-side price. "Store Counter
+      // Price" is what the store pays; "Counter Payout" is that same
+      // number already converted down to seller terms (fee/margin
+      // removed) — the exact figure the seller sees everywhere else.
+      // Using the raw store price made it look like the store's fee
+      // had vanished (e.g. showing €200 instead of €195 with a flat €5
+      // fee).
       previousPriceById = new Map(
-        previousRecords.map((r) => [r.id, numberValue(r.fields?.["Store Counter Price"])])
+        previousRecords.map((r) => [r.id, numberValue(r.fields?.["Counter Payout"])])
       );
       previousSellerCounterById = new Map(
         previousRecords.map((r) => [r.id, numberValue(r.fields?.["Seller Counter Price"])])
