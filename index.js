@@ -11896,13 +11896,25 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     let preFilteredByStatus = preFilteredByStatusRaw;
 
     if (filter === "denied" && preFilteredByStatusRaw.length) {
-      const sellerFormula = `FIND('${escapeFormulaValue(sellerRecordId)}', ARRAYJOIN({Seller ID}))`;
+      // FIXED — this used FIND(rawSellerRecordId, ARRAYJOIN({Seller ID})),
+      // which never matches a raw record ID against a linked field's
+      // ARRAYJOIN'd display value (a documented pitfall from earlier
+      // this session) — so this silently matched nothing, and the
+      // supersession exclusion below never actually excluded anything.
+      // Fetches without ID-based formula matching and filters by
+      // Seller ID in JS instead, the same reliable pattern used
+      // elsewhere in this file.
       const allRoundsForSeller = await airtable(COUNTER_OFFERS_TABLE)
-        .select({ filterByFormula: sellerFormula, fields: ["Previous Record ID", "Created At"] })
+        .select({
+          filterByFormula: `OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')`,
+          fields: ["Seller ID", "Previous Record ID", "Created At"]
+        })
         .all();
 
       const siblingsByPrevId = new Map();
       for (const r of allRoundsForSeller) {
+        if (!linkedRecordIncludes(r.fields?.["Seller ID"], sellerRecordId)) continue;
+
         const prevId = firstLinkedRecordId(r.fields?.["Previous Record ID"]);
         if (!prevId) continue;
         if (!siblingsByPrevId.has(prevId)) siblingsByPrevId.set(prevId, []);
