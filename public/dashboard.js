@@ -3464,7 +3464,17 @@ async function loadDashboardData() {
     }
 
     renderWtbUnifiedOfferRows(
-      (data.items || []).map((item) => ({ ...item, _kind: activeOfferStatusFilter === "denied" ? "denied" : "counter" }))
+      // FIXED — this unconditionally forced _kind to "denied"/"counter",
+      // discarding the backend's own "fresh_denied" tag on items merged
+      // in from the Seller Offers table — so isFreshDenied was always
+      // false, and Retry never showed for a genuinely fresh, never-
+      // countered offer that was denied outright (only the bare Delete
+      // did, since it also has no previous_record_id). Now only
+      // defaults when the backend hasn't already tagged it.
+      (data.items || []).map((item) => ({
+        ...item,
+        _kind: item._kind || (activeOfferStatusFilter === "denied" ? "denied" : "counter")
+      }))
     );
 
     const count = data.count || 0;
