@@ -12236,50 +12236,17 @@ async function cascadeDeleteWtbNegotiation({ seedCounterOfferId, seedSellerOffer
     }
   }
 
-  // Fetch broadly (no ID-based formula), filter in JS — the reliable
-  // pattern, not FIND()/ARRAYJOIN() on a raw record ID.
-  const allCounterOffersForSeller = await airtable(COUNTER_OFFERS_TABLE)
-    .select({
-      filterByFormula: `OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')`,
-      fields: ["Seller ID", "Seller Offer Record ID", "Order", "Member WTB"]
-    })
-    .all()
-    .then((records) => records.filter((r) => linkedRecordIncludes(r.fields?.["Seller ID"], sellerRecordId)));
-
-  const relatedCounterOfferIds = allCounterOffersForSeller
-    .filter((r) => {
-      const rSellerOfferId = asText(r.fields?.["Seller Offer Record ID"]);
-      if (sellerOfferRecordId && rSellerOfferId === sellerOfferRecordId) return true;
-
-      const rOrderId = firstLinkedRecordId(r.fields?.["Order"]);
-      const rMemberWtbId = firstLinkedRecordId(r.fields?.["Member WTB"]);
-      if (linkedOrderId && rOrderId === linkedOrderId) return true;
-      if (linkedMemberWtbId && rMemberWtbId === linkedMemberWtbId) return true;
-
-      return false;
-    })
-    .map((r) => r.id);
-
-  if (!sellerOfferRecordId && (linkedOrderId || linkedMemberWtbId)) {
-    const linkField = isMemberWtb ? "Linked Member WTBs" : "Linked Orders";
-    const targetId = linkedMemberWtbId || linkedOrderId;
-
-    const candidateOffers = await airtable(SELLER_OFFERS_TABLE)
-      .select({ fields: ["Seller ID", linkField] })
-      .all();
-
-    const match = candidateOffers.find(
-      (r) =>
-        linkedRecordIncludes(r.fields?.["Seller ID"], sellerRecordId) &&
-        firstLinkedRecordId(r.fields?.[linkField]) === targetId
-    );
-
-    sellerOfferRecordId = match?.id || null;
-  }
-
-  for (const id of relatedCounterOfferIds) {
-    await airtable(COUNTER_OFFERS_TABLE).destroy(id).catch((err) =>
-      console.error(`Failed to delete related Counter Offers round ${id} (non-blocking):`, err)
+  // FIXED — the record the user actually clicked Delete on must be
+  // guaranteed to disappear, no matter what happens afterward. This
+  // was previously placed AFTER the broader "find every related round"
+  // fetch below — if that fetch failed for any reason (a large table,
+  // a transient API hiccup), the whole function threw before ever
+  // reaching this, silently leaving the exact thing the seller asked
+  // to delete still sitting there. Now happens first and is wrapped
+  // safely on its own.
+  if (seedCounterOfferId) {
+    await airtable(COUNTER_OFFERS_TABLE).destroy(seedCounterOfferId).catch((err) =>
+      console.error("Failed to delete the seed Counter Offers record (non-blocking):", err)
     );
   }
 
@@ -12287,6 +12254,67 @@ async function cascadeDeleteWtbNegotiation({ seedCounterOfferId, seedSellerOffer
     await airtable(SELLER_OFFERS_TABLE).destroy(sellerOfferRecordId).catch((err) =>
       console.error("Failed to delete underlying Seller Offer (non-blocking):", err)
     );
+  }
+
+  // Everything below is best-effort cleanup of the REST of this same
+  // negotiation's history (superseded siblings, reopened rounds, etc.)
+  // — valuable, but must never prevent the core deletion above, which
+  // has already happened by this point regardless of what follows.
+  try {
+    // Fetch broadly (no ID-based formula), filter in JS — the reliable
+    // pattern, not FIND()/ARRAYJOIN() on a raw record ID.
+    const allCounterOffersForSeller = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')`,
+        fields: ["Seller ID", "Seller Offer Record ID", "Order", "Member WTB"]
+      })
+      .all()
+      .then((records) => records.filter((r) => linkedRecordIncludes(r.fields?.["Seller ID"], sellerRecordId)));
+
+    const relatedCounterOfferIds = allCounterOffersForSeller
+      .filter((r) => {
+        if (r.id === seedCounterOfferId) return false;
+
+        const rSellerOfferId = asText(r.fields?.["Seller Offer Record ID"]);
+        if (sellerOfferRecordId && rSellerOfferId === sellerOfferRecordId) return true;
+
+        const rOrderId = firstLinkedRecordId(r.fields?.["Order"]);
+        const rMemberWtbId = firstLinkedRecordId(r.fields?.["Member WTB"]);
+        if (linkedOrderId && rOrderId === linkedOrderId) return true;
+        if (linkedMemberWtbId && rMemberWtbId === linkedMemberWtbId) return true;
+
+        return false;
+      })
+      .map((r) => r.id);
+
+    if (!sellerOfferRecordId && (linkedOrderId || linkedMemberWtbId)) {
+      const linkField = isMemberWtb ? "Linked Member WTBs" : "Linked Orders";
+      const targetId = linkedMemberWtbId || linkedOrderId;
+
+      const candidateOffers = await airtable(SELLER_OFFERS_TABLE)
+        .select({ fields: ["Seller ID", linkField] })
+        .all();
+
+      const match = candidateOffers.find(
+        (r) =>
+          linkedRecordIncludes(r.fields?.["Seller ID"], sellerRecordId) &&
+          firstLinkedRecordId(r.fields?.[linkField]) === targetId
+      );
+
+      if (match?.id) {
+        await airtable(SELLER_OFFERS_TABLE).destroy(match.id).catch((err) =>
+          console.error("Failed to delete fallback-matched underlying Seller Offer (non-blocking):", err)
+        );
+      }
+    }
+
+    for (const id of relatedCounterOfferIds) {
+      await airtable(COUNTER_OFFERS_TABLE).destroy(id).catch((err) =>
+        console.error(`Failed to delete related Counter Offers round ${id} (non-blocking):`, err)
+      );
+    }
+  } catch (err) {
+    console.error("Failed to clean up the rest of the negotiation history (non-blocking, core delete already happened):", err);
   }
 
   if (linkedOrderId && !isMemberWtb) {
@@ -13970,7 +13998,8 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
           "Product Name (MWTB)",
           "SKU (MWTB)",
           "Size (MWTB)",
-          "Brand (MWTB)"
+          "Brand (MWTB)",
+          "Denied?"
         ],
         filterByFormula: `OR(
           {Fulfillment Status} = 'Outsource',
@@ -14022,9 +14051,17 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
     );
 
     const filteredOffersWithoutActiveCounter = filteredOffers.filter((record) => {
+      const f = record.fields || {};
+
+      // FIXED — a Seller Offer explicitly marked "Denied?" (via the
+      // structured-denial fix) was still matching this endpoint's own
+      // "Fulfillment Status = Outsource" filter (the order itself can
+      // stay Outsource for other sellers even after denying this one),
+      // so a denied offer kept showing in Open too, alongside Denied.
+      if (f["Denied?"]) return false;
+
       if (sellerOfferIdsWithActiveCounter.has(record.id)) return false;
 
-      const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]) || firstLinkedRecordId(f["Member WTBs"]);
       const linkedSellerId = firstLinkedRecordId(f["Seller ID"]);
       const key = linkedOrderId && linkedSellerId ? `${linkedOrderId}::${linkedSellerId}` : null;
