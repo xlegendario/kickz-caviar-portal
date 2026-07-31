@@ -1974,7 +1974,7 @@ function renderWtbUnifiedOfferRows(items) {
 
   const isDenied = activeOfferStatusFilter === "denied";
   const columns = isDenied
-    ? ["Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "Denied", "Actions"]
+    ? ["Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "Buyer's Last Offer", "Denied", "Actions"]
     : ["", "Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", (activeOfferStatusFilter === "counter" ? "Counter Offer" : "Buyer's Last Offer"), "VAT Type", "Current Lowest", "Date", "Actions"];
 
   dashboardTableHead.innerHTML = columns.map((c) => `<th>${c}</th>`).join("");
@@ -2013,6 +2013,7 @@ function renderWtbUnifiedOfferRows(items) {
           <td>${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.brand || "-")}</td>
           <td>${escapeHtml(amount || "-")}</td>
+          <td>${isFreshDenied ? "-" : escapeHtml(item.previous_store_price || "-")}</td>
           <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
@@ -2020,6 +2021,10 @@ function renderWtbUnifiedOfferRows(items) {
                 <button class="dashboard-confirm-btn" type="button" data-wtb-retry-fresh-offer-id="${escapeHtml(item.id || "")}" data-vat-type="${escapeHtml(item.vat_type || "")}" data-denied-amount="${escapeHtml(item.original_offer || "")}">Retry</button>
                 <button class="dashboard-deny-btn" type="button" data-wtb-delete-fresh-offer-id="${escapeHtml(item.id || "")}">Delete</button>
               ` : `
+                ${item.previous_record_id ? `
+                  <button class="dashboard-confirm-btn" type="button" data-wtb-accept-previous-id="${escapeHtml(item.id || "")}">${item.previous_store_price ? `Accept ${escapeHtml(item.previous_store_price)}` : "Accept Previous"}</button>
+                  <button class="dashboard-counter-btn" type="button" data-wtb-retry-counter-id="${escapeHtml(item.id || "")}">Retry</button>
+                ` : ""}
                 <button class="dashboard-deny-btn" type="button" data-wtb-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
               `}
             </div>
@@ -5173,6 +5178,48 @@ dashboardTableBody.addEventListener("click", async (event) => {
   // NEW — additive only: retry a fresh, never-countered offer that
   // was denied outright, using the pre-existing edit-after-denial
   // endpoint (already Portal-safe — seller_record_id, no secret).
+  // NEW — additive only: retry a counter round that dead-ended in
+  // denial, validated against the store's last real position (band
+  // rule enforced server-side — a too-low attempt gets a clear error).
+  const wtbRetryCounterButton = event.target.closest("[data-wtb-retry-counter-id]");
+  if (wtbRetryCounterButton) {
+    const offerId = wtbRetryCounterButton.dataset.wtbRetryCounterId;
+    const priceInput = prompt("Your new counter offer (€):");
+
+    if (!priceInput) return;
+
+    const price = Number(priceInput);
+
+    if (!Number.isFinite(price) || price <= 0) {
+      alert("Enter a valid amount.");
+      return;
+    }
+
+    wtbRetryCounterButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/dashboard/wtb-counter-offers/${offerId}/retry-counter`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ price, seller_record_id: dashboardSeller.id })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to submit retry");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      wtbRetryCounterButton.disabled = false;
+    }
+
+    return;
+  }
+
   const wtbRetryFreshOfferButton = event.target.closest("[data-wtb-retry-fresh-offer-id]");
   if (wtbRetryFreshOfferButton) {
     const offerId = wtbRetryFreshOfferButton.dataset.wtbRetryFreshOfferId;
