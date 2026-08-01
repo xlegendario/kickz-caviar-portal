@@ -11016,7 +11016,15 @@ async function validateAndSyncConsignorPriceAgainstLowestOffer({
 }) {
   const currentOfferToStore = numberValue(orderFields["Offer To Store"]);
 
-  if (Number.isFinite(currentOfferToStore) && computedStoreOfferPrice >= currentOfferToStore) {
+  // FIXED — Number.isFinite(0) is true in JS, so whenever "Offer To
+  // Store" evaluated to exactly 0 (a known Airtable quirk: a Number-
+  // typed formula field with no matching IF branch, e.g. both "Custom
+  // Offer" and "Lowest Offer" empty, coerces to 0 instead of blank),
+  // this treated it as "there's a real €0 offer to beat" — which no
+  // positive counter can ever be lower than, blocking every counter
+  // outright. Now correctly requires a genuinely positive value before
+  // treating it as a real competing offer.
+  if (Number.isFinite(currentOfferToStore) && currentOfferToStore > 0 && computedStoreOfferPrice >= currentOfferToStore) {
     return {
       ok: false,
       error: `Your counter isn't low enough — there's currently a better offer available to the store (€${currentOfferToStore.toFixed(2)}). You'll need to go lower than that.`
