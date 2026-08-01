@@ -2917,46 +2917,6 @@ async function loadDashboardData() {
     return;
   }
 
-  if (activeSection === "buying" && activeTab === "offers") {
-    dashboardTableBody.innerHTML = `
-      <tr>
-        <td colspan="${buyingOffersColumns.length}">
-          <div class="dashboard-empty-state">
-            <strong>Loading offers...</strong>
-          </div>
-        </td>
-      </tr>
-    `;
-  
-    const params = new URLSearchParams({
-      seller_record_id: dashboardSeller.id
-    });
-  
-    const response = await fetch(
-      `/api/dashboard/buying-offers?${params.toString()}`
-    );
-  
-    const data = await response.json();
-  
-    if (!response.ok) {
-      throw new Error(data.details || data.error || "Failed to load buying offers");
-    }
-  
-    renderBuyingOfferRows(data.items || []);
-  
-    dashboardCountsCache.buying.offers = data.count || 0;
-  
-    document
-      .querySelectorAll('[data-count-key="buying:offers"]')
-      .forEach((el) => {
-        el.textContent = data.count || 0;
-      });
-  
-    renderStats();
-  
-    return;
-  }
-
   if (activeSection === "buying" && activeTab === "accepted") {
     dashboardTableBody.innerHTML = `
       <tr>
