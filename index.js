@@ -14956,7 +14956,9 @@ app.get("/api/dashboard/buying-open-wtbs", async (req, res) => {
           "Purchase Status",
           "Payment Status",
           "Buying Inventory Filter",
-          "Date"
+          "Date",
+          "Buyer VAT ID",
+          "Buyer Country"
         ],
         filterByFormula: `OR(
           {Fulfillment Status} = 'Pending',
@@ -14965,14 +14967,54 @@ app.get("/api/dashboard/buying-open-wtbs", async (req, res) => {
       })
       .all();
 
+    const relevantMemberWtbIds = records
+      .filter((record) => linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId))
+      .map((r) => r.id);
+
+    // FIXED — same raw-price leak as buying-offers: "Current Lowest
+    // Offer" is the RAW seller ask (e.g. €90), not what the buyer
+    // should ever see. Looks up the winning Seller Offer's own price +
+    // VAT type and converts it (margin + VAT) before display, the
+    // same way everywhere else in this flow does.
+    const sellerOffersForOpenWtbs = relevantMemberWtbIds.length
+      ? await airtable(SELLER_OFFERS_TABLE)
+          .select({ fields: ["Member WTBs", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
+          .all()
+          .then((records) =>
+            records.filter(
+              (r) =>
+                !r.fields?.["Delete Offer"] &&
+                relevantMemberWtbIds.includes(firstLinkedRecordId(r.fields?.["Member WTBs"]))
+            )
+          )
+      : [];
+
+    const winningSellerOfferByWtbIdForOpen = new Map();
+    for (const so of sellerOffersForOpenWtbs) {
+      const wtbId = firstLinkedRecordId(so.fields?.["Member WTBs"]);
+      const price = numberValue(so.fields?.["Seller Offer"]);
+      if (!Number.isFinite(price)) continue;
+
+      const current = winningSellerOfferByWtbIdForOpen.get(wtbId);
+      if (!current || price < current.price) {
+        winningSellerOfferByWtbIdForOpen.set(wtbId, {
+          price,
+          vatType: asText(so.fields?.["Offer VAT Type"])
+        });
+      }
+    }
+
     const items = records
       .filter((record) =>
         linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
       )
       .map((record) => {
         const f = record.fields || {};
+        const winningSellerOffer = winningSellerOfferByWtbIdForOpen.get(record.id);
 
-        const currentLowest = numberValue(f["Current Lowest Offer"]);
+        const currentLowest = winningSellerOffer
+          ? calculateMemberWtbBuyerEquivalent(winningSellerOffer.price, winningSellerOffer.vatType, f)
+          : numberValue(f["Current Lowest Offer"]);
 
         return {
           id: record.id,
@@ -15678,7 +15720,9 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
           "Current Lowest Offer",
           "Purchase Status",
           "Fulfillment Status",
-          "Date"
+          "Date",
+          "Buyer VAT ID",
+          "Buyer Country"
         ],
         filterByFormula: `AND(
           OR(
@@ -15737,8 +15781,17 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
       )
       .map((record) => {
         const f = record.fields || {};
-        const offerAmount = numberValue(f["Current Lowest Offer"]);
         const winningSellerOffer = winningSellerOfferByWtbId.get(record.id);
+
+        // FIXED — this showed the RAW seller price directly (from
+        // "Current Lowest Offer"), leaking Lojiq's margin to the buyer
+        // — e.g. a seller's raw €90 ask showed as "€90" here, instead
+        // of the correctly converted €102.10 (margin + VAT) the buyer
+        // actually sees on Discord. Now computed the same way
+        // everywhere else in this flow: calculateMemberWtbBuyerEquivalent.
+        const offerAmount = winningSellerOffer
+          ? calculateMemberWtbBuyerEquivalent(winningSellerOffer.price, winningSellerOffer.vatType, f)
+          : numberValue(f["Current Lowest Offer"]);
 
         return {
           id: record.id,
