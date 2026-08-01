@@ -41,7 +41,7 @@ const dashboardConfig = {
     label: "Buying",
     tabs: [
       { key: "open_wtbs", label: "Open WTBs" },
-      { key: "offers", label: "Offers" },
+      { key: "offers", label: "Offers", statusFilters: ["open", "counter", "denied"] },
       { key: "accepted", label: "Accepted" },
       { key: "payment_required", label: "Payment Required" },
       { key: "confirmed", label: "Confirmed" },
@@ -1969,6 +1969,101 @@ function renderWtbOpenOffersRows(offers) {
 // lowest column, both restored from the old separate tab), "own_counter"
 // (seller's own pending counter, awaiting the store/buyer), "counter"
 // (store/buyer's counter, seller must respond), or "denied".
+// NEW — additive only: mirror of renderWtbUnifiedOfferRows for the
+// buyer's side. _kind: "fresh" (never responded to, from the existing
+// buying-offers endpoint), "seller_counter" (seller just countered
+// back, buyer must respond), "my_counter" (buyer's own pending
+// counter, awaiting the seller), "denied".
+function renderBuyingUnifiedOfferRows(items) {
+  setMobileTableMode(false);
+
+  const isDenied = activeOfferStatusFilter === "denied";
+  const columns = isDenied
+    ? ["WTB ID", "Product", "SKU", "Size", "Brand", "My Offer", "Seller's Last Offer", "Denied", "Actions"]
+    : ["WTB ID", "Product", "SKU", "Size", "Brand", "My Offer", (activeOfferStatusFilter === "counter" ? "Seller's Counter" : "Seller's Offer"), "VAT Type", "Date", "Actions"];
+
+  dashboardTableHead.innerHTML = columns.map((c) => `<th>${c}</th>`).join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr><td colspan="${columns.length}">
+        <div class="dashboard-empty-state">
+          <div class="dashboard-empty-icon">◇</div>
+          <strong>Nothing here yet</strong>
+        </div>
+      </td></tr>
+    `;
+    return;
+  }
+
+  dashboardTableBody.innerHTML = items.map((item) => {
+    const myOffer = item._kind === "fresh" ? item.max_price : item.my_offer;
+    const sellersOffer = item._kind === "fresh" ? item.offer : item.sellers_offer;
+    const dateValue = item._kind === "fresh" ? item.date : (item.denied_at || item.raw_date);
+
+    if (isDenied) {
+      return `
+        <tr>
+          <td>${escapeHtml(item.order_id || "-")}</td>
+          <td>${escapeHtml(item.product || "-")}</td>
+          <td>${escapeHtml(item.sku || "-")}</td>
+          <td>${escapeHtml(item.size || "-")}</td>
+          <td>${escapeHtml(item.brand || "-")}</td>
+          <td>${escapeHtml(myOffer || "-")}</td>
+          <td>${escapeHtml(item.previous_seller_counter || "-")}</td>
+          <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
+          <td>
+            <div class="dashboard-action-row">
+              ${item.member_wtb_record_id ? `
+                <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}">Accept</button>
+              ` : ""}
+              ${item.previous_record_id ? `
+                <button class="dashboard-counter-btn" type="button" data-buying-retry-counter-id="${escapeHtml(item.id || "")}">Retry</button>
+              ` : ""}
+              <button class="dashboard-deny-btn" type="button" data-buying-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }
+
+    let actionsCell;
+    if (item._kind === "fresh" || item._kind === "seller_counter") {
+      actionsCell = `
+        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}">Accept</button>
+        <button class="dashboard-counter-btn" type="button" data-buying-counter-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-counter-kind="${item._kind}" data-buying-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">Counter</button>
+        <button class="dashboard-deny-btn" type="button" data-buying-deny-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-deny-kind="${item._kind}">Deny</button>
+      `;
+    } else {
+      // "my_counter" — buyer's own pending counter, awaiting seller.
+      actionsCell = `
+        <button class="dashboard-counter-btn" type="button" data-buying-edit-counter-id="${escapeHtml(item.id || "")}">Edit</button>
+        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}">Accept</button>
+        <button class="dashboard-deny-btn" type="button" data-buying-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
+      `;
+    }
+
+    return `
+      <tr>
+        <td>${escapeHtml(item.order_id || "-")}</td>
+        <td>${escapeHtml(item.product || "-")}</td>
+        <td>${escapeHtml(item.sku || "-")}</td>
+        <td>${escapeHtml(item.size || "-")}</td>
+        <td>${escapeHtml(item.brand || "-")}</td>
+        <td>${escapeHtml(myOffer || "-")}</td>
+        <td>${escapeHtml(sellersOffer || "-")}</td>
+        <td>${escapeHtml(item.vat_type || "-")}</td>
+        <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
+        <td>
+          <div class="dashboard-action-row">
+            ${actionsCell}
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join("");
+}
+
 function renderWtbUnifiedOfferRows(items) {
   setMobileTableMode(false);
 
@@ -3391,6 +3486,91 @@ async function loadDashboardData() {
   
   if (activeSection === "consignment") {
     renderTableShell();
+    return;
+  }
+
+  if (activeSection === "buying" && activeTab === "offers") {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="7">
+          <div class="dashboard-empty-state">
+            <strong>Loading offers...</strong>
+          </div>
+        </td>
+      </tr>
+    `;
+
+    if (activeOfferStatusFilter === "open") {
+      // Mirrors WTB's Open: combines two sources — genuinely fresh
+      // seller offers the buyer hasn't responded to yet (existing
+      // buying-offers endpoint) AND rounds where the seller just
+      // countered back (buying-counter-offers?filter=open).
+      const [freshRes, sellerCounterRes] = await Promise.all([
+        fetch(`/api/dashboard/buying-offers?${new URLSearchParams({
+          seller_record_id: dashboardSeller.id
+        }).toString()}`),
+        fetch(`/api/dashboard/buying-counter-offers?${new URLSearchParams({
+          seller_record_id: dashboardSeller.id,
+          filter: "open"
+        }).toString()}`)
+      ]);
+
+      const freshData = await freshRes.json();
+      const sellerCounterData = await sellerCounterRes.json();
+
+      if (!freshRes.ok || !sellerCounterRes.ok) {
+        throw new Error(
+          freshData.error || sellerCounterData.error || "Failed to load offers"
+        );
+      }
+
+      const merged = [
+        ...(freshData.items || []).map((item) => ({ ...item, _kind: "fresh" })),
+        ...(sellerCounterData.items || []).map((item) => ({ ...item, _kind: "seller_counter" }))
+      ];
+
+      renderBuyingUnifiedOfferRows(merged);
+
+      const count = merged.length;
+      dashboardPillCountsCache["buying:offers"] = {
+        ...(dashboardPillCountsCache["buying:offers"] || {}),
+        open: count
+      };
+      document
+        .querySelectorAll('[data-pill-count-key="buying:offers:open"]')
+        .forEach((el) => { el.textContent = count; });
+
+      return;
+    }
+
+    const params = new URLSearchParams({
+      seller_record_id: dashboardSeller.id,
+      filter: activeOfferStatusFilter === "denied" ? "denied" : "countered"
+    });
+
+    const response = await fetch(`/api/dashboard/buying-counter-offers?${params.toString()}`);
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.details || data.error || "Failed to load offers");
+    }
+
+    renderBuyingUnifiedOfferRows(
+      (data.items || []).map((item) => ({
+        ...item,
+        _kind: activeOfferStatusFilter === "denied" ? "denied" : "my_counter"
+      }))
+    );
+
+    const count = data.count || 0;
+    dashboardPillCountsCache["buying:offers"] = {
+      ...(dashboardPillCountsCache["buying:offers"] || {}),
+      [activeOfferStatusFilter]: count
+    };
+    document
+      .querySelectorAll(`[data-pill-count-key="buying:offers:${activeOfferStatusFilter}"]`)
+      .forEach((el) => { el.textContent = count; });
+
     return;
   }
 
@@ -5352,6 +5532,254 @@ dashboardTableBody.addEventListener("click", async (event) => {
 
   // NEW — additive only: accept the store/buyer's previous counter
   // instead of waiting on a response to the seller's own pending one.
+  // NEW — additive only: Buying's Accept — works for fresh, seller_counter,
+  // my_counter, and denied items alike, since it always just accepts
+  // whichever seller is currently cheapest overall (reuses the existing,
+  // already-Portal-safe buying/accept-offer endpoint).
+  const buyingAcceptCurrentLowestButton = event.target.closest("[data-buying-accept-current-lowest-id]");
+  if (buyingAcceptCurrentLowestButton) {
+    const memberWtbRecordId = buyingAcceptCurrentLowestButton.dataset.buyingAcceptCurrentLowestId;
+    if (!memberWtbRecordId) return;
+
+    if (!confirm("Accept the current lowest offer?")) return;
+
+    buyingAcceptCurrentLowestButton.disabled = true;
+
+    try {
+      const response = await fetch("/api/dashboard/buying/accept-offer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_wtb_record_id: memberWtbRecordId })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to accept offer");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      buyingAcceptCurrentLowestButton.disabled = false;
+    }
+
+    return;
+  }
+
+  // NEW — additive only: Buying's Counter — for "fresh" items, creates
+  // the first-ever round; for "seller_counter" items, counters the
+  // existing round.
+  const buyingCounterButton = event.target.closest("[data-buying-counter-id]");
+  if (buyingCounterButton) {
+    const kind = buyingCounterButton.dataset.buyingCounterKind;
+    const priceInput = prompt("Your counter offer (€):");
+
+    if (!priceInput) return;
+
+    const price = Number(priceInput);
+
+    if (!Number.isFinite(price) || price <= 0) {
+      alert("Enter a valid amount.");
+      return;
+    }
+
+    buyingCounterButton.disabled = true;
+
+    try {
+      let response;
+      if (kind === "fresh") {
+        response = await fetch("/api/dashboard/buying-counter-offers/create-from-fresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            member_wtb_record_id: buyingCounterButton.dataset.buyingCounterId,
+            seller_offer_record_id: buyingCounterButton.dataset.buyingSellerOfferId,
+            price,
+            seller_record_id: dashboardSeller.id
+          })
+        });
+      } else {
+        response = await fetch(`/api/dashboard/buying-counter-offers/${buyingCounterButton.dataset.buyingCounterId}/buyer-counter`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ price, seller_record_id: dashboardSeller.id })
+        });
+      }
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to submit counter");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      buyingCounterButton.disabled = false;
+    }
+
+    return;
+  }
+
+  // NEW — additive only: Buying's Deny — for "fresh" items, uses the
+  // existing simple deny-offer endpoint (no Counter Offers round
+  // exists yet); for "seller_counter" items, uses the new buyer-deny
+  // (reopens the prior round, matching member_wtb_counter_deny:).
+  const buyingDenyButton = event.target.closest("[data-buying-deny-id]");
+  if (buyingDenyButton) {
+    const kind = buyingDenyButton.dataset.buyingDenyKind;
+
+    if (!confirm("Deny this offer?")) return;
+
+    buyingDenyButton.disabled = true;
+
+    try {
+      let response;
+      if (kind === "fresh") {
+        response = await fetch("/api/dashboard/buying/deny-offer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ member_wtb_record_id: buyingDenyButton.dataset.buyingDenyId })
+        });
+      } else {
+        response = await fetch(`/api/dashboard/buying-counter-offers/${buyingDenyButton.dataset.buyingDenyId}/buyer-deny`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ seller_record_id: dashboardSeller.id })
+        });
+      }
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to deny offer");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      buyingDenyButton.disabled = false;
+    }
+
+    return;
+  }
+
+  // NEW — additive only: buyer edits their own pending counter (raise it).
+  const buyingEditCounterButton = event.target.closest("[data-buying-edit-counter-id]");
+  if (buyingEditCounterButton) {
+    const offerId = buyingEditCounterButton.dataset.buyingEditCounterId;
+    const priceInput = prompt("Your new counter offer (€):");
+
+    if (!priceInput) return;
+
+    const price = Number(priceInput);
+
+    if (!Number.isFinite(price) || price <= 0) {
+      alert("Enter a valid amount.");
+      return;
+    }
+
+    buyingEditCounterButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/dashboard/buying-counter-offers/${offerId}/buyer-edit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ price, seller_record_id: dashboardSeller.id })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to edit counter");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      buyingEditCounterButton.disabled = false;
+    }
+
+    return;
+  }
+
+  // NEW — additive only: buyer retries after a dead-end denial.
+  const buyingRetryCounterButton = event.target.closest("[data-buying-retry-counter-id]");
+  if (buyingRetryCounterButton) {
+    const offerId = buyingRetryCounterButton.dataset.buyingRetryCounterId;
+    const priceInput = prompt("Your new counter offer (€):");
+
+    if (!priceInput) return;
+
+    const price = Number(priceInput);
+
+    if (!Number.isFinite(price) || price <= 0) {
+      alert("Enter a valid amount.");
+      return;
+    }
+
+    buyingRetryCounterButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/dashboard/buying-counter-offers/${offerId}/retry-counter`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ price, seller_record_id: dashboardSeller.id })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to submit retry");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      buyingRetryCounterButton.disabled = false;
+    }
+
+    return;
+  }
+
+  // NEW — additive only: buyer deletes their own counter or a denied one.
+  const buyingCancelOfferButton = event.target.closest("[data-buying-cancel-offer-id]");
+  if (buyingCancelOfferButton) {
+    const offerId = buyingCancelOfferButton.dataset.buyingCancelOfferId;
+
+    if (!confirm("Delete this offer? This can't be undone.")) return;
+
+    buyingCancelOfferButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/dashboard/buying-counter-offers/${offerId}/buyer-cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seller_record_id: dashboardSeller.id })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to delete offer");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      buyingCancelOfferButton.disabled = false;
+    }
+
+    return;
+  }
+
   const wtbAcceptPreviousButton = event.target.closest("[data-wtb-accept-previous-id]");
   if (wtbAcceptPreviousButton) {
     const offerId = wtbAcceptPreviousButton.dataset.wtbAcceptPreviousId;
