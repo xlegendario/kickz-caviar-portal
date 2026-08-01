@@ -12235,7 +12235,7 @@ async function cascadeDeleteWtbNegotiation({ seedCounterOfferId, seedSellerOffer
     const sellerOfferRecord = await airtable(SELLER_OFFERS_TABLE).find(sellerOfferRecordId).catch(() => null);
     if (sellerOfferRecord) {
       linkedOrderId = firstLinkedRecordId(sellerOfferRecord.fields?.["Linked Orders"]);
-      linkedMemberWtbId = firstLinkedRecordId(sellerOfferRecord.fields?.["Linked Member WTBs"]);
+      linkedMemberWtbId = firstLinkedRecordId(sellerOfferRecord.fields?.["Member WTBs"]);
       isMemberWtb = !!linkedMemberWtbId;
     }
   }
@@ -12306,7 +12306,7 @@ async function cascadeDeleteWtbNegotiation({ seedCounterOfferId, seedSellerOffer
       .map((r) => r.id);
 
     if (!sellerOfferRecordId && (linkedOrderId || linkedMemberWtbId)) {
-      const linkField = isMemberWtb ? "Linked Member WTBs" : "Linked Orders";
+      const linkField = isMemberWtb ? "Member WTBs" : "Linked Orders";
       const targetId = linkedMemberWtbId || linkedOrderId;
 
       const candidateOffers = await airtable(SELLER_OFFERS_TABLE)
@@ -15704,20 +15704,20 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
     // create-first-counter endpoint already relies on.
     const allSellerOffersForTheseWtbs = memberWtbIds.length
       ? await airtable(SELLER_OFFERS_TABLE)
-          .select({ fields: ["Linked Member WTBs", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
+          .select({ fields: ["Member WTBs", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
           .all()
           .then((records) =>
             records.filter(
               (r) =>
                 !r.fields?.["Delete Offer"] &&
-                memberWtbIds.includes(firstLinkedRecordId(r.fields?.["Linked Member WTBs"]))
+                memberWtbIds.includes(firstLinkedRecordId(r.fields?.["Member WTBs"]))
             )
           )
       : [];
 
     const winningSellerOfferByWtbId = new Map();
     for (const so of allSellerOffersForTheseWtbs) {
-      const wtbId = firstLinkedRecordId(so.fields?.["Linked Member WTBs"]);
+      const wtbId = firstLinkedRecordId(so.fields?.["Member WTBs"]);
       const price = numberValue(so.fields?.["Seller Offer"]);
       if (!Number.isFinite(price)) continue;
 
