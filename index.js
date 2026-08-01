@@ -15185,13 +15185,23 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
       const previousRecords = await airtable(COUNTER_OFFERS_TABLE)
         .select({ filterByFormula: previousFormula, fields: ["Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"] })
         .all();
+      // FIXED — same underlying issue as the Consignment €0.00 bug:
+      // numberValue() always returns a finite number (0 for a blank
+      // field), so Number.isFinite(numberValue(x)) is ALWAYS true —
+      // the intended fallback to "Seller Original Price" never
+      // actually ran. This specifically breaks a prior round that was
+      // itself a genuine round-1 seller offer (never countered, so
+      // "Seller Counter Price" is blank) — showed €0.00 there instead
+      // of correctly falling back. Now checks the value is genuinely
+      // positive before using it.
       previousSellerCounterById = new Map(
-        previousRecords.map((r) => [
-          r.id,
-          Number.isFinite(numberValue(r.fields?.["Seller Counter Price"]))
-            ? numberValue(r.fields?.["Seller Counter Price"])
-            : numberValue(r.fields?.["Seller Original Price"])
-        ])
+        previousRecords.map((r) => {
+          const sellerCounter = numberValue(r.fields?.["Seller Counter Price"]);
+          return [
+            r.id,
+            sellerCounter > 0 ? sellerCounter : numberValue(r.fields?.["Seller Original Price"])
+          ];
+        })
       );
     }
 
