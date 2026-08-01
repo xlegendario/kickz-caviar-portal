@@ -15478,6 +15478,183 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/buyer-edit", async (req,
   }
 });
 
+// NEW — additive only: mirror of WTB's retry-counter, for a buyer's
+// counter that dead-ended in denial (no reopen happened). Validates
+// the new price using the same narrowing-band rule against the
+// seller's last real position — his requirement: the retry must never
+// go lower than what the seller had already asked for.
+app.post("/api/dashboard/buying-counter-offers/:offerId/retry-counter", async (req, res) => {
+  try {
+    const offerId = asText(req.params.offerId);
+    const buyerSellerRecordId = asText(req.body?.seller_record_id);
+    const proposedPrice = Number(req.body?.price);
+
+    if (!offerId || !buyerSellerRecordId) {
+      return res.status(400).json({ error: "Missing offerId or seller_record_id" });
+    }
+
+    if (!Number.isInteger(proposedPrice) || proposedPrice <= 0) {
+      return res.status(400).json({ error: "Offer must be a valid whole number." });
+    }
+
+    const deniedRecord = await airtable(COUNTER_OFFERS_TABLE).find(offerId);
+    const f = deniedRecord.fields || {};
+
+    const memberWtbRecordId = firstLinkedRecordId(f["Member WTB"]);
+    const memberWtb = memberWtbRecordId ? await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId).catch(() => null) : null;
+
+    if (!memberWtb || !linkedRecordIncludes(memberWtb.fields?.["Buyer Seller ID"], buyerSellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    const priorRoundId = firstLinkedRecordId(f["Previous Record ID"]);
+
+    if (!priorRoundId) {
+      return res.status(409).json({ error: "There's no prior position to retry against." });
+    }
+
+    const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId);
+    const priorFields = priorRound.fields || {};
+
+    // The seller's last real position (mirrors WTB's storeLastPosition,
+    // reversed) — validated directly, not via the prior round's own
+    // status (expected to already be Closed, correctly superseded).
+    const sellerLastPosition = numberValue(priorFields["Seller Counter Price"]) || numberValue(priorFields["Seller Original Price"]);
+    const deniedBuyerCounter = numberValue(f["Store Counter Price"]);
+
+    if (!Number.isFinite(sellerLastPosition) || !Number.isFinite(deniedBuyerCounter)) {
+      return res.status(500).json({ error: "Missing price data to validate against." });
+    }
+
+    // Reversed narrowing band: the buyer's retry must land strictly
+    // between the seller's last position and the buyer's own denied
+    // counter (never below what the seller already asked for).
+    const validation = validateNextCounterPrice(deniedBuyerCounter, sellerLastPosition, proposedPrice);
+    if (!validation.ok) {
+      return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    const sellerRecordId = firstLinkedRecordId(f["Seller ID"]);
+    const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
+    const sellerVatType = asText(f["Seller Original VAT Type"]);
+
+    const newRound = await airtable(COUNTER_OFFERS_TABLE).create({
+      "Member WTB": [memberWtbRecordId],
+      "Seller ID": sellerRecordId ? [sellerRecordId] : undefined,
+      "Seller Offer Record ID": asText(f["Seller Offer Record ID"]),
+      "Source Type": "Member WTB",
+      "Seller Original Price": sellerOriginalPrice,
+      "Seller Original VAT Type": sellerVatType,
+      "Store Counter Price": proposedPrice,
+      "Previous Record ID": priorRoundId,
+      "Created At": new Date().toISOString(),
+      "Status": "Open"
+    });
+
+    if (AIRTABLE_DISCORD_UPDATES_URL) {
+      const recomputedPayout = calculateMemberWtbSellerPayout(proposedPrice, sellerVatType, memberWtb.fields || {});
+
+      await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trigger_type: "member-wtb-buyer-retried",
+          counter_offer_record_id: newRound.id,
+          product_name: asText(f["Product Name"]),
+          sku: asText(f["SKU"]),
+          size: asText(f["Size"]),
+          your_previous_counter: sellerLastPosition,
+          buyer_counter_payout: recomputedPayout
+        })
+      }).catch((err) => console.error("Failed to notify seller of retry counter (non-blocking):", err));
+    }
+
+    res.json({ ok: true, band: validation.band, new_round_id: newRound.id });
+  } catch (err) {
+    console.error("Failed to retry buying counter offer:", err);
+
+    res.status(500).json({
+      error: "Failed to retry offer",
+      details: err.message
+    });
+  }
+});
+
+// NEW — additive only: buyer deletes their own pending counter or a
+// denied one. Simpler than WTB's cascade-delete — there's no
+// equivalent "stale Lowest Offer" field on this side to worry about.
+app.post("/api/dashboard/buying-counter-offers/:offerId/buyer-cancel", async (req, res) => {
+  try {
+    const offerId = asText(req.params.offerId);
+    const buyerSellerRecordId = asText(req.body?.seller_record_id);
+
+    if (!offerId || !buyerSellerRecordId) {
+      return res.status(400).json({ error: "Missing offerId or seller_record_id" });
+    }
+
+    const record = await airtable(COUNTER_OFFERS_TABLE).find(offerId);
+    const memberWtbRecordId = firstLinkedRecordId(record.fields?.["Member WTB"]);
+    const memberWtb = memberWtbRecordId ? await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId).catch(() => null) : null;
+
+    if (!memberWtb || !linkedRecordIncludes(memberWtb.fields?.["Buyer Seller ID"], buyerSellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    await airtable(COUNTER_OFFERS_TABLE).destroy(offerId);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to cancel buying counter offer:", err);
+    res.status(500).json({ error: "Failed to cancel offer", details: err.message });
+  }
+});
+
+// NEW — additive only: Portal-safe wrapper for the buyer's FIRST-EVER
+// counter on a fresh seller offer (no Counter Offers round exists
+// yet) — calls the existing secret-protected create endpoint.
+app.post("/api/dashboard/buying-counter-offers/create-from-fresh", async (req, res) => {
+  try {
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+    const sellerOfferRecordId = asText(req.body?.seller_offer_record_id);
+    const buyerSellerRecordId = asText(req.body?.seller_record_id);
+    const price = req.body?.price;
+
+    if (!memberWtbRecordId || !sellerOfferRecordId || !buyerSellerRecordId) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId).catch(() => null);
+
+    if (!memberWtb || !linkedRecordIncludes(memberWtb.fields?.["Buyer Seller ID"], buyerSellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    const response = await fetch(`http://localhost:${PORT}/api/member-wtb-counter-offers/create`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+      },
+      body: JSON.stringify({
+        member_wtb_record_id: memberWtbRecordId,
+        seller_offer_record_id: sellerOfferRecordId,
+        price
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error("Failed to create first buying counter:", err);
+    res.status(500).json({ error: "Failed to submit counter", details: err.message });
+  }
+});
+
 app.get("/api/dashboard/buying-offers", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
