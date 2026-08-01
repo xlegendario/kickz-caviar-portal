@@ -15690,6 +15690,47 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
       })
       .all();
 
+    const memberWtbIds = records
+      .filter((record) => linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId))
+      .map((r) => r.id);
+
+    // FIXED — this previously never looked up the winning Seller
+    // Offer at all, so "fresh" items had no VAT Type to show, AND the
+    // Counter button had no seller_offer_record_id to submit against
+    // (silently broken). Finds, per Member WTB, whichever linked
+    // Seller Offer currently has the lowest price — matching what
+    // "Current Lowest Offer" already rolls up — and reads its own
+    // "Offer VAT Type" directly, the same field the existing, working
+    // create-first-counter endpoint already relies on.
+    const allSellerOffersForTheseWtbs = memberWtbIds.length
+      ? await airtable(SELLER_OFFERS_TABLE)
+          .select({ fields: ["Linked Member WTBs", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
+          .all()
+          .then((records) =>
+            records.filter(
+              (r) =>
+                !r.fields?.["Delete Offer"] &&
+                memberWtbIds.includes(firstLinkedRecordId(r.fields?.["Linked Member WTBs"]))
+            )
+          )
+      : [];
+
+    const winningSellerOfferByWtbId = new Map();
+    for (const so of allSellerOffersForTheseWtbs) {
+      const wtbId = firstLinkedRecordId(so.fields?.["Linked Member WTBs"]);
+      const price = numberValue(so.fields?.["Seller Offer"]);
+      if (!Number.isFinite(price)) continue;
+
+      const current = winningSellerOfferByWtbId.get(wtbId);
+      if (!current || price < current.price) {
+        winningSellerOfferByWtbId.set(wtbId, {
+          price,
+          id: so.id,
+          vatType: asText(so.fields?.["Offer VAT Type"])
+        });
+      }
+    }
+
     const items = records
       .filter((record) =>
         linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
@@ -15697,10 +15738,12 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
       .map((record) => {
         const f = record.fields || {};
         const offerAmount = numberValue(f["Current Lowest Offer"]);
+        const winningSellerOffer = winningSellerOfferByWtbId.get(record.id);
 
         return {
           id: record.id,
           member_wtb_record_id: record.id,
+          seller_offer_record_id: winningSellerOffer?.id || null,
           order_id: displayValue(f["Member WTB ID"]),
           product: displayValue(f["Product Name"]),
           sku: displayValue(f["SKU"]),
@@ -15710,6 +15753,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
           offer: Number.isFinite(offerAmount) && offerAmount > 0
             ? moneyWholeValue(offerAmount)
             : "-",
+          vat_type: winningSellerOffer?.vatType || null,
           status: "Offer Received",
           date: formatDateEU(f["Date"]),
           raw_date: f["Date"]
