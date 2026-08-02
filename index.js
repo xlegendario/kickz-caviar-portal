@@ -15079,7 +15079,18 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
     }
 
     const myMemberWtbs = await airtable(MEMBER_WTBS_TABLE)
-      .select({ fields: ["Buyer Seller ID"] })
+      .select({
+        fields: [
+          "Buyer Seller ID",
+          "Member WTB ID",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "Buyer VAT ID",
+          "Buyer Country"
+        ]
+      })
       .all()
       .then((records) =>
         records.filter((r) => linkedRecordIncludes(r.fields?.["Buyer Seller ID"], buyerSellerRecordId))
@@ -15180,10 +15191,11 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
     const previousIds = [...new Set(preFiltered.map((r) => firstLinkedRecordId(r.fields?.["Previous Record ID"])).filter(Boolean))];
 
     let previousSellerCounterById = new Map();
+    let previousBuyerCounterById = new Map();
     if (previousIds.length) {
       const previousFormula = `OR(${previousIds.map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`).join(",")})`;
       const previousRecords = await airtable(COUNTER_OFFERS_TABLE)
-        .select({ filterByFormula: previousFormula, fields: ["Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"] })
+        .select({ filterByFormula: previousFormula, fields: ["Seller Counter Price", "Seller Original Price", "Seller Original VAT Type", "Store Counter Price"] })
         .all();
       // FIXED — same underlying issue as the Consignment €0.00 bug:
       // numberValue() always returns a finite number (0 for a blank
@@ -15203,6 +15215,13 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
           ];
         })
       );
+      // NEW — additive only: his request — Open needs a "My Last
+      // Offer" column showing the buyer's own prior counter (from the
+      // round before this one), so they can weigh a fresh seller
+      // counter against what they last offered.
+      previousBuyerCounterById = new Map(
+        previousRecords.map((r) => [r.id, numberValue(r.fields?.["Store Counter Price"])])
+      );
     }
 
     const memberWtbFieldsById = new Map(myMemberWtbs.map((r) => [r.id, r.fields || {}]));
@@ -15215,19 +15234,24 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
 
       const previousOfferId = firstLinkedRecordId(f["Previous Record ID"]);
 
-      // "My Offer" (the buyer's own position): this round's own Store
-      // Counter Price if it's their own pending counter, else the
-      // prior round's own value (mirrors WTB's sellerLastOffer logic,
-      // reversed).
+      // FIXED — Number.isFinite(numberValue(x)) is always true (the
+      // same anti-pattern found and fixed elsewhere), so "myOffer"
+      // here was always this round's own Store Counter Price even
+      // when genuinely blank (a seller_counter round, where the
+      // SELLER just moved and this round never carries the buyer's
+      // own price) — showing €0.00 instead of correctly falling back
+      // to the buyer's actual last position on the prior round.
       const ownStoreCounter = numberValue(f["Store Counter Price"]);
-      const myOffer = Number.isFinite(ownStoreCounter) ? ownStoreCounter : null;
+      const myLastOffer = ownStoreCounter > 0
+        ? ownStoreCounter
+        : (previousOfferId ? previousBuyerCounterById.get(previousOfferId) : null);
 
       // "Seller's Last Offer": the seller's current position — this
       // round's own Seller Counter Price if the seller just moved,
       // else fall back to the seller's original ask.
       const sellerCounter = numberValue(f["Seller Counter Price"]);
       const sellerOriginal = numberValue(f["Seller Original Price"]);
-      const sellersOffer = Number.isFinite(sellerCounter) ? sellerCounter : sellerOriginal;
+      const sellersOffer = sellerCounter > 0 ? sellerCounter : sellerOriginal;
 
       const sellersOfferInBuyerTerms = calculateMemberWtbBuyerEquivalent(sellersOffer, vatType, wtbFields);
 
@@ -15240,7 +15264,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         sku: asText(wtbFields["SKU"]),
         size: asText(wtbFields["Size"]),
         brand: asText(wtbFields["Brand"]),
-        my_offer: Number.isFinite(myOffer) ? moneyValue(myOffer) : null,
+        my_offer: Number.isFinite(myLastOffer) && myLastOffer > 0 ? moneyValue(myLastOffer) : null,
         sellers_offer: Number.isFinite(sellersOfferInBuyerTerms) ? moneyValue(sellersOfferInBuyerTerms) : null,
         vat_type: vatType,
         previous_record_id: previousOfferId,
@@ -20083,6 +20107,17 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
       "Store Counter Price": buyerCounterPrice,
       "Counter Payout": recomputedPayout,
       "Counter Payout VAT Type": sellerVatType,
+      // FIXED — these were never set here, since the Discord DM below
+      // always carried product/SKU/size separately and never needed
+      // to read them back off this record. The new WTB Portal
+      // Countered pill reads them directly off the record itself,
+      // which left every field but the prices blank there.
+      "Order ID": memberWtbId,
+      "Product Name": productName,
+      "SKU": sku,
+      "Size": size,
+      "Brand": asText(wtbFields["Brand"]),
+      "Created At": new Date().toISOString(),
       "Status": "Open"
     });
 
@@ -20349,6 +20384,16 @@ app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) =>
       "Counter Payout": recomputedPayout,
       "Counter Payout VAT Type": sellerVatType,
       "Previous Record ID": previousRoundId,
+      // FIXED — same gap as the create endpoint above: these were
+      // never carried forward, leaving every subsequent round blank
+      // except for prices once the new WTB Portal Countered pill
+      // started reading them directly.
+      "Order ID": asText(f["Order ID"]),
+      "Product Name": asText(f["Product Name"]),
+      "SKU": asText(f["SKU"]),
+      "Size": asText(f["Size"]),
+      "Brand": asText(f["Brand"]),
+      "Created At": new Date().toISOString(),
       "Status": "Open"
     });
 
