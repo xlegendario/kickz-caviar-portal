@@ -12044,6 +12044,14 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       );
     }
 
+    // NEW — additive only: "Order ID" is a COMPUTED field (a formula,
+    // SIMPLIFIED — no longer needs a separate Member WTB fetch: he's
+    // added native lookup fields (Member WTB ID, Product Name (MWTB),
+    // SKU (MWTB), Size (MWTB), Brand (MWTB)) through the "Member WTB"
+    // link, mirroring how Order ID/Product Name/etc already resolve
+    // natively for Store Orders rounds via the Order link. Reads them
+    // directly in the mapping below instead.
+
     const items = preFiltered
       .map((record) => {
         const f = record.fields || {};
@@ -12129,11 +12137,13 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
 
         return {
           id: record.id,
-          order_id: displayValue(f["Order ID"]) || displayValue(f["Order"]),
-          product: displayValue(f["Product Name"]),
-          sku: displayValue(f["SKU"]),
-          size: displayValue(f["Size"]),
-          brand: displayValue(f["Brand"]),
+          order_id: isMemberWtb
+            ? (displayValue(f["Member WTB ID"]) || displayValue(f["Order ID"]))
+            : (displayValue(f["Order ID"]) || displayValue(f["Order"])),
+          product: isMemberWtb ? (displayValue(f["Product Name (MWTB)"]) || displayValue(f["Product Name"])) : displayValue(f["Product Name"]),
+          sku: isMemberWtb ? (displayValue(f["SKU (MWTB)"]) || displayValue(f["SKU"])) : displayValue(f["SKU"]),
+          size: isMemberWtb ? (displayValue(f["Size (MWTB)"]) || displayValue(f["Size"])) : displayValue(f["Size"]),
+          brand: isMemberWtb ? (displayValue(f["Brand (MWTB)"]) || displayValue(f["Brand"])) : displayValue(f["Brand"]),
           original_offer: Number.isFinite(sellerLastOffer) ? moneyValue(sellerLastOffer) : moneyValue(f["Seller Original Price"]),
           counter_payout: moneyValue(f["Counter Payout"]),
           vat_type: vatType,
@@ -12174,11 +12184,11 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           return {
             id: record.id,
             _kind: "fresh_denied",
-            order_id: displayValue(f["Order ID"]),
-            product: displayValue(f["Product Name"]),
-            sku: displayValue(f["SKU"]),
-            size: displayValue(f["Size"]),
-            brand: displayValue(f["Brand"]),
+            order_id: displayValue(f["Member WTB ID"]) || displayValue(f["Order ID"]),
+            product: displayValue(f["Product Name (MWTB)"]) || displayValue(f["Product Name"]),
+            sku: displayValue(f["SKU (MWTB)"]) || displayValue(f["SKU"]),
+            size: displayValue(f["Size (MWTB)"]) || displayValue(f["Size"]),
+            brand: displayValue(f["Brand (MWTB)"]) || displayValue(f["Brand"]),
             original_offer: moneyValue(f["Denied Amount"]),
             vat_type: displayValue(f["Denied VAT Type"]),
             denied_at: displayValue(f["Denied At"])
@@ -20107,16 +20117,13 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
       "Store Counter Price": buyerCounterPrice,
       "Counter Payout": recomputedPayout,
       "Counter Payout VAT Type": sellerVatType,
-      // FIXED — these were never set here, since the Discord DM below
-      // always carried product/SKU/size separately and never needed
-      // to read them back off this record. The new WTB Portal
-      // Countered pill reads them directly off the record itself,
-      // which left every field but the prices blank there.
-      "Order ID": memberWtbId,
-      "Product Name": productName,
-      "SKU": sku,
-      "Size": size,
-      "Brand": asText(wtbFields["Brand"]),
+      // SIMPLIFIED — Product Name/SKU/Size/Brand/Member WTB ID no
+      // longer need to be written here: he's added native lookup
+      // fields (Product Name (MWTB), SKU (MWTB), Size (MWTB), Brand
+      // (MWTB), Member WTB ID) through the "Member WTB" link above,
+      // mirroring how Product Name/SKU/etc already resolve natively
+      // for Store Orders rounds via the Order link. One less set of
+      // fields to remember to carry forward on every new round.
       "Created At": new Date().toISOString(),
       "Status": "Open"
     });
@@ -20384,15 +20391,11 @@ app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) =>
       "Counter Payout": recomputedPayout,
       "Counter Payout VAT Type": sellerVatType,
       "Previous Record ID": previousRoundId,
-      // FIXED — same gap as the create endpoint above: these were
-      // never carried forward, leaving every subsequent round blank
-      // except for prices once the new WTB Portal Countered pill
-      // started reading them directly.
-      "Order ID": asText(f["Order ID"]),
-      "Product Name": asText(f["Product Name"]),
-      "SKU": asText(f["SKU"]),
-      "Size": asText(f["Size"]),
-      "Brand": asText(f["Brand"]),
+      // SIMPLIFIED — no longer needs to carry Product Name/SKU/Size/
+      // Brand forward at all: "Member WTB" is already linked above, and
+      // the new native lookup fields (Product Name (MWTB) etc.)
+      // resolve through that link automatically on every round, so
+      // there's nothing left to remember to carry forward here.
       "Created At": new Date().toISOString(),
       "Status": "Open"
     });
