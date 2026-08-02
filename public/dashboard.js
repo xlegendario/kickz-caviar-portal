@@ -1978,9 +1978,24 @@ function renderBuyingUnifiedOfferRows(items) {
   setMobileTableMode(false);
 
   const isDenied = activeOfferStatusFilter === "denied";
+  const isOpen = activeOfferStatusFilter === "open";
+
+  // NEW — his request: "My Offer" was ambiguous. For Open it's the
+  // buyer's stated Max Price (their ceiling), with a separate "My
+  // Last Offer" column for their actual last counter (if any) so they
+  // can weigh a fresh seller offer against what they last put
+  // forward. For Countered, "My Offer" stays as-is (it IS their
+  // current pending counter, no "last" needed). For Denied, it's
+  // their actual denied counter, so "My Last Offer" fits better than
+  // "My Offer". "Seller's Counter" → "Seller's Last Offer", matching
+  // WTB's "Buyer's Last Offer" naming — the seller's shown price here
+  // isn't always literally a counter (could be their original,
+  // never-countered ask).
   const columns = isDenied
-    ? ["WTB ID", "Product", "SKU", "Size", "Brand", "My Offer", "Seller's Last Offer", "Denied", "Actions"]
-    : ["WTB ID", "Product", "SKU", "Size", "Brand", "My Offer", (activeOfferStatusFilter === "counter" ? "Seller's Counter" : "Seller's Offer"), "VAT Type", "Date", "Actions"];
+    ? ["WTB ID", "Product", "SKU", "Size", "Brand", "My Last Offer", "Seller's Last Offer", "Denied", "Actions"]
+    : isOpen
+      ? ["WTB ID", "Product", "SKU", "Size", "Brand", "Max Price", "My Last Offer", "Seller's Offer", "VAT Type", "Date", "Actions"]
+      : ["WTB ID", "Product", "SKU", "Size", "Brand", "My Offer", "Seller's Last Offer", "VAT Type", "Date", "Actions"];
 
   dashboardTableHead.innerHTML = columns.map((c) => `<th>${c}</th>`).join("");
 
@@ -1997,7 +2012,9 @@ function renderBuyingUnifiedOfferRows(items) {
   }
 
   dashboardTableBody.innerHTML = items.map((item) => {
-    const myOffer = item._kind === "fresh" ? item.max_price : item.my_offer;
+    const maxPrice = item._kind === "fresh" ? item.max_price : null;
+    const myOffer = item._kind === "my_counter" ? item.my_offer : null;
+    const myLastOffer = (item._kind === "seller_counter" || item._kind === "denied") ? item.my_offer : null;
     const sellersOffer = item._kind === "fresh" ? item.offer : item.sellers_offer;
     const dateValue = item._kind === "fresh" ? item.date : (item.denied_at || item.raw_date);
 
@@ -2009,7 +2026,7 @@ function renderBuyingUnifiedOfferRows(items) {
           <td>${escapeHtml(item.sku || "-")}</td>
           <td>${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.brand || "-")}</td>
-          <td>${escapeHtml(myOffer || "-")}</td>
+          <td>${escapeHtml(myLastOffer || "-")}</td>
           <td>${escapeHtml(item.previous_seller_counter || "-")}</td>
           <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
@@ -2050,7 +2067,12 @@ function renderBuyingUnifiedOfferRows(items) {
         <td>${escapeHtml(item.sku || "-")}</td>
         <td>${escapeHtml(item.size || "-")}</td>
         <td>${escapeHtml(item.brand || "-")}</td>
-        <td>${escapeHtml(myOffer || "-")}</td>
+        ${isOpen ? `
+          <td>${escapeHtml(maxPrice || "-")}</td>
+          <td>${escapeHtml(myLastOffer || "-")}</td>
+        ` : `
+          <td>${escapeHtml(myOffer || "-")}</td>
+        `}
         <td>${escapeHtml(sellersOffer || "-")}</td>
         <td>${escapeHtml(item.vat_type || "-")}</td>
         <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
