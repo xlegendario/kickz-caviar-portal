@@ -10196,6 +10196,30 @@ function moneyWholeValue(value) {
   }).format(Math.floor(n));
 }
 
+// NEW — additive only: his preference — sellers always enter whole
+// numbers, so most prices ARE whole numbers and should look clean
+// (€80, not €80,00). But a Member WTB buyer-facing price run through
+// VAT21 conversion can genuinely land on a decimal (€102.10) — that
+// must stay visible exactly as computed, never silently rounded away
+// (moneyWholeValue's Math.floor would quietly turn that into €102,
+// a real 10-cent discrepancy against what was actually agreed). This
+// shows decimals only when the real number actually has them, making
+// the VAT-conversion case visually distinct rather than hidden.
+function moneySmartValue(value) {
+  const n = numberValue(value);
+
+  if (!n) return "";
+
+  const isWhole = Math.abs(n - Math.round(n)) < 0.005;
+
+  return new Intl.NumberFormat("nl-NL", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: isWhole ? 0 : 2,
+    minimumFractionDigits: isWhole ? 0 : 2
+  }).format(n);
+}
+
 function getImageUrl(value) {
   if (!Array.isArray(value) || !value[0]?.url) return "";
   return value[0].url;
@@ -11987,6 +12011,76 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       memberWtbStatusMap = new Map(mwtbRecords.map((r) => [r.id, asText(r.fields?.["Fulfillment Status"])]));
     }
 
+    // NEW — additive only: builds "am I still the lowest seller" for
+    // Member WTB, which never existed before (only Store Orders had an
+    // equivalent, via the "Current Lowest (Normalized)/(VAT0)" rollup).
+    // Same normalization convention already used elsewhere in this
+    // file ("Offer Cost (Normalized)"): VAT21 stays as-is, VAT0/Margin
+    // get ×1.21, bringing every competing position onto one comparable
+    // scale regardless of VAT type. Fetches every OTHER seller's
+    // current position on the same Member WTB — a fresh, never-touched
+    // Seller Offer if they haven't been countered yet, or their live
+    // Counter Offers round's current price if they're mid-negotiation
+    // — and takes the minimum. A seller is "Lowest" if their own
+    // current price, normalized the same way, is at or below that.
+    let memberWtbMinNormalizedPrice = new Map();
+    if (memberWtbIdsForStatusCheck.length) {
+      const normalize = (price, vatType) => {
+        const p = Number(price);
+        if (!Number.isFinite(p)) return null;
+        return asText(vatType) === "VAT21" ? p : p * 1.21;
+      };
+
+      const [competingSellerOffers, competingCounterRounds] = await Promise.all([
+        airtable(SELLER_OFFERS_TABLE)
+          .select({ fields: ["Member WTBs", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
+          .all()
+          .then((records) =>
+            records.filter(
+              (r) =>
+                !r.fields?.["Delete Offer"] &&
+                memberWtbIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Member WTBs"]))
+            )
+          ),
+        airtable(COUNTER_OFFERS_TABLE)
+          .select({
+            filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Member WTB')`,
+            fields: ["Member WTB", "Seller Offer Record ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
+          })
+          .all()
+          .then((records) =>
+            records.filter((r) => memberWtbIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Member WTB"])))
+          )
+      ]);
+
+      const sellerOfferIdsWithActiveRound = new Set(
+        competingCounterRounds.map((r) => asText(r.fields?.["Seller Offer Record ID"])).filter(Boolean)
+      );
+
+      for (const so of competingSellerOffers) {
+        if (sellerOfferIdsWithActiveRound.has(so.id)) continue; // superseded by an active round below
+
+        const wtbId = firstLinkedRecordId(so.fields?.["Member WTBs"]);
+        const normalized = normalize(so.fields?.["Seller Offer"], so.fields?.["Offer VAT Type"]);
+        if (normalized == null) continue;
+
+        const current = memberWtbMinNormalizedPrice.get(wtbId);
+        if (current == null || normalized < current) memberWtbMinNormalizedPrice.set(wtbId, normalized);
+      }
+
+      for (const cr of competingCounterRounds) {
+        const wtbId = firstLinkedRecordId(cr.fields?.["Member WTB"]);
+        const vatType = cr.fields?.["Seller Original VAT Type"];
+        const sellerCounter = numberValue(cr.fields?.["Seller Counter Price"]);
+        const effectivePrice = sellerCounter > 0 ? sellerCounter : numberValue(cr.fields?.["Seller Original Price"]);
+        const normalized = normalize(effectivePrice, vatType);
+        if (normalized == null) continue;
+
+        const current = memberWtbMinNormalizedPrice.get(wtbId);
+        if (current == null || normalized < current) memberWtbMinNormalizedPrice.set(wtbId, normalized);
+      }
+    }
+
     const preFiltered = preFilteredByStatus.filter((record) => {
       const f = record.fields || {};
       const memberWtbId = firstLinkedRecordId(f["Member WTB"]);
@@ -12124,16 +12218,33 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
               : numberValue(orderFields["Current Lowest (Normalized)"]))
           : null;
 
-        const currentLowest = Number.isFinite(rollupLowest) && Number.isFinite(sellerLastOffer)
-          ? Math.min(rollupLowest, sellerLastOffer)
-          : (rollupLowest ?? sellerLastOffer);
+        // NEW — additive only: the Member WTB equivalent of the above,
+        // using memberWtbMinNormalizedPrice (built above from every
+        // other seller's current position, normalized to the same
+        // VAT21-equivalent scale). Own position gets normalized the
+        // same way before comparing.
+        const memberWtbId = isMemberWtb ? firstLinkedRecordId(f["Member WTB"]) : null;
+        const memberWtbCompetingMin = memberWtbId ? memberWtbMinNormalizedPrice.get(memberWtbId) : null;
+        const ownNormalizedForMemberWtb = isMemberWtb && Number.isFinite(sellerLastOffer)
+          ? (asText(vatType) === "VAT21" ? sellerLastOffer : sellerLastOffer * 1.21)
+          : null;
+        const memberWtbLowest = Number.isFinite(memberWtbCompetingMin) && Number.isFinite(ownNormalizedForMemberWtb)
+          ? Math.min(memberWtbCompetingMin, ownNormalizedForMemberWtb)
+          : (memberWtbCompetingMin ?? ownNormalizedForMemberWtb);
 
-        const isLowest = !isMemberWtb
-          ? (
+        const currentLowest = isMemberWtb
+          ? memberWtbLowest
+          : (Number.isFinite(rollupLowest) && Number.isFinite(sellerLastOffer)
+              ? Math.min(rollupLowest, sellerLastOffer)
+              : (rollupLowest ?? sellerLastOffer));
+
+        const isLowest = isMemberWtb
+          ? (Number.isFinite(ownNormalizedForMemberWtb) &&
+              (!Number.isFinite(memberWtbCompetingMin) || ownNormalizedForMemberWtb <= memberWtbCompetingMin))
+          : (
               displayValue(orderFields["Lowest Offer Seller ID"]) === displayValue(req.query.seller_id) ||
               (Number.isFinite(sellerLastOffer) && Number.isFinite(rollupLowest) && sellerLastOffer <= rollupLowest)
-            )
-          : null;
+            );
 
         return {
           id: record.id,
@@ -15044,7 +15155,7 @@ app.get("/api/dashboard/buying-open-wtbs", async (req, res) => {
           brand: displayValue(f["Brand"]),
           max_price: moneyWholeValue(f["Max Price"]),
           current_lowest: currentLowest
-            ? moneyWholeValue(currentLowest)
+            ? moneySmartValue(currentLowest)
             : "-",
           status: "Open",
           inventory_filter: displayValue(f["Buying Inventory Filter"]),
@@ -15274,12 +15385,12 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         sku: asText(wtbFields["SKU"]),
         size: asText(wtbFields["Size"]),
         brand: asText(wtbFields["Brand"]),
-        my_offer: Number.isFinite(myLastOffer) && myLastOffer > 0 ? moneyValue(myLastOffer) : null,
-        sellers_offer: Number.isFinite(sellersOfferInBuyerTerms) ? moneyValue(sellersOfferInBuyerTerms) : null,
+        my_offer: Number.isFinite(myLastOffer) && myLastOffer > 0 ? moneySmartValue(myLastOffer) : null,
+        sellers_offer: Number.isFinite(sellersOfferInBuyerTerms) ? moneySmartValue(sellersOfferInBuyerTerms) : null,
         vat_type: vatType,
         previous_record_id: previousOfferId,
         previous_seller_counter: previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
-          ? moneyWholeValue(previousSellerCounterById.get(previousOfferId))
+          ? moneySmartValue(previousSellerCounterById.get(previousOfferId))
           : null,
         raw_date: asText(f["Created At"]),
         denied_at: asText(f["Denied At"] || f["Last Modified"])
@@ -15790,6 +15901,27 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
       .filter((record) => linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId))
       .map((r) => r.id);
 
+    // NEW — additive only: without this, a Member WTB kept showing as
+    // "fresh" in Open forever, even after the buyer had already
+    // countered (creating an active Counter Offers round, correctly
+    // shown in Countered) — same duplicate-visibility fix already
+    // applied on the WTB seller side, mirrored here.
+    const activeCountersForTheseWtbs = memberWtbIds.length
+      ? await airtable(COUNTER_OFFERS_TABLE)
+          .select({
+            filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Member WTB')`,
+            fields: ["Member WTB"]
+          })
+          .all()
+          .then((records) =>
+            records.filter((r) => memberWtbIds.includes(firstLinkedRecordId(r.fields?.["Member WTB"])))
+          )
+      : [];
+
+    const memberWtbIdsWithActiveCounter = new Set(
+      activeCountersForTheseWtbs.map((r) => firstLinkedRecordId(r.fields?.["Member WTB"]))
+    );
+
     // FIXED — this previously never looked up the winning Seller
     // Offer at all, so "fresh" items had no VAT Type to show, AND the
     // Counter button had no seller_offer_record_id to submit against
@@ -15829,7 +15961,8 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
 
     const items = records
       .filter((record) =>
-        linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
+        linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId) &&
+        !memberWtbIdsWithActiveCounter.has(record.id)
       )
       .map((record) => {
         const f = record.fields || {};
@@ -15856,7 +15989,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
           brand: displayValue(f["Brand"]),
           max_price: moneyWholeValue(f["Max Price"]),
           offer: Number.isFinite(offerAmount) && offerAmount > 0
-            ? moneyWholeValue(offerAmount)
+            ? moneySmartValue(offerAmount)
             : "-",
           vat_type: winningSellerOffer?.vatType || null,
           status: "Offer Received",
