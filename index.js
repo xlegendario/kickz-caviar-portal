@@ -20607,8 +20607,51 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
 
     const previousRecordId = asText(f["Previous Record ID"]);
 
+    // NEW — additive only: round-1 edits (the buyer's very first
+    // counter, no Previous Record ID yet) previously always got
+    // rejected outright. Unlike Consignment's pre-offer (an automatic
+    // snapshot of an existing listing price, edited elsewhere) — a
+    // buyer's first counter here is a deliberate negotiation move with
+    // nowhere else to revise it, so blocking Edit made no sense.
+    // There's no "own prior position" to narrow-band against yet
+    // (this IS the first position), so it reuses the exact same,
+    // simpler validation the original round-1 creation already uses:
+    // just needs to stay lower than the seller's current ask.
     if (!previousRecordId) {
-      return res.status(409).json({ error: "Editing isn't supported for the very first counter yet." });
+      const sellerOfferRecordIdForFirstRound = asText(f["Seller Offer Record ID"]);
+      const memberWtbRecordIdForFirstRound = firstLinkedRecordId(f["Member WTB"]);
+
+      if (!memberWtbRecordIdForFirstRound) {
+        return res.status(400).json({ error: "Missing linked Member WTB." });
+      }
+
+      const memberWtbForFirstRound = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordIdForFirstRound);
+      const wtbFieldsForFirstRound = memberWtbForFirstRound.fields || {};
+
+      const sellerOriginalPriceForFirstRound = numberValue(f["Seller Original Price"]);
+      const sellerVatTypeForFirstRound = asText(f["Seller Original VAT Type"]);
+
+      const sellerAskInBuyerTerms = calculateMemberWtbBuyerEquivalent(
+        sellerOriginalPriceForFirstRound,
+        sellerVatTypeForFirstRound,
+        wtbFieldsForFirstRound
+      );
+
+      if (!Number.isFinite(sellerAskInBuyerTerms) || proposedPrice >= sellerAskInBuyerTerms) {
+        return res.status(400).json({
+          error: `Your counter must be lower than the current offer (€${Number(sellerAskInBuyerTerms).toFixed(2)}).`
+        });
+      }
+
+      const recomputedPayoutForFirstRound = calculateMemberWtbSellerPayout(proposedPrice, sellerVatTypeForFirstRound, wtbFieldsForFirstRound);
+
+      await airtable(COUNTER_OFFERS_TABLE).update(recordId, {
+        "Store Counter Price": proposedPrice,
+        "Counter Payout": recomputedPayoutForFirstRound,
+        "Counter Payout VAT Type": sellerVatTypeForFirstRound
+      });
+
+      return res.json({ ok: true });
     }
 
     const hasSellerCounter =
