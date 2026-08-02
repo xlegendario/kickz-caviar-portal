@@ -2032,7 +2032,7 @@ function renderBuyingUnifiedOfferRows(items) {
           <td>
             <div class="dashboard-action-row">
               ${item.member_wtb_record_id ? `
-                <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}">Accept</button>
+                <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}">${item.previous_seller_counter ? `Accept ${escapeHtml(item.previous_seller_counter)}` : "Accept"}</button>
               ` : ""}
               ${item.previous_record_id ? `
                 <button class="dashboard-counter-btn" type="button" data-buying-retry-counter-id="${escapeHtml(item.id || "")}">Retry</button>
@@ -2047,7 +2047,7 @@ function renderBuyingUnifiedOfferRows(items) {
     let actionsCell;
     if (item._kind === "fresh" || item._kind === "seller_counter") {
       actionsCell = `
-        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}">Accept</button>
+        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
         <button class="dashboard-counter-btn" type="button" data-buying-counter-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-counter-kind="${item._kind}" data-buying-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">Counter</button>
         <button class="dashboard-deny-btn" type="button" data-buying-deny-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-deny-kind="${item._kind}">Deny</button>
       `;
@@ -2055,7 +2055,7 @@ function renderBuyingUnifiedOfferRows(items) {
       // "my_counter" — buyer's own pending counter, awaiting seller.
       actionsCell = `
         <button class="dashboard-counter-btn" type="button" data-buying-edit-counter-id="${escapeHtml(item.id || "")}">Edit</button>
-        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}">Accept</button>
+        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
         <button class="dashboard-deny-btn" type="button" data-buying-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
       `;
     }
@@ -2154,12 +2154,18 @@ function renderWtbUnifiedOfferRows(items) {
     // "fresh" AND "own_counter" items — the backend computes the same
     // same-VAT-scale comparison for both, so a seller mid-counter can
     // still see if someone else has undercut them in the meantime.
-    const hasLowestData = item._kind === "fresh" || item._kind === "own_counter" || item._kind === "counter";
+    // FIXED — item.status is correctly null for Member WTB items (the
+    // "am I still the lowest seller" comparison only exists for Store
+    // Orders, via a rollup that has no Member WTB equivalent) — but
+    // this ternary had no null case, so it fell through to "beaten"
+    // (red dot) by default, falsely implying another seller had
+    // undercut them when no such comparison was ever made.
+    const hasLowestData = (item._kind === "fresh" || item._kind === "own_counter" || item._kind === "counter") && item.status !== null;
     const dotCell = hasLowestData
       ? `<div class="dashboard-status-dot ${item.status === "Lowest" ? "dashboard-status-dot-lowest" : "dashboard-status-dot-beaten"}"></div>`
       : "";
 
-    const currentLowestCell = hasLowestData ? (item.current_lowest || "-") : "-";
+    const currentLowestCell = (item._kind === "fresh" || item._kind === "own_counter" || item._kind === "counter") ? (item.current_lowest || "-") : "-";
     // FIXED — this column now covers both: for "own_counter" it's the
     // store's PREVIOUS position (before the seller's own counter,
     // used for Accept-Previous); for "counter" it's the store's
