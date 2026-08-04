@@ -2039,7 +2039,7 @@ function renderBuyingUnifiedOfferRows(items) {
           <td>
             <div class="dashboard-action-row">
               ${item.member_wtb_record_id ? `
-                <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}">${item.previous_seller_counter ? `Accept ${escapeHtml(item.previous_seller_counter)}` : "Accept"}</button>
+                <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.previous_seller_counter_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}">${item.previous_seller_counter ? `Accept ${escapeHtml(item.previous_seller_counter)}` : "Accept"}</button>
               ` : ""}
               ${item.previous_record_id ? `
                 <button class="dashboard-counter-btn" type="button" data-buying-retry-counter-id="${escapeHtml(item.id || "")}">Retry</button>
@@ -2054,7 +2054,7 @@ function renderBuyingUnifiedOfferRows(items) {
     let actionsCell;
     if (item._kind === "fresh" || item._kind === "seller_counter") {
       actionsCell = `
-        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
+        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
         <button class="dashboard-counter-btn" type="button" data-buying-counter-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-counter-kind="${item._kind}" data-buying-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">Counter</button>
         <button class="dashboard-deny-btn" type="button" data-buying-deny-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-deny-kind="${item._kind}">Deny</button>
       `;
@@ -2062,7 +2062,7 @@ function renderBuyingUnifiedOfferRows(items) {
       // "my_counter" — buyer's own pending counter, awaiting seller.
       actionsCell = `
         <button class="dashboard-counter-btn" type="button" data-buying-edit-counter-id="${escapeHtml(item.id || "")}">Edit</button>
-        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
+        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
         <button class="dashboard-deny-btn" type="button" data-buying-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
       `;
     }
@@ -5541,11 +5541,24 @@ dashboardTableBody.addEventListener("click", async (event) => {
 
     buyingAcceptCurrentLowestButton.disabled = true;
 
+    // FIXED — this always accepted the raw, un-negotiated listing
+    // price, ignoring the specific negotiated amount shown on the
+    // button itself (e.g. "Accept €92.10" on Countered/Denied) —
+    // silently accepting a different price than what was displayed.
+    // Now passes the actual negotiated payout when one exists (empty
+    // for a genuinely fresh, never-countered offer, where there's
+    // nothing to override).
+    const overridePayout = buyingAcceptCurrentLowestButton.dataset.buyingAcceptPayout;
+    const overrideVatType = buyingAcceptCurrentLowestButton.dataset.buyingAcceptVatType;
+
     try {
       const response = await fetch("/api/dashboard/buying/accept-offer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ member_wtb_record_id: memberWtbRecordId })
+        body: JSON.stringify({
+          member_wtb_record_id: memberWtbRecordId,
+          ...(overridePayout ? { override_price: Number(overridePayout), override_vat_type: overrideVatType } : {})
+        })
       });
 
       const data = await response.json();
