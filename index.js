@@ -15209,7 +15209,8 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
           "Size",
           "Brand",
           "Buyer VAT ID",
-          "Buyer Country"
+          "Buyer Country",
+          "Max Price"
         ]
       })
       .all()
@@ -15367,12 +15368,23 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         ? ownStoreCounter
         : (previousOfferId ? previousBuyerCounterById.get(previousOfferId) : null);
 
-      // "Seller's Last Offer": the seller's current position — this
-      // round's own Seller Counter Price if the seller just moved,
-      // else fall back to the seller's original ask.
+      // FIXED — "Seller's Last Offer" only ever looked at THIS round's
+      // own "Seller Counter Price" — correct when the seller just
+      // moved (this round IS their counter), but wrong for a
+      // "my_counter" item (the buyer's own pending round never has its
+      // own Seller Counter Price at all), where it silently fell all
+      // the way back to "Seller Original Price" — the seller's very
+      // first ask — instead of their actual last position from the
+      // prior round. Now falls back to previousSellerCounterById
+      // (already correctly resolved) the same way myLastOffer above
+      // does for the buyer's own side.
       const sellerCounter = numberValue(f["Seller Counter Price"]);
       const sellerOriginal = numberValue(f["Seller Original Price"]);
-      const sellersOffer = sellerCounter > 0 ? sellerCounter : sellerOriginal;
+      const sellersOffer = sellerCounter > 0
+        ? sellerCounter
+        : (previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
+            ? previousSellerCounterById.get(previousOfferId)
+            : sellerOriginal);
 
       const sellersOfferInBuyerTerms = calculateMemberWtbBuyerEquivalent(sellersOffer, vatType, wtbFields);
 
@@ -15385,6 +15397,11 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         sku: asText(wtbFields["SKU"]),
         size: asText(wtbFields["Size"]),
         brand: asText(wtbFields["Brand"]),
+        // FIXED — Max Price was already being fetched (via wtbFields)
+        // but never actually included in the returned item, so it
+        // always showed "-" in the Portal once an item moved past the
+        // "fresh" stage (which gets it from a different endpoint).
+        max_price: Number.isFinite(numberValue(wtbFields["Max Price"])) ? moneyWholeValue(wtbFields["Max Price"]) : null,
         my_offer: Number.isFinite(myLastOffer) && myLastOffer > 0 ? moneySmartValue(myLastOffer) : null,
         sellers_offer: Number.isFinite(sellersOfferInBuyerTerms) ? moneySmartValue(sellersOfferInBuyerTerms) : null,
         vat_type: vatType,
@@ -20384,6 +20401,11 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
       "Seller Original VAT Type": sellerVatType,
       "Seller Counter Price": proposedPrice,
       "Previous Record ID": previousRecordId,
+      // FIXED — this never set Created At, so Date went blank as soon
+      // as a seller-created round became the current one in the chain
+      // (the same recurring gap found and fixed elsewhere this session
+      // for other round-creation endpoints).
+      "Created At": new Date().toISOString(),
       "Status": "Open"
     });
 
@@ -20539,9 +20561,16 @@ app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) =>
 
     if (sellerDiscordId) {
       const buyerOwnPosition = proposedPrice;
+      // FIXED — this compared against sellerOriginalPrice (the seller's
+      // very first ask, unchanged for the whole chain) instead of
+      // their actual last/current position (sellerCounterPrice, already
+      // available on this same round) — made the gap look artificially
+      // large, so "no room left" almost never correctly triggered here.
+      // The Store Orders equivalent already correctly uses the
+      // counterpart's actual last position for this same check.
       const noRoomToCounter =
-        Number.isFinite(recomputedPayout) &&
-        !hasRoomForNextStep(sellerOriginalPrice, recomputedPayout);
+        Number.isFinite(sellerCounterInBuyerTerms) &&
+        !hasRoomForNextStep(buyerOwnPosition, sellerCounterInBuyerTerms);
 
       const discordResult = await sendMemberWtbCounterOfferDiscordDM({
         counterOfferRecordId: newRound.id,
