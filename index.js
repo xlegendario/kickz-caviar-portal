@@ -15435,10 +15435,20 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         max_price: Number.isFinite(numberValue(wtbFields["Max Price"])) ? moneyWholeValue(wtbFields["Max Price"]) : null,
         my_offer: Number.isFinite(myLastOffer) && myLastOffer > 0 ? moneySmartValue(myLastOffer) : null,
         sellers_offer: Number.isFinite(sellersOfferInBuyerTerms) ? moneySmartValue(sellersOfferInBuyerTerms) : null,
+        // NEW — additive only: raw seller-payout-scale value (not the
+        // buyer-facing display price above) for the Accept button to
+        // submit as override_price — matches exactly what the "Counter
+        // Payout" field itself is computed with, so accepting always
+        // honors the actual negotiated position instead of silently
+        // falling back to the seller's raw, un-negotiated listing.
+        sellers_offer_payout: Number.isFinite(sellersOffer) ? calculateMemberWtbSellerPayout(sellersOffer, vatType, wtbFields) : null,
         vat_type: vatType,
         previous_record_id: previousOfferId,
         previous_seller_counter: previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
           ? moneySmartValue(previousSellerCounterById.get(previousOfferId))
+          : null,
+        previous_seller_counter_payout: previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
+          ? calculateMemberWtbSellerPayout(previousSellerCounterById.get(previousOfferId), vatType, wtbFields)
           : null,
         raw_date: asText(f["Created At"]),
         denied_at: asText(f["Denied At"] || f["Last Modified"])
@@ -16653,6 +16663,15 @@ app.post("/api/dashboard/buying/deny-offer", async (req, res) => {
 app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
   try {
     const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+    // NEW — additive only: this endpoint always accepted the raw
+    // "Current Lowest Seller Offer" price, ignoring any negotiated
+    // position entirely — correct for a fresh, never-countered offer,
+    // but silently wrong for the Countered/Denied pills' "Accept €X"
+    // button, which shows a specific negotiated price that this never
+    // actually honored. Now accepts an optional override, matching the
+    // exact pattern the already-tested Discord accept handlers use.
+    const overridePrice = req.body?.override_price;
+    const overrideVatType = asText(req.body?.override_vat_type);
 
     if (!memberWtbRecordId) {
       return res.status(400).json({ error: "Missing member_wtb_record_id" });
@@ -16685,7 +16704,10 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
       },
       body: JSON.stringify({
         member_wtb_record_id: memberWtbRecordId,
-        seller_offer_record_id: sellerOfferRecordId
+        seller_offer_record_id: sellerOfferRecordId,
+        ...(Number.isFinite(Number(overridePrice)) && overridePrice > 0
+          ? { override_price: Number(overridePrice), override_vat_type: overrideVatType }
+          : {})
       })
     });
 
