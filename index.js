@@ -4304,6 +4304,7 @@ function bindConsignmentDiscordButtons(client) {
                 vatType: sellerVatType,
                 sellerOriginalPrice,
                 sellerOriginalVatType: sellerVatType,
+                sellerLastOfferPrice: deniedPrice,
                 deniedAmount: deniedPrice
               }).catch((err) => console.error("Failed to re-notify seller after buyer-deny (non-blocking):", err));
             }
@@ -7777,6 +7778,7 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
         vatType: sellerVatType,
         sellerOriginalPrice,
         sellerOriginalVatType: sellerVatType,
+        sellerLastOfferPrice: sellerOwnPosition,
         noRoomToCounter
       }).catch((err) => {
         console.error("Failed to DM seller of store counter-back (non-blocking):", err);
@@ -8054,6 +8056,7 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
             vatType: asText(priorFields["Seller Original VAT Type"] || f["Seller Original VAT Type"]),
             sellerOriginalPrice: numberValue(f["Seller Original Price"]),
             sellerOriginalVatType: asText(f["Seller Original VAT Type"]),
+            sellerLastOfferPrice: deniedSellerCounter,
             deniedAmount: deniedSellerCounter
           }).catch((err) => {
             console.error("Failed to re-notify seller after store-deny (non-blocking):", err);
@@ -8283,6 +8286,12 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
       const sellerDiscordId = asText(f["Seller Discord ID"]);
 
       if (sellerDiscordId) {
+        // Recomputed here (not reused from the earlier validation
+        // block above — that's a separate if/else, this one's own
+        // scope) — the seller's actual last raw counter, straight off
+        // the previous round.
+        const previousSellerCounterForNotify = numberValue(previousFields["Seller Counter Price"]);
+
         const discordResult = await sendCounterOfferDiscordDM({
           counterOfferRecordId: recordId,
           sellerDiscordId,
@@ -8293,7 +8302,8 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
           payout: updates["Counter Payout"],
           vatType: asText(f["Seller Original VAT Type"]),
           sellerOriginalPrice: numberValue(f["Seller Original Price"]),
-          sellerOriginalVatType: asText(f["Seller Original VAT Type"])
+          sellerOriginalVatType: asText(f["Seller Original VAT Type"]),
+          sellerLastOfferPrice: previousSellerCounterForNotify
         }).catch((err) => {
           console.error("Failed to DM seller of edited counter (non-blocking):", err);
           return null;
@@ -10483,6 +10493,7 @@ async function sendCounterOfferDiscordDM({
   vatType,
   sellerOriginalPrice,
   sellerOriginalVatType,
+  sellerLastOfferPrice,
   noRoomToCounter,
   deniedAmount
 }) {
@@ -10495,14 +10506,26 @@ async function sendCounterOfferDiscordDM({
   const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
   const dm = await user.createDM();
 
-  const originalText =
-    sellerOriginalPrice !== undefined && sellerOriginalPrice !== null && sellerOriginalPrice !== ""
-      ? `€${Number(sellerOriginalPrice).toFixed(2)} · ${sellerOriginalVatType || "—"}`
+  // FIXED — his call: primary reference should be the seller's LAST
+  // position, not their original ask — that's the only thing that
+  // matters for the decision in front of them right now ("only €5
+  // lower than what I last offered — I'll take it"), and it matches
+  // the narrowing-band rule itself (always evaluated against the last
+  // position, never the original). Falls back to the original when no
+  // distinct last position exists yet (a genuine round-1 notification,
+  // where last and original are the same number anyway).
+  const effectiveLastOffer = Number.isFinite(Number(sellerLastOfferPrice)) && sellerLastOfferPrice !== null
+    ? sellerLastOfferPrice
+    : sellerOriginalPrice;
+
+  const lastOfferText =
+    effectiveLastOffer !== undefined && effectiveLastOffer !== null && effectiveLastOffer !== ""
+      ? `€${Number(effectiveLastOffer).toFixed(2)} · ${sellerOriginalVatType || "—"}`
       : null;
 
   const diffText =
-    originalText && Number.isFinite(Number(sellerOriginalPrice)) && Number.isFinite(Number(payout))
-      ? ` (${Number(payout) - Number(sellerOriginalPrice) >= 0 ? "+" : ""}€${(Number(payout) - Number(sellerOriginalPrice)).toFixed(2)})`
+    lastOfferText && Number.isFinite(Number(effectiveLastOffer)) && Number.isFinite(Number(payout))
+      ? ` (${Number(payout) - Number(effectiveLastOffer) >= 0 ? "+" : ""}€${(Number(payout) - Number(effectiveLastOffer)).toFixed(2)})`
       : "";
 
   // NEW — when there's no valid step left for either side, say so
@@ -10542,7 +10565,7 @@ async function sendCounterOfferDiscordDM({
           ...deniedNote,
           `The store sent a counter offer.`,
           "",
-          ...(originalText ? [`**Your original offer**`, originalText, ""] : []),
+          ...(lastOfferText ? [`**Your last offer**`, lastOfferText, ""] : []),
           `**Counter payout**`,
           `€${Number(payout).toFixed(2)} · ${vatType || "—"}${diffText}`,
           "",
@@ -10617,6 +10640,7 @@ async function sendMemberWtbCounterOfferDiscordDM({
   vatType,
   sellerOriginalPrice,
   sellerOriginalVatType,
+  sellerLastOfferPrice,
   noRoomToCounter,
   deniedAmount
 }) {
@@ -10629,14 +10653,21 @@ async function sendMemberWtbCounterOfferDiscordDM({
   const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
   const dm = await user.createDM();
 
-  const originalText =
-    sellerOriginalPrice !== undefined && sellerOriginalPrice !== null && sellerOriginalPrice !== ""
-      ? `€${Number(sellerOriginalPrice).toFixed(2)} · ${sellerOriginalVatType || "—"}`
+  // FIXED — same change as sendCounterOfferDiscordDM (WTB): show the
+  // seller's LAST position primarily, original ask as a small
+  // secondary reference — consistent across both flows now.
+  const effectiveLastOffer = Number.isFinite(Number(sellerLastOfferPrice)) && sellerLastOfferPrice !== null
+    ? sellerLastOfferPrice
+    : sellerOriginalPrice;
+
+  const lastOfferText =
+    effectiveLastOffer !== undefined && effectiveLastOffer !== null && effectiveLastOffer !== ""
+      ? `€${Number(effectiveLastOffer).toFixed(2)} · ${sellerOriginalVatType || "—"}`
       : null;
 
   const diffText =
-    originalText && Number.isFinite(Number(sellerOriginalPrice)) && Number.isFinite(Number(payout))
-      ? ` (${Number(payout) - Number(sellerOriginalPrice) >= 0 ? "+" : ""}€${(Number(payout) - Number(sellerOriginalPrice)).toFixed(2)})`
+    lastOfferText && Number.isFinite(Number(effectiveLastOffer)) && Number.isFinite(Number(payout))
+      ? ` (${Number(payout) - Number(effectiveLastOffer) >= 0 ? "+" : ""}€${(Number(payout) - Number(effectiveLastOffer)).toFixed(2)})`
       : "";
 
   const closingLine = noRoomToCounter
@@ -10662,7 +10693,7 @@ async function sendMemberWtbCounterOfferDiscordDM({
           ...deniedNote,
           `The buyer sent a counter offer.`,
           "",
-          ...(originalText ? [`**Your original offer**`, originalText, ""] : []),
+          ...(lastOfferText ? [`**Your last offer**`, lastOfferText, ""] : []),
           `**Counter payout**`,
           `€${Number(payout).toFixed(2)} · ${vatType || "—"}${diffText}`,
           "",
@@ -20583,6 +20614,7 @@ app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) =>
         vatType: sellerVatType,
         sellerOriginalPrice,
         sellerOriginalVatType: sellerVatType,
+        sellerLastOfferPrice: sellerCounterPrice,
         noRoomToCounter
       }).catch((err) => {
         console.error("Failed to DM seller of buyer counter-back (non-blocking):", err);
@@ -20814,6 +20846,11 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
       const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
 
       if (sellerDiscordId) {
+        // Recomputed fresh here (not reused from the earlier
+        // validation block — separate if/else, different scope) — the
+        // seller's actual last raw counter, off the previous round.
+        const sellerCounterOnPreviousRoundForNotify = numberValue(previousFields["Seller Counter Price"]);
+
         await sendMemberWtbCounterOfferDiscordDM({
           counterOfferRecordId: recordId,
           sellerDiscordId,
@@ -20824,7 +20861,8 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
           payout: recomputedPayoutForNotify,
           vatType: sellerVatType,
           sellerOriginalPrice,
-          sellerOriginalVatType: sellerVatType
+          sellerOriginalVatType: sellerVatType,
+          sellerLastOfferPrice: sellerCounterOnPreviousRoundForNotify
         }).catch((err) => console.error("Failed to notify seller of edited counter (non-blocking):", err));
       }
     }
