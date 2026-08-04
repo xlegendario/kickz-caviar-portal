@@ -1992,10 +1992,10 @@ function renderBuyingUnifiedOfferRows(items) {
   // isn't always literally a counter (could be their original,
   // never-countered ask).
   const columns = isDenied
-    ? ["WTB ID", "Product", "SKU", "Size", "Brand", "My Last Offer", "Seller's Last Offer", "Denied", "Actions"]
+    ? ["WTB ID", "Product", "SKU", "Size", "Brand", "Max Price", "My Last Offer", "Seller's Last Offer", "Denied", "Actions"]
     : isOpen
       ? ["WTB ID", "Product", "SKU", "Size", "Brand", "Max Price", "My Last Offer", "Seller's Offer", "VAT Type", "Date", "Actions"]
-      : ["WTB ID", "Product", "SKU", "Size", "Brand", "My Offer", "Seller's Last Offer", "VAT Type", "Date", "Actions"];
+      : ["WTB ID", "Product", "SKU", "Size", "Brand", "Max Price", "My Offer", "Seller's Last Offer", "VAT Type", "Date", "Actions"];
 
   dashboardTableHead.innerHTML = columns.map((c) => `<th>${c}</th>`).join("");
 
@@ -2012,7 +2012,13 @@ function renderBuyingUnifiedOfferRows(items) {
   }
 
   dashboardTableBody.innerHTML = items.map((item) => {
-    const maxPrice = item._kind === "fresh" ? item.max_price : null;
+    // FIXED — this restricted Max Price display to "fresh" items only,
+    // even though it's just a static property of the WTB itself (not
+    // tied to negotiation state) — now that the backend correctly
+    // returns it for every kind, no reason to hide it once a
+    // negotiation is underway; the buyer still wants to weigh offers
+    // against their original ceiling throughout.
+    const maxPrice = item.max_price || null;
     const myOffer = item._kind === "my_counter" ? item.my_offer : null;
     const myLastOffer = (item._kind === "seller_counter" || item._kind === "denied") ? item.my_offer : null;
     const sellersOffer = item._kind === "fresh" ? item.offer : item.sellers_offer;
@@ -2026,6 +2032,7 @@ function renderBuyingUnifiedOfferRows(items) {
           <td>${escapeHtml(item.sku || "-")}</td>
           <td>${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.brand || "-")}</td>
+          <td>${escapeHtml(maxPrice || "-")}</td>
           <td>${escapeHtml(myLastOffer || "-")}</td>
           <td>${escapeHtml(item.previous_seller_counter || "-")}</td>
           <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
@@ -2071,6 +2078,7 @@ function renderBuyingUnifiedOfferRows(items) {
           <td>${escapeHtml(maxPrice || "-")}</td>
           <td>${escapeHtml(myLastOffer || "-")}</td>
         ` : `
+          <td>${escapeHtml(maxPrice || "-")}</td>
           <td>${escapeHtml(myOffer || "-")}</td>
         `}
         <td>${escapeHtml(sellersOffer || "-")}</td>
