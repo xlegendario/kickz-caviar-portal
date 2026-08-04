@@ -20651,6 +20651,31 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
         "Counter Payout VAT Type": sellerVatTypeForFirstRound
       });
 
+      // FIXED — this update landed correctly but never notified the
+      // seller at all, unlike every other edit/counter action in this
+      // flow. Reuses the exact same notification the later-round
+      // "buyer edited" branch below already sends.
+      const sellerRecordIdForFirstRound = firstLinkedRecordId(f["Seller ID"]);
+      const sellerRecordForFirstRound = sellerRecordIdForFirstRound
+        ? await airtable(SELLERS_TABLE).find(sellerRecordIdForFirstRound).catch(() => null)
+        : null;
+      const sellerDiscordIdForFirstRound = asText(sellerRecordForFirstRound?.fields?.["Discord ID"]);
+
+      if (sellerDiscordIdForFirstRound) {
+        await sendMemberWtbCounterOfferDiscordDM({
+          counterOfferRecordId: recordId,
+          sellerDiscordId: sellerDiscordIdForFirstRound,
+          productName: asText(wtbFieldsForFirstRound["Product Name"]),
+          sku: asText(wtbFieldsForFirstRound["SKU"]),
+          size: asText(wtbFieldsForFirstRound["Size"]),
+          memberWtbId: asText(wtbFieldsForFirstRound["Member WTB ID"]) || memberWtbRecordIdForFirstRound,
+          payout: recomputedPayoutForFirstRound,
+          vatType: sellerVatTypeForFirstRound,
+          sellerOriginalPrice: sellerOriginalPriceForFirstRound,
+          sellerOriginalVatType: sellerVatTypeForFirstRound
+        }).catch((err) => console.error("Failed to notify seller of edited first-round counter (non-blocking):", err));
+      }
+
       return res.json({ ok: true });
     }
 
