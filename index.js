@@ -16277,16 +16277,19 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
       .filter((record) => linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId))
       .map((r) => r.id);
 
-    // NEW — additive only: without this, a Member WTB kept showing as
-    // "fresh" in Open forever, even after the buyer had already
-    // countered (creating an active Counter Offers round, correctly
-    // shown in Countered) — same duplicate-visibility fix already
-    // applied on the WTB seller side, mirrored here.
+    // FIXED — his explicit request: a genuinely better fresh offer
+    // from ANOTHER seller should always reach the buyer, even while
+    // they're already negotiating with someone else — "only ever good
+    // news." This previously excluded the WHOLE Member WTB from Open
+    // the moment ANY seller had an active counter round, hiding a
+    // completely different, untouched, possibly-better seller's fresh
+    // offer along with it. Now tracks WHICH seller has an active
+    // round (per Member WTB) instead of just whether ANY seller does.
     const activeCountersForTheseWtbs = memberWtbIds.length
       ? await airtable(COUNTER_OFFERS_TABLE)
           .select({
             filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Member WTB')`,
-            fields: ["Member WTB"]
+            fields: ["Member WTB", "Seller ID"]
           })
           .all()
           .then((records) =>
@@ -16294,9 +16297,19 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
           )
       : [];
 
-    const memberWtbIdsWithActiveCounter = new Set(
-      activeCountersForTheseWtbs.map((r) => firstLinkedRecordId(r.fields?.["Member WTB"]))
-    );
+    // Per Member WTB, the set of seller IDs currently mid-negotiation
+    // — their raw Seller Offer is stale (superseded by their counter)
+    // and must be skipped when picking the "fresh" winner below.
+    const sellerIdsWithActiveCounterByWtbId = new Map();
+    for (const r of activeCountersForTheseWtbs) {
+      const wtbId = firstLinkedRecordId(r.fields?.["Member WTB"]);
+      const sellerId = firstLinkedRecordId(r.fields?.["Seller ID"]);
+      if (!wtbId || !sellerId) continue;
+      if (!sellerIdsWithActiveCounterByWtbId.has(wtbId)) {
+        sellerIdsWithActiveCounterByWtbId.set(wtbId, new Set());
+      }
+      sellerIdsWithActiveCounterByWtbId.get(wtbId).add(sellerId);
+    }
 
     // FIXED — this previously never looked up the winning Seller
     // Offer at all, so "fresh" items had no VAT Type to show, AND the
@@ -16308,7 +16321,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
     // create-first-counter endpoint already relies on.
     const allSellerOffersForTheseWtbs = memberWtbIds.length
       ? await airtable(SELLER_OFFERS_TABLE)
-          .select({ fields: ["Member WTBs", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
+          .select({ fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
           .all()
           .then((records) =>
             records.filter(
@@ -16322,6 +16335,12 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
     const winningSellerOfferByWtbId = new Map();
     for (const so of allSellerOffersForTheseWtbs) {
       const wtbId = firstLinkedRecordId(so.fields?.["Member WTBs"]);
+      const sellerId = firstLinkedRecordId(so.fields?.["Seller ID"]);
+
+      // Skip — this seller is already mid-negotiation on this WTB;
+      // their raw offer is stale, doesn't belong in the "fresh" pool.
+      if (sellerId && sellerIdsWithActiveCounterByWtbId.get(wtbId)?.has(sellerId)) continue;
+
       const price = numberValue(so.fields?.["Seller Offer"]);
       if (!Number.isFinite(price)) continue;
 
@@ -16338,7 +16357,11 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
     const items = records
       .filter((record) =>
         linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId) &&
-        !memberWtbIdsWithActiveCounter.has(record.id)
+        // Only hide from Open if NO seller has an untouched fresh
+        // offer left (i.e. every seller on this WTB is already mid-
+        // negotiation) — otherwise a genuinely fresh, possibly-better
+        // offer from someone else must still surface here.
+        winningSellerOfferByWtbId.has(record.id)
       )
       .map((record) => {
         const f = record.fields || {};
