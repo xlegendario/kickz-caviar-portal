@@ -7587,6 +7587,15 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
       "Seller Original Price": sellerOriginalPrice,
       "Seller Original VAT Type": sellerVatType,
       "Seller Counter Price": proposedPrice,
+      // FIXED — this never set Counter Payout on a seller-created
+      // round (only buyer-counter/store-counter sets it, via a real
+      // conversion). The seller's own new counter already IS what
+      // they'd receive if accepted, no conversion needed — just
+      // mirror it directly. Confirmed via the Airtable schema export
+      // that "Counter Payout" is a plain currency field, not a
+      // formula that would have auto-filled this on its own.
+      "Counter Payout": proposedPrice,
+      "Counter Payout VAT Type": sellerVatType,
       "Previous Record ID": previousRecordId,
       // FIXED — only round 1 ever set this; every subsequent round
       // (seller-counter or store-counter) left it empty, showing "-"
@@ -12858,6 +12867,12 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
       "Seller Original Price": sellerOriginalPrice,
       "Seller Original VAT Type": sellerVatType,
       "Seller Counter Price": proposedPrice,
+      // FIXED — same gap as the main seller-counter endpoint: this
+      // never set Counter Payout on a seller-created round. The
+      // seller's own new counter already IS what they'd receive, no
+      // conversion needed.
+      "Counter Payout": proposedPrice,
+      "Counter Payout VAT Type": sellerVatType,
       "Previous Record ID": priorRoundId,
       "Created At": new Date().toISOString(),
       "Status": "Open"
@@ -20691,6 +20706,12 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
       "Seller Original Price": sellerOriginalPrice,
       "Seller Original VAT Type": sellerVatType,
       "Seller Counter Price": proposedPrice,
+      // FIXED — same gap as WTB's seller-counter: this never set
+      // Counter Payout on a seller-created round. Confirmed via the
+      // Airtable schema export that "Counter Payout" is a plain
+      // currency field, not a formula — nothing was auto-filling it.
+      "Counter Payout": proposedPrice,
+      "Counter Payout VAT Type": sellerVatType,
       "Previous Record ID": previousRecordId,
       // FIXED — this never set Created At, so Date went blank as soon
       // as a seller-created round became the current one in the chain
