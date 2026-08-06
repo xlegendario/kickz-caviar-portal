@@ -12573,6 +12573,73 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
       return res.status(409).json({ error: "That previous offer is no longer available." });
     }
 
+    const linkedMemberWtbIdForPrevious = firstLinkedRecordId(f["Member WTB"]);
+
+    // NEW — additive only: same fix as seller-accept above — this
+    // always required an "Order" link and hard-failed for Member WTB.
+    if (linkedMemberWtbIdForPrevious) {
+      const sellerOfferRecordId = asText(f["Seller Offer Record ID"]);
+
+      if (!sellerOfferRecordId) {
+        return res.status(500).json({ error: "Counter Offer missing linked Seller Offer" });
+      }
+
+      const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(linkedMemberWtbIdForPrevious);
+
+      if (asText(memberWtb.fields?.["Fulfillment Status"]) === "Allocated") {
+        return res.status(409).json({ error: "This Member WTB is no longer available." });
+      }
+
+      const acceptedPayout = numberValue(f["Counter Payout"]);
+      const acceptedVatType = asText(f["Counter Payout VAT Type"] || f["Seller Original VAT Type"]);
+
+      await airtable(COUNTER_OFFERS_TABLE).update(previousOfferId, {
+        "Status": "Accepted",
+        "Accepted At": new Date().toISOString(),
+        "Closed At": new Date().toISOString()
+      });
+
+      // Abandon the seller's own pending counter — they're choosing
+      // the buyer's earlier position instead.
+      await airtable(COUNTER_OFFERS_TABLE).update(pendingOfferId, {
+        "Status": "Denied",
+        "Denied At": new Date().toISOString(),
+        "Closed At": new Date().toISOString()
+      }).catch((err) => console.error("Failed to close abandoned own counter (non-blocking):", err));
+
+      const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
+
+      if (!wtbBotBaseUrl) {
+        return res.status(500).json({ error: "KICKZ_WTB_BOT_BASE_URL is missing" });
+      }
+
+      const dealResponse = await fetch(`${wtbBotBaseUrl}/member-wtb/deal-channel`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.KC_PORTAL_SECRET
+        },
+        body: JSON.stringify({
+          member_wtb_record_id: linkedMemberWtbIdForPrevious,
+          seller_offer_record_id: sellerOfferRecordId,
+          override_price: acceptedPayout,
+          override_vat_type: acceptedVatType
+        })
+      });
+
+      const dealData = await dealResponse.json().catch(() => ({}));
+
+      if (!dealResponse.ok) {
+        return res.status(dealResponse.status).json({ error: dealData.error || "Failed to accept offer" });
+      }
+
+      await closeCompetingCountersForMemberWtb(linkedMemberWtbIdForPrevious, previousOfferId).catch((err) =>
+        console.error("Failed to close competing counters (non-blocking):", err)
+      );
+
+      return res.json({ ok: true });
+    }
+
     const linkedOrderId = firstLinkedRecordId(f["Order"]);
 
     if (!linkedOrderId) {
@@ -12843,6 +12910,72 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-accept", async (req,
 
     if (asText(f["Status"]) !== "Open") {
       return res.status(409).json({ error: "This counter offer is no longer available." });
+    }
+
+    const linkedMemberWtbId = firstLinkedRecordId(f["Member WTB"]);
+
+    // NEW — additive only: this endpoint previously always required an
+    // "Order" link and hard-failed for every Member WTB round (they
+    // only ever link via "Member WTB", never "Order") — meaning a
+    // seller could never successfully Accept a Member WTB deal via the
+    // Portal. Routes Member WTB rounds through the same
+    // /member-wtb/deal-channel + override mechanism Buying's own
+    // accept flow already correctly uses, instead of the Order-based
+    // Make webhook path below (which stays completely unchanged for
+    // Store Orders).
+    if (linkedMemberWtbId) {
+      const sellerOfferRecordId = asText(f["Seller Offer Record ID"]);
+
+      if (!sellerOfferRecordId) {
+        return res.status(500).json({ error: "Counter Offer missing linked Seller Offer" });
+      }
+
+      const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(linkedMemberWtbId);
+
+      if (asText(memberWtb.fields?.["Fulfillment Status"]) === "Allocated") {
+        return res.status(409).json({ error: "This Member WTB is no longer available." });
+      }
+
+      const acceptedPayout = numberValue(f["Counter Payout"]);
+      const acceptedVatType = asText(f["Counter Payout VAT Type"] || f["Seller Original VAT Type"]);
+
+      await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+        "Status": "Accepted",
+        "Accepted At": new Date().toISOString(),
+        "Closed At": new Date().toISOString()
+      });
+
+      const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
+
+      if (!wtbBotBaseUrl) {
+        return res.status(500).json({ error: "KICKZ_WTB_BOT_BASE_URL is missing" });
+      }
+
+      const dealResponse = await fetch(`${wtbBotBaseUrl}/member-wtb/deal-channel`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.KC_PORTAL_SECRET
+        },
+        body: JSON.stringify({
+          member_wtb_record_id: linkedMemberWtbId,
+          seller_offer_record_id: sellerOfferRecordId,
+          override_price: acceptedPayout,
+          override_vat_type: acceptedVatType
+        })
+      });
+
+      const dealData = await dealResponse.json().catch(() => ({}));
+
+      if (!dealResponse.ok) {
+        return res.status(dealResponse.status).json({ error: dealData.error || "Failed to accept offer" });
+      }
+
+      await closeCompetingCountersForMemberWtb(linkedMemberWtbId, counterOfferRecordId).catch((err) =>
+        console.error("Failed to close competing counters (non-blocking):", err)
+      );
+
+      return res.json({ ok: true });
     }
 
     const linkedOrderId = firstLinkedRecordId(f["Order"]);
