@@ -4027,17 +4027,36 @@ function bindConsignmentDiscordButtons(client) {
                 wtbFields
               );
 
-              await sendMemberWtbBuyerCounterOfferDiscordDM({
-                counterOfferRecordId: priorRoundId,
-                buyerDiscordId,
-                productName: asText(wtbFields["Product Name"]),
-                sku: asText(wtbFields["SKU"]),
-                size: asText(wtbFields["Size"]),
-                memberWtbId: asText(wtbFields["Member WTB ID"]) || memberWtbRecordId,
-                newPrice: priorSellerCounterInBuyerTerms,
-                yourPreviousCounter: deniedPrice,
-                deniedAmount: deniedPrice
-              }).catch((err) => console.error("Failed to re-notify buyer after seller-deny (non-blocking):", err));
+              // NEW — additive only: his explicit request — if ANOTHER
+              // seller already has something on the table for this
+              // same WTB, the buyer's view has already silently moved
+              // on to them (per the unified-thread visibility model) —
+              // sending a "Denied" notification here would be
+              // confusing, since from the buyer's perspective they
+              // already have a newer offer and never knew this
+              // specific seller existed. Only sent when this seller was
+              // genuinely the only one, where it's necessary
+              // information for the buyer to reconsider their counter.
+              const denyingSellerId = firstLinkedRecordId(deniedFields["Seller ID"]);
+              const otherSellerExists = await getCurrentGlobalLowestNormalized(
+                "Member WTB",
+                memberWtbRecordId,
+                denyingSellerId
+              );
+
+              if (!Number.isFinite(otherSellerExists)) {
+                await sendMemberWtbBuyerCounterOfferDiscordDM({
+                  counterOfferRecordId: priorRoundId,
+                  buyerDiscordId,
+                  productName: asText(wtbFields["Product Name"]),
+                  sku: asText(wtbFields["SKU"]),
+                  size: asText(wtbFields["Size"]),
+                  memberWtbId: asText(wtbFields["Member WTB ID"]) || memberWtbRecordId,
+                  newPrice: priorSellerCounterInBuyerTerms,
+                  yourPreviousCounter: deniedPrice,
+                  deniedAmount: deniedPrice
+                }).catch((err) => console.error("Failed to re-notify buyer after seller-deny (non-blocking):", err));
+              }
             }
           }
         }
@@ -5040,6 +5059,20 @@ function bindConsignmentDiscordButtons(client) {
           const orderRecord = await airtable(ORDERS_TABLE).find(deniedOrderId);
           const orderFields = orderRecord.fields || {};
 
+          // NEW — additive only: his explicit request — same
+          // suppression as the Member WTB equivalent — if ANOTHER
+          // seller already has something on the table for this same
+          // Order, the store's view has already silently moved on to
+          // them, so a "Denied" notification here would be confusing.
+          // Only sent when this seller was genuinely the only one.
+          const denyingSellerIdForStore = firstLinkedRecordId(deniedFields["Seller ID"]);
+          const otherSellerExistsForStore = await getCurrentGlobalLowestNormalized(
+            "Seller Offer",
+            deniedOrderId,
+            denyingSellerIdForStore
+          );
+          const shouldNotifyStore = !Number.isFinite(otherSellerExistsForStore);
+
           if (priorRoundId) {
             const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
 
@@ -5060,28 +5093,30 @@ function bindConsignmentDiscordButtons(client) {
                 orderFields
               );
 
-              await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  trigger_type: "counter-offer-seller-countered",
-                  store_name: asText(orderFields["Store Name"]),
-                  record_id: deniedOrderId,
-                  shopify_order_number: asText(orderFields["Shopify Order Number"]),
-                  product_name: asText(deniedFields["Product Name"]),
-                  sku: asText(deniedFields["SKU"]),
-                  size: asText(deniedFields["Size"]),
-                  counter_offer_record_id: priorRoundId,
-                  selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
-                  your_previous_counter: deniedPrice,
-                  // FIXED — same display bug: show the seller's raw
-                  // counter here, not the store-converted equivalent.
-                  seller_counter_price: priorSellerCounterInStoreTerms ?? priorSellerCounter,
-                  denied_price: deniedPrice
-                })
-              });
+              if (shouldNotifyStore) {
+                await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    trigger_type: "counter-offer-seller-countered",
+                    store_name: asText(orderFields["Store Name"]),
+                    record_id: deniedOrderId,
+                    shopify_order_number: asText(orderFields["Shopify Order Number"]),
+                    product_name: asText(deniedFields["Product Name"]),
+                    sku: asText(deniedFields["SKU"]),
+                    size: asText(deniedFields["Size"]),
+                    counter_offer_record_id: priorRoundId,
+                    selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
+                    your_previous_counter: deniedPrice,
+                    // FIXED — same display bug: show the seller's raw
+                    // counter here, not the store-converted equivalent.
+                    seller_counter_price: priorSellerCounterInStoreTerms ?? priorSellerCounter,
+                    denied_price: deniedPrice
+                  })
+                });
+              }
             }
-          } else {
+          } else if (shouldNotifyStore) {
             await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -7797,6 +7832,21 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
 
+    // NEW — additive only: his explicit request — the store only ever
+    // sees ONE unified thread (it may silently swap to a different,
+    // better-offering seller behind the scenes), so their own counter
+    // must never regress below the best position they've EVER offered
+    // on this Order, regardless of which seller it went to originally
+    // — otherwise it would look like they're backtracking to whichever
+    // seller they'd previously countered, even though from the store's
+    // perspective they're just continuing the same negotiation.
+    const buyerHighestEver = await getBuyerHighestEverPosition("Seller Offer", linkedOrderIdForBand);
+    if (Number.isFinite(buyerHighestEver) && proposedPrice < buyerHighestEver) {
+      return res.status(400).json({
+        error: `Your counter can't be lower than €${buyerHighestEver.toFixed(2)}, which you've already offered on this order.`
+      });
+    }
+
     const linkedOrderId = firstLinkedRecordId(f["Order"]);
     const linkedSellerId = firstLinkedRecordId(f["Seller ID"]);
     const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
@@ -7834,6 +7884,18 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
       "Status": "Closed",
       "Closed At": new Date().toISOString()
     });
+
+    // NEW — additive only: his explicit request — this new, higher
+    // counter might also now beat what a PREVIOUSLY-denied seller was
+    // denied at. Re-opens a fresh round for any such seller, giving
+    // them a genuine second chance rather than being permanently out
+    // just because they said no to an earlier, lower position.
+    await reengageDeniedSellers({
+      sourceType: "Seller Offer",
+      recordId: linkedOrderId,
+      newBuyerCounterPrice: proposedPrice,
+      excludeSellerId: linkedSellerId
+    }).catch((err) => console.error("Failed to re-engage previously denied sellers (non-blocking):", err));
 
     // Notify the seller — reuses the exact same DM function as round 1,
     // now with the Counter button already added, so the seller can
@@ -12971,6 +13033,151 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
 // normalizes it the same way the WTB dot-indicator comparison already
 // does (VAT21 stays, VAT0/Margin ×1.21), and returns the minimum.
 // sourceType: "Seller Offer" (Store Orders) or "Member WTB".
+// ---------------------------------------------------------------------
+// NEW — additive only: his explicit request — since the buyer/store
+// only ever sees ONE unified thread (even though it may silently swap
+// between different sellers behind the scenes as better offers come
+// in), their OWN counter must never regress below the best position
+// they've EVER offered on this Order/WTB, regardless of which seller
+// it was originally directed at. Without this, a buyer's counter to a
+// newly-surfaced seller could accidentally undercut what they already
+// told a PREVIOUS seller, which would look inconsistent to that
+// seller even though the buyer never intended it (they don't know the
+// seller silently changed). "Store Counter Price" is always in buyer-
+// facing terms already (the buyer's own literal input, never VAT-
+// converted), so it's directly comparable across different sellers'
+// threads with no normalization needed.
+async function getBuyerHighestEverPosition(sourceType, recordId) {
+  const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
+
+  const allRounds = await airtable(COUNTER_OFFERS_TABLE)
+    .select({
+      filterByFormula: `{Source Type} = '${escapeFormulaValue(sourceType)}'`,
+      fields: [counterLinkField, "Store Counter Price"]
+    })
+    .all()
+    .then((records) => records.filter((r) => firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId));
+
+  let highest = null;
+  for (const r of allRounds) {
+    const price = numberValue(r.fields?.["Store Counter Price"]);
+    if (price > 0 && (highest == null || price > highest)) highest = price;
+  }
+
+  return highest;
+}
+
+// ---------------------------------------------------------------------
+// NEW — additive only: his explicit request — "Deny" (from the buyer's
+// side) should mean "not at that price," not "goodbye forever." Once
+// the buyer counters again at a price HIGHER than what a previously-
+// denied seller was denied at (better for them, worse for nobody),
+// that seller gets a fresh Open round at this new position — a real
+// second chance to accept or counter, exactly as if they'd never been
+// denied. Only ever fires on genuine improvement over what THAT
+// specific seller last saw; never re-engages at an equal or worse
+// price than their own denial.
+async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPrice, excludeSellerId }) {
+  const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
+
+  const deniedRounds = await airtable(COUNTER_OFFERS_TABLE)
+    .select({
+      filterByFormula: `AND({Status} = 'Denied', {Source Type} = '${escapeFormulaValue(sourceType)}')`
+    })
+    .all()
+    .then((records) => records.filter((r) => firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId));
+
+  // Per seller, only their MOST RECENT denied round matters.
+  const latestDeniedBySeller = new Map();
+  for (const r of deniedRounds) {
+    const sellerId = firstLinkedRecordId(r.fields?.["Seller ID"]);
+    if (!sellerId || sellerId === excludeSellerId) continue;
+
+    const existing = latestDeniedBySeller.get(sellerId);
+    const deniedAt = new Date(r.fields?.["Denied At"] || 0);
+    if (!existing || deniedAt > new Date(existing.fields?.["Denied At"] || 0)) {
+      latestDeniedBySeller.set(sellerId, r);
+    }
+  }
+
+  const contextRecord =
+    sourceType === "Member WTB"
+      ? await airtable(MEMBER_WTBS_TABLE).find(recordId).catch(() => null)
+      : await airtable(ORDERS_TABLE).find(recordId).catch(() => null);
+  const contextFields = contextRecord?.fields || {};
+
+  for (const [sellerId, deniedRound] of latestDeniedBySeller.entries()) {
+    const df = deniedRound.fields || {};
+    const deniedBuyerPrice = numberValue(df["Store Counter Price"]);
+
+    // Only re-engage on genuine improvement — strictly higher than
+    // what this specific seller was denied at.
+    if (!(newBuyerCounterPrice > deniedBuyerPrice)) continue;
+
+    const sellerOriginalPrice = numberValue(df["Seller Original Price"]);
+    const sellerVatType = asText(df["Seller Original VAT Type"]);
+    const sellerOfferRecordId = asText(df["Seller Offer Record ID"]);
+
+    const recomputedPayout =
+      sourceType === "Member WTB"
+        ? calculateMemberWtbSellerPayout(newBuyerCounterPrice, sellerVatType, contextFields)
+        : calculateCounterPayoutForVatType(newBuyerCounterPrice, sellerVatType, contextFields);
+
+    if (!Number.isFinite(recomputedPayout) || recomputedPayout <= 0) continue;
+
+    const createFields = {
+      "Seller ID": [sellerId],
+      "Source Type": sourceType,
+      "Seller Offer Record ID": sellerOfferRecordId,
+      "Seller Original Price": sellerOriginalPrice,
+      "Seller Original VAT Type": sellerVatType,
+      "Store Counter Price": newBuyerCounterPrice,
+      "Counter Payout": recomputedPayout,
+      "Counter Payout VAT Type": sellerVatType,
+      "Previous Record ID": deniedRound.id,
+      "Created At": new Date().toISOString(),
+      "Status": "Open"
+    };
+    createFields[sourceType === "Member WTB" ? "Member WTB" : "Order"] = [recordId];
+
+    const reopenedRound = await airtable(COUNTER_OFFERS_TABLE).create(createFields);
+
+    const sellerRecord = await airtable(SELLERS_TABLE).find(sellerId).catch(() => null);
+    const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
+    if (!sellerDiscordId) continue;
+
+    if (sourceType === "Member WTB") {
+      await sendMemberWtbCounterOfferDiscordDM({
+        counterOfferRecordId: reopenedRound.id,
+        sellerDiscordId,
+        productName: asText(contextFields["Product Name"]),
+        sku: asText(contextFields["SKU"]),
+        size: asText(contextFields["Size"]),
+        memberWtbId: asText(contextFields["Member WTB ID"]) || recordId,
+        payout: recomputedPayout,
+        vatType: sellerVatType,
+        sellerOriginalPrice,
+        sellerOriginalVatType: sellerVatType,
+        sellerLastOfferPrice: deniedBuyerPrice > 0 ? sellerOriginalPrice : null
+      }).catch((err) => console.error("Failed to re-engage previously denied seller (non-blocking):", err));
+    } else {
+      await sendCounterOfferDiscordDM({
+        counterOfferRecordId: reopenedRound.id,
+        sellerDiscordId,
+        productName: asText(contextFields["Product Name"]),
+        sku: asText(contextFields["SKU"]),
+        size: asText(contextFields["Size"]),
+        orderId: asText(contextFields["Order ID"]),
+        payout: recomputedPayout,
+        vatType: sellerVatType,
+        sellerOriginalPrice,
+        sellerOriginalVatType: sellerVatType
+      }).catch((err) => console.error("Failed to re-engage previously denied seller (non-blocking):", err));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
 async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSellerId) {
   const linkField = sourceType === "Member WTB" ? "Member WTBs" : "Linked Orders";
   const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
@@ -21002,6 +21209,18 @@ app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) =>
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
 
+    // NEW — additive only: same "never regress below own historical
+    // best" consistency rule as Store Orders — the buyer only ever
+    // sees ONE unified thread, so their own counter must never go
+    // below the best position they've EVER offered on this WTB,
+    // regardless of which seller it originally went to.
+    const buyerHighestEver = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
+    if (Number.isFinite(buyerHighestEver) && proposedPrice < buyerHighestEver) {
+      return res.status(400).json({
+        error: `Your counter can't be lower than €${buyerHighestEver.toFixed(2)}, which you've already offered on this WTB.`
+      });
+    }
+
     await airtable(COUNTER_OFFERS_TABLE).update(previousRoundId, {
       "Status": "Closed",
       "Closed At": new Date().toISOString()
@@ -21033,6 +21252,18 @@ app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) =>
       "Created At": new Date().toISOString(),
       "Status": "Open"
     });
+
+    // NEW — additive only: his explicit request — this new, higher
+    // counter might also now beat what a PREVIOUSLY-denied seller was
+    // denied at. Re-opens a fresh round for any such seller, giving
+    // them a genuine second chance rather than being permanently out
+    // just because they said no to an earlier, lower position.
+    await reengageDeniedSellers({
+      sourceType: "Member WTB",
+      recordId: memberWtbRecordId,
+      newBuyerCounterPrice: proposedPrice,
+      excludeSellerId: sellerRecordId
+    }).catch((err) => console.error("Failed to re-engage previously denied sellers (non-blocking):", err));
 
     const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
     const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
