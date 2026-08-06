@@ -13208,7 +13208,7 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
     airtable(COUNTER_OFFERS_TABLE)
       .select({
         filterByFormula: `AND({Status} = 'Open', {Source Type} = '${escapeFormulaValue(sourceType)}')`,
-        fields: [counterLinkField, "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
+        fields: [counterLinkField, "Seller ID", "Counter Payout", "Counter Payout VAT Type", "Seller Original VAT Type"]
       })
       .all()
       .then((records) => records.filter((r) => firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId))
@@ -13234,9 +13234,24 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
     const sellerId = firstLinkedRecordId(cr.fields?.["Seller ID"]);
     if (!sellerId || sellerId === excludeSellerId) continue;
 
-    const sellerCounter = numberValue(cr.fields?.["Seller Counter Price"]);
-    const effectivePrice = sellerCounter > 0 ? sellerCounter : numberValue(cr.fields?.["Seller Original Price"]);
-    const vatType = cr.fields?.["Seller Original VAT Type"];
+    // FIXED — a real, confirmed bug: this fell back to "Seller
+    // Original Price" (the seller's VERY FIRST, stale ask) whenever
+    // the round's pending move was the BUYER's (Store Counter Price
+    // set, Seller Counter Price still empty — i.e. the seller hasn't
+    // responded to the buyer's counter yet). That's wrong: the buyer's
+    // pending counter IS the current relevant position for this
+    // seller — if they accept it, that's what they receive. "Counter
+    // Payout" already correctly represents exactly this, on EVERY
+    // round regardless of who moved last (every round-creation
+    // endpoint sets it), so use it directly instead of trying to
+    // reconstruct it from Seller Counter Price / Seller Original
+    // Price. Confirmed via live testing: seller B's own dashboard
+    // showed 90 (their stale original ask) as the still-lowest price
+    // even after seller A's round moved to a pending 87 buyer counter
+    // — both sides showed a green "lowest" dot simultaneously, which
+    // is impossible if 87 genuinely beats 90.
+    const effectivePrice = numberValue(cr.fields?.["Counter Payout"]);
+    const vatType = cr.fields?.["Counter Payout VAT Type"] || cr.fields?.["Seller Original VAT Type"];
     const normalized = normalize(effectivePrice, vatType);
     if (normalized == null) continue;
     if (minNormalized == null || normalized < minNormalized) minNormalized = normalized;
