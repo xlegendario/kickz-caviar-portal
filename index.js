@@ -7615,8 +7615,13 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
     if (Number.isFinite(globalLowestNormalized)) {
       const proposedNormalized = asText(sellerVatType) === "VAT21" ? proposedPrice : proposedPrice * 1.21;
       if (proposedNormalized >= globalLowestNormalized) {
+        // FIXED — this said "beat that" without ever saying WHAT to
+        // beat, leaving him to guess. Converts the normalized threshold
+        // back to his own VAT-native scale so the message gives an
+        // actual, actionable number.
+        const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestNormalized : globalLowestNormalized / 1.21;
         return res.status(400).json({
-          error: `Another seller already offers a better price for this order. Your counter needs to beat that, not just your own last position.`
+          error: `Another seller already offers a better price for this order. Your counter needs to be lower than €${rawThreshold.toFixed(2)} (${sellerVatType}) to beat it.`
         });
       }
     }
@@ -15976,13 +15981,42 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
           ? previousSellerCounterById.get(previousOfferId)
           : null,
         raw_date: asText(f["Created At"]),
-        denied_at: asText(f["Denied At"] || f["Last Modified"])
+        denied_at: asText(f["Denied At"] || f["Last Modified"]),
+        // Kept only for the visibility filter right below — not part
+        // of the response shape.
+        __sellerId: firstLinkedRecordId(f["Seller ID"])
       };
     });
 
+    // NEW — additive only: his explicit request — the buyer should
+    // only ever see the SINGLE best available position, never two
+    // parallel threads. Without this, an "open" item (either a
+    // seller's own counter-back, or the buyer's own pending counter)
+    // kept showing even after a genuinely better position appeared
+    // from a completely different seller — which is exactly what
+    // should make THIS item disappear, as if that other seller's
+    // position had simply replaced it.
+    const visibleItems =
+      filter === "denied"
+        ? items
+        : (
+            await Promise.all(
+              items.map(async (item) => {
+                const betterElsewhere = await getCurrentGlobalLowestNormalized(
+                  "Member WTB",
+                  item.member_wtb_record_id,
+                  item.__sellerId
+                );
+                return Number.isFinite(betterElsewhere) ? null : item;
+              })
+            )
+          ).filter(Boolean);
+
+    const finalItems = visibleItems.map(({ __sellerId, ...rest }) => rest);
+
     res.json({
-      count: items.length,
-      items: sortDashboardItemsNewestFirst(items)
+      count: finalItems.length,
+      items: sortDashboardItemsNewestFirst(finalItems)
     });
   } catch (err) {
     console.error("Failed to load buying counter offers:", err);
@@ -21037,8 +21071,10 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
     if (Number.isFinite(globalLowestNormalized)) {
       const proposedNormalized = asText(sellerVatType) === "VAT21" ? proposedPrice : proposedPrice * 1.21;
       if (proposedNormalized >= globalLowestNormalized) {
+        // FIXED — same missing-number fix as Store Orders' equivalent.
+        const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestNormalized : globalLowestNormalized / 1.21;
         return res.status(400).json({
-          error: `Another seller already offers a better price for this WTB. Your counter needs to beat that, not just your own last position.`
+          error: `Another seller already offers a better price for this WTB. Your counter needs to be lower than €${rawThreshold.toFixed(2)} (${sellerVatType}) to beat it.`
         });
       }
     }
