@@ -7522,6 +7522,33 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
       }
     }
 
+    // FIXED — the check above only looks ONE hop back via this round's
+    // OWN Previous Record ID — but after a deny-reopen, the round being
+    // responded to is the REOPENED prior round, whose own Previous
+    // Record ID points to whatever came before the seller's now-denied
+    // counter, not to that denied counter itself (nothing links forward
+    // to it). Without this, a seller could resubmit the exact same
+    // price the store just denied. Searches forward for a denied round
+    // that responded to this same round, using its price as the (more
+    // recent, more restrictive) reference when one exists.
+    const deniedSuccessorFormula = `AND(
+      {Status} = 'Denied',
+      OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')
+    )`;
+    const deniedSuccessors = await airtable(COUNTER_OFFERS_TABLE)
+      .select({ filterByFormula: deniedSuccessorFormula, fields: ["Previous Record ID", "Seller Counter Price", "Denied At"] })
+      .all();
+    const deniedSuccessor = deniedSuccessors
+      .filter((r) => asText(r.fields?.["Previous Record ID"]) === previousRecordId)
+      .sort((a, b) => new Date(b.fields?.["Denied At"] || 0) - new Date(a.fields?.["Denied At"] || 0))[0];
+
+    if (deniedSuccessor) {
+      const deniedSellerCounter = numberValue(deniedSuccessor.fields?.["Seller Counter Price"]);
+      if (deniedSellerCounter) {
+        sellerOwnReference = deniedSellerCounter;
+      }
+    }
+
     const validation = validateNextCounterPrice(sellerOwnReference, lastPrice, proposedPrice);
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
@@ -7680,8 +7707,32 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
 
     const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(previousRoundId);
     const priorFields = priorRound.fields || {};
-    const priorStorePrice = numberValue(priorFields["Store Counter Price"]);
+    let priorStorePrice = numberValue(priorFields["Store Counter Price"]);
     const sellerCounterPrice = numberValue(f["Seller Counter Price"]);
+
+    // FIXED — same gap as seller-counter/buyer-counter — after a
+    // deny-reopen, the round being responded to is the reopened prior
+    // round, whose own Previous Record ID points to whatever came
+    // before the store's now-denied counter, not to that denied
+    // counter itself. Without this, the store could resubmit the exact
+    // same price the seller just denied.
+    const deniedSuccessorFormulaForStore = `AND(
+      {Status} = 'Denied',
+      OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')
+    )`;
+    const deniedSuccessorsForStore = await airtable(COUNTER_OFFERS_TABLE)
+      .select({ filterByFormula: deniedSuccessorFormulaForStore, fields: ["Previous Record ID", "Store Counter Price", "Denied At"] })
+      .all();
+    const deniedSuccessorForStore = deniedSuccessorsForStore
+      .filter((r) => asText(r.fields?.["Previous Record ID"]) === previousRecordId)
+      .sort((a, b) => new Date(b.fields?.["Denied At"] || 0) - new Date(a.fields?.["Denied At"] || 0))[0];
+
+    if (deniedSuccessorForStore) {
+      const deniedStorePrice = numberValue(deniedSuccessorForStore.fields?.["Store Counter Price"]);
+      if (deniedStorePrice) {
+        priorStorePrice = deniedStorePrice;
+      }
+    }
 
     const linkedOrderIdForBand = firstLinkedRecordId(f["Order"]);
     const orderRecordForBand = await airtable(ORDERS_TABLE).find(linkedOrderIdForBand);
@@ -10682,7 +10733,11 @@ async function sendMemberWtbCounterOfferDiscordDM({
   const message = await dm.send({
     embeds: [
       {
-        title: "🔁 Counter Offer",
+        // FIXED — same fix as sendCounterOfferDiscordDM (WTB) — this
+        // was never applied here, so a re-send after the seller's own
+        // counter was denied still looked like a neutral, fresh
+        // counter instead of the denial it actually is.
+        title: deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "" ? "❌ Offer Denied" : "🔁 Counter Offer",
         description: [
           `**${productName || "—"}**`,
           `SKU: ${sku || "—"}`,
@@ -10699,7 +10754,7 @@ async function sendMemberWtbCounterOfferDiscordDM({
           "",
           closingLine
         ].join("\n"),
-        color: 0xf1c40f
+        color: deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "" ? 0xe74c3c : 0xf1c40f
       }
     ],
     components: [
@@ -20559,6 +20614,35 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
       }
     }
 
+    // FIXED — the check above only looks ONE hop back via this round's
+    // OWN Previous Record ID — but after a deny-reopen, the round being
+    // responded to is the REOPENED prior round, whose own Previous
+    // Record ID points to whatever came before the seller's now-denied
+    // counter, not to that denied counter itself (nothing links
+    // forward to it). Without this, a seller could resubmit the exact
+    // same price the store just denied — his point: this also means a
+    // seller could otherwise spam the buyer with a price already
+    // rejected. Searches forward for a denied round that responded to
+    // this same round, and uses ITS price as the (more recent, more
+    // restrictive) reference instead when one exists.
+    const deniedSuccessorFormula = `AND(
+      {Status} = 'Denied',
+      {Source Type} = 'Member WTB'
+    )`;
+    const deniedSuccessors = await airtable(COUNTER_OFFERS_TABLE)
+      .select({ filterByFormula: deniedSuccessorFormula, fields: ["Previous Record ID", "Seller Counter Price", "Denied At"] })
+      .all();
+    const deniedSuccessor = deniedSuccessors
+      .filter((r) => asText(r.fields?.["Previous Record ID"]) === previousRecordId)
+      .sort((a, b) => new Date(b.fields?.["Denied At"] || 0) - new Date(a.fields?.["Denied At"] || 0))[0];
+
+    if (deniedSuccessor) {
+      const deniedSellerCounter = numberValue(deniedSuccessor.fields?.["Seller Counter Price"]);
+      if (deniedSellerCounter) {
+        sellerOwnReference = deniedSellerCounter;
+      }
+    }
+
     // Scale mismatch guard: buyerCounterPrice is in BUYER terms, must
     // convert to SELLER terms before comparing against the seller's own
     // reference (which is already seller-scale).
@@ -20694,7 +20778,31 @@ app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) =>
 
     const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId);
     const priorFields = priorRound.fields || {};
-    const buyerOwnReference = numberValue(priorFields["Store Counter Price"]);
+    let buyerOwnReference = numberValue(priorFields["Store Counter Price"]);
+
+    // FIXED — same gap as seller-counter above, mirrored: after a
+    // deny-reopen, the round being responded to is the reopened prior
+    // round, whose own Previous Record ID points to whatever came
+    // before the buyer's now-denied counter, not to that denied
+    // counter itself. Without this, the buyer could resubmit the exact
+    // same price the seller just denied.
+    const deniedSuccessorFormulaForBuyer = `AND(
+      {Status} = 'Denied',
+      {Source Type} = 'Member WTB'
+    )`;
+    const deniedSuccessorsForBuyer = await airtable(COUNTER_OFFERS_TABLE)
+      .select({ filterByFormula: deniedSuccessorFormulaForBuyer, fields: ["Previous Record ID", "Store Counter Price", "Denied At"] })
+      .all();
+    const deniedSuccessorForBuyer = deniedSuccessorsForBuyer
+      .filter((r) => asText(r.fields?.["Previous Record ID"]) === previousRoundId)
+      .sort((a, b) => new Date(b.fields?.["Denied At"] || 0) - new Date(a.fields?.["Denied At"] || 0))[0];
+
+    if (deniedSuccessorForBuyer) {
+      const deniedBuyerCounter = numberValue(deniedSuccessorForBuyer.fields?.["Store Counter Price"]);
+      if (deniedBuyerCounter) {
+        buyerOwnReference = deniedBuyerCounter;
+      }
+    }
 
     // Scale mismatch guard: sellerCounterPrice is in SELLER terms, must
     // convert to BUYER terms before comparing.
