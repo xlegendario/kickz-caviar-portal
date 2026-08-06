@@ -12450,8 +12450,8 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           counter_payout: moneyValue(f["Counter Payout"]),
           vat_type: vatType,
           previous_record_id: previousOfferId,
-          previous_store_price: Number.isFinite(previousStorePrice) ? moneyWholeValue(previousStorePrice) : null,
-          current_lowest: Number.isFinite(currentLowest) ? moneyWholeValue(currentLowest) : null,
+          previous_store_price: Number.isFinite(previousStorePrice) ? moneySmartValue(previousStorePrice) : null,
+          current_lowest: Number.isFinite(currentLowest) ? moneySmartValue(currentLowest) : null,
           status: isLowest === null ? null : (isLowest ? "Lowest" : "Beaten"),
           raw_date: displayValue(f["Created At"]),
           denied_at: displayValue(f["Denied At"] || f["Last Modified"])
@@ -14845,31 +14845,55 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
 
     const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
-    const items = filteredOffersWithoutActiveCounter.map((record) => {
+    const items = await Promise.all(filteredOffersWithoutActiveCounter.map(async (record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
       const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
       const isMemberWtb = !!linkedMemberWtbId;
-      
+      const linkedSellerId = firstLinkedRecordId(f["Seller ID"]);
+
       const orderFields = orderMap.get(linkedOrderId) || {};
 
       const vatType = displayValue(f["Offer VAT Type"]);
       const offerAmount = numberValue(f["Seller Offer"]);
 
-      const currentLowest = isMemberWtb
-        ? (
-            numberValue(f["Current Lowest Offer (MWTB)"]) ||
-            numberValue(f["Current Lowest Source Price (MWTB)"])
-          )
-        : vatType === "VAT0"
-          ? numberValue(orderFields["Current Lowest (VAT0)"])
-          : numberValue(orderFields["Current Lowest (Normalized)"]);
+      // FIXED — "Current Lowest Offer (MWTB)"/"Current Lowest Source
+      // Price (MWTB)" are Airtable rollups sourced from the raw Seller
+      // Offers table only — the exact same staleness pattern found and
+      // fixed elsewhere this session: they never reflect anyone's
+      // ACTIVE Counter Offers position, only their original, un-
+      // countered listing. A seller who'd already countered down still
+      // showed their old, higher raw price here. Reuses the already-
+      // proven live computation instead — correctly accounts for every
+      // seller's actual current position (their live counter if they
+      // have one, else their raw offer).
+      let currentLowest;
+      let isLowest;
 
-      const isLowest = isMemberWtb
-        ? Number.isFinite(offerAmount) &&
-          Number.isFinite(currentLowest) &&
-          Math.abs(offerAmount - currentLowest) < 0.01
-        : displayValue(orderFields["Lowest Offer Seller ID"]) === displayValue(req.query.seller_id);
+      if (isMemberWtb) {
+        const normalize = (price, vt) => {
+          const p = Number(price);
+          if (!Number.isFinite(p)) return null;
+          return asText(vt) === "VAT21" ? p : p * 1.21;
+        };
+        const othersMin = await getCurrentGlobalLowestNormalized("Member WTB", linkedMemberWtbId, linkedSellerId);
+        const ownNormalized = normalize(offerAmount, vatType);
+        const trueLowestNormalized =
+          Number.isFinite(othersMin) && Number.isFinite(ownNormalized)
+            ? Math.min(othersMin, ownNormalized)
+            : (othersMin ?? ownNormalized);
+
+        currentLowest = Number.isFinite(trueLowestNormalized)
+          ? (asText(vatType) === "VAT21" ? trueLowestNormalized : trueLowestNormalized / 1.21)
+          : null;
+        isLowest = Number.isFinite(ownNormalized) && (!Number.isFinite(othersMin) || ownNormalized <= othersMin);
+      } else {
+        currentLowest =
+          vatType === "VAT0"
+            ? numberValue(orderFields["Current Lowest (VAT0)"])
+            : numberValue(orderFields["Current Lowest (Normalized)"]);
+        isLowest = displayValue(orderFields["Lowest Offer Seller ID"]) === displayValue(req.query.seller_id);
+      }
 
       return {
         id: record.id,
@@ -14893,15 +14917,15 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
         brand: isMemberWtb
           ? displayValue(f["Brand (MWTB)"] || f["Brand"])
           : displayValue(f["Brand"] || orderFields["Brand"]),
-        offer: moneyWholeValue(offerAmount),
+        offer: moneySmartValue(offerAmount),
         offer_raw: offerAmount,
         vat_type: vatType,
-        current_lowest: moneyWholeValue(currentLowest),
+        current_lowest: Number.isFinite(currentLowest) ? moneySmartValue(currentLowest) : null,
         status: isLowest ? "Lowest" : "Beaten",
         date: formatDateEU(f["Offer Date"]),
         raw_date: f["Offer Date"]
       };
-    });
+    }));
 
     const sortedItems = sortDashboardItemsNewestFirst(items);
 
