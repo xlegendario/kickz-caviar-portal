@@ -4038,11 +4038,11 @@ function bindConsignmentDiscordButtons(client) {
               // genuinely the only one, where it's necessary
               // information for the buyer to reconsider their counter.
               const denyingSellerId = firstLinkedRecordId(deniedFields["Seller ID"]);
-              const otherSellerExists = await getCurrentGlobalLowestNormalized(
+              const otherSellerExists = (await getCurrentGlobalLowestNormalized(
                 "Member WTB",
                 memberWtbRecordId,
                 denyingSellerId
-              );
+              )).normalized;
 
               if (!Number.isFinite(otherSellerExists)) {
                 await sendMemberWtbBuyerCounterOfferDiscordDM({
@@ -5066,11 +5066,11 @@ function bindConsignmentDiscordButtons(client) {
           // them, so a "Denied" notification here would be confusing.
           // Only sent when this seller was genuinely the only one.
           const denyingSellerIdForStore = firstLinkedRecordId(deniedFields["Seller ID"]);
-          const otherSellerExistsForStore = await getCurrentGlobalLowestNormalized(
+          const otherSellerExistsForStore = (await getCurrentGlobalLowestNormalized(
             "Seller Offer",
             deniedOrderId,
             denyingSellerIdForStore
-          );
+          )).normalized;
           const shouldNotifyStore = !Number.isFinite(otherSellerExistsForStore);
 
           if (priorRoundId) {
@@ -7611,7 +7611,7 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
     // counter right back to 90 the instant seller B undercuts them to
     // 90 first, which shouldn't be allowed to just match — has to
     // actually go lower.
-    const globalLowestNormalized = await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, linkedSellerId);
+    const globalLowestNormalized = (await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, linkedSellerId)).normalized;
     if (Number.isFinite(globalLowestNormalized)) {
       const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestNormalized : globalLowestNormalized / 1.21;
       // FIXED — this only checked "strictly lower," never applying the
@@ -13219,15 +13219,23 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
   );
 
   let minNormalized = null;
+  let winningRaw = null;
+  let winningVatType = null;
 
   for (const so of rawOffers) {
     const sellerId = firstLinkedRecordId(so.fields?.["Seller ID"]);
     if (!sellerId || sellerId === excludeSellerId) continue;
     if (sellerIdsWithActiveCounter.has(sellerId)) continue; // superseded by their active round below
 
-    const normalized = normalize(so.fields?.["Seller Offer"], so.fields?.["Offer VAT Type"]);
+    const rawPrice = numberValue(so.fields?.["Seller Offer"]);
+    const rawVatType = so.fields?.["Offer VAT Type"];
+    const normalized = normalize(rawPrice, rawVatType);
     if (normalized == null) continue;
-    if (minNormalized == null || normalized < minNormalized) minNormalized = normalized;
+    if (minNormalized == null || normalized < minNormalized) {
+      minNormalized = normalized;
+      winningRaw = rawPrice;
+      winningVatType = rawVatType;
+    }
   }
 
   for (const cr of activeCounters) {
@@ -13254,10 +13262,24 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
     const vatType = cr.fields?.["Counter Payout VAT Type"] || cr.fields?.["Seller Original VAT Type"];
     const normalized = normalize(effectivePrice, vatType);
     if (normalized == null) continue;
-    if (minNormalized == null || normalized < minNormalized) minNormalized = normalized;
+    if (minNormalized == null || normalized < minNormalized) {
+      minNormalized = normalized;
+      winningRaw = effectivePrice;
+      winningVatType = vatType;
+    }
   }
 
-  return minNormalized;
+  // FIXED — this used to return a bare number, forcing every caller
+  // needing the actual seller-scale price (not just the normalized
+  // value used for comparisons) to convert the NORMALIZED number back
+  // down — which produces a seller-payout-scale number, not the
+  // buyer-facing price a seller's own dashboard needs to show when
+  // displaying "what's the current best price in the market." Now
+  // returns the winning raw price + its own VAT type too, so callers
+  // can run it through the correct buyer-facing conversion themselves.
+  // .normalized alone still works exactly like the old bare-number
+  // return for every comparison-only caller.
+  return { normalized: minNormalized, raw: winningRaw, vatType: winningVatType };
 }
 
 // ---------------------------------------------------------------------
@@ -14891,17 +14913,32 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
           if (!Number.isFinite(p)) return null;
           return asText(vt) === "VAT21" ? p : p * 1.21;
         };
-        const othersMin = await getCurrentGlobalLowestNormalized("Member WTB", linkedMemberWtbId, linkedSellerId);
+        const othersResult = await getCurrentGlobalLowestNormalized("Member WTB", linkedMemberWtbId, linkedSellerId);
+        const othersMin = othersResult.normalized;
         const ownNormalized = normalize(offerAmount, vatType);
-        const trueLowestNormalized =
-          Number.isFinite(othersMin) && Number.isFinite(ownNormalized)
-            ? Math.min(othersMin, ownNormalized)
-            : (othersMin ?? ownNormalized);
 
-        currentLowest = Number.isFinite(trueLowestNormalized)
-          ? (asText(vatType) === "VAT21" ? trueLowestNormalized : trueLowestNormalized / 1.21)
-          : null;
-        isLowest = Number.isFinite(ownNormalized) && (!Number.isFinite(othersMin) || ownNormalized <= othersMin);
+        // FIXED — this converted the winning NORMALIZED value back to
+        // seller-payout scale (dividing by 1.21 for non-VAT21), which
+        // is the wrong target entirely — this column is meant to show
+        // the current best price in BUYER-FACING terms (what the
+        // market is currently offering), matching what the Discord
+        // embed and the Buying portal both correctly show. Now
+        // identifies WHICH position actually wins (his own raw offer,
+        // or whichever other seller's raw price/VAT type
+        // getCurrentGlobalLowestNormalized already tracked) and runs
+        // THAT through the real buyer-facing conversion.
+        const ownWins = Number.isFinite(ownNormalized) && (!Number.isFinite(othersMin) || ownNormalized <= othersMin);
+        const winningRaw = ownWins ? offerAmount : othersResult.raw;
+        const winningVatType = ownWins ? vatType : othersResult.vatType;
+
+        if (Number.isFinite(winningRaw)) {
+          const wtbRecordForBuyerPrice = await airtable(MEMBER_WTBS_TABLE).find(linkedMemberWtbId).catch(() => null);
+          const wtbFieldsForBuyerPrice = wtbRecordForBuyerPrice?.fields || {};
+          currentLowest = calculateMemberWtbBuyerEquivalent(winningRaw, winningVatType, wtbFieldsForBuyerPrice);
+        } else {
+          currentLowest = null;
+        }
+        isLowest = ownWins;
       } else {
         currentLowest =
           vatType === "VAT0"
@@ -15691,38 +15728,22 @@ app.get("/api/dashboard/buying-open-wtbs", async (req, res) => {
       .filter((record) => linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId))
       .map((r) => r.id);
 
-    // FIXED — same raw-price leak as buying-offers: "Current Lowest
-    // Offer" is the RAW seller ask (e.g. €90), not what the buyer
-    // should ever see. Looks up the winning Seller Offer's own price +
-    // VAT type and converts it (margin + VAT) before display, the
-    // same way everywhere else in this flow does.
-    const sellerOffersForOpenWtbs = relevantMemberWtbIds.length
-      ? await airtable(SELLER_OFFERS_TABLE)
-          .select({ fields: ["Member WTBs", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
-          .all()
-          .then((records) =>
-            records.filter(
-              (r) =>
-                !r.fields?.["Delete Offer"] &&
-                relevantMemberWtbIds.includes(firstLinkedRecordId(r.fields?.["Member WTBs"]))
-            )
-          )
-      : [];
-
-    const winningSellerOfferByWtbIdForOpen = new Map();
-    for (const so of sellerOffersForOpenWtbs) {
-      const wtbId = firstLinkedRecordId(so.fields?.["Member WTBs"]);
-      const price = numberValue(so.fields?.["Seller Offer"]);
-      if (!Number.isFinite(price)) continue;
-
-      const current = winningSellerOfferByWtbIdForOpen.get(wtbId);
-      if (!current || price < current.price) {
-        winningSellerOfferByWtbIdForOpen.set(wtbId, {
-          price,
-          vatType: asText(so.fields?.["Offer VAT Type"])
-        });
-      }
-    }
+    // FIXED — a real, confirmed bug, same root cause as buying-offers:
+    // this only ever looked at raw Seller Offers table prices, never
+    // accounting for anyone's ACTIVE counter position — so a seller
+    // who'd already countered down to a genuinely better price than
+    // everyone's raw asks still showed the WORSE raw number here. Now
+    // reuses the proven cross-seller helper, which correctly picks up
+    // Counter Payout for anyone mid-negotiation.
+    const winningPositionByWtbId = new Map();
+    await Promise.all(
+      relevantMemberWtbIds.map(async (wtbId) => {
+        const result = await getCurrentGlobalLowestNormalized("Member WTB", wtbId, null);
+        if (Number.isFinite(result.raw)) {
+          winningPositionByWtbId.set(wtbId, { price: result.raw, vatType: result.vatType });
+        }
+      })
+    );
 
     const items = records
       .filter((record) =>
@@ -15730,7 +15751,7 @@ app.get("/api/dashboard/buying-open-wtbs", async (req, res) => {
       )
       .map((record) => {
         const f = record.fields || {};
-        const winningSellerOffer = winningSellerOfferByWtbIdForOpen.get(record.id);
+        const winningSellerOffer = winningPositionByWtbId.get(record.id);
 
         const currentLowest = winningSellerOffer
           ? calculateMemberWtbBuyerEquivalent(winningSellerOffer.price, winningSellerOffer.vatType, f)
@@ -16042,11 +16063,11 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         : (
             await Promise.all(
               items.map(async (item) => {
-                const betterElsewhere = await getCurrentGlobalLowestNormalized(
+                const betterElsewhere = (await getCurrentGlobalLowestNormalized(
                   "Member WTB",
                   item.member_wtb_record_id,
                   item.__sellerId
-                );
+                )).normalized;
                 return Number.isFinite(betterElsewhere) ? null : item;
               })
             )
@@ -16634,6 +16655,32 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
         });
       }
     }
+
+    // FIXED — a real, confirmed bug: even after finding the best
+    // FRESH, un-countered offer, this never checked whether some OTHER
+    // seller's ACTIVE counter position (someone already mid-
+    // negotiation) was actually BETTER. E.g. seller A's live counter
+    // at 87 genuinely beats seller B's fresh 90 — but seller B kept
+    // showing here in Open regardless, since active-counter sellers
+    // were only ever excluded from winning FRESH, never compared
+    // against. Per the "buyer only ever sees the single best position"
+    // design, if an active counter beats the best fresh offer, this
+    // WTB's true winner belongs in Countered instead — so it must be
+    // excluded from Open entirely, not shown with a worse number.
+    const normalizeForCompare = (price, vt) => {
+      const p = Number(price);
+      if (!Number.isFinite(p)) return null;
+      return asText(vt) === "VAT21" ? p : p * 1.21;
+    };
+    await Promise.all(
+      Array.from(winningSellerOfferByWtbId.entries()).map(async ([wtbId, winner]) => {
+        const bestActiveCounter = (await getCurrentGlobalLowestNormalized("Member WTB", wtbId, null)).normalized;
+        const freshNormalized = normalizeForCompare(winner.price, winner.vatType);
+        if (Number.isFinite(bestActiveCounter) && Number.isFinite(freshNormalized) && bestActiveCounter < freshNormalized) {
+          winningSellerOfferByWtbId.delete(wtbId);
+        }
+      })
+    );
 
     const items = records
       .filter((record) =>
@@ -21107,7 +21154,7 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
     // seller's counter must also beat whatever OTHER sellers currently
     // have on the table for this same Member WTB, not just their own
     // prior position.
-    const globalLowestNormalized = await getCurrentGlobalLowestNormalized("Member WTB", memberWtbRecordId, sellerRecordId);
+    const globalLowestNormalized = (await getCurrentGlobalLowestNormalized("Member WTB", memberWtbRecordId, sellerRecordId)).normalized;
     if (Number.isFinite(globalLowestNormalized)) {
       const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestNormalized : globalLowestNormalized / 1.21;
       // FIXED — same min-step fix as Store Orders' equivalent — only
