@@ -7567,10 +7567,27 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
 
     const linkedOrderId = firstLinkedRecordId(f["Order"]);
     const linkedSellerId = firstLinkedRecordId(f["Seller ID"]);
+    const sellerVatType = asText(f["Seller Original VAT Type"]);
+
+    // NEW — additive only: his explicit request — a seller's counter
+    // must also beat whatever OTHER sellers currently have on the
+    // table for this same Order, not just their own prior position.
+    // Without this, seller A (currently the winner at 90) could
+    // counter right back to 90 the instant seller B undercuts them to
+    // 90 first, which shouldn't be allowed to just match — has to
+    // actually go lower.
+    const globalLowestNormalized = await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, linkedSellerId);
+    if (Number.isFinite(globalLowestNormalized)) {
+      const proposedNormalized = asText(sellerVatType) === "VAT21" ? proposedPrice : proposedPrice * 1.21;
+      if (proposedNormalized >= globalLowestNormalized) {
+        return res.status(400).json({
+          error: `Another seller already offers a better price for this order. Your counter needs to beat that, not just your own last position.`
+        });
+      }
+    }
+
     const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
     const orderFields = orderRecord.fields || {};
-
-    const sellerVatType = asText(f["Seller Original VAT Type"]);
 
     const newRound = await airtable(COUNTER_OFFERS_TABLE).create({
       "Order": [linkedOrderId],
@@ -12938,6 +12955,83 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
 // accept-previous) were missing this entirely: accepting via the
 // Portal left every other competing seller's active negotiation
 // dangling open, unlike accepting the exact same thing via Discord.
+// ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// NEW — additive only: his explicit request — a seller countering (or
+// placing a fresh offer) should never be allowed to land at a price
+// that's worse than what another seller ALREADY has on the table for
+// the same Order/WTB, and this needs to hold continuously: a seller's
+// own COUNTER also becomes the new bar for everyone else, not just
+// their original raw offer. The existing "Current Lowest (Normalized)"
+// rollup can't be reused for this — it only reflects raw, never-
+// countered Seller Offers (rolled up from the Seller Offers table
+// directly), so it goes stale the moment anyone starts negotiating.
+// This fetches every OTHER seller's actual CURRENT position — their
+// live Counter Offers round if they have one, else their raw offer —
+// normalizes it the same way the WTB dot-indicator comparison already
+// does (VAT21 stays, VAT0/Margin ×1.21), and returns the minimum.
+// sourceType: "Seller Offer" (Store Orders) or "Member WTB".
+async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSellerId) {
+  const linkField = sourceType === "Member WTB" ? "Member WTBs" : "Linked Orders";
+  const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
+
+  const normalize = (price, vatType) => {
+    const p = Number(price);
+    if (!Number.isFinite(p)) return null;
+    return asText(vatType) === "VAT21" ? p : p * 1.21;
+  };
+
+  const [rawOffers, activeCounters] = await Promise.all([
+    airtable(SELLER_OFFERS_TABLE)
+      .select({ fields: [linkField, "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
+      .all()
+      .then((records) =>
+        records.filter(
+          (r) =>
+            !r.fields?.["Delete Offer"] &&
+            firstLinkedRecordId(r.fields?.[linkField]) === recordId
+        )
+      ),
+    airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `AND({Status} = 'Open', {Source Type} = '${escapeFormulaValue(sourceType)}')`,
+        fields: [counterLinkField, "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
+      })
+      .all()
+      .then((records) => records.filter((r) => firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId))
+  ]);
+
+  const sellerIdsWithActiveCounter = new Set(
+    activeCounters.map((r) => firstLinkedRecordId(r.fields?.["Seller ID"])).filter(Boolean)
+  );
+
+  let minNormalized = null;
+
+  for (const so of rawOffers) {
+    const sellerId = firstLinkedRecordId(so.fields?.["Seller ID"]);
+    if (!sellerId || sellerId === excludeSellerId) continue;
+    if (sellerIdsWithActiveCounter.has(sellerId)) continue; // superseded by their active round below
+
+    const normalized = normalize(so.fields?.["Seller Offer"], so.fields?.["Offer VAT Type"]);
+    if (normalized == null) continue;
+    if (minNormalized == null || normalized < minNormalized) minNormalized = normalized;
+  }
+
+  for (const cr of activeCounters) {
+    const sellerId = firstLinkedRecordId(cr.fields?.["Seller ID"]);
+    if (!sellerId || sellerId === excludeSellerId) continue;
+
+    const sellerCounter = numberValue(cr.fields?.["Seller Counter Price"]);
+    const effectivePrice = sellerCounter > 0 ? sellerCounter : numberValue(cr.fields?.["Seller Original Price"]);
+    const vatType = cr.fields?.["Seller Original VAT Type"];
+    const normalized = normalize(effectivePrice, vatType);
+    if (normalized == null) continue;
+    if (minNormalized == null || normalized < minNormalized) minNormalized = normalized;
+  }
+
+  return minNormalized;
+}
+
 // ---------------------------------------------------------------------
 async function closeCompetingCountersForOrder(orderRecordId, acceptedCounterOfferRecordId) {
   const openCountersForOrderMatch = await airtable(COUNTER_OFFERS_TABLE)
@@ -20703,6 +20797,20 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
     const validation = validateNextCounterPrice(sellerOwnReference, buyerPriceInSellerTerms, proposedPrice);
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    // NEW — additive only: same cross-seller rule as Store Orders — a
+    // seller's counter must also beat whatever OTHER sellers currently
+    // have on the table for this same Member WTB, not just their own
+    // prior position.
+    const globalLowestNormalized = await getCurrentGlobalLowestNormalized("Member WTB", memberWtbRecordId, sellerRecordId);
+    if (Number.isFinite(globalLowestNormalized)) {
+      const proposedNormalized = asText(sellerVatType) === "VAT21" ? proposedPrice : proposedPrice * 1.21;
+      if (proposedNormalized >= globalLowestNormalized) {
+        return res.status(400).json({
+          error: `Another seller already offers a better price for this WTB. Your counter needs to beat that, not just your own last position.`
+        });
+      }
     }
 
     await airtable(COUNTER_OFFERS_TABLE).update(previousRecordId, {
