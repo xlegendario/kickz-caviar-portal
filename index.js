@@ -16896,6 +16896,14 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
     // exact pattern the already-tested Discord accept handlers use.
     const overridePrice = req.body?.override_price;
     const overrideVatType = asText(req.body?.override_vat_type);
+    // NEW — additive only: this endpoint never closed other sellers'
+    // competing counters on the same Member WTB at all — meaning if
+    // multiple sellers had offers/negotiations open, accepting one via
+    // the Portal would leave the others dangling, still open, still
+    // actionable. Optional so the frontend doesn't have to change for
+    // the "fresh offer, no specific round" case (empty string safely
+    // matches nothing, so every open round gets closed).
+    const acceptedCounterOfferRecordId = asText(req.body?.counter_offer_record_id);
 
     if (!memberWtbRecordId) {
       return res.status(400).json({ error: "Missing member_wtb_record_id" });
@@ -16943,6 +16951,10 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
         details: data.details || ""
       });
     }
+
+    await closeCompetingCountersForMemberWtb(memberWtbRecordId, acceptedCounterOfferRecordId || "").catch((err) =>
+      console.error("Failed to close competing counters (non-blocking):", err)
+    );
 
     res.json({ ok: true, data });
   } catch (err) {
