@@ -4093,6 +4093,15 @@ function bindConsignmentDiscordButtons(client) {
         return;
       }
 
+      // NEW — additive only: this never deferred, so Discord's 3-
+      // second acknowledgment window applied directly — the recently
+      // added forward-search-for-denied-successor query (scans the
+      // whole table, no narrow scoping available without hitting the
+      // raw-ID/ARRAYJOIN pitfall) can add enough latency to exceed
+      // that, showing "Something went wrong" to the user even though
+      // the counter is created successfully server-side regardless.
+      await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
       const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/${counterOfferRecordId}/seller-counter`, {
         method: "POST",
         headers: {
@@ -4105,16 +4114,14 @@ function bindConsignmentDiscordButtons(client) {
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        await interaction.reply({
-          content: `❌ ${data.error || "Failed to submit your counter."}`,
-          ephemeral: true
+        await interaction.editReply({
+          content: `❌ ${data.error || "Failed to submit your counter."}`
         }).catch(() => {});
         return;
       }
 
-      await interaction.reply({
-        content: `✅ Your counter of €${counterPrice} was sent to the buyer.`,
-        ephemeral: true
+      await interaction.editReply({
+        content: `✅ Your counter of €${counterPrice} was sent to the buyer.`
       }).catch(() => {});
 
       await safeEditInteractionMessage(interaction, {
@@ -4363,6 +4370,10 @@ function bindConsignmentDiscordButtons(client) {
         return;
       }
 
+      // FIXED — same 3-second-acknowledgment issue as the seller-facing
+      // equivalent above.
+      await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
       const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/${counterOfferRecordId}/buyer-counter`, {
         method: "POST",
         headers: {
@@ -4375,16 +4386,14 @@ function bindConsignmentDiscordButtons(client) {
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        await interaction.reply({
-          content: `❌ ${data.error || "Failed to submit your counter."}`,
-          ephemeral: true
+        await interaction.editReply({
+          content: `❌ ${data.error || "Failed to submit your counter."}`
         }).catch(() => {});
         return;
       }
 
-      await interaction.reply({
-        content: `✅ Your counter of €${counterPrice} was sent to the seller.`,
-        ephemeral: true
+      await interaction.editReply({
+        content: `✅ Your counter of €${counterPrice} was sent to the seller.`
       }).catch(() => {});
 
       await safeEditInteractionMessage(interaction, {
@@ -4923,6 +4932,10 @@ function bindConsignmentDiscordButtons(client) {
         return;
       }
 
+      // FIXED — same 3-second-acknowledgment issue found in the Member
+      // WTB equivalents.
+      await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
       const response = await fetch(
         `${APP_PUBLIC_BASE_URL}/api/counter-offers/${counterOfferRecordId}/seller-counter`,
         {
@@ -4935,16 +4948,14 @@ function bindConsignmentDiscordButtons(client) {
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        await interaction.reply({
-          content: `❌ ${data.error || "Failed to submit your counter."}`,
-          ephemeral: true
+        await interaction.editReply({
+          content: `❌ ${data.error || "Failed to submit your counter."}`
         }).catch(() => {});
         return;
       }
 
-      await interaction.reply({
-        content: `✅ Your counter of €${counterPrice} was sent to the store.`,
-        ephemeral: true
+      await interaction.editReply({
+        content: `✅ Your counter of €${counterPrice} was sent to the store.`
       }).catch(() => {});
 
       // FIXED — CRASH: this used the discord.js ActionRowBuilder/
@@ -15629,14 +15640,24 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         // Payout" field itself is computed with, so accepting always
         // honors the actual negotiated position instead of silently
         // falling back to the seller's raw, un-negotiated listing.
-        sellers_offer_payout: Number.isFinite(sellersOffer) ? calculateMemberWtbSellerPayout(sellersOffer, vatType, wtbFields) : null,
+        // FIXED — this ran sellersOffer through calculateMemberWtbSellerPayout,
+        // which expects a BUYER-facing price as input (it strips margin+VAT
+        // to get what the seller receives). But sellersOffer is ALWAYS
+        // already a seller-native raw number (from Seller Counter Price or
+        // Seller Original Price) — never buyer-facing — so this was
+        // silently double-converting: stripping margin+VAT from a number
+        // that was never buyer-facing to begin with. E.g. a seller's own
+        // untouched original ask of €80 became €67.90 instead of staying
+        // €80. The raw seller-scale value IS the correct override_price
+        // directly, no conversion needed.
+        sellers_offer_payout: Number.isFinite(sellersOffer) ? sellersOffer : null,
         vat_type: vatType,
         previous_record_id: previousOfferId,
         previous_seller_counter: previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
           ? moneySmartValue(previousSellerCounterById.get(previousOfferId))
           : null,
         previous_seller_counter_payout: previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
-          ? calculateMemberWtbSellerPayout(previousSellerCounterById.get(previousOfferId), vatType, wtbFields)
+          ? previousSellerCounterById.get(previousOfferId)
           : null,
         raw_date: asText(f["Created At"]),
         denied_at: asText(f["Denied At"] || f["Last Modified"])
