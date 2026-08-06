@@ -7613,15 +7613,16 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
     // actually go lower.
     const globalLowestNormalized = await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, linkedSellerId);
     if (Number.isFinite(globalLowestNormalized)) {
-      const proposedNormalized = asText(sellerVatType) === "VAT21" ? proposedPrice : proposedPrice * 1.21;
-      if (proposedNormalized >= globalLowestNormalized) {
-        // FIXED — this said "beat that" without ever saying WHAT to
-        // beat, leaving him to guess. Converts the normalized threshold
-        // back to his own VAT-native scale so the message gives an
-        // actual, actionable number.
-        const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestNormalized : globalLowestNormalized / 1.21;
+      const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestNormalized : globalLowestNormalized / 1.21;
+      // FIXED — this only checked "strictly lower," never applying the
+      // same €2.50 minimum step the normal narrowing-band validation
+      // enforces everywhere else — so a counter that was technically
+      // lower but still too close (e.g. 83 against a threshold of 85)
+      // slipped through uncaught.
+      const maxAllowedRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
+      if (proposedPrice > maxAllowedRaw) {
         return res.status(400).json({
-          error: `Another seller already offers a better price for this order. Your counter needs to be lower than €${rawThreshold.toFixed(2)} (${sellerVatType}) to beat it.`
+          error: `Another seller already offers a better price for this order. Your counter needs to be at most €${maxAllowedRaw.toFixed(2)} (${sellerVatType}) to beat it.`
         });
       }
     }
@@ -21069,12 +21070,15 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
     // prior position.
     const globalLowestNormalized = await getCurrentGlobalLowestNormalized("Member WTB", memberWtbRecordId, sellerRecordId);
     if (Number.isFinite(globalLowestNormalized)) {
-      const proposedNormalized = asText(sellerVatType) === "VAT21" ? proposedPrice : proposedPrice * 1.21;
-      if (proposedNormalized >= globalLowestNormalized) {
-        // FIXED — same missing-number fix as Store Orders' equivalent.
-        const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestNormalized : globalLowestNormalized / 1.21;
+      const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestNormalized : globalLowestNormalized / 1.21;
+      // FIXED — same min-step fix as Store Orders' equivalent — only
+      // checked "strictly lower," never applying the same €2.50
+      // minimum step everywhere else, so a technically-lower-but-still-
+      // too-close counter slipped through uncaught.
+      const maxAllowedRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
+      if (proposedPrice > maxAllowedRaw) {
         return res.status(400).json({
-          error: `Another seller already offers a better price for this WTB. Your counter needs to be lower than €${rawThreshold.toFixed(2)} (${sellerVatType}) to beat it.`
+          error: `Another seller already offers a better price for this WTB. Your counter needs to be at most €${maxAllowedRaw.toFixed(2)} (${sellerVatType}) to beat it.`
         });
       }
     }
