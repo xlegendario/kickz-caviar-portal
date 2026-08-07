@@ -4027,16 +4027,22 @@ function bindConsignmentDiscordButtons(client) {
                 wtbFields
               );
 
-              // NEW — additive only: his explicit request — if ANOTHER
-              // seller already has something on the table for this
-              // same WTB, the buyer's view has already silently moved
-              // on to them (per the unified-thread visibility model) —
-              // sending a "Denied" notification here would be
-              // confusing, since from the buyer's perspective they
-              // already have a newer offer and never knew this
-              // specific seller existed. Only sent when this seller was
-              // genuinely the only one, where it's necessary
-              // information for the buyer to reconsider their counter.
+              // FIXED — a real, confirmed bug found via his sharp
+              // pushback: this only checked "does ANY other seller
+              // position exist at all" — but a WORSE fallback position
+              // (e.g. another seller's stale, already-superseded raw
+              // listing) would ALSO count here, incorrectly suppressing
+              // the notification even when the denying seller was
+              // genuinely the best available. His exact point: the
+              // notification should ONLY be suppressed when another
+              // seller is GENUINELY BETTER than what just got denied —
+              // otherwise the denying seller effectively "drops out of
+              // the running" and the buyer needs to know, since nobody
+              // better is actually on the table. Chain-traces the
+              // denying seller's own TRUE last position (not their
+              // stale original ask) and normalizes it the same way
+              // getCurrentGlobalLowestNormalized does internally, so
+              // the comparison is apples-to-apples.
               const denyingSellerId = firstLinkedRecordId(deniedFields["Seller ID"]);
               const otherSellerExists = (await getCurrentGlobalLowestNormalized(
                 "Member WTB",
@@ -4044,7 +4050,17 @@ function bindConsignmentDiscordButtons(client) {
                 denyingSellerId
               )).normalized;
 
-              if (!Number.isFinite(otherSellerExists)) {
+              const denyingSellerTruePosition = await findSellersTrueLastCounter(counterOfferRecordId);
+              const denyingSellerVatType = asText(deniedFields["Seller Original VAT Type"]);
+              const denyingSellerOwnNormalized = Number.isFinite(denyingSellerTruePosition)
+                ? (denyingSellerVatType === "VAT21" ? denyingSellerTruePosition : denyingSellerTruePosition * 1.21)
+                : null;
+
+              const shouldNotifyBuyer =
+                !Number.isFinite(otherSellerExists) ||
+                (Number.isFinite(denyingSellerOwnNormalized) && otherSellerExists >= denyingSellerOwnNormalized);
+
+              if (shouldNotifyBuyer) {
                 await sendMemberWtbBuyerCounterOfferDiscordDM({
                   counterOfferRecordId: priorRoundId,
                   buyerDiscordId,
@@ -5059,19 +5075,31 @@ function bindConsignmentDiscordButtons(client) {
           const orderRecord = await airtable(ORDERS_TABLE).find(deniedOrderId);
           const orderFields = orderRecord.fields || {};
 
-          // NEW — additive only: his explicit request — same
-          // suppression as the Member WTB equivalent — if ANOTHER
-          // seller already has something on the table for this same
-          // Order, the store's view has already silently moved on to
-          // them, so a "Denied" notification here would be confusing.
-          // Only sent when this seller was genuinely the only one.
+          // FIXED — a real, confirmed bug found via his sharp
+          // pushback on the Member WTB equivalent (same underlying
+          // logic here): this only checked "does ANY other seller
+          // position exist at all" — but a WORSE fallback position
+          // would ALSO count, incorrectly suppressing the notification
+          // even when the denying seller was genuinely the best
+          // available. Now chain-traces the denying seller's own TRUE
+          // last position and only suppresses when another seller is
+          // GENUINELY BETTER than that.
           const denyingSellerIdForStore = firstLinkedRecordId(deniedFields["Seller ID"]);
           const otherSellerExistsForStore = (await getCurrentGlobalLowestNormalized(
             "Seller Offer",
             deniedOrderId,
             denyingSellerIdForStore
           )).normalized;
-          const shouldNotifyStore = !Number.isFinite(otherSellerExistsForStore);
+
+          const denyingSellerTruePositionForStore = await findSellersTrueLastCounter(counterOfferRecordId);
+          const denyingSellerVatTypeForStore = asText(deniedFields["Seller Original VAT Type"]);
+          const denyingSellerOwnNormalizedForStore = Number.isFinite(denyingSellerTruePositionForStore)
+            ? (denyingSellerVatTypeForStore === "VAT21" ? denyingSellerTruePositionForStore : denyingSellerTruePositionForStore * 1.21)
+            : null;
+
+          const shouldNotifyStore =
+            !Number.isFinite(otherSellerExistsForStore) ||
+            (Number.isFinite(denyingSellerOwnNormalizedForStore) && otherSellerExistsForStore >= denyingSellerOwnNormalizedForStore);
 
           if (priorRoundId) {
             const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
