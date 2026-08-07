@@ -12370,8 +12370,8 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     // natively for Store Orders rounds via the Order link. Reads them
     // directly in the mapping below instead.
 
-    const items = preFiltered
-      .map((record) => {
+    const items = await Promise.all(preFiltered
+      .map(async (record) => {
         const f = record.fields || {};
         const linkedOrderId = firstLinkedRecordId(f["Order"]);
         const linkedMemberWtbId = firstLinkedRecordId(f["Member WTB"]);
@@ -12418,12 +12418,27 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         // real position lives on the round before it) — using it for
         // "denied" without checking this round's own value first was
         // showing the wrong (much older) amount as "Your Offer".
+        // FIXED (again) — a real, confirmed bug found via his live
+        // testing: this only looked ONE hop back via
+        // previousSellerCounterById — if that immediately-prior round
+        // was ITSELF a supersession where the seller never responded
+        // (Seller Counter Price empty there too), their real last
+        // countered position — from possibly several supersessions
+        // back — was silently lost. Also hit the classic
+        // Number.isFinite(numberValue(x))-is-always-true trap: an
+        // empty field became 0, which IS finite, so it was always
+        // "found" and then moneyValue(0) rendered as "-". Reuses the
+        // full chain-walking helper (findSellersTrueLastCounter,
+        // built for the same underlying bug in the Discord
+        // notification) instead of a single, shallow lookup.
         const ownSellerCounter = numberValue(f["Seller Counter Price"]);
-        const sellerLastOffer = (filter === "open" || (filter === "denied" && Number.isFinite(ownSellerCounter)))
-          ? (Number.isFinite(ownSellerCounter) ? ownSellerCounter : numberValue(f["Seller Original Price"]))
-          : (previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
-              ? previousSellerCounterById.get(previousOfferId)
-              : numberValue(f["Seller Original Price"]));
+        let sellerLastOffer;
+        if (filter === "open" || (filter === "denied" && ownSellerCounter > 0)) {
+          sellerLastOffer = ownSellerCounter > 0 ? ownSellerCounter : numberValue(f["Seller Original Price"]);
+        } else {
+          const trueLastCounter = await findSellersTrueLastCounter(record.id);
+          sellerLastOffer = trueLastCounter ?? numberValue(f["Seller Original Price"]);
+        }
 
         // FIXED — the rollup fields below ("Current Lowest ...") are
         // Airtable rollups over the raw Seller Offers table price,
@@ -12502,7 +12517,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           raw_date: displayValue(f["Created At"]),
           denied_at: displayValue(f["Denied At"] || f["Last Modified"])
         };
-      });
+      }));
 
     // NEW — additive only: "denied" must also include fresh,
     // never-countered offers that were denied outright — those never
@@ -13150,6 +13165,34 @@ async function getBuyerHighestEverPosition(sourceType, recordId) {
 //     price, and leaving an orphaned extra row in the buyer's own
 //     Countered view too. Always unconditionally superseded — closes
 //     their round, opens a fresh one at the new price, notifies them.
+// NEW — additive only: a real, confirmed gap found via his live
+// testing — when a seller's round gets superseded WITHOUT them ever
+// responding (the merged category below), their true last position
+// (if they'd countered in an EARLIER round, before that got itself
+// superseded) has nowhere to live — "Seller Original Price" only ever
+// tracks their VERY FIRST ask, by design, never anything more recent.
+// Confirmed exactly: seller B countered to €89 (creating a round with
+// Seller Counter Price=89), that round got superseded (buyer moved
+// again) before seller B replied, and THAT superseding round's own
+// Seller Counter Price is empty — so the notification fell all the
+// way back to their original €92, silently losing the real €89.
+// Walks backward through Previous Record ID until it finds a round
+// where THIS seller's Seller Counter Price is genuinely set, or
+// reaches the start of the chain with nothing found (a seller who's
+// never actually countered at all).
+async function findSellersTrueLastCounter(startRoundId, maxHops = 15) {
+  let currentId = startRoundId;
+  for (let hop = 0; hop < maxHops && currentId; hop++) {
+    const round = await airtable(COUNTER_OFFERS_TABLE).find(currentId).catch(() => null);
+    if (!round) return null;
+    const f = round.fields || {};
+    const sellerCounter = numberValue(f["Seller Counter Price"]);
+    if (sellerCounter > 0) return sellerCounter;
+    currentId = asText(f["Previous Record ID"]) || null;
+  }
+  return null;
+}
+
 async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPrice, excludeSellerId }) {
   const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
 
@@ -13231,7 +13274,7 @@ async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPric
       })
     );
 
-  for (const round of pendingSellerCounterRounds) {
+for (const round of pendingSellerCounterRounds) {
     const rf = round.fields || {};
     const sellerId = firstLinkedRecordId(rf["Seller ID"]);
     const sellerOriginalPrice = numberValue(rf["Seller Original Price"]);
@@ -13273,14 +13316,15 @@ async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPric
     if (!sellerDiscordId) continue;
 
     // FIXED — a related bug the loop-merge above surfaces: for a
-    // seller who never actually countered (Seller Counter Price
-    // genuinely empty/0), passing 0 here made the DM treat "€0.00" as
-    // their real last offer instead of correctly falling back to their
-    // original ask — 0 is a valid, finite number, so the notification
-    // function's own null-check never caught this. Passes null
-    // explicitly in that case.
-    const sellerCounterOnThisRound = numberValue(rf["Seller Counter Price"]);
-    const sellerLastOfferForNotify = sellerCounterOnThisRound > 0 ? sellerCounterOnThisRound : null;
+    // seller who never actually countered on THIS specific round,
+    // just checking rf["Seller Counter Price"] wasn't enough — if
+    // they'd countered on an EARLIER round that itself got superseded
+    // before they replied to the next one, that genuine last position
+    // was getting silently lost, falling all the way back to their
+    // original ask instead. Walks the full chain via
+    // findSellersTrueLastCounter to find their real last position,
+    // however many supersessions back it happened.
+    const sellerLastOfferForNotify = await findSellersTrueLastCounter(round.id);
 
     if (sourceType === "Member WTB") {
       await sendMemberWtbCounterOfferDiscordDM({
