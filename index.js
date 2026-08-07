@@ -16979,20 +16979,67 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/retry-counter", async (r
     const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId);
     const priorFields = priorRound.fields || {};
 
-    // The seller's last real position (mirrors WTB's storeLastPosition,
-    // reversed) — validated directly, not via the prior round's own
-    // status (expected to already be Closed, correctly superseded).
-    const sellerLastPosition = numberValue(priorFields["Seller Counter Price"]) || numberValue(priorFields["Seller Original Price"]);
+    // FIXED — a real, confirmed bug found via his live testing: this
+    // endpoint had never received the fixes applied to the main
+    // seller-counter/buyer-counter endpoints. Three separate issues:
+    // (1) sellerLastPosition only looked ONE hop back (this round's
+    // own Previous Record ID), missing the seller's TRUE last
+    // position after multiple supersessions — now chain-traces via
+    // the shared helper; (2) sellerLastPosition (seller-scale) and
+    // deniedBuyerCounter (buyer-scale) were compared directly with no
+    // conversion — now converts the seller's true position to
+    // buyer-facing terms first, so both sides of the comparison are
+    // on the same scale; (3) no cross-seller ceiling was applied at
+    // all, so a retry could pass this endpoint's own band check even
+    // when a genuinely BETTER seller elsewhere made the retry
+    // pointless — now folds that in too, matching the seller-side
+    // fix.
+    const sellerLastPositionRaw = await findSellersTrueLastCounter(priorRoundId);
+    const sellerLastPosition = Number.isFinite(sellerLastPositionRaw) && sellerLastPositionRaw > 0
+      ? sellerLastPositionRaw
+      : numberValue(priorFields["Seller Original Price"]);
+    const sellerVatTypeForRetry = asText(priorFields["Seller Original VAT Type"] || f["Seller Original VAT Type"]);
     const deniedBuyerCounter = numberValue(f["Store Counter Price"]);
 
     if (!Number.isFinite(sellerLastPosition) || !Number.isFinite(deniedBuyerCounter)) {
       return res.status(500).json({ error: "Missing price data to validate against." });
     }
 
+    const sellerLastPositionInBuyerTerms = calculateMemberWtbBuyerEquivalent(
+      sellerLastPosition,
+      sellerVatTypeForRetry,
+      memberWtb.fields || {}
+    );
+
+    if (!Number.isFinite(sellerLastPositionInBuyerTerms)) {
+      return res.status(500).json({ error: "Could not compute margin conversion for this WTB." });
+    }
+
+    // Cross-seller ceiling — is there a DIFFERENT, genuinely better
+    // seller the buyer should be aiming for instead? Computed in
+    // seller-payout scale (matching getCurrentGlobalLowestNormalized's
+    // native output), then converted to buyer-facing terms for a
+    // consistent comparison here.
+    const thisSellerId = firstLinkedRecordId(f["Seller ID"]);
+    const globalLowestForRetry = (await getCurrentGlobalLowestNormalized("Member WTB", memberWtbRecordId, thisSellerId)).normalized;
+    let crossSellerCeilingBuyerTerms = null;
+    if (Number.isFinite(globalLowestForRetry)) {
+      // globalLowestForRetry is already normalized (VAT21-equivalent,
+      // seller-payout scale) across every OTHER seller — convert
+      // straight to buyer-facing terms via the flat €10 margin,
+      // treating it as VAT21 since that's what "normalized" means.
+      crossSellerCeilingBuyerTerms = calculateMemberWtbBuyerEquivalent(globalLowestForRetry, "VAT21", memberWtb.fields || {});
+    }
+
     // Reversed narrowing band: the buyer's retry must land strictly
     // between the seller's last position and the buyer's own denied
     // counter (never below what the seller already asked for).
-    const validation = validateNextCounterPrice(deniedBuyerCounter, sellerLastPosition, proposedPrice);
+    const validation = validateNextCounterPriceWithCrossSellerCeiling(
+      deniedBuyerCounter,
+      sellerLastPositionInBuyerTerms,
+      proposedPrice,
+      Number.isFinite(crossSellerCeilingBuyerTerms) ? Math.floor(crossSellerCeilingBuyerTerms - MIN_COUNTER_STEP) : null
+    );
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
