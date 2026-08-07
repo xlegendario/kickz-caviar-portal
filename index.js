@@ -17976,6 +17976,23 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
     // the "fresh offer, no specific round" case (empty string safely
     // matches nothing, so every open round gets closed).
     const acceptedCounterOfferRecordId = asText(req.body?.counter_offer_record_id);
+    // FIXED — CRITICAL: this endpoint ALWAYS used
+    // "Current Lowest Seller Offer" (a plain Airtable field on the
+    // Member WTB record) to decide WHICH SELLER gets the deal —
+    // completely regardless of which specific row's Accept button was
+    // actually clicked, or what negotiation history existed. That
+    // field is only ever set by the original, pre-negotiation
+    // "place-offer" flow and is NEVER updated as counters/denials
+    // happen — so clicking "Accept €95.10" (seller A's genuinely
+    // negotiated position, correctly shown after the chain-tracing
+    // fixes) could silently create a deal channel with a COMPLETELY
+    // DIFFERENT seller (seller B) instead, confirmed via his exact
+    // live report. Now accepts an explicit seller_offer_record_id from
+    // the frontend (which already has the correct value available on
+    // every item) and uses THAT when provided, falling back to the
+    // stale field only for the genuinely-fresh, never-negotiated case
+    // where no override applies at all.
+    const explicitSellerOfferRecordId = asText(req.body?.seller_offer_record_id);
 
     if (!memberWtbRecordId) {
       return res.status(400).json({ error: "Missing member_wtb_record_id" });
@@ -17984,7 +18001,7 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
     const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
     const f = memberWtb.fields || {};
 
-    const sellerOfferRecordId = firstLinkedRecordId(f["Current Lowest Seller Offer"]);
+    const sellerOfferRecordId = explicitSellerOfferRecordId || firstLinkedRecordId(f["Current Lowest Seller Offer"]);
 
     if (!sellerOfferRecordId) {
       return res.status(400).json({
