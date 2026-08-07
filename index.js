@@ -21262,6 +21262,20 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
       "Status": "Open"
     });
 
+    // FIXED — a real, confirmed gap: this endpoint (the buyer's VERY
+    // FIRST counter, before any negotiation exists) never called the
+    // broadcast at all — only round-2+ (buyer-counter) and Edit did.
+    // Confirmed via his live test: seller B got the counter, seller A
+    // (a completely untouched fresh offer) got nothing. His explicit
+    // rule applies here too: every buyer counter reaches everyone
+    // still in the game, round 1 included.
+    await reengageDeniedSellers({
+      sourceType: "Member WTB",
+      recordId: memberWtbRecordId,
+      newBuyerCounterPrice: buyerCounterPrice,
+      excludeSellerId: sellerRecordId
+    }).catch((err) => console.error("Failed to re-engage other sellers on first counter (non-blocking):", err));
+
     const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
     const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
     let dmErrors = 0;
