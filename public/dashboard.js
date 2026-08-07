@@ -2210,7 +2210,7 @@ function renderWtbUnifiedOfferRows(items) {
       // "counter" — store/buyer just moved, seller must respond.
       actionsCell = `
         <button class="dashboard-confirm-btn" type="button" data-wtb-seller-accept-id="${escapeHtml(item.id || "")}">${item.counter_payout ? `Accept ${escapeHtml(item.counter_payout)}` : "Accept"}</button>
-        <button class="dashboard-counter-btn" type="button" data-wtb-seller-counter-id="${escapeHtml(item.id || "")}">Counter</button>
+        <button class="dashboard-counter-btn" type="button" data-wtb-seller-counter-id="${escapeHtml(item.id || "")}" data-wtb-seller-counter-is-member-wtb="${item.is_member_wtb ? "1" : "0"}">Counter</button>
         <button class="dashboard-deny-btn" type="button" data-wtb-seller-deny-id="${escapeHtml(item.id || "")}">Deny</button>
       `;
     }
@@ -5490,6 +5490,15 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const wtbSellerCounterButton = event.target.closest("[data-wtb-seller-counter-id]");
   if (wtbSellerCounterButton) {
     const offerId = wtbSellerCounterButton.dataset.wtbSellerCounterId;
+    // FIXED — a real, confirmed bug found via his live testing: this
+    // always called the Store Orders seller-counter endpoint,
+    // regardless of whether the item was actually a Member WTB round
+    // — for Member WTB, that endpoint operates on the wrong table/
+    // scope entirely (no "Order" link exists on a Member WTB round),
+    // producing a nonsensical cross-seller threshold and the wrong
+    // error text ("for this order" instead of "for this WTB"). Now
+    // routes to the correct endpoint based on the item's own type.
+    const isMemberWtb = wtbSellerCounterButton.dataset.wtbSellerCounterIsMemberWtb === "1";
     const priceInput = prompt("Your counter offer (€):");
 
     if (!priceInput) return;
@@ -5504,7 +5513,10 @@ dashboardTableBody.addEventListener("click", async (event) => {
     wtbSellerCounterButton.disabled = true;
 
     try {
-      const response = await fetch(`/api/counter-offers/${offerId}/seller-counter`, {
+      const endpoint = isMemberWtb
+        ? `/api/dashboard/wtb-counter-offers/${offerId}/seller-counter-mwtb`
+        : `/api/counter-offers/${offerId}/seller-counter`;
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ price, seller_record_id: dashboardSeller.id })
