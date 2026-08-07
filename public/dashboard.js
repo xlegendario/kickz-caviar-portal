@@ -2020,7 +2020,7 @@ function renderBuyingUnifiedOfferRows(items) {
     // against their original ceiling throughout.
     const maxPrice = item.max_price || null;
     const myOffer = item._kind === "my_counter" ? item.my_offer : null;
-    const myLastOffer = (item._kind === "seller_counter" || item._kind === "denied") ? item.my_offer : null;
+    const myLastOffer = (item._kind === "seller_counter" || item._kind === "denied" || item._kind === "fresh") ? item.my_offer : null;
     const sellersOffer = item._kind === "fresh" ? item.offer : item.sellers_offer;
     const dateValue = item._kind === "fresh" ? item.date : (item.denied_at || item.raw_date);
 
