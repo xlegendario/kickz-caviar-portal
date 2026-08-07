@@ -13493,6 +13493,14 @@ for (const round of pendingSellerCounterRounds) {
     // however many supersessions back it happened.
     const sellerLastOfferForNotify = await findSellersTrueLastCounter(round.id);
 
+    // NEW — additive only: same proactive "no room" check as the
+    // fresh-sellers category — is there any valid step left for this
+    // seller given their own last position vs the new buyer offer?
+    const pendingNoRoomToCounter = !hasRoomForNextStep(
+      Number.isFinite(sellerLastOfferForNotify) ? sellerLastOfferForNotify : sellerOriginalPrice,
+      recomputedPayout
+    );
+
     if (sourceType === "Member WTB") {
       await sendMemberWtbCounterOfferDiscordDM({
         counterOfferRecordId: newRound.id,
@@ -13505,7 +13513,8 @@ for (const round of pendingSellerCounterRounds) {
         vatType: sellerVatType,
         sellerOriginalPrice,
         sellerOriginalVatType: sellerVatType,
-        sellerLastOfferPrice: sellerLastOfferForNotify
+        sellerLastOfferPrice: sellerLastOfferForNotify,
+        noRoomToCounter: pendingNoRoomToCounter
       }).catch((err) => console.error("Failed to supersede pending seller counter (non-blocking):", err));
     } else {
       await sendCounterOfferDiscordDM({
@@ -13519,7 +13528,8 @@ for (const round of pendingSellerCounterRounds) {
         vatType: sellerVatType,
         sellerOriginalPrice,
         sellerOriginalVatType: sellerVatType,
-        sellerLastOfferPrice: sellerLastOfferForNotify
+        sellerLastOfferPrice: sellerLastOfferForNotify,
+        noRoomToCounter: pendingNoRoomToCounter
       }).catch((err) => console.error("Failed to supersede pending seller counter (non-blocking):", err));
     }
   }
@@ -13573,6 +13583,13 @@ for (const round of pendingSellerCounterRounds) {
     const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
     if (!sellerDiscordId) continue;
 
+    // NEW — additive only: same proactive "no room" check already
+    // used elsewhere — is there any valid step left for THIS seller
+    // to counter back with, given their own raw ask vs what the buyer
+    // is now offering? If not, their DM shows Accept/Deny only,
+    // instead of a Counter button that would always fail.
+    const freshNoRoomToCounter = !hasRoomForNextStep(sellerOriginalPrice, recomputedPayout);
+
     if (sourceType === "Member WTB") {
       await sendMemberWtbCounterOfferDiscordDM({
         counterOfferRecordId: newRound.id,
@@ -13584,7 +13601,8 @@ for (const round of pendingSellerCounterRounds) {
         payout: recomputedPayout,
         vatType: sellerVatType,
         sellerOriginalPrice,
-        sellerOriginalVatType: sellerVatType
+        sellerOriginalVatType: sellerVatType,
+        noRoomToCounter: freshNoRoomToCounter
       }).catch((err) => console.error("Failed to notify fresh seller of buyer counter (non-blocking):", err));
     } else {
       await sendCounterOfferDiscordDM({
@@ -13597,7 +13615,8 @@ for (const round of pendingSellerCounterRounds) {
         payout: recomputedPayout,
         vatType: sellerVatType,
         sellerOriginalPrice,
-        sellerOriginalVatType: sellerVatType
+        sellerOriginalVatType: sellerVatType,
+        noRoomToCounter: freshNoRoomToCounter
       }).catch((err) => console.error("Failed to notify fresh seller of buyer counter (non-blocking):", err));
     }
   }
@@ -17397,6 +17416,22 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
         // this, now also used to correctly DISPLAY it.
         const myHighestEver = await getBuyerHighestEverPosition("Member WTB", record.id);
 
+        // NEW — additive only: his exact scenario — the buyer's own
+        // historical floor on this WTB (getBuyerHighestEverPosition)
+        // can leave NO valid room to counter THIS seller's fresh ask
+        // at all, e.g. floor €100 vs ask €102.10 — a gap under the
+        // €2.50 min-step, so literally no whole-number counter could
+        // ever satisfy both "must beat my own floor" and "must be
+        // lower than the seller's ask" simultaneously. Proactively
+        // flags this so the frontend can show only Accept/Deny,
+        // instead of a Counter button that would always fail.
+        const sellerAskInBuyerTermsForRoomCheck = offerAmount;
+        const noRoomToCounter =
+          Number.isFinite(myHighestEver) &&
+          myHighestEver > 0 &&
+          Number.isFinite(sellerAskInBuyerTermsForRoomCheck) &&
+          (sellerAskInBuyerTermsForRoomCheck - myHighestEver) < MIN_COUNTER_STEP;
+
         return {
           id: record.id,
           member_wtb_record_id: record.id,
@@ -17413,6 +17448,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
           my_offer: Number.isFinite(myHighestEver) && myHighestEver > 0
             ? moneySmartValue(myHighestEver)
             : null,
+          no_room_to_counter: noRoomToCounter,
           vat_type: winningSellerOffer?.vatType || null,
           status: "Offer Received",
           date: formatDateEU(f["Date"]),
@@ -21708,6 +21744,26 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
     // for the first time — exactly his live scenario.
     const buyerHighestEver = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
 
+    // NEW — additive only: his exact scenario — even when the
+    // proposed price technically satisfies "beats my own floor" AND
+    // "beats the seller's ask" individually, the GAP between the
+    // buyer's floor and the seller's ask can itself be too small for
+    // the standard €2.50 min-step (e.g. floor €100, ask €102.10 — a
+    // €2.10 gap). No whole-number counter could ever land validly in
+    // between, so this rejects the attempt with a clear "no room"
+    // message rather than a confusing per-price rejection depending
+    // on exactly what was typed.
+    if (
+      Number.isFinite(buyerHighestEver) &&
+      buyerHighestEver > 0 &&
+      (sellerAskInBuyerTerms - buyerHighestEver) < MIN_COUNTER_STEP
+    ) {
+      return res.status(400).json({
+        error: "No room to counter — the gap between your own previous position and this seller's ask is too small for another step. Please accept or deny.",
+        no_room_to_counter: true
+      });
+    }
+
     if (Number.isFinite(buyerHighestEver) && buyerCounterPrice < buyerHighestEver) {
       return res.status(400).json({
         error: `Your counter can't be lower than €${buyerHighestEver.toFixed(2)}, which you've already offered on this WTB.`
@@ -21790,6 +21846,86 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
   } catch (err) {
     console.error("Failed to create member WTB counter offers:", err);
     res.status(500).json({ error: "Failed to create counter offers", details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: lets the buyer explicitly Deny a fresh, never-
+// yet-negotiated seller offer — needed for his exact scenario: the
+// buyer's own historical floor on this WTB (getBuyerHighestEverPosition)
+// leaves NO valid room to counter this specific seller's ask at all
+// (the gap is under the €2.50 min-step), so Accept/Deny are the only
+// genuine options — a Counter attempt would always fail. "Deny" here
+// means "I won't go higher than my floor for this seller specifically"
+// — creates a round for THIS seller at the buyer's floor, immediately
+// marked Denied, then reuses reengageDeniedSellers (same broadcast
+// already used everywhere else) to reopen whichever OTHER seller has a
+// stale, superseded position at that same floor — giving them a fresh
+// chance to accept or counter, exactly like any other deny-reopen.
+// ---------------------------------------------------------------------
+app.post("/api/dashboard/buying-offers/:memberWtbRecordId/deny", async (req, res) => {
+  try {
+    const memberWtbRecordId = asText(req.params.memberWtbRecordId);
+    const sellerOfferId = asText(req.body?.seller_offer_record_id);
+    const buyerRecordId = asText(req.body?.seller_record_id);
+
+    if (!memberWtbRecordId || !sellerOfferId) {
+      return res.status(400).json({ error: "Missing memberWtbRecordId or seller_offer_record_id" });
+    }
+
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+    const wtbFields = memberWtb.fields || {};
+
+    if (buyerRecordId && !linkedRecordIncludes(wtbFields["Buyer Seller ID"], buyerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    const sellerOfferRecord = await airtable(SELLER_OFFERS_TABLE).find(sellerOfferId).catch(() => null);
+
+    if (!sellerOfferRecord) {
+      return res.status(404).json({ error: "Seller offer not found." });
+    }
+
+    const sf = sellerOfferRecord.fields || {};
+    const sellerOriginalPrice = numberValue(sf["Seller Offer"]);
+    const sellerVatType = asText(sf["Offer VAT Type"]);
+    const sellerRecordId = firstLinkedRecordId(sf["Seller ID"]);
+
+    if (!sellerOriginalPrice || !sellerRecordId) {
+      return res.status(409).json({ error: "Seller offer is missing price or seller." });
+    }
+
+    const buyerHighestEver = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
+
+    if (!Number.isFinite(buyerHighestEver) || buyerHighestEver <= 0) {
+      return res.status(409).json({
+        error: "You haven't made any offer on this WTB yet — there's nothing to deny against."
+      });
+    }
+
+    // FIXED — his exact correction: this used to silently create a
+    // pre-Denied round for THIS seller (no Discord notification at
+    // all) while separately reopening every OTHER seller — meaning
+    // the seller being denied never actually heard anything. Instead,
+    // this seller should be treated exactly like any other seller
+    // "in the game": reached via the SAME broadcast (reengageDeniedSellers),
+    // via its "fresh, never-yet-engaged" category (their raw offer is
+    // still untouched) — genuinely notified with the buyer's floor,
+    // Accept/Deny available, Counter automatically hidden if there's
+    // truly no room for them either. No exclusion — the buyer's
+    // "Deny" here means "this is my real floor for everyone," not
+    // "silently reject this one seller and only tell the others."
+    await reengageDeniedSellers({
+      sourceType: "Member WTB",
+      recordId: memberWtbRecordId,
+      newBuyerCounterPrice: buyerHighestEver,
+      excludeSellerId: null
+    }).catch((err) => console.error("Failed to broadcast buyer floor after fresh-offer deny (non-blocking):", err));
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to deny fresh buying offer:", err);
+    res.status(500).json({ error: "Failed to deny offer", details: err.message });
   }
 });
 
