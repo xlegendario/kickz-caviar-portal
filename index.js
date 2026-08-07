@@ -13637,7 +13637,7 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
     return asText(vatType) === "VAT21" ? p : p * 1.21;
   };
 
-  const [rawOffers, activeCounters] = await Promise.all([
+  const [rawOffers, activeCounters, allRoundsAnyStatus] = await Promise.all([
     airtable(SELLER_OFFERS_TABLE)
       .select({ fields: [linkField, "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
       .all()
@@ -13652,6 +13652,22 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
       .select({
         filterByFormula: `AND({Status} = 'Open', {Source Type} = '${escapeFormulaValue(sourceType)}')`,
         fields: [counterLinkField, "Seller ID", "Counter Payout", "Counter Payout VAT Type", "Seller Original VAT Type", "Seller Counter Price"]
+      })
+      .all()
+      .then((records) => records.filter((r) => firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId)),
+    // NEW — additive only: a real, confirmed bug found via his live
+    // testing — after a seller's round is Denied, they have NO Open
+    // round left at all, so the chain-trace starting point below
+    // (previously only looked at Open rounds) never even started,
+    // silently falling all the way back to their raw, very-first
+    // listing instead of chain-tracing to their true last countered
+    // position. Fetches every round regardless of status, so each
+    // seller's MOST RECENT round (whatever its status) can serve as
+    // the chain-trace starting point.
+    airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `{Source Type} = '${escapeFormulaValue(sourceType)}'`,
+        fields: [counterLinkField, "Seller ID", "Created At"]
       })
       .all()
       .then((records) => records.filter((r) => firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId))
@@ -13696,10 +13712,15 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
   // helper (findSellersTrueLastCounter) through each seller's active
   // round's full history before falling back to their raw offer.
   const activeRoundIdBySellerForGlobalLowest = new Map();
-  for (const cr of activeCounters) {
-    const sellerId = firstLinkedRecordId(cr.fields?.["Seller ID"]);
-    if (sellerId && !activeRoundIdBySellerForGlobalLowest.has(sellerId)) {
-      activeRoundIdBySellerForGlobalLowest.set(sellerId, cr.id);
+  const latestCreatedAtBySeller = new Map();
+  for (const r of allRoundsAnyStatus) {
+    const sellerId = firstLinkedRecordId(r.fields?.["Seller ID"]);
+    if (!sellerId) continue;
+    const createdAt = asText(r.fields?.["Created At"]);
+    const currentLatest = latestCreatedAtBySeller.get(sellerId);
+    if (!currentLatest || (createdAt && createdAt > currentLatest)) {
+      latestCreatedAtBySeller.set(sellerId, createdAt);
+      activeRoundIdBySellerForGlobalLowest.set(sellerId, r.id);
     }
   }
 
@@ -16503,7 +16524,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
 
     const memberWtbFieldsById = new Map(myMemberWtbs.map((r) => [r.id, r.fields || {}]));
 
-    const items = preFiltered.map((record) => {
+    const items = await Promise.all(preFiltered.map(async (record) => {
       const f = record.fields || {};
       const memberWtbId = firstLinkedRecordId(f["Member WTB"]);
       const wtbFields = memberWtbFieldsById.get(memberWtbId) || {};
@@ -16523,23 +16544,22 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         ? ownStoreCounter
         : (previousOfferId ? previousBuyerCounterById.get(previousOfferId) : null);
 
-      // FIXED — "Seller's Last Offer" only ever looked at THIS round's
-      // own "Seller Counter Price" — correct when the seller just
-      // moved (this round IS their counter), but wrong for a
-      // "my_counter" item (the buyer's own pending round never has its
-      // own Seller Counter Price at all), where it silently fell all
-      // the way back to "Seller Original Price" — the seller's very
-      // first ask — instead of their actual last position from the
-      // prior round. Now falls back to previousSellerCounterById
-      // (already correctly resolved) the same way myLastOffer above
-      // does for the buyer's own side.
+      // FIXED — this used to only look ONE hop back via
+      // previousSellerCounterById (the round's own Previous Record
+      // ID), which misses a seller's true position after MULTIPLE
+      // supersessions (e.g. their round got closed/denied, then the
+      // buyer's later counter superseded it again before they could
+      // even respond) — same class of staleness bug already fixed
+      // elsewhere via the shared chain-walking helper, just never
+      // applied to this specific "Seller's Last Offer" computation.
       const sellerCounter = numberValue(f["Seller Counter Price"]);
-      const sellerOriginal = numberValue(f["Seller Original Price"]);
-      const sellersOffer = sellerCounter > 0
-        ? sellerCounter
-        : (previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
-            ? previousSellerCounterById.get(previousOfferId)
-            : sellerOriginal);
+      let sellersOffer;
+      if (sellerCounter > 0) {
+        sellersOffer = sellerCounter;
+      } else {
+        const chainTraced = await findSellersTrueLastCounter(record.id);
+        sellersOffer = chainTraced ?? numberValue(f["Seller Original Price"]);
+      }
 
       const sellersOfferInBuyerTerms = calculateMemberWtbBuyerEquivalent(sellersOffer, vatType, wtbFields);
 
@@ -16590,7 +16610,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         // of the response shape.
         __sellerId: firstLinkedRecordId(f["Seller ID"])
       };
-    });
+    }));
 
     // NEW — additive only: his explicit request — the buyer should
     // only ever see the SINGLE best available position, never two
