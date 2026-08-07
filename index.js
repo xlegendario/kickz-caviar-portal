@@ -7624,7 +7624,7 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
         Number.isFinite(crossSellerCeilingRaw)
       ) {
         return res.status(400).json({
-          error: `Another seller already offers a better price for this order, leaving no room to counter. Your counter would need to be at most €${crossSellerCeilingRaw.toFixed(2)} (${sellerVatType}), which conflicts with your own previous position. Please accept or deny.`,
+          error: `Another seller already offers a better price for this order — at most €${crossSellerCeilingRaw.toFixed(2)} (${sellerVatType}) to beat it — and the gap between that and the store's current position is too small for another step. Please accept or deny.`,
           band: validation.band
         });
       }
@@ -21729,7 +21729,7 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
         Number.isFinite(crossSellerCeilingRaw)
       ) {
         return res.status(400).json({
-          error: `Another seller already offers a better price for this WTB, leaving no room to counter. Your counter would need to be at most €${crossSellerCeilingRaw.toFixed(2)} (${sellerVatType}), which conflicts with your own previous position. Please accept or deny.`,
+          error: `Another seller already offers a better price for this WTB — at most €${crossSellerCeilingRaw.toFixed(2)} (${sellerVatType}) to beat it — and the gap between that and the buyer's current position is too small for another step. Please accept or deny.`,
           band: validation.band
         });
       }
