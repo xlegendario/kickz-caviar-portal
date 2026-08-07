@@ -12494,24 +12494,6 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           ? (asText(vatType) === "VAT21" ? sellerLastOffer : sellerLastOffer * 1.21)
           : null;
 
-        // TEMPORARY — additive only, safe to remove later: diagnostic
-        // logging to pin down a reported "Current Lowest shows my own
-        // offer instead of the genuinely lower competitor" bug that
-        // code-reading alone hasn't confirmed with certainty.
-        if (isMemberWtb) {
-          console.error("DEBUG wtb-counter-offers memberWtb dot-indicator:", {
-            recordId: record.id,
-            memberWtbId,
-            filter,
-            sellerLastOffer,
-            vatType,
-            ownNormalizedForMemberWtb,
-            memberWtbCompetingMin,
-            memberWtbMinNormalizedPriceHasKey: memberWtbId ? memberWtbMinNormalizedPrice.has(memberWtbId) : null,
-            memberWtbMinNormalizedPriceEntries: [...memberWtbMinNormalizedPrice.entries()]
-          });
-        }
-
         const memberWtbLowest = Number.isFinite(memberWtbCompetingMin) && Number.isFinite(ownNormalizedForMemberWtb)
           ? Math.min(memberWtbCompetingMin, ownNormalizedForMemberWtb)
           : (memberWtbCompetingMin ?? ownNormalizedForMemberWtb);
