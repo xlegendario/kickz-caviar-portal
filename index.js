@@ -17363,7 +17363,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
       })
     );
 
-    const items = records
+    const items = await Promise.all(records
       .filter((record) =>
         linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId) &&
         // Only hide from Open if NO seller has an untouched fresh
@@ -17372,7 +17372,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
         // offer from someone else must still surface here.
         winningSellerOfferByWtbId.has(record.id)
       )
-      .map((record) => {
+      .map(async (record) => {
         const f = record.fields || {};
         const winningSellerOffer = winningSellerOfferByWtbId.get(record.id);
 
@@ -17385,6 +17385,17 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
         const offerAmount = winningSellerOffer
           ? calculateMemberWtbBuyerEquivalent(winningSellerOffer.price, winningSellerOffer.vatType, f)
           : numberValue(f["Current Lowest Offer"]);
+
+        // NEW — additive only: his explicit request — "My Last Offer"
+        // must show the buyer's GLOBAL historical high on this WHOLE
+        // WTB, not just their position on THIS specific, never-yet-
+        // negotiated seller (which is always empty for a fresh item).
+        // Without this, a buyer who'd already countered seller A at
+        // €100 saw a blank "My Last Offer" here for seller B, even
+        // though €100 is still their real, binding position — same
+        // getBuyerHighestEverPosition helper already used to VALIDATE
+        // this, now also used to correctly DISPLAY it.
+        const myHighestEver = await getBuyerHighestEverPosition("Member WTB", record.id);
 
         return {
           id: record.id,
@@ -17399,12 +17410,15 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
           offer: Number.isFinite(offerAmount) && offerAmount > 0
             ? moneySmartValue(offerAmount)
             : "-",
+          my_offer: Number.isFinite(myHighestEver) && myHighestEver > 0
+            ? moneySmartValue(myHighestEver)
+            : null,
           vat_type: winningSellerOffer?.vatType || null,
           status: "Offer Received",
           date: formatDateEU(f["Date"]),
           raw_date: f["Date"]
         };
-      });
+      }));
 
     res.json({
       count: items.length,
@@ -21680,6 +21694,23 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
     if (!Number.isFinite(sellerAskInBuyerTerms) || buyerCounterPrice >= sellerAskInBuyerTerms) {
       return res.status(400).json({
         error: `Your counter must be lower than the current offer (€${Number(sellerAskInBuyerTerms).toFixed(2)}).`
+      });
+    }
+
+    // FIXED — a real, confirmed gap found via his live testing:
+    // getBuyerHighestEverPosition was only ever wired into the
+    // round-2+ buyer-counter endpoint, never into THIS one — the
+    // buyer's very FIRST counter to a seller they haven't negotiated
+    // with before (e.g. a fresh, previously-untouched seller B, while
+    // the buyer already countered seller A higher earlier on this
+    // same WTB). Without this, a buyer could regress below their own
+    // historical best simply by countering a DIFFERENT, fresh seller
+    // for the first time — exactly his live scenario.
+    const buyerHighestEver = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
+
+    if (Number.isFinite(buyerHighestEver) && buyerCounterPrice < buyerHighestEver) {
+      return res.status(400).json({
+        error: `Your counter can't be lower than €${buyerHighestEver.toFixed(2)}, which you've already offered on this WTB.`
       });
     }
 
