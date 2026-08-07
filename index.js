@@ -22674,6 +22674,41 @@ async function createOpenMemberWtb({
         );
     }
 
+    // FIXED — a real, confirmed gap found via his live testing: when
+    // Retailed fails to find an exact match, this used to fall
+    // straight to a broader, non-exact Retailed lookup — StockX was
+    // never tried at all, even though a working Retailed→StockX
+    // fallback chain already exists elsewhere in this file
+    // (lookupSkuMasterProduct). His exact report: a real, existing
+    // SKU not yet in SKU Master came back with the SKU itself as the
+    // product name and an empty brand, since Retailed alone couldn't
+    // find it. Tries an exact StockX match here too, before falling
+    // back further — same pattern as lookupSkuMasterProduct (checks
+    // is_exact_sku_match, auto-creates the SKU Master entry on
+    // success so future lookups for this SKU are instant).
+    if (!skuMaster) {
+      const stockxProduct = await lookupProductFromStockx(sku).catch((err) => {
+        console.error("StockX SKU lookup failed (Open WTB creation):", {
+          sku,
+          error: err.message
+        });
+        return null;
+      });
+
+      if (stockxProduct && stockxProduct.is_exact_sku_match) {
+        const stockxProductName = stockxProduct.product_name || sku;
+
+        skuMaster = await airtable(SKU_MASTER_TABLE).create({
+          "SKU": sku,
+          "Product Name": stockxProductName,
+          "Brand": stockxProduct.brand || "",
+          "Picture": stockxProduct.image
+            ? [{ url: stockxProduct.image }]
+            : []
+        });
+      }
+    }
+
     if (skuMaster) {
       const fields = skuMaster.fields || {};
 
@@ -22689,22 +22724,18 @@ async function createOpenMemberWtb({
             : ""
       };
     } else {
-      const retailedProduct =
-        await lookupProductFromRetailed(sku)
-          .catch(() => null);
-
-      if (retailedProduct) {
-        product = {
-          product_name:
-            asText(
-              retailedProduct.product_name
-            ) || sku,
-          brand:
-            asText(retailedProduct.brand),
-          image_url:
-            asText(retailedProduct.image)
-        };
-      }
+      // FIXED — his explicit decision: if NEITHER Retailed nor StockX
+      // could confirm an exact SKU match, silently falling back to a
+      // loose, non-exact Retailed lookup risked creating a WTB with
+      // the WRONG product name/brand — worse than no WTB at all,
+      // since a buyer would never know it happened. Now rejects the
+      // request outright with a clear, actionable error instead of
+      // ever guessing.
+      const error = new Error(
+        `SKU "${sku}" could not be found or confirmed in our database. Please double-check the SKU and try again.`
+      );
+      error.statusCode = 404;
+      throw error;
     }
   }
 
