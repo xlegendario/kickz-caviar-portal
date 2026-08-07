@@ -13137,12 +13137,19 @@ async function getBuyerHighestEverPosition(sourceType, recordId) {
 //     reached on EVERY buyer counter too, not just the very first
 //     round-1 broadcast — otherwise they'd never hear from the buyer
 //     again once negotiation started with someone else.
-// (3) Sellers with their own pending counter-back, awaiting the
-//     buyer's response — if the buyer instead responds to a
-//     DIFFERENT seller, this seller's counter would otherwise sit
-//     stale forever, never learning the buyer's position has moved.
-//     Their stale round gets closed and replaced with a fresh one at
-//     the new price.
+// (3) Any seller with an ACTIVE round who isn't the one just
+//     countered — covers BOTH a seller who's already countered back
+//     (Seller Counter Price set, genuinely awaiting the buyer) AND a
+//     seller whose round still just shows an EARLIER buyer ask they
+//     never got around to answering. Both are now-outdated positions
+//     the moment the buyer moves again — his exact catch: the second
+//     case was originally missed entirely (didn't qualify as "fresh"
+//     since they already had a round, didn't qualify as "pending
+//     counter-back" under the original, narrower scope since they
+//     never replied), leaving them permanently stuck showing a stale
+//     price, and leaving an orphaned extra row in the buyer's own
+//     Countered view too. Always unconditionally superseded — closes
+//     their round, opens a fresh one at the new price, notifies them.
 async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPrice, excludeSellerId }) {
   const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
 
@@ -13196,21 +13203,19 @@ async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPric
       )
     );
 
-  // NEW — additive only: a THIRD group, per his explicit follow-up —
-  // a seller whose OWN counter-back is sitting open, awaiting the
-  // buyer's response (they already moved, it's genuinely the buyer's
-  // turn), gets stuck exactly like a fresh or denied seller would if
-  // the buyer instead responds to a DIFFERENT seller entirely. Their
-  // pending round never goes anywhere on its own. Whenever the buyer
-  // counters (regardless of who they nominally countered), every
-  // OTHER seller's pending counter-back gets superseded with this
-  // same new position too — closes their stale round, opens a fresh
-  // one at the current price, notifies them. Scoped to rounds where
-  // "Seller Counter Price" is set (that's specifically what marks
-  // "seller already moved, buyer's turn") — never touches a round
-  // where the SELLER still owes the response, that's the seller's own
-  // decision to make, not something a buyer counter elsewhere should
-  // interrupt.
+  // NEW — additive only: a group covering BOTH sellers who've actually
+  // countered back AND sellers whose round still just shows the
+  // BUYER's earlier ask, never responded to — his exact follow-up
+  // catch: a seller who never answered a PRIOR buyer counter was
+  // falling through every category (not "fresh" — they already have
+  // an active round; not "pending counter-back" as originally scoped
+  // — their Seller Counter Price was never set since they never
+  // replied), so their round just sat there showing a now-stale price
+  // forever, and the buyer/store's own Countered view kept showing a
+  // separate, orphaned row for them too. Fixed by dropping the
+  // Seller-Counter-Price condition entirely — ANY active round for a
+  // seller who isn't the one just countered represents an outdated
+  // position now (whether they replied or not) and gets superseded.
   const pendingSellerCounterRounds = await airtable(COUNTER_OFFERS_TABLE)
     .select({
       filterByFormula: `AND({Status} = 'Open', {Source Type} = '${escapeFormulaValue(sourceType)}')`,
@@ -13222,8 +13227,7 @@ async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPric
         if (firstLinkedRecordId(r.fields?.[counterLinkField]) !== recordId) return false;
         const sellerId = firstLinkedRecordId(r.fields?.["Seller ID"]);
         if (!sellerId || sellerId === excludeSellerId) return false;
-        const sellerCounter = numberValue(r.fields?.["Seller Counter Price"]);
-        return sellerCounter > 0;
+        return true;
       })
     );
 
@@ -13268,6 +13272,16 @@ async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPric
     const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
     if (!sellerDiscordId) continue;
 
+    // FIXED — a related bug the loop-merge above surfaces: for a
+    // seller who never actually countered (Seller Counter Price
+    // genuinely empty/0), passing 0 here made the DM treat "€0.00" as
+    // their real last offer instead of correctly falling back to their
+    // original ask — 0 is a valid, finite number, so the notification
+    // function's own null-check never caught this. Passes null
+    // explicitly in that case.
+    const sellerCounterOnThisRound = numberValue(rf["Seller Counter Price"]);
+    const sellerLastOfferForNotify = sellerCounterOnThisRound > 0 ? sellerCounterOnThisRound : null;
+
     if (sourceType === "Member WTB") {
       await sendMemberWtbCounterOfferDiscordDM({
         counterOfferRecordId: newRound.id,
@@ -13280,7 +13294,7 @@ async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPric
         vatType: sellerVatType,
         sellerOriginalPrice,
         sellerOriginalVatType: sellerVatType,
-        sellerLastOfferPrice: numberValue(rf["Seller Counter Price"])
+        sellerLastOfferPrice: sellerLastOfferForNotify
       }).catch((err) => console.error("Failed to supersede pending seller counter (non-blocking):", err));
     } else {
       await sendCounterOfferDiscordDM({
@@ -13294,7 +13308,7 @@ async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPric
         vatType: sellerVatType,
         sellerOriginalPrice,
         sellerOriginalVatType: sellerVatType,
-        sellerLastOfferPrice: numberValue(rf["Seller Counter Price"])
+        sellerLastOfferPrice: sellerLastOfferForNotify
       }).catch((err) => console.error("Failed to supersede pending seller counter (non-blocking):", err));
     }
   }
