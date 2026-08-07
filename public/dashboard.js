@@ -2053,10 +2053,18 @@ function renderBuyingUnifiedOfferRows(items) {
 
     let actionsCell;
     if (item._kind === "fresh" || item._kind === "seller_counter") {
+      // FIXED — his explicit correction: the Counter button should
+      // stay visible even when there's no room, so both buyer and
+      // seller can see WHY there's no room by clicking it — not have
+      // it silently disappear. Carries the no_room flag as a data
+      // attribute so the click handler can show the explanation
+      // immediately, without a wasted round trip to the server.
+      const counterButtonHtml = `<button class="dashboard-counter-btn" type="button" data-buying-counter-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-counter-kind="${item._kind}" data-buying-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}" data-buying-counter-no-room="${item.no_room_to_counter ? "1" : "0"}">Counter</button>`;
+
       actionsCell = `
         <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(item._kind === "fresh" ? "" : (item.id || ""))}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
-        <button class="dashboard-counter-btn" type="button" data-buying-counter-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-counter-kind="${item._kind}" data-buying-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">Counter</button>
-        <button class="dashboard-deny-btn" type="button" data-buying-deny-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-deny-kind="${item._kind}">Deny</button>
+        ${counterButtonHtml}
+        <button class="dashboard-deny-btn" type="button" data-buying-deny-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-deny-kind="${item._kind}" data-buying-deny-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">Deny</button>
       `;
     } else {
       // "my_counter" — buyer's own pending counter, awaiting seller.
@@ -5607,6 +5615,18 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const buyingCounterButton = event.target.closest("[data-buying-counter-id]");
   if (buyingCounterButton) {
     const kind = buyingCounterButton.dataset.buyingCounterKind;
+
+    // NEW — additive only: his explicit correction — the Counter
+    // button stays visible even when there's no room, so clicking it
+    // shows a clear explanation (why: the gap between the buyer's own
+    // previous position and this seller's ask is too small for
+    // another step) instead of a Counter button that quietly did
+    // nothing, or a wasted round trip to the server just to find out.
+    if (buyingCounterButton.dataset.buyingCounterNoRoom === "1") {
+      alert("No room to counter — the gap between your own previous position on this WTB and this seller's ask is too small for another step. Please accept or deny.");
+      return;
+    }
+
     const priceInput = prompt("Your counter offer (€):");
 
     if (!priceInput) return;
@@ -5672,10 +5692,21 @@ dashboardTableBody.addEventListener("click", async (event) => {
     try {
       let response;
       if (kind === "fresh") {
-        response = await fetch("/api/dashboard/buying/deny-offer", {
+        // FIXED — a real, confirmed gap: this used to call
+        // /api/dashboard/buying/deny-offer, which only flips an
+        // "Offer Sent?" flag and does nothing to the actual
+        // negotiation — no reopening of other sellers, no reflection
+        // of the buyer's real floor. Now uses the correct endpoint,
+        // which creates a proper denial round at the buyer's own
+        // historical floor and reopens any other seller with a stale,
+        // superseded position at that same floor.
+        response = await fetch(`/api/dashboard/buying-offers/${buyingDenyButton.dataset.buyingDenyId}/deny`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ member_wtb_record_id: buyingDenyButton.dataset.buyingDenyId })
+          body: JSON.stringify({
+            seller_record_id: dashboardSeller.id,
+            seller_offer_record_id: buyingDenyButton.dataset.buyingDenySellerOfferId
+          })
         });
       } else {
         response = await fetch(`/api/dashboard/buying-counter-offers/${buyingDenyButton.dataset.buyingDenyId}/buyer-deny`, {
