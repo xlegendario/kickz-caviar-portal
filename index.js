@@ -3832,6 +3832,17 @@ function bindConsignmentDiscordButtons(client) {
         return;
       }
 
+      // FIXED — same 3-second-acknowledgment issue found and fixed
+      // repeatedly elsewhere this session: this never deferred before
+      // the slow work below. This endpoint has grown significantly
+      // slower since the reengageDeniedSellers broadcast work was
+      // added (chain-tracing through every seller's history, creating
+      // fresh rounds, sending Discord DMs to multiple sellers) —
+      // confirmed via his live report: Discord showed a failure, but
+      // the counter reached seller A successfully regardless. Deferring
+      // immediately removes that race entirely.
+      await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
       const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/create`, {
         method: "POST",
         headers: {
@@ -3848,16 +3859,14 @@ function bindConsignmentDiscordButtons(client) {
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        await interaction.reply({
-          content: `❌ ${data.error || "Failed to submit your counter."}`,
-          ephemeral: true
+        await interaction.editReply({
+          content: `❌ ${data.error || "Failed to submit your counter."}`
         }).catch(() => {});
         return;
       }
 
-      await interaction.reply({
-        content: `✅ Your counter of €${counterPrice} was sent to the seller(s).`,
-        ephemeral: true
+      await interaction.editReply({
+        content: `✅ Your counter of €${counterPrice} was sent to the seller(s).`
       }).catch(() => {});
 
       await safeEditInteractionMessage(interaction, {
@@ -12110,12 +12119,23 @@ function getTimeToMax(startTime) {
   return `${hours}h ${minutes}m left`;
 }
 
-function normalizeDeal(record) {
+function normalizeDeal(record, dealType) {
   const f = record.fields || {};
 
   return {
     id: record.id,
     source_type: "order",
+    // NEW — additive only: a real, confirmed bug found via his live
+    // report — the frontend used to decide "Claim Deal" vs "Make
+    // Offer" purely from the currently-active TAB (a global UI
+    // variable), not from what the deal itself actually is. If a
+    // WTB fetch was still in flight when the user switched to the
+    // Quick Deals tab, it could render with the wrong button —
+    // letting a seller "claim" an order that was never meant to be
+    // instantly claimable, since it isn't from an auto-accept store.
+    // Every deal now carries its own reliable type, straight from the
+    // query that fetched it, so rendering never has to guess.
+    deal_type: dealType,
     order_id: displayValue(f["Order ID"]),
     product: displayValue(f["Product Name"]),
     sku: displayValue(f["SKU"]),
@@ -12147,6 +12167,11 @@ function normalizeMemberWtbDeal(record) {
   return {
     id: record.id,
     source_type: "member_wtb",
+    // NEW — additive only: same reliable-type fix as normalizeDeal —
+    // Member WTBs only ever appear under the WTB tab, so this is
+    // always "wtb", but included for consistency so the frontend
+    // never needs to special-case member_wtb deals separately.
+    deal_type: "wtb",
 
     order_id:
       displayValue(f["Member WTB ID"]) || record.id,
@@ -20001,7 +20026,7 @@ app.get("/api/deals", async (req, res) => {
     }
     
     const records = airtableData.records || [];
-    let deals = records.map(normalizeDeal);
+    let deals = records.map((record) => normalizeDeal(record, type));
     
     if (type === "wtb") {
       const memberWtbRecords = await airtable(MEMBER_WTBS_TABLE)
