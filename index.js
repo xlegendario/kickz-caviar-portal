@@ -12279,12 +12279,38 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           .filter(Boolean)
       );
 
+      // FIXED — a real, confirmed bug found via his live testing: a
+      // seller who hasn't yet responded to the LATEST buyer counter,
+      // but DID counter earlier in the chain (that round has since
+      // been superseded), was falling all the way back to their very
+      // FIRST raw listing here — the exact same chain-tracing gap
+      // already fixed for "Your Offer" and the Discord notification,
+      // just never applied to THIS aggregate too. Produced the
+      // reported symptom: seller B's own contribution to "the best
+      // OTHER position" used their stale raw 92 instead of their real
+      // last countered 89, while their OWN displayed position
+      // (correctly chain-traced) showed 89 — two different sellers
+      // could then both independently satisfy "am I at or below the
+      // aggregate minimum," each shown as "Lowest" simultaneously.
+      // Chain-traces every seller without a genuine CURRENT counter
+      // too, not just a flat raw-offer fallback.
+      const activeRoundIdBySeller = new Map();
+      for (const cr of competingCounterRounds) {
+        const sellerId = firstLinkedRecordId(cr.fields?.["Seller ID"]);
+        if (sellerId && !activeRoundIdBySeller.has(sellerId)) {
+          activeRoundIdBySeller.set(sellerId, cr.id);
+        }
+      }
+
       for (const so of competingSellerOffers) {
         const sellerId = firstLinkedRecordId(so.fields?.["Seller ID"]);
         if (sellerId && sellerIdsWithGenuineCounterForWtb.has(sellerId)) continue; // superseded by their genuine counter below
 
         const wtbId = firstLinkedRecordId(so.fields?.["Member WTBs"]);
-        const normalized = normalize(so.fields?.["Seller Offer"], so.fields?.["Offer VAT Type"]);
+        const activeRoundId = sellerId ? activeRoundIdBySeller.get(sellerId) : null;
+        const chainTraced = activeRoundId ? await findSellersTrueLastCounter(activeRoundId) : null;
+        const effectivePrice = chainTraced ?? numberValue(so.fields?.["Seller Offer"]);
+        const normalized = normalize(effectivePrice, so.fields?.["Offer VAT Type"]);
         if (normalized == null) continue;
 
         const current = memberWtbMinNormalizedPrice.get(wtbId);
@@ -12467,6 +12493,25 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         const ownNormalizedForMemberWtb = isMemberWtb && Number.isFinite(sellerLastOffer)
           ? (asText(vatType) === "VAT21" ? sellerLastOffer : sellerLastOffer * 1.21)
           : null;
+
+        // TEMPORARY — additive only, safe to remove later: diagnostic
+        // logging to pin down a reported "Current Lowest shows my own
+        // offer instead of the genuinely lower competitor" bug that
+        // code-reading alone hasn't confirmed with certainty.
+        if (isMemberWtb) {
+          console.error("DEBUG wtb-counter-offers memberWtb dot-indicator:", {
+            recordId: record.id,
+            memberWtbId,
+            filter,
+            sellerLastOffer,
+            vatType,
+            ownNormalizedForMemberWtb,
+            memberWtbCompetingMin,
+            memberWtbMinNormalizedPriceHasKey: memberWtbId ? memberWtbMinNormalizedPrice.has(memberWtbId) : null,
+            memberWtbMinNormalizedPriceEntries: [...memberWtbMinNormalizedPrice.entries()]
+          });
+        }
+
         const memberWtbLowest = Number.isFinite(memberWtbCompetingMin) && Number.isFinite(ownNormalizedForMemberWtb)
           ? Math.min(memberWtbCompetingMin, ownNormalizedForMemberWtb)
           : (memberWtbCompetingMin ?? ownNormalizedForMemberWtb);
