@@ -2034,12 +2034,12 @@ function renderBuyingUnifiedOfferRows(items) {
           <td>${escapeHtml(item.brand || "-")}</td>
           <td>${escapeHtml(maxPrice || "-")}</td>
           <td>${escapeHtml(myLastOffer || "-")}</td>
-          <td>${escapeHtml(item.previous_seller_counter || "-")}</td>
+          <td>${escapeHtml(sellersOffer || "-")}</td>
           <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
               ${item.member_wtb_record_id ? `
-                <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.previous_seller_counter_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(item.id || "")}">${item.previous_seller_counter ? `Accept ${escapeHtml(item.previous_seller_counter)}` : "Accept"}</button>
+                <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(item.id || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
               ` : ""}
               ${item.previous_record_id ? `
                 <button class="dashboard-counter-btn" type="button" data-buying-retry-counter-id="${escapeHtml(item.id || "")}">Retry</button>
