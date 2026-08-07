@@ -16620,38 +16620,44 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
     // from a completely different seller — which is exactly what
     // should make THIS item disappear, as if that other seller's
     // position had simply replaced it.
-    const visibleItems =
-      filter === "denied"
-        ? items
-        : (
-            await Promise.all(
-              items.map(async (item) => {
-                // FIXED — a real, confirmed bug: this checked "does
-                // ANY value exist from other sellers" instead of "is
-                // that value actually BETTER than this item's own
-                // position" — so a WORSE fresh offer from another
-                // seller (e.g. seller B's raw 90) incorrectly hid
-                // seller A's genuinely-better counter-back (87), just
-                // because 90 was *a* number, not because it beat 87.
-                const betterElsewhere = (await getCurrentGlobalLowestNormalized(
-                  "Member WTB",
-                  item.member_wtb_record_id,
-                  item.__sellerId
-                )).normalized;
-                if (!Number.isFinite(betterElsewhere)) return item;
+    // FIXED — this used to explicitly SKIP the "denied" filter,
+    // showing every denied seller side by side. His exact reasoning:
+    // the buyer/store should always feel like they're negotiating
+    // with just ONE seller — seeing two (or more) Denied rows at once
+    // breaks that illusion and gets confusing fast, especially across
+    // several WTBs at once. getCurrentGlobalLowestNormalized already
+    // chain-traces through Denied rounds too (fixed earlier this
+    // session), so this comparison correctly finds each seller's TRUE
+    // position regardless of their round's current status — applying
+    // the same filter to Denied now just works, no separate logic
+    // needed.
+    const visibleItems = await Promise.all(
+      items.map(async (item) => {
+        // FIXED — a real, confirmed bug: this checked "does
+        // ANY value exist from other sellers" instead of "is
+        // that value actually BETTER than this item's own
+        // position" — so a WORSE fresh offer from another
+        // seller (e.g. seller B's raw 90) incorrectly hid
+        // seller A's genuinely-better counter-back (87), just
+        // because 90 was *a* number, not because it beat 87.
+        const betterElsewhere = (await getCurrentGlobalLowestNormalized(
+          "Member WTB",
+          item.member_wtb_record_id,
+          item.__sellerId
+        )).normalized;
+        if (!Number.isFinite(betterElsewhere)) return item;
 
-                const ownRawPrice = item.sellers_offer_payout;
-                const ownVatType = item.vat_type;
-                const ownNormalized = Number.isFinite(Number(ownRawPrice))
-                  ? (asText(ownVatType) === "VAT21" ? Number(ownRawPrice) : Number(ownRawPrice) * 1.21)
-                  : null;
+        const ownRawPrice = item.sellers_offer_payout;
+        const ownVatType = item.vat_type;
+        const ownNormalized = Number.isFinite(Number(ownRawPrice))
+          ? (asText(ownVatType) === "VAT21" ? Number(ownRawPrice) : Number(ownRawPrice) * 1.21)
+          : null;
 
-                if (ownNormalized == null) return item; // can't compare — don't hide
+        if (ownNormalized == null) return item; // can't compare — don't hide
 
-                return betterElsewhere < ownNormalized ? null : item;
-              })
-            )
-          ).filter(Boolean);
+        return betterElsewhere < ownNormalized ? null : item;
+      })
+    ).then((results) => results.filter(Boolean));
 
     const finalItems = visibleItems.map(({ __sellerId, ...rest }) => rest);
 
