@@ -8439,6 +8439,20 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
         ).catch(() => {});
       }
 
+      // NEW — additive only: his explicit request — an edited counter
+      // is still a new position, and should reach every other seller
+      // still in the game the exact same way a fresh counter would —
+      // otherwise Edit would quietly be an exception to the broadcast
+      // rule, and a store editing because they got no response would
+      // still leave every OTHER seller stuck on stale information.
+      const linkedSellerIdForEdit = firstLinkedRecordId(f["Seller ID"]);
+      await reengageDeniedSellers({
+        sourceType: "Seller Offer",
+        recordId: linkedOrderId,
+        newBuyerCounterPrice: proposedPrice,
+        excludeSellerId: linkedSellerIdForEdit
+      }).catch((err) => console.error("Failed to re-engage other sellers after edit (non-blocking):", err));
+
       const sellerDiscordId = asText(f["Seller Discord ID"]);
 
       if (sellerDiscordId) {
@@ -13074,15 +13088,29 @@ async function getBuyerHighestEverPosition(sourceType, recordId) {
 }
 
 // ---------------------------------------------------------------------
-// NEW — additive only: his explicit request — "Deny" (from the buyer's
-// side) should mean "not at that price," not "goodbye forever." Once
-// the buyer counters again at a price HIGHER than what a previously-
-// denied seller was denied at (better for them, worse for nobody),
-// that seller gets a fresh Open round at this new position — a real
-// second chance to accept or counter, exactly as if they'd never been
-// denied. Only ever fires on genuine improvement over what THAT
-// specific seller last saw; never re-engages at an equal or worse
-// price than their own denial.
+// NEW — additive only: his explicit request — every time the buyer/
+// store counters, ALL sellers still "in the game" get a shot at it,
+// not just the one currently visible — maximizes the chance of a
+// deal, and every response still has to beat the current global
+// lowest (enforced elsewhere, in the seller-counter endpoints). Three
+// groups get reached here:
+// (1) Previously-DENIED sellers — "Deny" means "not at that price,"
+//     not "goodbye forever." Once the buyer counters again HIGHER
+//     than what a specific seller was denied at (better for them,
+//     worse for nobody), they get a fresh Open round at this new
+//     position. Only fires on genuine improvement over what THAT
+//     seller last saw.
+// (2) Fresh, never-yet-engaged sellers — a seller whose offer is just
+//     sitting there untouched (never contacted, never denied) gets
+//     reached on EVERY buyer counter too, not just the very first
+//     round-1 broadcast — otherwise they'd never hear from the buyer
+//     again once negotiation started with someone else.
+// (3) Sellers with their own pending counter-back, awaiting the
+//     buyer's response — if the buyer instead responds to a
+//     DIFFERENT seller, this seller's counter would otherwise sit
+//     stale forever, never learning the buyer's position has moved.
+//     Their stale round gets closed and replaced with a fresh one at
+//     the new price.
 async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPrice, excludeSellerId }) {
   const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
 
@@ -13111,6 +13139,211 @@ async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPric
       ? await airtable(MEMBER_WTBS_TABLE).find(recordId).catch(() => null)
       : await airtable(ORDERS_TABLE).find(recordId).catch(() => null);
   const contextFields = contextRecord?.fields || {};
+
+  // NEW — additive only: his explicit request — this used to only
+  // reach sellers who'd already been engaged and denied. Every time
+  // the buyer counters, EVERY seller still "in the game" should get a
+  // shot at it — including a seller who's never been contacted at
+  // all, whose fresh offer is just sitting there untouched. Without
+  // this, only previously-denied sellers ever got a second look;
+  // someone who simply hadn't been reached yet never would be,
+  // silently reducing the chance of a deal.
+  const sellerLinkField = sourceType === "Member WTB" ? "Member WTBs" : "Linked Orders";
+  const activeCounterSellerIdsForRecord = await airtable(COUNTER_OFFERS_TABLE)
+    .select({
+      filterByFormula: `AND({Status} = 'Open', {Source Type} = '${escapeFormulaValue(sourceType)}')`,
+      fields: [counterLinkField, "Seller ID"]
+    })
+    .all()
+    .then((records) =>
+      new Set(
+        records
+          .filter((r) => firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId)
+          .map((r) => firstLinkedRecordId(r.fields?.["Seller ID"]))
+          .filter(Boolean)
+      )
+    );
+
+  // NEW — additive only: a THIRD group, per his explicit follow-up —
+  // a seller whose OWN counter-back is sitting open, awaiting the
+  // buyer's response (they already moved, it's genuinely the buyer's
+  // turn), gets stuck exactly like a fresh or denied seller would if
+  // the buyer instead responds to a DIFFERENT seller entirely. Their
+  // pending round never goes anywhere on its own. Whenever the buyer
+  // counters (regardless of who they nominally countered), every
+  // OTHER seller's pending counter-back gets superseded with this
+  // same new position too — closes their stale round, opens a fresh
+  // one at the current price, notifies them. Scoped to rounds where
+  // "Seller Counter Price" is set (that's specifically what marks
+  // "seller already moved, buyer's turn") — never touches a round
+  // where the SELLER still owes the response, that's the seller's own
+  // decision to make, not something a buyer counter elsewhere should
+  // interrupt.
+  const pendingSellerCounterRounds = await airtable(COUNTER_OFFERS_TABLE)
+    .select({
+      filterByFormula: `AND({Status} = 'Open', {Source Type} = '${escapeFormulaValue(sourceType)}')`,
+      fields: [counterLinkField, "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type", "Seller Offer Record ID"]
+    })
+    .all()
+    .then((records) =>
+      records.filter((r) => {
+        if (firstLinkedRecordId(r.fields?.[counterLinkField]) !== recordId) return false;
+        const sellerId = firstLinkedRecordId(r.fields?.["Seller ID"]);
+        if (!sellerId || sellerId === excludeSellerId) return false;
+        const sellerCounter = numberValue(r.fields?.["Seller Counter Price"]);
+        return sellerCounter > 0;
+      })
+    );
+
+  for (const round of pendingSellerCounterRounds) {
+    const rf = round.fields || {};
+    const sellerId = firstLinkedRecordId(rf["Seller ID"]);
+    const sellerOriginalPrice = numberValue(rf["Seller Original Price"]);
+    const sellerVatType = asText(rf["Seller Original VAT Type"]);
+    const sellerOfferRecordId = asText(rf["Seller Offer Record ID"]);
+    if (!sellerVatType) continue;
+
+    const recomputedPayout =
+      sourceType === "Member WTB"
+        ? calculateMemberWtbSellerPayout(newBuyerCounterPrice, sellerVatType, contextFields)
+        : calculateCounterPayoutForVatType(newBuyerCounterPrice, sellerVatType, contextFields);
+
+    if (!Number.isFinite(recomputedPayout) || recomputedPayout <= 0) continue;
+
+    await airtable(COUNTER_OFFERS_TABLE).update(round.id, {
+      "Status": "Closed",
+      "Closed At": new Date().toISOString()
+    });
+
+    const createFields = {
+      "Seller ID": [sellerId],
+      "Source Type": sourceType,
+      "Seller Offer Record ID": sellerOfferRecordId,
+      "Seller Original Price": sellerOriginalPrice,
+      "Seller Original VAT Type": sellerVatType,
+      "Store Counter Price": newBuyerCounterPrice,
+      "Counter Payout": recomputedPayout,
+      "Counter Payout VAT Type": sellerVatType,
+      "Previous Record ID": round.id,
+      "Created At": new Date().toISOString(),
+      "Status": "Open"
+    };
+    createFields[sourceType === "Member WTB" ? "Member WTB" : "Order"] = [recordId];
+
+    const newRound = await airtable(COUNTER_OFFERS_TABLE).create(createFields);
+
+    const sellerRecord = await airtable(SELLERS_TABLE).find(sellerId).catch(() => null);
+    const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
+    if (!sellerDiscordId) continue;
+
+    if (sourceType === "Member WTB") {
+      await sendMemberWtbCounterOfferDiscordDM({
+        counterOfferRecordId: newRound.id,
+        sellerDiscordId,
+        productName: asText(contextFields["Product Name"]),
+        sku: asText(contextFields["SKU"]),
+        size: asText(contextFields["Size"]),
+        memberWtbId: asText(contextFields["Member WTB ID"]) || recordId,
+        payout: recomputedPayout,
+        vatType: sellerVatType,
+        sellerOriginalPrice,
+        sellerOriginalVatType: sellerVatType,
+        sellerLastOfferPrice: numberValue(rf["Seller Counter Price"])
+      }).catch((err) => console.error("Failed to supersede pending seller counter (non-blocking):", err));
+    } else {
+      await sendCounterOfferDiscordDM({
+        counterOfferRecordId: newRound.id,
+        sellerDiscordId,
+        productName: asText(contextFields["Product Name"]),
+        sku: asText(contextFields["SKU"]),
+        size: asText(contextFields["Size"]),
+        orderId: asText(contextFields["Order ID"]),
+        payout: recomputedPayout,
+        vatType: sellerVatType,
+        sellerOriginalPrice,
+        sellerOriginalVatType: sellerVatType,
+        sellerLastOfferPrice: numberValue(rf["Seller Counter Price"])
+      }).catch((err) => console.error("Failed to supersede pending seller counter (non-blocking):", err));
+    }
+  }
+
+  const freshSellerOffers = await airtable(SELLER_OFFERS_TABLE)
+    .select({ fields: [sellerLinkField, "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer", "Withdrawn?"] })
+    .all()
+    .then((records) =>
+      records.filter((r) => {
+        if (r.fields?.["Delete Offer"] || r.fields?.["Withdrawn?"]) return false;
+        if (firstLinkedRecordId(r.fields?.[sellerLinkField]) !== recordId) return false;
+        const sellerId = firstLinkedRecordId(r.fields?.["Seller ID"]);
+        if (!sellerId || sellerId === excludeSellerId) return false;
+        // Already actively engaged (their own live round exists) —
+        // not "fresh," they're handled by the normal negotiation flow.
+        return !activeCounterSellerIdsForRecord.has(sellerId);
+      })
+    );
+
+  for (const so of freshSellerOffers) {
+    const sf = so.fields || {};
+    const sellerId = firstLinkedRecordId(sf["Seller ID"]);
+    const sellerOriginalPrice = numberValue(sf["Seller Offer"]);
+    const sellerVatType = asText(sf["Offer VAT Type"]);
+    if (!sellerOriginalPrice || !sellerVatType) continue;
+
+    const recomputedPayout =
+      sourceType === "Member WTB"
+        ? calculateMemberWtbSellerPayout(newBuyerCounterPrice, sellerVatType, contextFields)
+        : calculateCounterPayoutForVatType(newBuyerCounterPrice, sellerVatType, contextFields);
+
+    if (!Number.isFinite(recomputedPayout) || recomputedPayout <= 0) continue;
+
+    const createFields = {
+      "Seller ID": [sellerId],
+      "Source Type": sourceType,
+      "Seller Offer Record ID": so.id,
+      "Seller Original Price": sellerOriginalPrice,
+      "Seller Original VAT Type": sellerVatType,
+      "Store Counter Price": newBuyerCounterPrice,
+      "Counter Payout": recomputedPayout,
+      "Counter Payout VAT Type": sellerVatType,
+      "Created At": new Date().toISOString(),
+      "Status": "Open"
+    };
+    createFields[sourceType === "Member WTB" ? "Member WTB" : "Order"] = [recordId];
+
+    const newRound = await airtable(COUNTER_OFFERS_TABLE).create(createFields);
+
+    const sellerRecord = await airtable(SELLERS_TABLE).find(sellerId).catch(() => null);
+    const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
+    if (!sellerDiscordId) continue;
+
+    if (sourceType === "Member WTB") {
+      await sendMemberWtbCounterOfferDiscordDM({
+        counterOfferRecordId: newRound.id,
+        sellerDiscordId,
+        productName: asText(contextFields["Product Name"]),
+        sku: asText(contextFields["SKU"]),
+        size: asText(contextFields["Size"]),
+        memberWtbId: asText(contextFields["Member WTB ID"]) || recordId,
+        payout: recomputedPayout,
+        vatType: sellerVatType,
+        sellerOriginalPrice,
+        sellerOriginalVatType: sellerVatType
+      }).catch((err) => console.error("Failed to notify fresh seller of buyer counter (non-blocking):", err));
+    } else {
+      await sendCounterOfferDiscordDM({
+        counterOfferRecordId: newRound.id,
+        sellerDiscordId,
+        productName: asText(contextFields["Product Name"]),
+        sku: asText(contextFields["SKU"]),
+        size: asText(contextFields["Size"]),
+        orderId: asText(contextFields["Order ID"]),
+        payout: recomputedPayout,
+        vatType: sellerVatType,
+        sellerOriginalPrice,
+        sellerOriginalVatType: sellerVatType
+      }).catch((err) => console.error("Failed to notify fresh seller of buyer counter (non-blocking):", err));
+    }
+  }
 
   for (const [sellerId, deniedRound] of latestDeniedBySeller.entries()) {
     const df = deniedRound.fields || {};
@@ -21559,6 +21792,17 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
         }).catch((err) => console.error("Failed to notify seller of edited first-round counter (non-blocking):", err));
       }
 
+      // NEW — additive only: his explicit request — an edited counter
+      // is still a new position, and should reach every other seller
+      // still in the game the exact same way a fresh counter would.
+      const sellerIdForFirstRound = firstLinkedRecordId(f["Seller ID"]);
+      await reengageDeniedSellers({
+        sourceType: "Member WTB",
+        recordId: memberWtbRecordIdForFirstRound,
+        newBuyerCounterPrice: proposedPrice,
+        excludeSellerId: sellerIdForFirstRound
+      }).catch((err) => console.error("Failed to re-engage other sellers after edit (non-blocking):", err));
+
       return res.json({ ok: true });
     }
 
@@ -21666,6 +21910,16 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
       // Buyer edited — notify the seller with the revised counter.
       const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
       const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
+
+      // NEW — additive only: his explicit request — an edited counter
+      // is still a new position, and should reach every other seller
+      // still in the game the exact same way a fresh counter would.
+      await reengageDeniedSellers({
+        sourceType: "Member WTB",
+        recordId: memberWtbRecordId,
+        newBuyerCounterPrice: proposedPrice,
+        excludeSellerId: sellerRecordId
+      }).catch((err) => console.error("Failed to re-engage other sellers after edit (non-blocking):", err));
 
       if (sellerDiscordId) {
         // Recomputed fresh here (not reused from the earlier
