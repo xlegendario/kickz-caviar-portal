@@ -16563,6 +16563,20 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
 
       const sellersOfferInBuyerTerms = calculateMemberWtbBuyerEquivalent(sellersOffer, vatType, wtbFields);
 
+      // TEMPORARY — additive only, safe to remove later: diagnostic
+      // logging to pin down why the Denied pill still shows a stale,
+      // raw number despite the chain-tracing fix.
+      console.error("DEBUG buying-counter-offers denied sellersOffer:", {
+        recordId: record.id,
+        filter,
+        sellerCounter,
+        sellersOffer,
+        vatType,
+        sellersOfferInBuyerTerms,
+        wtbFieldsBuyerVatId: wtbFields?.["Buyer VAT ID"],
+        wtbFieldsBuyerCountry: wtbFields?.["Buyer Country"]
+      });
+
       return {
         id: record.id,
         member_wtb_record_id: memberWtbId,
