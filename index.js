@@ -12472,6 +12472,19 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
 
         return {
           id: record.id,
+          // NEW — additive only: a real, confirmed bug found via his
+          // live testing — the frontend's WTB "Counter" button always
+          // called the STORE ORDERS seller-counter endpoint
+          // (/api/counter-offers/:id/seller-counter), regardless of
+          // whether the item was actually a Member WTB round. For a
+          // Member WTB item, that endpoint operates on the wrong
+          // table/scope entirely (Order-linked data that doesn't
+          // exist for a Member WTB round), producing a nonsensical
+          // cross-seller threshold and the wrong error text ("for this
+          // order" instead of "for this WTB"). Exposes which endpoint
+          // family this item belongs to so the frontend can route
+          // correctly.
+          is_member_wtb: isMemberWtb,
           order_id: isMemberWtb
             ? (displayValue(f["Member WTB ID"]) || displayValue(f["Order ID"]))
             : (displayValue(f["Order ID"]) || displayValue(f["Order"])),
@@ -13863,6 +13876,61 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
 // endpoint internally with the secret added server-side, so the
 // secret never reaches the browser.
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// NEW — additive only: Portal-safe wrapper for a seller countering on a
+// Member WTB round from the seller-side Want To Buys "Countered" pill.
+// A real, confirmed bug found via his live testing: the frontend's
+// "Counter" button always called the STORE ORDERS seller-counter
+// endpoint, regardless of item type — for a Member WTB round, that
+// endpoint operates on the wrong table/scope entirely (no "Order" link
+// exists there), producing nonsense cross-seller thresholds and the
+// wrong error text. This wrapper checks Portal ownership then calls
+// the correct, secret-protected /api/member-wtb-counter-offers/:id/
+// seller-counter internally, same pattern as seller-edit above.
+// ---------------------------------------------------------------------
+app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-counter-mwtb", async (req, res) => {
+  try {
+    const offerId = asText(req.params.offerId);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const price = req.body?.price;
+
+    if (!offerId || !sellerRecordId) {
+      return res.status(400).json({ error: "Missing offerId or seller_record_id" });
+    }
+
+    const record = await airtable(COUNTER_OFFERS_TABLE).find(offerId);
+    const f = record.fields || {};
+
+    if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    const response = await fetch(`http://localhost:${PORT}/api/member-wtb-counter-offers/${offerId}/seller-counter`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+      },
+      body: JSON.stringify({ price })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error("Failed to submit Member WTB seller counter:", err);
+
+    res.status(500).json({
+      error: "Failed to submit counter",
+      details: err.message
+    });
+  }
+});
+
 app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-edit", async (req, res) => {
   try {
     const offerId = asText(req.params.offerId);
