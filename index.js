@@ -7545,27 +7545,18 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
     const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
     const lastPrice = numberValue(f["Counter Payout"]);
 
-    // FIXED — second bug, same root cause as the store-editing one:
-    // this always used "Seller Original Price" (the very first ask) as
-    // the seller's own reference point, even when the seller had ALREADY
-    // countered in an earlier round of this same back-and-forth. Once
-    // they've countered once, their real own position is that counter,
-    // not their original ask from several rounds ago — otherwise the
-    // min-step check gets computed against a stale number and lets
-    // through a "counter" that doesn't actually move from where they
-    // last stood. If the round this record responds to (via its own
-    // Previous Record ID) has a Seller Counter Price, that's the
-    // seller's true last position; only fall back to the original ask
-    // when this is genuinely their first-ever counter-back.
-    let sellerOwnReference = sellerOriginalPrice;
-    const priorRoundIdForSeller = asText(f["Previous Record ID"]);
-
-    if (priorRoundIdForSeller) {
-      const priorRoundForSeller = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundIdForSeller);
-      const priorSellerCounter = numberValue(priorRoundForSeller.fields?.["Seller Counter Price"]);
-      if (priorSellerCounter) {
-        sellerOwnReference = priorSellerCounter;
-      }
+    // FIXED — a real, confirmed bug found via his live testing on the
+    // Member WTB side (same underlying endpoint pattern here): only
+    // walking ONE hop back via Previous Record ID missed a seller's
+    // true last position when it happened several supersessions
+    // further back (e.g. broadcast-superseded more than once before
+    // they got a chance to respond). Now uses the shared full
+    // chain-walking helper (findSellersTrueLastCounter), which keeps
+    // walking backward until it finds a round where this seller's
+    // Seller Counter Price is genuinely set.
+    let sellerOwnReference = await findSellersTrueLastCounter(previousRecordId);
+    if (!Number.isFinite(sellerOwnReference) || sellerOwnReference <= 0) {
+      sellerOwnReference = sellerOriginalPrice;
     }
 
     // FIXED — the check above only looks ONE hop back via this round's
@@ -21552,18 +21543,22 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
     const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
     const wtbFields = memberWtb.fields || {};
 
-    // Chain-aware own reference — same fix as Store Orders: if the
-    // seller has already countered earlier in this back-and-forth, their
-    // true own position is that counter, not the very original ask.
-    let sellerOwnReference = sellerOriginalPrice;
-    const priorRoundIdForSeller = asText(f["Previous Record ID"]);
-
-    if (priorRoundIdForSeller) {
-      const priorRoundForSeller = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundIdForSeller).catch(() => null);
-      const priorSellerCounter = numberValue(priorRoundForSeller?.fields?.["Seller Counter Price"]);
-      if (priorSellerCounter) {
-        sellerOwnReference = priorSellerCounter;
-      }
+    // FIXED — a real, confirmed bug found via his live testing: this
+    // only walked ONE hop back via this round's OWN Previous Record
+    // ID — but after MULTIPLE supersessions (e.g. this seller
+    // countered once, got superseded by a later buyer broadcast
+    // before responding, more than once), their true last position
+    // could be several hops further back than that, and this fell
+    // all the way back to their very first, stale original ask
+    // instead. Now uses the same full chain-walking helper already
+    // built for the equivalent display/notification bug
+    // (findSellersTrueLastCounter), which keeps walking backward
+    // until it finds a round where this seller's Seller Counter
+    // Price is genuinely set, however many supersessions back that
+    // happened.
+    let sellerOwnReference = await findSellersTrueLastCounter(previousRecordId);
+    if (!Number.isFinite(sellerOwnReference) || sellerOwnReference <= 0) {
+      sellerOwnReference = sellerOriginalPrice;
     }
 
     // FIXED — the check above only looks ONE hop back via this round's
