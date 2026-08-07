@@ -12238,7 +12238,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
 
       const [competingSellerOffers, competingCounterRounds] = await Promise.all([
         airtable(SELLER_OFFERS_TABLE)
-          .select({ fields: ["Member WTBs", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
+          .select({ fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
           .all()
           .then((records) =>
             records.filter(
@@ -12250,7 +12250,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         airtable(COUNTER_OFFERS_TABLE)
           .select({
             filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Member WTB')`,
-            fields: ["Member WTB", "Seller Offer Record ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
+            fields: ["Member WTB", "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
           })
           .all()
           .then((records) =>
@@ -12258,12 +12258,30 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           )
       ]);
 
-      const sellerOfferIdsWithActiveRound = new Set(
-        competingCounterRounds.map((r) => asText(r.fields?.["Seller Offer Record ID"])).filter(Boolean)
+      // FIXED — corrects my own previous mistake this same session: I'd
+      // switched this to use Counter Payout for EVERY active round,
+      // which is wrong for seller-vs-seller competition specifically —
+      // a round where only the BUYER's pending, unanswered ask is
+      // sitting there (Seller Counter Price still empty) is NOT another
+      // seller's real competing position, it's just the same baseline
+      // offer mirrored to every seller at once. Confirmed directly by
+      // him: "Sellers competeren alleen tegen de andere sellers en hun
+      // eigen laatste laagste offer" — the buyer's own counter should
+      // NEVER count as the thing sellers must beat against each other.
+      // Only counts a round here once the seller has GENUINELY
+      // countered (Seller Counter Price set); otherwise their raw,
+      // still-untouched listing is their real position — never silently
+      // excluded, and never replaced by the buyer's pending offer.
+      const sellerIdsWithGenuineCounterForWtb = new Set(
+        competingCounterRounds
+          .filter((r) => numberValue(r.fields?.["Seller Counter Price"]) > 0)
+          .map((r) => firstLinkedRecordId(r.fields?.["Seller ID"]))
+          .filter(Boolean)
       );
 
       for (const so of competingSellerOffers) {
-        if (sellerOfferIdsWithActiveRound.has(so.id)) continue; // superseded by an active round below
+        const sellerId = firstLinkedRecordId(so.fields?.["Seller ID"]);
+        if (sellerId && sellerIdsWithGenuineCounterForWtb.has(sellerId)) continue; // superseded by their genuine counter below
 
         const wtbId = firstLinkedRecordId(so.fields?.["Member WTBs"]);
         const normalized = normalize(so.fields?.["Seller Offer"], so.fields?.["Offer VAT Type"]);
@@ -12274,11 +12292,12 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       }
 
       for (const cr of competingCounterRounds) {
+        const sellerCounter = numberValue(cr.fields?.["Seller Counter Price"]);
+        if (!(sellerCounter > 0)) continue; // buyer's pending ask, not a genuine seller position — skip
+
         const wtbId = firstLinkedRecordId(cr.fields?.["Member WTB"]);
         const vatType = cr.fields?.["Seller Original VAT Type"];
-        const sellerCounter = numberValue(cr.fields?.["Seller Counter Price"]);
-        const effectivePrice = sellerCounter > 0 ? sellerCounter : numberValue(cr.fields?.["Seller Original Price"]);
-        const normalized = normalize(effectivePrice, vatType);
+        const normalized = normalize(sellerCounter, vatType);
         if (normalized == null) continue;
 
         const current = memberWtbMinNormalizedPrice.get(wtbId);
@@ -13441,14 +13460,32 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
     airtable(COUNTER_OFFERS_TABLE)
       .select({
         filterByFormula: `AND({Status} = 'Open', {Source Type} = '${escapeFormulaValue(sourceType)}')`,
-        fields: [counterLinkField, "Seller ID", "Counter Payout", "Counter Payout VAT Type", "Seller Original VAT Type"]
+        fields: [counterLinkField, "Seller ID", "Counter Payout", "Counter Payout VAT Type", "Seller Original VAT Type", "Seller Counter Price"]
       })
       .all()
       .then((records) => records.filter((r) => firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId))
   ]);
 
-  const sellerIdsWithActiveCounter = new Set(
-    activeCounters.map((r) => firstLinkedRecordId(r.fields?.["Seller ID"])).filter(Boolean)
+  // FIXED — a real, confirmed related bug: this excluded a seller's
+  // RAW offer from consideration the moment they had ANY active round
+  // at all — including a round where only the BUYER's pending,
+  // unanswered ask is sitting there (Seller Counter Price still
+  // empty). That's wrong: until this seller actually counters, their
+  // raw listing IS still their real, current competing position — not
+  // "nothing" (which is what silently excluding them produced). His
+  // exact example: seller A (raw 95, untouched) and seller B (raw 92,
+  // untouched) both receive the same buyer broadcast at 72.90 — since
+  // neither has genuinely countered yet, seller B's own narrowing-band
+  // counter (e.g. to 89) must be checked against seller A's raw 95
+  // (the only real competing seller position that exists), not
+  // silently against nothing. Only excludes a seller here once they've
+  // GENUINELY countered (Seller Counter Price set) — matching exactly
+  // the same bar sellerHasActuallyCountered below already uses.
+  const sellerIdsWithGenuineCounter = new Set(
+    activeCounters
+      .filter((r) => numberValue(r.fields?.["Seller Counter Price"]) > 0)
+      .map((r) => firstLinkedRecordId(r.fields?.["Seller ID"]))
+      .filter(Boolean)
   );
 
   let minNormalized = null;
@@ -13458,7 +13495,7 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
   for (const so of rawOffers) {
     const sellerId = firstLinkedRecordId(so.fields?.["Seller ID"]);
     if (!sellerId || sellerId === excludeSellerId) continue;
-    if (sellerIdsWithActiveCounter.has(sellerId)) continue; // superseded by their active round below
+    if (sellerIdsWithGenuineCounter.has(sellerId)) continue; // superseded by their genuine counter below
 
     const rawPrice = numberValue(so.fields?.["Seller Offer"]);
     const rawVatType = so.fields?.["Offer VAT Type"];
@@ -13475,22 +13512,27 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
     const sellerId = firstLinkedRecordId(cr.fields?.["Seller ID"]);
     if (!sellerId || sellerId === excludeSellerId) continue;
 
-    // FIXED — a real, confirmed bug: this fell back to "Seller
-    // Original Price" (the seller's VERY FIRST, stale ask) whenever
-    // the round's pending move was the BUYER's (Store Counter Price
-    // set, Seller Counter Price still empty — i.e. the seller hasn't
-    // responded to the buyer's counter yet). That's wrong: the buyer's
-    // pending counter IS the current relevant position for this
-    // seller — if they accept it, that's what they receive. "Counter
-    // Payout" already correctly represents exactly this, on EVERY
-    // round regardless of who moved last (every round-creation
-    // endpoint sets it), so use it directly instead of trying to
-    // reconstruct it from Seller Counter Price / Seller Original
-    // Price. Confirmed via live testing: seller B's own dashboard
-    // showed 90 (their stale original ask) as the still-lowest price
-    // even after seller A's round moved to a pending 87 buyer counter
-    // — both sides showed a green "lowest" dot simultaneously, which
-    // is impossible if 87 genuinely beats 90.
+    // FIXED — a real, confirmed bug found via his live testing: this
+    // counted ANY active round's Counter Payout as "a threshold to
+    // beat," including a round where the SELLER hasn't responded yet
+    // (Seller Counter Price still empty, only the buyer's identical
+    // broadcast offer sitting there via reengageDeniedSellers). When
+    // multiple sellers get the SAME buyer counter simultaneously, none
+    // of their still-pending copies of that SAME offer are a genuine
+    // competing ASK from one another — they're all just mirrors of
+    // the one baseline position. Counting them against each other
+    // meant neither seller could even respond without going BELOW
+    // what the buyer had already offered, which made no sense (e.g.
+    // seller A capped at 70 when their own band should have allowed
+    // up to 89, purely because seller B had the identical, still-
+    // unanswered 85 sitting on their own round too). Now only counts
+    // a competitor's position once they've actually placed their OWN
+    // counter (Seller Counter Price genuinely set) — that's the
+    // earliest point a seller's position becomes a real, independent
+    // ask another seller needs to beat.
+    const sellerHasActuallyCountered = numberValue(cr.fields?.["Seller Counter Price"]) > 0;
+    if (!sellerHasActuallyCountered) continue;
+
     const effectivePrice = numberValue(cr.fields?.["Counter Payout"]);
     const vatType = cr.fields?.["Counter Payout VAT Type"] || cr.fields?.["Seller Original VAT Type"];
     const normalized = normalize(effectivePrice, vatType);
