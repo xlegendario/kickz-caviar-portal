@@ -7586,36 +7586,49 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
       }
     }
 
-    const validation = validateNextCounterPrice(sellerOwnReference, lastPrice, proposedPrice);
-    if (!validation.ok) {
-      return res.status(400).json({ error: validation.reason, band: validation.band });
-    }
-
+    // Move these up — needed for the cross-seller ceiling computation
+    // before the combined validation below (previously computed after
+    // the own-band check had already run and possibly failed).
     const linkedOrderId = firstLinkedRecordId(f["Order"]);
     const linkedSellerId = firstLinkedRecordId(f["Seller ID"]);
     const sellerVatType = asText(f["Seller Original VAT Type"]);
 
-    // NEW — additive only: his explicit request — a seller's counter
-    // must also beat whatever OTHER sellers currently have on the
-    // table for this same Order, not just their own prior position.
-    // Without this, seller A (currently the winner at 90) could
-    // counter right back to 90 the instant seller B undercuts them to
-    // 90 first, which shouldn't be allowed to just match — has to
-    // actually go lower.
-    const globalLowestNormalized = (await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, linkedSellerId)).normalized;
-    if (Number.isFinite(globalLowestNormalized)) {
-      const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestNormalized : globalLowestNormalized / 1.21;
-      // FIXED — this only checked "strictly lower," never applying the
-      // same €2.50 minimum step the normal narrowing-band validation
-      // enforces everywhere else — so a counter that was technically
-      // lower but still too close (e.g. 83 against a threshold of 85)
-      // slipped through uncaught.
-      const maxAllowedRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
-      if (proposedPrice > maxAllowedRaw) {
+    // FIXED — a real, confirmed bug found via his live testing (same
+    // issue on the Member WTB side too): the seller's own narrowing
+    // band and the cross-seller "beat the current lowest" ceiling used
+    // to be validated as two separate, sequential gates — a proposed
+    // price could fail the FIRST gate (own band) with a misleading
+    // error that never mentioned the cross-seller constraint even
+    // existed, and "No room left" only ever appeared when the own band
+    // ALONE happened to be too narrow — never when the two constraints
+    // COMBINED left no valid price at all. Now computes the
+    // cross-seller ceiling FIRST and folds it into the own band before
+    // validating, via the shared helper, giving one honest, combined
+    // answer regardless of which specific price was tried.
+    const globalLowestForValidation = (await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, linkedSellerId)).normalized;
+    let crossSellerCeilingRaw = null;
+    if (Number.isFinite(globalLowestForValidation)) {
+      const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestForValidation : globalLowestForValidation / 1.21;
+      crossSellerCeilingRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
+    }
+
+    const validation = validateNextCounterPriceWithCrossSellerCeiling(
+      sellerOwnReference,
+      lastPrice,
+      proposedPrice,
+      crossSellerCeilingRaw
+    );
+    if (!validation.ok) {
+      if (
+        validation.reason.startsWith("No room left") &&
+        Number.isFinite(crossSellerCeilingRaw)
+      ) {
         return res.status(400).json({
-          error: `Another seller already offers a better price for this order. Your counter needs to be at most €${maxAllowedRaw.toFixed(2)} (${sellerVatType}) to beat it.`
+          error: `Another seller already offers a better price for this order, leaving no room to counter. Your counter would need to be at most €${crossSellerCeilingRaw.toFixed(2)} (${sellerVatType}), which conflicts with your own previous position. Please accept or deny.`,
+          band: validation.band
         });
       }
+      return res.status(400).json({ error: validation.reason, band: validation.band });
     }
 
     const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
@@ -10341,6 +10354,67 @@ function hasRoomForNextStep(ownReferencePrice, counterpartPrice) {
   }
 
   return minAllowed <= maxAllowed;
+}
+
+// NEW — additive only: his explicit request — a seller's own narrowing
+// band and the cross-seller "beat the current lowest" ceiling used to
+// be validated as two completely independent, sequential gates. That
+// let a proposed price fail the FIRST gate (own band) with a
+// misleading error that never mentioned the SECOND gate (cross-seller)
+// even existed — and, worse, meant "No room left" only ever appeared
+// when the own band ALONE happened to be too narrow, never when the
+// combination of both constraints left no valid price at all. His
+// exact case: seller's own band allowed [82, 86], but another seller's
+// genuinely lower position meant nothing above ~80 could ever be
+// competitive — the true valid range was empty, but the seller never
+// saw "No room left," just a confusing "maximum €86" that didn't
+// mention the real, binding constraint. This computes the seller's own
+// band exactly like validateNextCounterPrice does internally, then
+// folds in the cross-seller ceiling as an ADDITIONAL cap on the upper
+// bound before returning — giving one combined, honest answer.
+function validateNextCounterPriceWithCrossSellerCeiling(ownReferencePrice, counterpartPrice, proposed, crossSellerCeiling) {
+  const movingDown = ownReferencePrice > counterpartPrice;
+  const low = Math.min(ownReferencePrice, counterpartPrice);
+  const high = Math.max(ownReferencePrice, counterpartPrice);
+
+  let minAllowed = low + 1;
+  let maxAllowed = high - 1;
+
+  if (movingDown) {
+    maxAllowed = Math.floor(ownReferencePrice - MIN_COUNTER_STEP);
+  } else {
+    minAllowed = Math.ceil(ownReferencePrice + MIN_COUNTER_STEP);
+  }
+
+  // Fold in the cross-seller ceiling — only ever tightens the upper
+  // bound further, never loosens it. A seller moving UP (asking for
+  // more) is unaffected by this — the cross-seller ceiling only
+  // matters when it's LOWER than what their own band would otherwise
+  // allow, i.e. when they're trying to move DOWN toward it.
+  if (Number.isFinite(crossSellerCeiling) && crossSellerCeiling < maxAllowed) {
+    maxAllowed = crossSellerCeiling;
+  }
+
+  if (minAllowed > maxAllowed) {
+    return {
+      ok: false,
+      reason: "No room left to counter — the gap is too small for another step, please accept or deny.",
+      band: [low, high]
+    };
+  }
+
+  if (!Number.isInteger(proposed)) {
+    return { ok: false, reason: "Counter offers must be a whole number.", band: [minAllowed, maxAllowed] };
+  }
+
+  if (proposed < minAllowed || proposed > maxAllowed) {
+    const reason = movingDown
+      ? `Your counter must be lower than your previous €${ownReferencePrice} — maximum €${maxAllowed}.`
+      : `Your counter must be higher than your previous €${ownReferencePrice} — minimum €${minAllowed}.`;
+    return { ok: false, reason, band: [minAllowed, maxAllowed] };
+  }
+
+  return { ok: true, band: [minAllowed, maxAllowed] };
 }
 
 function moneyValue(value) {
@@ -21599,28 +21673,45 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
       return res.status(500).json({ error: "Could not compute margin conversion for this WTB." });
     }
 
-    const validation = validateNextCounterPrice(sellerOwnReference, buyerPriceInSellerTerms, proposedPrice);
-    if (!validation.ok) {
-      return res.status(400).json({ error: validation.reason, band: validation.band });
+    // FIXED — a real, confirmed bug found via his live testing: the
+    // seller's own narrowing band and the cross-seller "beat the
+    // current lowest" ceiling used to be validated as two separate,
+    // sequential gates — a proposed price could fail the FIRST gate
+    // (own band) with a misleading error that never mentioned the
+    // cross-seller constraint even existed, and "No room left" only
+    // ever appeared when the own band ALONE happened to be too narrow
+    // — never when the two constraints COMBINED left no valid price
+    // at all. Now folds the cross-seller ceiling into the own band
+    // before validating, via the shared helper, giving one honest,
+    // combined answer regardless of which specific price was tried.
+    const globalLowestForValidation = (await getCurrentGlobalLowestNormalized("Member WTB", memberWtbRecordId, sellerRecordId)).normalized;
+    let crossSellerCeilingRaw = null;
+    if (Number.isFinite(globalLowestForValidation)) {
+      const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestForValidation : globalLowestForValidation / 1.21;
+      crossSellerCeilingRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
     }
 
-    // NEW — additive only: same cross-seller rule as Store Orders — a
-    // seller's counter must also beat whatever OTHER sellers currently
-    // have on the table for this same Member WTB, not just their own
-    // prior position.
-    const globalLowestNormalized = (await getCurrentGlobalLowestNormalized("Member WTB", memberWtbRecordId, sellerRecordId)).normalized;
-    if (Number.isFinite(globalLowestNormalized)) {
-      const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestNormalized : globalLowestNormalized / 1.21;
-      // FIXED — same min-step fix as Store Orders' equivalent — only
-      // checked "strictly lower," never applying the same €2.50
-      // minimum step everywhere else, so a technically-lower-but-still-
-      // too-close counter slipped through uncaught.
-      const maxAllowedRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
-      if (proposedPrice > maxAllowedRaw) {
+    const validation = validateNextCounterPriceWithCrossSellerCeiling(
+      sellerOwnReference,
+      buyerPriceInSellerTerms,
+      proposedPrice,
+      crossSellerCeilingRaw
+    );
+    if (!validation.ok) {
+      // Distinguishes a genuine "no room combining both constraints"
+      // from a price that's simply outside the (already-combined)
+      // valid band, so the cross-seller-specific wording still shows
+      // when relevant, without ever hiding behind the own-band error.
+      if (
+        validation.reason.startsWith("No room left") &&
+        Number.isFinite(crossSellerCeilingRaw)
+      ) {
         return res.status(400).json({
-          error: `Another seller already offers a better price for this WTB. Your counter needs to be at most €${maxAllowedRaw.toFixed(2)} (${sellerVatType}) to beat it.`
+          error: `Another seller already offers a better price for this WTB, leaving no room to counter. Your counter would need to be at most €${crossSellerCeilingRaw.toFixed(2)} (${sellerVatType}), which conflicts with your own previous position. Please accept or deny.`,
+          band: validation.band
         });
       }
+      return res.status(400).json({ error: validation.reason, band: validation.band });
     }
 
     await airtable(COUNTER_OFFERS_TABLE).update(previousRecordId, {
