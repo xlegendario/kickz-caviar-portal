@@ -13655,12 +13655,34 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
   let winningRaw = null;
   let winningVatType = null;
 
+  // FIXED — a real, confirmed bug found via his live testing: a seller
+  // who genuinely countered EARLIER (e.g. seller A at 83) but whose
+  // round then got superseded again by a LATER buyer broadcast before
+  // they got a chance to respond (via reengageDeniedSellers' merged
+  // "any active round" category) falls back here to their raw, very
+  // FIRST listing (e.g. 95) instead of their true, more recent 83 —
+  // the exact same staleness bug already fixed for the Portal's own
+  // "Current Lowest" display and the Discord re-notification, just
+  // never applied to THIS shared function too, which is what actual
+  // seller-counter VALIDATION relies on. Chain-traces via the same
+  // helper (findSellersTrueLastCounter) through each seller's active
+  // round's full history before falling back to their raw offer.
+  const activeRoundIdBySellerForGlobalLowest = new Map();
+  for (const cr of activeCounters) {
+    const sellerId = firstLinkedRecordId(cr.fields?.["Seller ID"]);
+    if (sellerId && !activeRoundIdBySellerForGlobalLowest.has(sellerId)) {
+      activeRoundIdBySellerForGlobalLowest.set(sellerId, cr.id);
+    }
+  }
+
   for (const so of rawOffers) {
     const sellerId = firstLinkedRecordId(so.fields?.["Seller ID"]);
     if (!sellerId || sellerId === excludeSellerId) continue;
     if (sellerIdsWithGenuineCounter.has(sellerId)) continue; // superseded by their genuine counter below
 
-    const rawPrice = numberValue(so.fields?.["Seller Offer"]);
+    const activeRoundId = activeRoundIdBySellerForGlobalLowest.get(sellerId);
+    const chainTraced = activeRoundId ? await findSellersTrueLastCounter(activeRoundId) : null;
+    const rawPrice = chainTraced ?? numberValue(so.fields?.["Seller Offer"]);
     const rawVatType = so.fields?.["Offer VAT Type"];
     const normalized = normalize(rawPrice, rawVatType);
     if (normalized == null) continue;
@@ -21690,22 +21712,6 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
       const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestForValidation : globalLowestForValidation / 1.21;
       crossSellerCeilingRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
     }
-
-    // TEMPORARY — additive only, safe to remove later: diagnostic
-    // logging to pin down why the cross-seller ceiling doesn't seem
-    // to be tightening the own-reference band as expected.
-    console.error("DEBUG seller-counter cross-seller ceiling:", {
-      previousRecordId,
-      memberWtbRecordId,
-      sellerRecordId,
-      sellerOwnReference,
-      sellerVatType,
-      buyerCounterPrice,
-      buyerPriceInSellerTerms,
-      globalLowestForValidation,
-      crossSellerCeilingRaw,
-      proposedPrice
-    });
 
     const validation = validateNextCounterPriceWithCrossSellerCeiling(
       sellerOwnReference,
