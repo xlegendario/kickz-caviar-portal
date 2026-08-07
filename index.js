@@ -21691,6 +21691,22 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
       crossSellerCeilingRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
     }
 
+    // TEMPORARY — additive only, safe to remove later: diagnostic
+    // logging to pin down why the cross-seller ceiling doesn't seem
+    // to be tightening the own-reference band as expected.
+    console.error("DEBUG seller-counter cross-seller ceiling:", {
+      previousRecordId,
+      memberWtbRecordId,
+      sellerRecordId,
+      sellerOwnReference,
+      sellerVatType,
+      buyerCounterPrice,
+      buyerPriceInSellerTerms,
+      globalLowestForValidation,
+      crossSellerCeilingRaw,
+      proposedPrice
+    });
+
     const validation = validateNextCounterPriceWithCrossSellerCeiling(
       sellerOwnReference,
       buyerPriceInSellerTerms,
