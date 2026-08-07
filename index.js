@@ -7635,16 +7635,19 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
     // answer regardless of which specific price was tried.
     const globalLowestForValidation = (await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, linkedSellerId)).normalized;
     let crossSellerCeilingRaw = null;
+    let crossSellerReferenceRaw = null;
     if (Number.isFinite(globalLowestForValidation)) {
       const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestForValidation : globalLowestForValidation / 1.21;
       crossSellerCeilingRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
+      crossSellerReferenceRaw = rawThreshold;
     }
 
     const validation = validateNextCounterPriceWithCrossSellerCeiling(
       sellerOwnReference,
       lastPrice,
       proposedPrice,
-      crossSellerCeilingRaw
+      crossSellerCeilingRaw,
+      crossSellerReferenceRaw
     );
     if (!validation.ok) {
       if (
@@ -10400,7 +10403,7 @@ function hasRoomForNextStep(ownReferencePrice, counterpartPrice) {
 // band exactly like validateNextCounterPrice does internally, then
 // folds in the cross-seller ceiling as an ADDITIONAL cap on the upper
 // bound before returning — giving one combined, honest answer.
-function validateNextCounterPriceWithCrossSellerCeiling(ownReferencePrice, counterpartPrice, proposed, crossSellerCeiling) {
+function validateNextCounterPriceWithCrossSellerCeiling(ownReferencePrice, counterpartPrice, proposed, crossSellerCeiling, crossSellerReferencePrice = null) {
   const movingDown = ownReferencePrice > counterpartPrice;
   const low = Math.min(ownReferencePrice, counterpartPrice);
   const high = Math.max(ownReferencePrice, counterpartPrice);
@@ -10419,8 +10422,17 @@ function validateNextCounterPriceWithCrossSellerCeiling(ownReferencePrice, count
   // more) is unaffected by this — the cross-seller ceiling only
   // matters when it's LOWER than what their own band would otherwise
   // allow, i.e. when they're trying to move DOWN toward it.
+  // NEW — additive only: his exact, valid point — when the ceiling is
+  // what ACTUALLY tightened the band, the error should say so ("the
+  // current lowest offer"), not blame "your previous" position, which
+  // makes the resulting gap look arbitrary (e.g. "previous €95 —
+  // maximum €89" hides that the real reason for landing at 89 was
+  // another seller's €92, not anything about the seller's own €95).
+  const ownBandMaxAllowed = maxAllowed;
+  let crossSellerIsBindingConstraint = false;
   if (Number.isFinite(crossSellerCeiling) && crossSellerCeiling < maxAllowed) {
     maxAllowed = crossSellerCeiling;
+    crossSellerIsBindingConstraint = true;
   }
 
   if (minAllowed > maxAllowed) {
@@ -10436,9 +10448,19 @@ function validateNextCounterPriceWithCrossSellerCeiling(ownReferencePrice, count
   }
 
   if (proposed < minAllowed || proposed > maxAllowed) {
-    const reason = movingDown
-      ? `Your counter must be lower than your previous €${ownReferencePrice} — maximum €${maxAllowed}.`
-      : `Your counter must be higher than your previous €${ownReferencePrice} — minimum €${minAllowed}.`;
+    let reason;
+    if (movingDown && crossSellerIsBindingConstraint && proposed > maxAllowed) {
+      // The proposed price failed specifically because of the
+      // cross-seller ceiling (not the seller's own band) — say so,
+      // using the actual reference price when given (avoids rounding
+      // artifacts from reconstructing it off the computed ceiling).
+      const displayPrice = Number.isFinite(crossSellerReferencePrice) ? crossSellerReferencePrice : (crossSellerCeiling + MIN_COUNTER_STEP);
+      reason = `Your counter must be lower than the current lowest offer of €${displayPrice} — maximum €${maxAllowed}.`;
+    } else {
+      reason = movingDown
+        ? `Your counter must be lower than your previous €${ownReferencePrice} — maximum €${maxAllowed}.`
+        : `Your counter must be higher than your previous €${ownReferencePrice} — minimum €${minAllowed}.`;
+    }
     return { ok: false, reason, band: [minAllowed, maxAllowed] };
   }
 
@@ -17044,7 +17066,8 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/retry-counter", async (r
       deniedBuyerCounter,
       sellerLastPositionInBuyerTerms,
       proposedPrice,
-      Number.isFinite(crossSellerCeilingBuyerTerms) ? Math.floor(crossSellerCeilingBuyerTerms - MIN_COUNTER_STEP) : null
+      Number.isFinite(crossSellerCeilingBuyerTerms) ? Math.floor(crossSellerCeilingBuyerTerms - MIN_COUNTER_STEP) : null,
+      Number.isFinite(crossSellerCeilingBuyerTerms) ? Math.round(crossSellerCeilingBuyerTerms * 100) / 100 : null
     );
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
@@ -21826,16 +21849,19 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
     // combined answer regardless of which specific price was tried.
     const globalLowestForValidation = (await getCurrentGlobalLowestNormalized("Member WTB", memberWtbRecordId, sellerRecordId)).normalized;
     let crossSellerCeilingRaw = null;
+    let crossSellerReferenceRaw = null;
     if (Number.isFinite(globalLowestForValidation)) {
       const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestForValidation : globalLowestForValidation / 1.21;
       crossSellerCeilingRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
+      crossSellerReferenceRaw = rawThreshold;
     }
 
     const validation = validateNextCounterPriceWithCrossSellerCeiling(
       sellerOwnReference,
       buyerPriceInSellerTerms,
       proposedPrice,
-      crossSellerCeilingRaw
+      crossSellerCeilingRaw,
+      crossSellerReferenceRaw
     );
     if (!validation.ok) {
       // Distinguishes a genuine "no room combining both constraints"
