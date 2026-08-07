@@ -10832,11 +10832,17 @@ async function sendCounterOfferDiscordDM({
   // NEW — used when this notification is a RE-SEND of an already-open
   // round after the seller's own follow-up counter got denied. Makes
   // clear this isn't a brand new counter from the store — it's the
-  // same standing offer as before, still available to accept or
-  // counter again, lower this time.
+  // FIXED — his correction: simplified from an earlier, overcomplicated
+  // version that tried to distinguish "your own counter" wording from
+  // "the current lowest was denied" wording, needing a specific euro
+  // amount either way. Simpler and always correct: a plain "your offer
+  // was denied," no amount — the rest of the embed already shows this
+  // seller's OWN correct numbers (their last offer, the new counter
+  // payout), so nothing is lost by not repeating a number here that
+  // might not even be theirs.
   const deniedNote =
     deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== ""
-      ? [`❌ Your counter of €${Number(deniedAmount).toFixed(2)} was denied.`, ""]
+      ? ["❌ Your offer was denied.", ""]
       : [];
 
   const message = await dm.send({
@@ -10968,9 +10974,17 @@ async function sendMemberWtbCounterOfferDiscordDM({
     ? "You're now very close to each other's price — there's no room for another counter. Please accept or deny."
     : "Accept if you can fulfill this at the counter price.";
 
+  // FIXED — his correction: simplified from an earlier, overcomplicated
+  // version that tried to distinguish "your own counter" wording from
+  // "the current lowest was denied" wording, needing a specific euro
+  // amount either way. Simpler and always correct: a plain "your offer
+  // was denied," no amount — the rest of the embed already shows this
+  // seller's OWN correct numbers (their last offer, the new counter
+  // payout), so nothing is lost by not repeating a number here that
+  // might not even be theirs.
   const deniedNote =
     deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== ""
-      ? [`❌ Your counter of €${Number(deniedAmount).toFixed(2)} was denied.`, ""]
+      ? ["❌ Your offer was denied.", ""]
       : [];
 
   const message = await dm.send({
@@ -13360,7 +13374,7 @@ async function findSellersTrueLastCounter(startRoundId, maxHops = 15) {
   return null;
 }
 
-async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPrice, excludeSellerId }) {
+async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPrice, excludeSellerId, isDenyBroadcast = false }) {
   const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
 
   const deniedRounds = await airtable(COUNTER_OFFERS_TABLE)
@@ -13514,7 +13528,13 @@ for (const round of pendingSellerCounterRounds) {
         sellerOriginalPrice,
         sellerOriginalVatType: sellerVatType,
         sellerLastOfferPrice: sellerLastOfferForNotify,
-        noRoomToCounter: pendingNoRoomToCounter
+        noRoomToCounter: pendingNoRoomToCounter,
+        // NEW — additive only: same reasoning as the fresh-sellers
+        // category — this seller's earlier position is being
+        // superseded specifically because the buyer just denied the
+        // currently-lowest offer, which is effectively a "no" to
+        // everyone still in the game.
+        deniedAmount: isDenyBroadcast ? recomputedPayout : undefined
       }).catch((err) => console.error("Failed to supersede pending seller counter (non-blocking):", err));
     } else {
       await sendCounterOfferDiscordDM({
@@ -13529,7 +13549,8 @@ for (const round of pendingSellerCounterRounds) {
         sellerOriginalPrice,
         sellerOriginalVatType: sellerVatType,
         sellerLastOfferPrice: sellerLastOfferForNotify,
-        noRoomToCounter: pendingNoRoomToCounter
+        noRoomToCounter: pendingNoRoomToCounter,
+        deniedAmount: isDenyBroadcast ? recomputedPayout : undefined
       }).catch((err) => console.error("Failed to supersede pending seller counter (non-blocking):", err));
     }
   }
@@ -13602,7 +13623,16 @@ for (const round of pendingSellerCounterRounds) {
         vatType: sellerVatType,
         sellerOriginalPrice,
         sellerOriginalVatType: sellerVatType,
-        noRoomToCounter: freshNoRoomToCounter
+        noRoomToCounter: freshNoRoomToCounter,
+        // NEW — additive only: his exact scenario — when the buyer
+        // denies the CURRENTLY-LOWEST position, that's effectively a
+        // "no" to EVERY seller still in the game, since if the buyer
+        // won't accept the lowest, they won't accept anything higher
+        // either. Every seller reached by this broadcast (except
+        // previously-denied sellers being reopened with genuinely
+        // good news below) sees this as a clear denial, not a neutral
+        // "here's a new counter."
+        deniedAmount: isDenyBroadcast ? recomputedPayout : undefined
       }).catch((err) => console.error("Failed to notify fresh seller of buyer counter (non-blocking):", err));
     } else {
       await sendCounterOfferDiscordDM({
@@ -13616,7 +13646,8 @@ for (const round of pendingSellerCounterRounds) {
         vatType: sellerVatType,
         sellerOriginalPrice,
         sellerOriginalVatType: sellerVatType,
-        noRoomToCounter: freshNoRoomToCounter
+        noRoomToCounter: freshNoRoomToCounter,
+        deniedAmount: isDenyBroadcast ? recomputedPayout : undefined
       }).catch((err) => console.error("Failed to notify fresh seller of buyer counter (non-blocking):", err));
     }
   }
@@ -16915,6 +16946,29 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/buyer-deny", async (req,
               denied_price: numberValue(deniedFields["Seller Counter Price"])
             })
           }).catch((err) => console.error("Failed to notify seller of reopened round (non-blocking):", err));
+        }
+
+        // FIXED — a real, confirmed gap found via his live testing: this
+        // only ever reopened THIS ONE seller's own prior round — every
+        // OTHER seller still in the game (e.g. a seller with their own
+        // pending counter still awaiting the buyer, or a fresh, never-
+        // engaged seller) heard nothing at all. His exact point: denying
+        // the CURRENTLY-LOWEST seller is effectively a "no" to everyone,
+        // since if the buyer won't accept the lowest, they won't accept
+        // anything higher either. Broadcasts to every OTHER seller too,
+        // using the buyer's real floor (not just this one denied price,
+        // in case they've offered higher elsewhere before) — same
+        // deny-styled notification as the fresh-offer deny flow.
+        const buyerFloorForBroadcast = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
+
+        if (Number.isFinite(buyerFloorForBroadcast) && buyerFloorForBroadcast > 0) {
+          await reengageDeniedSellers({
+            sourceType: "Member WTB",
+            recordId: memberWtbRecordId,
+            newBuyerCounterPrice: buyerFloorForBroadcast,
+            excludeSellerId: sellerRecordId,
+            isDenyBroadcast: true
+          }).catch((err) => console.error("Failed to broadcast buyer floor to other sellers after deny (non-blocking):", err));
         }
       }
     }
@@ -21919,7 +21973,8 @@ app.post("/api/dashboard/buying-offers/:memberWtbRecordId/deny", async (req, res
       sourceType: "Member WTB",
       recordId: memberWtbRecordId,
       newBuyerCounterPrice: buyerHighestEver,
-      excludeSellerId: null
+      excludeSellerId: null,
+      isDenyBroadcast: true
     }).catch((err) => console.error("Failed to broadcast buyer floor after fresh-offer deny (non-blocking):", err));
 
     res.json({ ok: true });
