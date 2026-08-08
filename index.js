@@ -4094,14 +4094,52 @@ function bindConsignmentDiscordButtons(client) {
       // this seller (no Previous Record ID — nothing to reopen), the
       // block above was skipped entirely, meaning the buyer got NO
       // notification whatsoever, not even a simple "this was denied."
-      // Sends a plain, generic denial notice in that case, pointing
-      // them back to the Open Offers page — this seller's raw listing
-      // is untouched and will show there again.
+      // FIXED (again) — his follow-up correction: the first version of
+      // this fallback was plain text with no way to act on it. This
+      // seller's raw offer is untouched by the denial (only the
+      // buyer's counter got denied, not the seller's own listing), so
+      // resends the exact same Accept/Counter/Decline buttons the
+      // original "New Offer Received" DM has, tied to that same raw
+      // offer — same pattern, same custom_ids, so the existing button
+      // handlers work without any changes.
       try {
         const priorRoundIdForFallback = asText(deniedFields["Previous Record ID"]);
 
         if (!priorRoundIdForFallback) {
           const memberWtbRecordIdForFallback = firstLinkedRecordId(deniedFields["Member WTB"]);
+          const sellerOfferRecordIdForFallback = asText(deniedFields["Seller Offer Record ID"]);
+
+          // NEW — additive only: his exact scenario — if ANOTHER
+          // seller is genuinely BETTER (still active, not just
+          // existing), the buyer's view has already silently moved to
+          // them per the unified-thread visibility model, so denying
+          // THIS (worse) seller shouldn't notify the buyer at all —
+          // same suppression logic already used for the prior-round
+          // branch above, just applied here too since round-1 denials
+          // were skipping it entirely.
+          const denyingSellerIdForFallback = firstLinkedRecordId(deniedFields["Seller ID"]);
+          const otherSellerExistsForFallback = memberWtbRecordIdForFallback
+            ? (await getCurrentGlobalLowestNormalized(
+                "Member WTB",
+                memberWtbRecordIdForFallback,
+                denyingSellerIdForFallback
+              )).normalized
+            : null;
+
+          const denyingSellerTruePositionForFallback = await findSellersTrueLastCounter(counterOfferRecordId);
+          const denyingSellerVatTypeForFallback = asText(deniedFields["Seller Original VAT Type"]);
+          const denyingSellerOwnNormalizedForFallback = Number.isFinite(denyingSellerTruePositionForFallback)
+            ? (denyingSellerVatTypeForFallback === "VAT21" ? denyingSellerTruePositionForFallback : denyingSellerTruePositionForFallback * 1.21)
+            : null;
+
+          const shouldNotifyBuyerForFallback =
+            !Number.isFinite(otherSellerExistsForFallback) ||
+            (Number.isFinite(denyingSellerOwnNormalizedForFallback) && otherSellerExistsForFallback >= denyingSellerOwnNormalizedForFallback);
+
+          if (!shouldNotifyBuyerForFallback) {
+            return;
+          }
+
           const memberWtbForFallback = memberWtbRecordIdForFallback
             ? await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordIdForFallback).catch(() => null)
             : null;
@@ -4114,9 +4152,24 @@ function bindConsignmentDiscordButtons(client) {
             buyerRecordForFallback?.fields?.["Discord ID"] || buyerRecordForFallback?.fields?.["Discord User ID"]
           );
 
-          if (buyerDiscordIdForFallback) {
+          const sellerOfferRecordForFallback = sellerOfferRecordIdForFallback
+            ? await airtable(SELLER_OFFERS_TABLE).find(sellerOfferRecordIdForFallback).catch(() => null)
+            : null;
+          const sof = sellerOfferRecordForFallback?.fields || {};
+          const rawSellerAsk = numberValue(sof["Seller Offer"]);
+          const rawSellerVatType = asText(sof["Offer VAT Type"]);
+          const offerToBuyerForFallback = Number.isFinite(rawSellerAsk)
+            ? calculateMemberWtbBuyerEquivalent(rawSellerAsk, rawSellerVatType, wtbFieldsForFallback)
+            : null;
+
+          if (buyerDiscordIdForFallback && sellerOfferRecordIdForFallback && Number.isFinite(offerToBuyerForFallback)) {
             const user = await kickzDealDiscordClient.users.fetch(buyerDiscordIdForFallback).catch(() => null);
             const dm = user ? await user.createDM().catch(() => null) : null;
+
+            const imageUrlForFallback =
+              Array.isArray(wtbFieldsForFallback["Picture"]) && wtbFieldsForFallback["Picture"][0]?.url
+                ? wtbFieldsForFallback["Picture"][0].url
+                : "";
 
             if (dm) {
               await dm.send({
@@ -4125,10 +4178,42 @@ function bindConsignmentDiscordButtons(client) {
                   description: [
                     `Your counter on **${asText(wtbFieldsForFallback["Product Name"]) || "this WTB"}** was denied by the seller.`,
                     "",
-                    "Head back to your Open Offers to see what's currently available and try again."
+                    `**SKU:** ${asText(wtbFieldsForFallback["SKU"]) || "—"}`,
+                    `**Size:** ${asText(wtbFieldsForFallback["Size"]) || "—"}`,
+                    "",
+                    `**Current Offer:** €${offerToBuyerForFallback.toFixed(2)}`,
+                    "",
+                    "You can accept this seller's offer, counter again, or decline."
                   ].join("\n"),
-                  color: 0xE74C3C
-                }]
+                  color: 0xE74C3C,
+                  timestamp: new Date().toISOString(),
+                  ...(imageUrlForFallback ? { image: { url: imageUrlForFallback } } : {})
+                }],
+                components: [
+                  {
+                    type: 1,
+                    components: [
+                      {
+                        type: 2,
+                        style: 3,
+                        label: "Accept Offer",
+                        custom_id: `accept_member_wtb_buyer_offer:${memberWtbRecordIdForFallback}:${sellerOfferRecordIdForFallback}`
+                      },
+                      {
+                        type: 2,
+                        style: 1,
+                        label: "Counter",
+                        custom_id: `counter_member_wtb_buyer:${memberWtbRecordIdForFallback}:${sellerOfferRecordIdForFallback}`
+                      },
+                      {
+                        type: 2,
+                        style: 4,
+                        label: "Decline",
+                        custom_id: `decline_member_wtb_buyer_offer:${memberWtbRecordIdForFallback}`
+                      }
+                    ]
+                  }
+                ]
               }).catch((err) => console.error("Failed to send round-1 denial fallback DM (non-blocking):", err));
             }
           }
