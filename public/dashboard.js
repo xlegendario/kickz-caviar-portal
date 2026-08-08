@@ -2025,6 +2025,16 @@ function renderBuyingUnifiedOfferRows(items) {
     const dateValue = item._kind === "fresh" ? item.date : (item.denied_at || item.raw_date);
 
     if (isDenied) {
+      // NEW — additive only: his exact scenario — a genuinely fresh
+      // offer denied outright (no prior counter ever existed, so no
+      // Counter Offers record to retry against) needs different
+      // actions than a regular denied round: Counter (a fresh first
+      // counter via create-from-fresh, not Retry) and Delete (the new
+      // buyer-delete-denied endpoint, since the regular buyer-cancel
+      // only knows how to delete a Counter Offers record, and this
+      // item's id is a Seller Offer record instead).
+      const isFreshDenied = item._kind === "fresh_denied";
+
       return `
         <tr>
           <td>${escapeHtml(item.order_id || "-")}</td>
@@ -2039,12 +2049,17 @@ function renderBuyingUnifiedOfferRows(items) {
           <td>
             <div class="dashboard-action-row">
               ${item.member_wtb_record_id ? `
-                <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(item.id || "")}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
+                <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(isFreshDenied ? "" : (item.id || ""))}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
               ` : ""}
-              ${item.previous_record_id ? `
-                <button class="dashboard-counter-btn" type="button" data-buying-retry-counter-id="${escapeHtml(item.id || "")}">Retry</button>
-              ` : ""}
-              <button class="dashboard-deny-btn" type="button" data-buying-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
+              ${isFreshDenied ? `
+                <button class="dashboard-counter-btn" type="button" data-buying-counter-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-counter-kind="fresh" data-buying-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">Counter</button>
+                <button class="dashboard-deny-btn" type="button" data-buying-delete-denied-id="${escapeHtml(item.seller_offer_record_id || item.id || "")}">Delete</button>
+              ` : `
+                ${item.previous_record_id ? `
+                  <button class="dashboard-counter-btn" type="button" data-buying-retry-counter-id="${escapeHtml(item.id || "")}">Retry</button>
+                ` : ""}
+                <button class="dashboard-deny-btn" type="button" data-buying-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
+              `}
             </div>
           </td>
         </tr>
@@ -3562,7 +3577,14 @@ async function loadDashboardData() {
     renderBuyingUnifiedOfferRows(
       (data.items || []).map((item) => ({
         ...item,
-        _kind: activeOfferStatusFilter === "denied" ? "denied" : "my_counter"
+        // FIXED — this always overwrote _kind, discarding the
+        // backend's own "fresh_denied" tag on items merged in from a
+        // fresh, never-countered offer denied outright (his exact
+        // fresh_no_floor deny scenario) — losing the distinction
+        // needed to show the correct Accept/Counter/Delete buttons
+        // for that case. Only applies the generic fallback when the
+        // backend didn't already tag the item itself.
+        _kind: item._kind || (activeOfferStatusFilter === "denied" ? "denied" : "my_counter")
       }))
     );
 
@@ -5839,6 +5861,42 @@ dashboardTableBody.addEventListener("click", async (event) => {
     } catch (err) {
       alert(err.message);
       buyingCancelOfferButton.disabled = false;
+    }
+
+    return;
+  }
+
+  // NEW — additive only: Delete on a "fresh_denied" item (a genuinely
+  // fresh, never-countered offer denied outright — his exact
+  // fresh_no_floor scenario). This item's id is a Seller Offer
+  // record, not a Counter Offers round, so it needs its own endpoint
+  // rather than reusing buyer-cancel above.
+  const buyingDeleteDeniedButton = event.target.closest("[data-buying-delete-denied-id]");
+  if (buyingDeleteDeniedButton) {
+    const sellerOfferId = buyingDeleteDeniedButton.dataset.buyingDeleteDeniedId;
+
+    if (!confirm("Delete this offer? This can't be undone.")) return;
+
+    buyingDeleteDeniedButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/dashboard/buying-offers/${sellerOfferId}/buyer-delete-denied`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seller_record_id: dashboardSeller.id })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Failed to delete offer");
+      }
+
+      await loadDashboardData();
+      await loadDashboardCounts();
+    } catch (err) {
+      alert(err.message);
+      buyingDeleteDeniedButton.disabled = false;
     }
 
     return;
