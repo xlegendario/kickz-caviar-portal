@@ -5418,9 +5418,30 @@ function bindConsignmentDiscordButtons(client) {
       // existing code) already sets "Offer Sent?": false for this
       // exact reason — mirroring that here closes the same gap for
       // Store Orders.
+      // FIXED — a real, confirmed gap found via his careful questioning:
+      // this only ever wrote "Custom Offer", never "Offer VAT Type" —
+      // but calculateLinkedUnitPrice.js (the script that sets the real,
+      // final invoiced price) decides whether to strip VAT ENTIRELY
+      // based on that field. Without writing it here, that field just
+      // kept whatever it was last set to by computeAndPushLowestOffer.js
+      // (based on the RAW seller offer, not this negotiated deal) —
+      // meaning a negotiated deal could get the wrong VAT type and the
+      // wrong final price. Uses the exact same rule already proven
+      // correct elsewhere in this codebase (computeAndPushLowestOffer.js
+      // and the pre-existing Consignment accept flow): Margin sellers
+      // stay "Margin"; otherwise it follows the CLIENT's country, not
+      // the seller's own VAT type — Dutch clients always "VAT21", non-
+      // Dutch clients always "VAT0".
+      const sellerVatTypeForAcceptWrite = asText(f["Seller Original VAT Type"]);
+      const offerVatTypeForAcceptWrite =
+        sellerVatTypeForAcceptWrite === "Margin"
+          ? "Margin"
+          : (isDutchClientCountry(orderRecord.fields?.["Client Country"]) ? "VAT21" : "VAT0");
+
       try {
         await airtable(ORDERS_TABLE).update(linkedOrderId, {
           "Custom Offer": numberValue(f["Store Counter Price"]),
+          "Offer VAT Type": offerVatTypeForAcceptWrite,
           "Offer Accepted?": true,
           "Offer Sent?": false
         });
@@ -8253,10 +8274,26 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
     // sending a fresh "Offer Request" for an already-accepted deal.
     // Setting "Offer Sent?": false prevents that (and matches the
     // pre-existing Consignment accept flow's own handling of this).
+    // FIXED — a real, confirmed gap found via his careful questioning:
+    // this only ever wrote "Custom Offer", never "Offer VAT Type" — but
+    // calculateLinkedUnitPrice.js decides whether to strip VAT entirely
+    // based on that field. Without writing it here, that field just
+    // kept whatever it was last set to by computeAndPushLowestOffer.js
+    // (based on the RAW seller offer, not this negotiated deal). Uses
+    // the exact same rule already proven correct elsewhere (Margin
+    // sellers stay "Margin"; otherwise it follows the CLIENT's
+    // country, not the seller's own VAT type). sellerVatTypeForAccept
+    // and orderFieldsForAccept are already computed just above.
+    const offerVatTypeForAcceptWrite =
+      sellerVatTypeForAccept === "Margin"
+        ? "Margin"
+        : (isDutchClientCountry(orderFieldsForAccept?.["Client Country"]) ? "VAT21" : "VAT0");
+
     try {
       if (Number.isFinite(acceptedStorePrice) && acceptedStorePrice > 0) {
         await airtable(ORDERS_TABLE).update(linkedOrderId, {
           "Custom Offer": acceptedStorePrice,
+          "Offer VAT Type": offerVatTypeForAcceptWrite,
           "Offer Accepted?": true,
           "Offer Sent?": false
         });
@@ -11445,18 +11482,21 @@ function calculateStoreCustomOfferFromConsignmentBase(basePrice, orderFields = {
     if (!Number.isFinite(margin)) return null;
     rawOffer = base + margin;
   } else {
-    // FIXED (again) — the correct formula includes a flat €5 base
-    // cost on top of the percentage markup: MAX(base+10, base*(1+pct)+5).
-    // Confirmed against a real example: consignor price €165 correctly
-    // becomes a €180 store offer. The official Airtable "Offer To
-    // Store" formula is missing this +5 in its Percentage branch (to
-    // be fixed there too) — this was only ever correctly present in
-    // this function's original, pre-session version.
     if (!Number.isFinite(percentage)) return null;
     rawOffer = Math.max(base + 10, base * (1 + percentage) + 5);
   }
 
-  return roundUpToStep(rawOffer, 2.5);
+  // FIXED — a real, confirmed bug found via his live testing: this used
+  // roundUpToStep (always rounds UP), but the actual "Offer To Store"
+  // Airtable formula uses ROUND(value/2.5,0)*2.5 — round to NEAREST,
+  // which can round DOWN. His exact incident: a consignment deal
+  // negotiated/accepted around €157.10 (computed here, rounding up)
+  // actually got charged €155 (from Offer To Store, rounding to
+  // nearest) — the same raw number, two different rounding rules,
+  // producing two different real amounts for the same deal. Using
+  // roundToNearestStep here instead makes this function's result
+  // always match Offer To Store exactly, for any raw value.
+  return roundToNearestStep(rawOffer, 2.5);
 }
 
 // NEW — additive only: the exact inverse of the two functions above,
