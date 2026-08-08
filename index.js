@@ -3965,7 +3965,7 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       await safeEditInteractionMessage(interaction, {
-        content: "✅ Counter offer accepted. Payment will be requested once confirmed.",
+        content: "✅ Counter offer accepted. Check the private channel that was just created for you to process the deal.",
         embeds: interaction.message.embeds,
         components: []
       }).catch(() => {});
@@ -4087,6 +4087,54 @@ function bindConsignmentDiscordButtons(client) {
         }
       } catch (reopenErr) {
         console.error("Failed to reopen prior round after member WTB seller-deny (non-blocking):", reopenErr);
+      }
+
+      // FIXED — a real, confirmed gap found via his live testing: when
+      // the denied round was itself the buyer's VERY FIRST counter to
+      // this seller (no Previous Record ID — nothing to reopen), the
+      // block above was skipped entirely, meaning the buyer got NO
+      // notification whatsoever, not even a simple "this was denied."
+      // Sends a plain, generic denial notice in that case, pointing
+      // them back to the Open Offers page — this seller's raw listing
+      // is untouched and will show there again.
+      try {
+        const priorRoundIdForFallback = asText(deniedFields["Previous Record ID"]);
+
+        if (!priorRoundIdForFallback) {
+          const memberWtbRecordIdForFallback = firstLinkedRecordId(deniedFields["Member WTB"]);
+          const memberWtbForFallback = memberWtbRecordIdForFallback
+            ? await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordIdForFallback).catch(() => null)
+            : null;
+          const wtbFieldsForFallback = memberWtbForFallback?.fields || {};
+          const buyerRecordIdForFallback = firstLinkedRecordId(wtbFieldsForFallback["Buyer Seller ID"]);
+          const buyerRecordForFallback = buyerRecordIdForFallback
+            ? await airtable(SELLERS_TABLE).find(buyerRecordIdForFallback).catch(() => null)
+            : null;
+          const buyerDiscordIdForFallback = asText(
+            buyerRecordForFallback?.fields?.["Discord ID"] || buyerRecordForFallback?.fields?.["Discord User ID"]
+          );
+
+          if (buyerDiscordIdForFallback) {
+            const user = await kickzDealDiscordClient.users.fetch(buyerDiscordIdForFallback).catch(() => null);
+            const dm = user ? await user.createDM().catch(() => null) : null;
+
+            if (dm) {
+              await dm.send({
+                embeds: [{
+                  title: "❌ Offer Denied",
+                  description: [
+                    `Your counter on **${asText(wtbFieldsForFallback["Product Name"]) || "this WTB"}** was denied by the seller.`,
+                    "",
+                    "Head back to your Open Offers to see what's currently available and try again."
+                  ].join("\n"),
+                  color: 0xE74C3C
+                }]
+              }).catch((err) => console.error("Failed to send round-1 denial fallback DM (non-blocking):", err));
+            }
+          }
+        }
+      } catch (fallbackErr) {
+        console.error("Failed to send round-1 denial fallback notification (non-blocking):", fallbackErr);
       }
 
       return;
@@ -4283,7 +4331,7 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       await safeEditInteractionMessage(interaction, {
-        content: "✅ Counter offer accepted. Payment will be requested once confirmed.",
+        content: "✅ Counter offer accepted. Check the private channel that was just created for you to process the deal.",
         embeds: interaction.message.embeds,
         components: []
       }).catch(() => {});
