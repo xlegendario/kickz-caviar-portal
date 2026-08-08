@@ -17051,9 +17051,64 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
 
     const finalItems = visibleItems.map(({ __sellerId, ...rest }) => rest);
 
+    // NEW — additive only: a real, confirmed gap found via his live
+    // testing — a fresh, never-countered offer denied via
+    // /api/dashboard/buying-offers/:id/deny (the "fresh_no_floor" deny
+    // path) only ever marked the underlying Seller Offer as Denied? —
+    // this endpoint reads exclusively from the Counter Offers table,
+    // so that denial had nowhere to surface for the BUYER. His exact
+    // expectation: it must show up here too, in the buyer's own
+    // Denied pill, with Accept (the seller's original ask), Counter
+    // (a fresh first counter), and Delete — mirroring exactly the
+    // same "fresh_denied" pattern already proven for the SELLER's own
+    // wtb-counter-offers Denied pill.
+    let mergedFinalItems = finalItems;
+
+    if (filter === "denied") {
+      const deniedSellerOfferRecords = await airtable(SELLER_OFFERS_TABLE)
+        .select({ filterByFormula: `{Denied?} = TRUE()`, fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Denied At", "Withdrawn?"] })
+        .all()
+        .then((records) =>
+          records.filter(
+            (r) =>
+              !r.fields?.["Withdrawn?"] &&
+              myMemberWtbIds.has(firstLinkedRecordId(r.fields?.["Member WTBs"]))
+          )
+        );
+
+      const freshDeniedItems = deniedSellerOfferRecords.map((record) => {
+        const f = record.fields || {};
+        const memberWtbId = firstLinkedRecordId(f["Member WTBs"]);
+        const wtbFields = memberWtbFieldsById.get(memberWtbId) || {};
+        const rawSellerAsk = numberValue(f["Seller Offer"]);
+        const vatType = asText(f["Offer VAT Type"]);
+        const sellersOfferInBuyerTerms = calculateMemberWtbBuyerEquivalent(rawSellerAsk, vatType, wtbFields);
+
+        return {
+          id: record.id,
+          _kind: "fresh_denied",
+          member_wtb_record_id: memberWtbId,
+          seller_offer_record_id: record.id,
+          order_id: asText(wtbFields["Member WTB ID"]) || memberWtbId,
+          product: asText(wtbFields["Product Name"]),
+          sku: asText(wtbFields["SKU"]),
+          size: asText(wtbFields["Size"]),
+          brand: asText(wtbFields["Brand"]),
+          max_price: Number.isFinite(numberValue(wtbFields["Max Price"])) ? moneyWholeValue(wtbFields["Max Price"]) : null,
+          sellers_offer: Number.isFinite(sellersOfferInBuyerTerms) ? moneySmartValue(sellersOfferInBuyerTerms) : null,
+          sellers_offer_payout: Number.isFinite(rawSellerAsk) ? rawSellerAsk : null,
+          vat_type: vatType,
+          raw_date: asText(f["Denied At"]),
+          denied_at: asText(f["Denied At"])
+        };
+      });
+
+      mergedFinalItems = [...finalItems, ...freshDeniedItems];
+    }
+
     res.json({
-      count: finalItems.length,
-      items: sortDashboardItemsNewestFirst(finalItems)
+      count: mergedFinalItems.length,
+      items: sortDashboardItemsNewestFirst(mergedFinalItems)
     });
   } catch (err) {
     console.error("Failed to load buying counter offers:", err);
@@ -17539,6 +17594,49 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/buyer-cancel", async (re
   }
 });
 
+// ---------------------------------------------------------------------
+// NEW — additive only: lets the buyer delete a "fresh_denied" item
+// from their own Denied pill — a Seller Offer marked Denied? via the
+// fresh_no_floor deny path (no Counter Offers record exists for these,
+// so the regular buyer-cancel above doesn't apply). Soft-deletes via
+// the same "Withdrawn?" flag already used for the seller-side delete,
+// so it disappears from BOTH the buyer's and seller's views
+// consistently, while discord-wtb-bot-main's undercut-check can still
+// see it if needed.
+// ---------------------------------------------------------------------
+app.post("/api/dashboard/buying-offers/:sellerOfferId/buyer-delete-denied", async (req, res) => {
+  try {
+    const sellerOfferId = asText(req.params.sellerOfferId);
+    const buyerSellerRecordId = asText(req.body?.seller_record_id);
+
+    if (!sellerOfferId || !buyerSellerRecordId) {
+      return res.status(400).json({ error: "Missing sellerOfferId or seller_record_id" });
+    }
+
+    const sellerOfferRecord = await airtable(SELLER_OFFERS_TABLE).find(sellerOfferId).catch(() => null);
+
+    if (!sellerOfferRecord) {
+      return res.status(404).json({ error: "Offer not found." });
+    }
+
+    const memberWtbRecordId = firstLinkedRecordId(sellerOfferRecord.fields?.["Member WTBs"]);
+    const memberWtb = memberWtbRecordId ? await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId).catch(() => null) : null;
+
+    if (!memberWtb || !linkedRecordIncludes(memberWtb.fields?.["Buyer Seller ID"], buyerSellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    await airtable(SELLER_OFFERS_TABLE).update(sellerOfferId, {
+      "Withdrawn?": true
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to delete denied buying offer:", err);
+    res.status(500).json({ error: "Failed to delete offer", details: err.message });
+  }
+});
+
 // NEW — additive only: Portal-safe wrapper for the buyer's FIRST-EVER
 // counter on a fresh seller offer (no Counter Offers round exists
 // yet) — calls the existing secret-protected create endpoint.
@@ -17670,12 +17768,20 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
     // create-first-counter endpoint already relies on.
     const allSellerOffersForTheseWtbs = memberWtbIds.length
       ? await airtable(SELLER_OFFERS_TABLE)
-          .select({ fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
+          .select({ fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer", "Denied?"] })
           .all()
           .then((records) =>
             records.filter(
               (r) =>
                 !r.fields?.["Delete Offer"] &&
+                // FIXED — a real, confirmed gap found via his live
+                // testing: this checked "Delete Offer" but never
+                // "Denied?", so a fresh Seller Offer just marked
+                // Denied by the buyer (the fresh_no_floor deny path)
+                // still counted as a valid, winning "fresh" candidate
+                // here — it kept showing in the buyer's own Open pill
+                // as if the deny had done nothing at all.
+                !r.fields?.["Denied?"] &&
                 memberWtbIds.includes(firstLinkedRecordId(r.fields?.["Member WTBs"]))
             )
           )
