@@ -13928,6 +13928,18 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
   let minNormalized = null;
   let winningRaw = null;
   let winningVatType = null;
+  // NEW — additive only: his explicit request for the Lojiq Portal
+  // store-view endpoint — callers that need to know exactly WHICH
+  // record produced the winning price (to know which round to act
+  // on, and whether it's a genuine counter-offer round vs. a still-
+  // untouched raw seller offer) previously had no way to get that
+  // from this function without re-deriving it themselves elsewhere,
+  // risking the exact "second place with similar logic drifts out of
+  // sync" bug already seen once in this project. Every existing
+  // caller is unaffected — they only ever read .normalized/.raw/
+  // .vatType, which are untouched.
+  let winningRecordId = null;
+  let winningSource = null;
 
   // FIXED — a real, confirmed bug found via his live testing: a seller
   // who genuinely countered EARLIER (e.g. seller A at 83) but whose
@@ -13969,6 +13981,17 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
       minNormalized = normalized;
       winningRaw = rawPrice;
       winningVatType = rawVatType;
+      // NEW — additive only: findSellersTrueLastCounter only ever
+      // returns a bare price (not a record id), so when it supplied
+      // rawPrice there's no single record that genuinely holds this
+      // seller's current, actionable position — their own active
+      // round has no genuine counter sitting on it yet. Always point
+      // callers at the raw Seller Offer record itself here, and mark
+      // whether the price shown is that raw listing as-is or a
+      // chain-traced historical one, so callers can tell the two
+      // apart without re-deriving anything themselves.
+      winningRecordId = so.id;
+      winningSource = chainTraced != null ? "seller_offer_chain_traced" : "seller_offer_raw";
     }
   }
 
@@ -14005,6 +14028,12 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
       minNormalized = normalized;
       winningRaw = effectivePrice;
       winningVatType = vatType;
+      // NEW — additive only: this IS a genuine, currently Open
+      // Counter Offers round with the seller's own counter sitting
+      // on it — the record a caller should actually act on
+      // (accept/deny/counter against).
+      winningRecordId = cr.id;
+      winningSource = "counter_offer_round";
     }
   }
 
@@ -14018,8 +14047,131 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
   // can run it through the correct buyer-facing conversion themselves.
   // .normalized alone still works exactly like the old bare-number
   // return for every comparison-only caller.
-  return { normalized: minNormalized, raw: winningRaw, vatType: winningVatType };
+  return {
+    normalized: minNormalized,
+    raw: winningRaw,
+    vatType: winningVatType,
+    // NEW — additive only, see comments above. Existing callers that
+    // only destructure .normalized/.raw/.vatType are unaffected.
+    winningRecordId,
+    winningSource
+  };
 }
+
+// ---------------------------------------------------------------------
+// NEW — additive only: Lojiq Portal's Open pill (Store Orders' store/
+// buyer-side view). Returns, per order still open for offers, the
+// SINGLE current best position — reusing getCurrentGlobalLowestNormalized
+// as the one central source of truth (explicit design requirement)
+// rather than re-deriving "what's the best price" a second time here.
+//
+// Two shapes an item can have:
+//  - round_type: "fresh" — the winning position is a still-untouched
+//    raw Seller Offer (no genuine counter sitting on it). Deliberately
+//    reads the Order's own "Offer To Store" formula field for the
+//    store-facing price rather than recalculating it — that field is
+//    already the trusted source /api/orders?view=offers relies on
+//    today. counter_offer_record_id is null; the store's first action
+//    still goes through the existing round-1 flow
+//    (/api/orders/:recordId/counter-offer).
+//  - round_type: "counter" — the winning position IS a genuine,
+//    currently Open Counter Offers round (the seller has countered).
+//    counter_offer_record_id is the round to act on via
+//    store-accept/store-deny/store-counter.
+//
+// Deliberately excludes orders where the store's OWN counter is
+// currently the winning/pending one (awaiting the seller) — that's the
+// future Countered pill, not Open.
+// ---------------------------------------------------------------------
+app.get("/api/counter-offers/store-view", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (
+      !process.env.COUNTER_OFFERS_SECRET ||
+      secret !== process.env.COUNTER_OFFERS_SECRET
+    ) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const storeName = asText(req.query.store_name);
+
+    if (!storeName) {
+      return res.status(400).json({ error: "Missing store_name" });
+    }
+
+    const safeStoreName = escapeFormulaValue(storeName);
+
+    const orderRecords = await airtable(ORDERS_TABLE)
+      .select({
+        filterByFormula: `AND(
+          TRIM({Store Name} & '') = '${safeStoreName}',
+          OR({Fulfillment Status} = 'Pending', {Fulfillment Status} = 'Outsource')
+        )`
+      })
+      .all();
+
+    if (!orderRecords.length) {
+      return res.json({ count: 0, items: [] });
+    }
+
+    const items = [];
+
+    for (const orderRecord of orderRecords) {
+      const orderId = orderRecord.id;
+      const orderFields = orderRecord.fields || {};
+
+      const best = await getCurrentGlobalLowestNormalized("Seller Offer", orderId, null);
+
+      if (best.normalized == null) continue; // no seller offers at all for this order yet
+
+      if (best.winningSource === "counter_offer_round") {
+        const storePrice = calculateStoreCounterEquivalent(best.raw, best.vatType, orderFields);
+
+        if (!Number.isFinite(storePrice) || storePrice <= 0) continue;
+
+        items.push({
+          order_record_id: orderId,
+          order_number: displayValue(orderFields["Shopify Order Number"]),
+          product: displayValue(orderFields["Shopify Product Name"]),
+          sku: displayValue(orderFields["SKU"]),
+          size: displayValue(orderFields["Size"]),
+          round_type: "counter",
+          counter_offer_record_id: best.winningRecordId,
+          price_to_accept: storePrice
+        });
+        continue;
+      }
+
+      // Winning position is a raw (or chain-traced) Seller Offer, not a
+      // genuine open counter round — treat as "fresh", using the
+      // Order's own trusted Offer To Store field for the price, exactly
+      // as agreed (reused as-is, not recalculated).
+      const offerToStore = numberValue(orderFields["Offer To Store"]);
+
+      if (!Number.isFinite(offerToStore) || offerToStore <= 0) continue;
+
+      items.push({
+        order_record_id: orderId,
+        order_number: displayValue(orderFields["Shopify Order Number"]),
+        product: displayValue(orderFields["Shopify Product Name"]),
+        sku: displayValue(orderFields["SKU"]),
+        size: displayValue(orderFields["Size"]),
+        round_type: "fresh",
+        counter_offer_record_id: null,
+        price_to_accept: offerToStore
+      });
+    }
+
+    res.json({ count: items.length, items });
+  } catch (err) {
+    console.error("Failed to load store-view counter offers:", err);
+    res.status(500).json({
+      error: "Failed to load store offers",
+      details: err.message
+    });
+  }
+});
 
 // ---------------------------------------------------------------------
 async function closeCompetingCountersForOrder(orderRecordId, acceptedCounterOfferRecordId) {
