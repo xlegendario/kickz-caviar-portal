@@ -11322,7 +11322,15 @@ async function sendOfferDeniedDiscordDM({
   size,
   shopifyOrderNumber,
   deniedAmount,
-  vatType
+  vatType,
+  // NEW — additive only: this function is being reused for Member WTB
+  // too (his exact scenario — denying a genuinely fresh, never-
+  // countered Member WTB offer) — the button handler behind "Place New
+  // Offer" already routes generically to the now Member-WTB-aware
+  // /api/seller-offers/:offerId/edit-after-denial, so no new DM
+  // function is needed, just this small label so the embed correctly
+  // says "Member WTB" instead of "Order" in that context.
+  contextLabel = "Order"
 }) {
   await initKickzDealDiscord();
 
@@ -11347,7 +11355,7 @@ async function sendOfferDeniedDiscordDM({
           `SKU: ${sku || "—"}`,
           `Size: ${size || "—"}`,
           "",
-          `Order: ${orderId || orderRecordId || "—"}`,
+          `${contextLabel}: ${orderId || orderRecordId || "—"}`,
           "",
           `**Your denied offer**`,
           `${amountText} · ${vatType || "—"}`,
@@ -14140,6 +14148,7 @@ app.get("/api/counter-offers/store-view", async (req, res) => {
           counter_offer_record_id: best.winningRecordId,
           price_to_accept: storePrice
         });
+
         continue;
       }
 
@@ -14172,7 +14181,6 @@ app.get("/api/counter-offers/store-view", async (req, res) => {
     });
   }
 });
-
 // ---------------------------------------------------------------------
 async function closeCompetingCountersForOrder(orderRecordId, acceptedCounterOfferRecordId) {
   const openCountersForOrderMatch = await airtable(COUNTER_OFFERS_TABLE)
@@ -20108,9 +20116,17 @@ app.post("/api/seller-offers/:offerId/edit-after-denial", async (req, res) => {
     }
 
     const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+    // NEW — additive only: this endpoint previously only ever supported
+    // Store Orders (required Linked Orders) — extending it to also
+    // accept a Member WTB-linked Seller Offer, for his exact scenario:
+    // a buyer denying a genuinely fresh Member WTB offer they've never
+    // countered before, where the retry needs this exact same
+    // mechanism (Denied? flag cleared, price updated) rather than the
+    // Counter Offers table's broadcast machinery.
+    const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
 
-    if (!linkedOrderId) {
-      return res.status(409).json({ error: "This offer is not linked to an order" });
+    if (!linkedOrderId && !linkedMemberWtbId) {
+      return res.status(409).json({ error: "This offer is not linked to an order or Member WTB" });
     }
 
     const normalizedOffer = vatType === "VAT0" ? offerAmount * 1.21 : offerAmount;
@@ -22273,10 +22289,46 @@ app.post("/api/dashboard/buying-offers/:memberWtbRecordId/deny", async (req, res
 
     const buyerHighestEver = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
 
+    // FIXED — his exact correction, found via live testing: this used
+    // to hard-reject with "nothing to deny against" whenever the buyer
+    // had never made ANY counter yet on this whole WTB — a completely
+    // reasonable, common case (a buyer's very first reaction to a
+    // fresh offer being "no thanks"). His clear direction: this should
+    // simply deny THIS seller's fresh offer outright — same mechanism
+    // already proven for Store Orders (mark the Seller Offer "Denied?",
+    // send an "Offer Denied" DM with a Retry button, surface it in the
+    // seller's own Want To Buys Denied pill with Retry + Delete) —
+    // not the broader multi-seller broadcast, since there's no
+    // established buyer floor yet to broadcast in the first place.
     if (!Number.isFinite(buyerHighestEver) || buyerHighestEver <= 0) {
-      return res.status(409).json({
-        error: "You haven't made any offer on this WTB yet — there's nothing to deny against."
+      const nowIsoForFreshDeny = new Date().toISOString();
+
+      await airtable(SELLER_OFFERS_TABLE).update(sellerOfferId, {
+        "Denied?": true,
+        "Denied At": nowIsoForFreshDeny,
+        "Denied Amount": sellerOriginalPrice,
+        "Denied VAT Type": sellerVatType
       });
+
+      const sellerRecordForFreshDeny = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+      const sellerDiscordIdForFreshDeny = asText(sellerRecordForFreshDeny?.fields?.["Discord ID"]);
+
+      if (sellerDiscordIdForFreshDeny) {
+        await sendOfferDeniedDiscordDM({
+          orderId: asText(wtbFields["Member WTB ID"]) || memberWtbRecordId,
+          sellerOfferRecordId: sellerOfferId,
+          sellerRecordId,
+          sellerDiscordId: sellerDiscordIdForFreshDeny,
+          productName: asText(wtbFields["Product Name"]),
+          sku: asText(wtbFields["SKU"]),
+          size: asText(wtbFields["Size"]),
+          deniedAmount: sellerOriginalPrice,
+          vatType: sellerVatType,
+          contextLabel: "Member WTB"
+        }).catch((err) => console.error("Failed to send fresh-offer denial DM (non-blocking):", err));
+      }
+
+      return res.json({ ok: true, denied_type: "fresh_no_floor" });
     }
 
     // FIXED — his exact correction: this used to silently create a
