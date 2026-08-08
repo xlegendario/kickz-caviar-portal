@@ -14107,31 +14107,25 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
 }
 
 // ---------------------------------------------------------------------
-// NEW — additive only: Lojiq Portal's Open pill (Store Orders' store/
-// buyer-side view). Returns, per order still open for offers, the
-// SINGLE current best position — reusing getCurrentGlobalLowestNormalized
-// as the one central source of truth (explicit design requirement)
-// rather than re-deriving "what's the best price" a second time here.
-//
-// Two shapes an item can have:
-//  - round_type: "fresh" — the winning position is a still-untouched
-//    raw Seller Offer (no genuine counter sitting on it). Deliberately
-//    reads the Order's own "Offer To Store" formula field for the
-//    store-facing price rather than recalculating it — that field is
-//    already the trusted source /api/orders?view=offers relies on
-//    today. counter_offer_record_id is null; the store's first action
-//    still goes through the existing round-1 flow
-//    (/api/orders/:recordId/counter-offer).
-//  - round_type: "counter" — the winning position IS a genuine,
-//    currently Open Counter Offers round (the seller has countered).
-//    counter_offer_record_id is the round to act on via
-//    store-accept/store-deny/store-counter.
-//
-// Deliberately excludes orders where the store's OWN counter is
-// currently the winning/pending one (awaiting the seller) — that's the
-// future Countered pill, not Open.
+// NEW — additive only: Lojiq Portal's Open pill, part 1 of 2 — fresh,
+// never-countered Seller Offers for a store's orders. 1:1 mirror of
+// /api/dashboard/buying-offers (Member WTB's equivalent), adapted:
+//  - ownership by Store Name text match (Store Orders has no linked
+//    buyer record the way Member WTB has Buyer Seller ID)
+//  - price is read directly from the Order's own "Offer To Store"
+//    field rather than recalculated — his explicit, confirmed choice,
+//    on firmer footing now that both write-side bugs feeding that
+//    field (rounding, missing Offer VAT Type on accept) are fixed
+// Everything else — excluding Denied?/Withdrawn?/Delete Offer sellers,
+// excluding sellers already mid-negotiation on this order, and hiding
+// the whole order if some OTHER seller's active counter already beats
+// the best fresh offer (that order belongs in Countered instead) — is
+// carried over unchanged from the Member WTB pattern.
+// Replaces the earlier, simpler store-view endpoint (his confirmed
+// call — this is more thorough: proper Denied?/Withdrawn? exclusion,
+// cross-seller comparison, no-room-to-counter).
 // ---------------------------------------------------------------------
-app.get("/api/counter-offers/store-view", async (req, res) => {
+app.get("/api/dashboard/store-offers", async (req, res) => {
   try {
     const secret = asText(req.headers["x-kc-secret"]);
 
@@ -14154,7 +14148,8 @@ app.get("/api/counter-offers/store-view", async (req, res) => {
       .select({
         filterByFormula: `AND(
           TRIM({Store Name} & '') = '${safeStoreName}',
-          OR({Fulfillment Status} = 'Pending', {Fulfillment Status} = 'Outsource')
+          OR({Fulfillment Status} = 'Pending', {Fulfillment Status} = 'Outsource'),
+          {Offer To Store} > 0
         )`
       })
       .all();
@@ -14163,58 +14158,155 @@ app.get("/api/counter-offers/store-view", async (req, res) => {
       return res.json({ count: 0, items: [] });
     }
 
-    const items = [];
+    const orderIds = orderRecords.map((r) => r.id);
+    const orderIdSet = new Set(orderIds);
 
-    for (const orderRecord of orderRecords) {
-      const orderId = orderRecord.id;
-      const orderFields = orderRecord.fields || {};
+    // Per order, the set of seller IDs currently mid-negotiation — their
+    // raw Seller Offer is stale (superseded by their own counter) and
+    // must be skipped when picking the "fresh" winner below.
+    const activeCountersForTheseOrders = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Seller Offer')`,
+        fields: ["Order", "Seller ID"]
+      })
+      .all()
+      .then((records) => records.filter((r) => orderIdSet.has(firstLinkedRecordId(r.fields?.["Order"]))));
 
-      const best = await getCurrentGlobalLowestNormalized("Seller Offer", orderId, null);
-
-      if (best.normalized == null) continue; // no seller offers at all for this order yet
-
-      if (best.winningSource === "counter_offer_round") {
-        const storePrice = calculateStoreCounterEquivalent(best.raw, best.vatType, orderFields);
-
-        if (!Number.isFinite(storePrice) || storePrice <= 0) continue;
-
-        items.push({
-          order_record_id: orderId,
-          order_number: displayValue(orderFields["Shopify Order Number"]),
-          product: displayValue(orderFields["Shopify Product Name"]),
-          sku: displayValue(orderFields["SKU"]),
-          size: displayValue(orderFields["Size"]),
-          round_type: "counter",
-          counter_offer_record_id: best.winningRecordId,
-          price_to_accept: storePrice
-        });
-
-        continue;
+    const sellerIdsWithActiveCounterByOrderId = new Map();
+    for (const r of activeCountersForTheseOrders) {
+      const orderId = firstLinkedRecordId(r.fields?.["Order"]);
+      const sellerId = firstLinkedRecordId(r.fields?.["Seller ID"]);
+      if (!orderId || !sellerId) continue;
+      if (!sellerIdsWithActiveCounterByOrderId.has(orderId)) {
+        sellerIdsWithActiveCounterByOrderId.set(orderId, new Set());
       }
-
-      // Winning position is a raw (or chain-traced) Seller Offer, not a
-      // genuine open counter round — treat as "fresh", using the
-      // Order's own trusted Offer To Store field for the price, exactly
-      // as agreed (reused as-is, not recalculated).
-      const offerToStore = numberValue(orderFields["Offer To Store"]);
-
-      if (!Number.isFinite(offerToStore) || offerToStore <= 0) continue;
-
-      items.push({
-        order_record_id: orderId,
-        order_number: displayValue(orderFields["Shopify Order Number"]),
-        product: displayValue(orderFields["Shopify Product Name"]),
-        sku: displayValue(orderFields["SKU"]),
-        size: displayValue(orderFields["Size"]),
-        round_type: "fresh",
-        counter_offer_record_id: null,
-        price_to_accept: offerToStore
-      });
+      sellerIdsWithActiveCounterByOrderId.get(orderId).add(sellerId);
     }
 
-    res.json({ count: items.length, items });
+    const allSellerOffersForTheseOrders = await airtable(SELLER_OFFERS_TABLE)
+      .select({ fields: ["Linked Orders", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer", "Denied?", "Withdrawn?"] })
+      .all()
+      .then((records) =>
+        records.filter(
+          (r) =>
+            !r.fields?.["Delete Offer"] &&
+            !r.fields?.["Denied?"] &&
+            !r.fields?.["Withdrawn?"] &&
+            orderIdSet.has(firstLinkedRecordId(r.fields?.["Linked Orders"]))
+        )
+      );
+
+    const winningSellerOfferByOrderId = new Map();
+    for (const so of allSellerOffersForTheseOrders) {
+      const orderId = firstLinkedRecordId(so.fields?.["Linked Orders"]);
+      const sellerId = firstLinkedRecordId(so.fields?.["Seller ID"]);
+
+      // Skip — this seller is already mid-negotiation on this order;
+      // their raw offer is stale, doesn't belong in the "fresh" pool.
+      if (sellerId && sellerIdsWithActiveCounterByOrderId.get(orderId)?.has(sellerId)) continue;
+
+      const price = numberValue(so.fields?.["Seller Offer"]);
+      if (!Number.isFinite(price)) continue;
+
+      const current = winningSellerOfferByOrderId.get(orderId);
+      if (!current || price < current.price) {
+        winningSellerOfferByOrderId.set(orderId, {
+          price,
+          id: so.id,
+          vatType: asText(so.fields?.["Offer VAT Type"])
+        });
+      }
+    }
+
+    // If some OTHER seller's active counter already beats the best
+    // fresh offer, this order's true winner belongs in Countered
+    // instead — exclude from Open entirely rather than show a worse
+    // number.
+    await Promise.all(
+      Array.from(winningSellerOfferByOrderId.keys()).map(async (orderId) => {
+        const bestActiveCounter = (await getCurrentGlobalLowestNormalized("Seller Offer", orderId, null)).normalized;
+        const winner = winningSellerOfferByOrderId.get(orderId);
+        const freshNormalized = asText(winner.vatType) === "VAT21" ? winner.price : winner.price * 1.21;
+        if (Number.isFinite(bestActiveCounter) && Number.isFinite(freshNormalized) && bestActiveCounter < freshNormalized) {
+          winningSellerOfferByOrderId.delete(orderId);
+        }
+      })
+    );
+
+    // Same batching pattern as winningSellerOfferByOrderId above — one
+    // broad fetch for ALL these orders' rounds (any status, needed since
+    // the store's highest-ever position can live on a Closed/Denied
+    // round too), then a per-order lookup, instead of one Airtable call
+    // per order (getBuyerHighestEverPosition would otherwise run once
+    // per item and risk Airtable's rate limit on a bigger list).
+    const allRoundsForTheseOrders = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `{Source Type} = 'Seller Offer'`,
+        fields: ["Order", "Store Counter Price"]
+      })
+      .all()
+      .then((records) => records.filter((r) => orderIdSet.has(firstLinkedRecordId(r.fields?.["Order"]))));
+
+    const myHighestEverByOrderId = new Map();
+    for (const r of allRoundsForTheseOrders) {
+      const orderId = firstLinkedRecordId(r.fields?.["Order"]);
+      if (!orderId) continue;
+      const price = numberValue(r.fields?.["Store Counter Price"]);
+      if (!(price > 0)) continue;
+      const current = myHighestEverByOrderId.get(orderId);
+      if (current == null || price > current) {
+        myHighestEverByOrderId.set(orderId, price);
+      }
+    }
+
+    const items = orderRecords
+      .filter((record) => winningSellerOfferByOrderId.has(record.id))
+      .map((record) => {
+        const f = record.fields || {};
+        const winningSellerOffer = winningSellerOfferByOrderId.get(record.id);
+
+        // His explicit, confirmed choice: read the price directly from
+        // the Order's own trusted "Offer To Store" field rather than
+        // recalculating it from winningSellerOffer.
+        const offerAmount = numberValue(f["Offer To Store"]);
+
+        const myHighestEver = myHighestEverByOrderId.get(record.id) ?? null;
+
+        const noRoomToCounter =
+          Number.isFinite(myHighestEver) &&
+          myHighestEver > 0 &&
+          Number.isFinite(offerAmount) &&
+          (offerAmount - myHighestEver) < MIN_COUNTER_STEP;
+
+        return {
+          id: record.id,
+          order_record_id: record.id,
+          seller_offer_record_id: winningSellerOffer.id,
+          order_number: displayValue(f["Shopify Order Number"]),
+          product: displayValue(f["Shopify Product Name"]),
+          sku: displayValue(f["SKU"]),
+          size: displayValue(f["Size"]),
+          brand: displayValue(f["Brand"]),
+          offer: Number.isFinite(offerAmount) && offerAmount > 0
+            ? moneySmartValue(offerAmount)
+            : "-",
+          my_offer: Number.isFinite(myHighestEver) && myHighestEver > 0
+            ? moneySmartValue(myHighestEver)
+            : null,
+          no_room_to_counter: noRoomToCounter,
+          vat_type: winningSellerOffer.vatType || null,
+          status: "Offer Received",
+          date: formatDateEU(f["Order Date"]),
+          raw_date: f["Order Date"]
+        };
+      });
+
+    res.json({
+      count: items.length,
+      items: sortDashboardItemsNewestFirst(items)
+    });
   } catch (err) {
-    console.error("Failed to load store-view counter offers:", err);
+    console.error("Failed to load store offers:", err);
     res.status(500).json({
       error: "Failed to load store offers",
       details: err.message
