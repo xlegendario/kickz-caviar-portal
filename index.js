@@ -21920,6 +21920,43 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
       });
     }
 
+    // NEW — additive only: a real, confirmed gap found via his live
+    // testing — this "create" endpoint handles BOTH a genuinely fresh,
+    // first-ever counter to a seller AND a retry after THIS SAME
+    // seller just denied (via the Denied embed's reused Counter
+    // button). getBuyerHighestEverPosition alone doesn't distinguish
+    // these — it only blocks going BELOW the historical high, so
+    // resubmitting the EXACT price this seller just denied (e.g. €90
+    // again) passed, since €90 isn't LESS than the €90 historical
+    // high. His explicit expectation: a retry against a seller who
+    // just denied must be STRICTLY higher than what they denied —
+    // finds the most recent Denied round for THIS specific seller
+    // offer and, if found, enforces the standard narrowing-band
+    // minimum step above that denied price.
+    const recentDeniedRoundForThisSeller = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `AND({Status} = 'Denied', {Source Type} = 'Member WTB', {Seller Offer Record ID} = '${escapeFormulaValue(sellerOfferId)}')`,
+        fields: ["Member WTB", "Store Counter Price", "Denied At"],
+        sort: [{ field: "Denied At", direction: "desc" }],
+        maxRecords: 1
+      })
+      .firstPage()
+      .then((records) =>
+        records.find((r) => firstLinkedRecordId(r.fields?.["Member WTB"]) === memberWtbRecordId)
+      )
+      .catch(() => null);
+
+    if (recentDeniedRoundForThisSeller) {
+      const deniedPriceForThisSeller = numberValue(recentDeniedRoundForThisSeller.fields?.["Store Counter Price"]);
+      const minAllowedRetry = Math.ceil(deniedPriceForThisSeller + MIN_COUNTER_STEP);
+
+      if (Number.isFinite(deniedPriceForThisSeller) && deniedPriceForThisSeller > 0 && buyerCounterPrice < minAllowedRetry) {
+        return res.status(400).json({
+          error: `This seller already denied €${deniedPriceForThisSeller.toFixed(2)} — your retry must be at least €${minAllowedRetry.toFixed(2)}.`
+        });
+      }
+    }
+
     // FIXED — a real, confirmed gap found via his live testing:
     // getBuyerHighestEverPosition was only ever wired into the
     // round-2+ buyer-counter endpoint, never into THIS one — the
