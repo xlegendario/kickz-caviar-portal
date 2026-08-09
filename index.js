@@ -7660,25 +7660,22 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
       return res.status(409).json({ error: "No open round-1 counters found for this order to edit." });
     }
 
-    // FIXED — a real, confirmed gap, corrected twice: this never
-    // checked the new price against the store's OWN current round-1
-    // price at all — only against each seller's ask (to decide
-    // whether to skip that seller). His explicit correction: it's not
-    // enough to just require the price to DIFFER — the whole
-    // ping-pong principle is that the buyer/store only ever moves
-    // UP from their own previous position (mirrored by sellers only
-    // ever moving down), so they narrow toward each other. Editing to
-    // a LOWER price than the store's own current round-1 offer would
-    // break that principle just as much as editing to the identical
-    // price would. All round-1 siblings share the same "Store Counter
-    // Price" (they were all created from the same broadcast), so
-    // there's one single reference number to check against.
+    // FIXED — his correction: don't reimplement this rule ad hoc — it
+    // already exists, centrally, as validateNextCounterPrice, used by
+    // every other price-change action in this system (store-counter,
+    // seller-counter, the per-round edit endpoint). Round 1 has no
+    // genuine seller counterpart yet (nobody's countered), so passing
+    // Infinity as the counterpart price gives exactly the right
+    // behavior: a floor of "current + MIN_COUNTER_STEP," no artificial
+    // ceiling — same function, same band logic, same error wording as
+    // everywhere else, not a separate reimplementation.
     const currentRoundOnePrice = numberValue(roundOneRecords[0].fields?.["Store Counter Price"]);
 
-    if (Number.isFinite(currentRoundOnePrice) && proposedPrice < currentRoundOnePrice + MIN_COUNTER_STEP) {
-      return res.status(400).json({
-        error: `Your edit must be higher than your current offer (€${currentRoundOnePrice}) — minimum €${(currentRoundOnePrice + MIN_COUNTER_STEP).toFixed(2)}.`
-      });
+    if (Number.isFinite(currentRoundOnePrice)) {
+      const editValidation = validateNextCounterPrice(currentRoundOnePrice, Infinity, proposedPrice);
+      if (!editValidation.ok) {
+        return res.status(400).json({ error: editValidation.reason, band: editValidation.band });
+      }
     }
 
     // FIXED — this endpoint previously passed an empty {} as orderFields
