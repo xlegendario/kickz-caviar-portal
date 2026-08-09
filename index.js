@@ -8758,6 +8758,20 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
     const record = await airtable(COUNTER_OFFERS_TABLE).find(recordId);
     const f = record.fields || {};
 
+    // NEW — additive only, same pattern as store-accept/store-deny/
+    // store-counter: only enforced when store_name is provided (and
+    // only relevant for actor="store" — a seller edit has no
+    // store_name to check), so the existing Discord caller (which
+    // doesn't send it) is unaffected.
+    const requestedStoreNameForEdit = asText(req.body?.store_name);
+    if (actor === "store" && requestedStoreNameForEdit) {
+      const linkedOrderIdForEdit = firstLinkedRecordId(f["Order"]);
+      const ownsIt = await verifyStoreOwnsOrderForRound(linkedOrderIdForEdit, requestedStoreNameForEdit);
+      if (!ownsIt) {
+        return res.status(403).json({ error: "Not allowed for this store." });
+      }
+    }
+
     if (asText(f["Status"]) !== "Open") {
       return res.status(409).json({ error: "This counter offer is no longer open — nothing to edit." });
     }
