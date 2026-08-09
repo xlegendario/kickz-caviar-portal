@@ -3900,7 +3900,7 @@ function bindConsignmentDiscordButtons(client) {
       try {
         counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
       } catch (err) {
-        if (err.statusCode === 404 || err.error === "NOT_FOUND") {
+        if ((err.statusCode === 404 || err.error === "NOT_FOUND" || err.statusCode === 403 || err.error === "NOT_AUTHORIZED")) {
           await safeEditInteractionMessage(interaction, {
             content: "❌ This offer is no longer valid.",
             embeds: interaction.message.embeds,
@@ -4008,7 +4008,7 @@ function bindConsignmentDiscordButtons(client) {
       try {
         deniedRecord = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
       } catch (err) {
-        if (err.statusCode === 404 || err.error === "NOT_FOUND") {
+        if ((err.statusCode === 404 || err.error === "NOT_FOUND" || err.statusCode === 403 || err.error === "NOT_AUTHORIZED")) {
           await safeEditInteractionMessage(interaction, {
             content: "❌ This offer is no longer valid.",
             embeds: interaction.message.embeds,
@@ -5231,7 +5231,7 @@ function bindConsignmentDiscordButtons(client) {
           "Closed At": new Date().toISOString()
         });
       } catch (err) {
-        if (err.statusCode === 404 || err.error === "NOT_FOUND") {
+        if ((err.statusCode === 404 || err.error === "NOT_FOUND" || err.statusCode === 403 || err.error === "NOT_AUTHORIZED")) {
           await disableCounterOfferDiscordButtons(
             interaction.channelId,
             interaction.message.id,
@@ -5391,7 +5391,7 @@ function bindConsignmentDiscordButtons(client) {
       try {
         counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
       } catch (err) {
-        if (err.statusCode === 404 || err.error === "NOT_FOUND") {
+        if ((err.statusCode === 404 || err.error === "NOT_FOUND" || err.statusCode === 403 || err.error === "NOT_AUTHORIZED")) {
           await disableCounterOfferDiscordButtons(
             interaction.channelId,
             interaction.message.id,
@@ -7805,7 +7805,7 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
     try {
       previousRecord = await airtable(COUNTER_OFFERS_TABLE).find(previousRecordId);
     } catch (err) {
-      if (err.statusCode === 404 || err.error === "NOT_FOUND") {
+      if ((err.statusCode === 404 || err.error === "NOT_FOUND" || err.statusCode === 403 || err.error === "NOT_AUTHORIZED")) {
         return res.status(404).json({ error: "This offer is no longer valid." });
       }
       throw err;
@@ -8762,7 +8762,7 @@ app.post("/api/counter-offers/:id/store-cancel", async (req, res) => {
     }
 
     const record = await airtable(COUNTER_OFFERS_TABLE).find(offerId).catch((err) => {
-      if (err.statusCode === 404 || err.error === "NOT_FOUND") return null;
+      if ((err.statusCode === 404 || err.error === "NOT_FOUND" || err.statusCode === 403 || err.error === "NOT_AUTHORIZED")) return null;
       throw err;
     });
 
@@ -23290,7 +23290,7 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
     try {
       previousRecord = await airtable(COUNTER_OFFERS_TABLE).find(previousRecordId);
     } catch (err) {
-      if (err.statusCode === 404 || err.error === "NOT_FOUND") {
+      if ((err.statusCode === 404 || err.error === "NOT_FOUND" || err.statusCode === 403 || err.error === "NOT_AUTHORIZED")) {
         return res.status(404).json({ error: "This offer is no longer valid." });
       }
       throw err;
