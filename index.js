@@ -7956,6 +7956,15 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
     const previousRecord = await airtable(COUNTER_OFFERS_TABLE).find(previousRecordId);
     const f = previousRecord.fields || {};
 
+    // NEW — additive only, see verifyStoreOwnsOrderForRound above.
+    const requestedStoreNameForCounter = asText(req.body?.store_name);
+    if (requestedStoreNameForCounter) {
+      const ownsIt = await verifyStoreOwnsOrderForRound(firstLinkedRecordId(f["Order"]), requestedStoreNameForCounter);
+      if (!ownsIt) {
+        return res.status(403).json({ error: "Not allowed for this store." });
+      }
+    }
+
     if (asText(f["Status"]) !== "Open") {
       return res.status(409).json({ error: "This counter offer is no longer open." });
     }
@@ -8189,6 +8198,14 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
     }
 
     const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
+
+    // NEW — additive only, see verifyStoreOwnsOrderForRound above.
+    // Reuses orderRecord (already being fetched here) instead of a
+    // second lookup.
+    const requestedStoreNameForAccept = asText(req.body?.store_name);
+    if (requestedStoreNameForAccept && displayValue(orderRecord.fields?.["Store Name"]) !== requestedStoreNameForAccept) {
+      return res.status(403).json({ error: "Not allowed for this store." });
+    }
     const orderStatus = asText(orderRecord.fields?.["Fulfillment Status"]);
 
     if (orderStatus !== "Outsource") {
@@ -8371,13 +8388,25 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
       return res.status(409).json({ error: "This counter offer is no longer available." });
     }
 
+    // NEW — additive only, see verifyStoreOwnsOrderForRound above.
+    // Computed here (before the write below) rather than where it used
+    // to be computed further down, so a denial can't happen at all for
+    // a store that doesn't own this order.
+    const linkedOrderId = firstLinkedRecordId(f["Order"]);
+    const requestedStoreNameForDeny = asText(req.body?.store_name);
+    if (requestedStoreNameForDeny) {
+      const ownsIt = await verifyStoreOwnsOrderForRound(linkedOrderId, requestedStoreNameForDeny);
+      if (!ownsIt) {
+        return res.status(403).json({ error: "Not allowed for this store." });
+      }
+    }
+
     await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
       "Status": "Denied",
       "Denied At": new Date().toISOString(),
       "Closed At": new Date().toISOString()
     });
 
-    const linkedOrderId = firstLinkedRecordId(f["Order"]);
     const sellerRecordId = firstLinkedRecordId(f["Seller ID"]);
     const sellerDiscordId = asText(f["Seller Discord ID"]);
 
@@ -13905,6 +13934,20 @@ for (const round of pendingSellerCounterRounds) {
 }
 
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// NEW — additive only: his explicit, confirmed request — add the same
+// per-action ownership check Member WTB's buyer-accept/buyer-deny/
+// buyer-counter already have (not just the shared secret), now that
+// Lojiq Portal calls these Store Orders endpoints too. Small, cheap,
+// extra safety layer: confirms the store making the request actually
+// owns the Order this round belongs to, before any write happens.
+// ---------------------------------------------------------------------
+async function verifyStoreOwnsOrderForRound(orderRecordId, requestedStoreName) {
+  if (!orderRecordId || !asText(requestedStoreName)) return false;
+  const order = await airtable(ORDERS_TABLE).find(orderRecordId);
+  return displayValue(order.fields?.["Store Name"]) === asText(requestedStoreName);
+}
+
 async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSellerId) {
   const linkField = sourceType === "Member WTB" ? "Member WTBs" : "Linked Orders";
   const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
