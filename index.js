@@ -10907,10 +10907,16 @@ function calculateCounterPayoutForVatType(storeCounterAllInPrice, vatType, order
   if (method === "Firm Range" && Number.isFinite(margin) && margin > 0) {
     payout = converted - margin;
   } else if (Number.isFinite(percentage) && percentage > 0) {
-    payout = Math.min(
-      converted - 10,
-      converted / (1 + percentage)
-    );
+    // FIXED — must invert MAX(base+10, base*(1+pct)+5), same fix as
+    // calculateStoreCounterEquivalent's forward direction, mirrored
+    // using the same proven threshold-based approach already used in
+    // calculateConsignmentBaseFromStoreOffer below (a naive
+    // min(converted-10, converted/(1+percentage)) was both missing the
+    // "-5" and less explicit about which branch actually applies).
+    const threshold = 5 / percentage;
+    const candidateFromFloor = converted - 10;
+    const candidateFromPercentage = (converted - 5) / (1 + percentage);
+    payout = candidateFromFloor <= threshold ? candidateFromFloor : candidateFromPercentage;
   } else if (Number.isFinite(margin) && margin > 0) {
     payout = converted - margin;
   } else {
@@ -10951,9 +10957,15 @@ function calculateStoreCounterEquivalent(sellerAskPrice, vatType, orderFields = 
   if (method === "Firm Range" && Number.isFinite(margin) && margin > 0) {
     storePrice = converted + margin;
   } else if (Number.isFinite(percentage) && percentage > 0) {
+    // FIXED — his confirmed, deliberate design: the Airtable "Offer To
+    // Store" formula's Percentage branch is
+    // MAX(base+10, base*(1+pct)+5) — the "+5" was missing here,
+    // producing a store price up to €5 lower than the formula would
+    // give the exact same raw seller price for. Mirrors the already-
+    // correct calculateStoreCustomOfferFromConsignmentBase below.
     storePrice = Math.max(
       converted + 10,
-      converted * (1 + percentage)
+      converted * (1 + percentage) + 5
     );
   } else if (Number.isFinite(margin) && margin > 0) {
     storePrice = converted + margin;
