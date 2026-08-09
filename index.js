@@ -14436,6 +14436,16 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
           sku: displayValue(f["SKU"]),
           size: displayValue(f["Size"]),
           brand: displayValue(f["Brand"]),
+          // NEW — additive only: these three were present on every
+          // other order-list view via the Lojiq Portal's own shared
+          // mapping (selling_price, offer_date, eta) but missing here
+          // — his own catch before live-testing, would have shown "—"
+          // in those columns for every row.
+          selling_price: Number.isFinite(numberValue(f["Selling Price"])) && numberValue(f["Selling Price"]) > 0
+            ? moneySmartValue(numberValue(f["Selling Price"]))
+            : "-",
+          offer_date: formatDateEU(f["Offer Sent At"]),
+          eta: displayValue(f["Estimated Time"]),
           offer: Number.isFinite(offerAmount) && offerAmount > 0
             ? moneySmartValue(offerAmount)
             : "-",
@@ -14588,6 +14598,14 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
         sku: displayValue(orderFields["SKU"]),
         size: displayValue(orderFields["Size"]),
         brand: displayValue(orderFields["Brand"]),
+        // NEW — additive only: matching the same fields added to
+        // store-offers just now — his own catch before live-testing.
+        selling_price: Number.isFinite(numberValue(orderFields["Selling Price"])) && numberValue(orderFields["Selling Price"]) > 0
+          ? moneySmartValue(numberValue(orderFields["Selling Price"]))
+          : "-",
+        offer_date: formatDateEU(orderFields["Offer Sent At"]),
+        eta: displayValue(orderFields["Estimated Time"]),
+        date: formatDateEU(orderFields["Order Date"]),
         my_offer: Number.isFinite(myLastOffer) && myLastOffer > 0 ? moneySmartValue(myLastOffer) : null,
         sellers_offer: Number.isFinite(sellersOfferInStoreTerms) ? moneySmartValue(sellersOfferInStoreTerms) : null,
         sellers_offer_payout: Number.isFinite(sellersOffer) ? sellersOffer : null,
