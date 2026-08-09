@@ -14314,6 +14314,189 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
   }
 });
 // ---------------------------------------------------------------------
+// NEW — additive only: Lojiq Portal's Open pill, part 2 of 2 — genuine
+// back-and-forth rounds where the SELLER just moved and the store needs
+// to respond. 1:1 mirror of /api/dashboard/buying-counter-offers,
+// adapted the same way as store-offers above (store_name text match
+// instead of a linked buyer record, x-kc-secret since this is called
+// server-to-server by Lojiq Portal rather than from a logged-in
+// browser session).
+//
+// Only filter=open is built right now, on purpose — matches the
+// agreed small-steps approach; filter=countered/denied come with
+// their own phases later. Requesting anything else returns a clear
+// "not built yet" response rather than silently doing the wrong
+// thing.
+// ---------------------------------------------------------------------
+app.get("/api/dashboard/store-counter-offers", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (
+      !process.env.COUNTER_OFFERS_SECRET ||
+      secret !== process.env.COUNTER_OFFERS_SECRET
+    ) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const storeName = asText(req.query.store_name);
+    const filter = asText(req.query.filter) || "open";
+
+    if (!storeName) {
+      return res.status(400).json({ error: "Missing store_name" });
+    }
+
+    if (filter !== "open") {
+      return res.status(400).json({ error: `filter=${filter} isn't built yet — only filter=open is available so far` });
+    }
+
+    const safeStoreName = escapeFormulaValue(storeName);
+
+    const myOrders = await airtable(ORDERS_TABLE)
+      .select({
+        filterByFormula: `AND(
+          TRIM({Store Name} & '') = '${safeStoreName}',
+          OR({Fulfillment Status} = 'Pending', {Fulfillment Status} = 'Outsource')
+        )`
+      })
+      .all();
+
+    const myOrderIds = new Set(myOrders.map((r) => r.id));
+
+    if (!myOrderIds.size) {
+      return res.json({ count: 0, items: [] });
+    }
+
+    const records = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Seller Offer')`
+      })
+      .all()
+      .then((records) =>
+        records.filter((r) => myOrderIds.has(firstLinkedRecordId(r.fields?.["Order"])))
+      );
+
+    // "open" wants rows where the SELLER just moved (store must
+    // respond) — same distinction as buying-counter-offers.
+    const preFiltered = records.filter((record) => {
+      const f = record.fields || {};
+      return f["Seller Counter Price"] !== undefined && f["Seller Counter Price"] !== null && f["Seller Counter Price"] !== "";
+    });
+
+    const previousIds = [...new Set(preFiltered.map((r) => firstLinkedRecordId(r.fields?.["Previous Record ID"])).filter(Boolean))];
+
+    let previousSellerCounterById = new Map();
+    let previousStoreCounterById = new Map();
+    if (previousIds.length) {
+      const previousFormula = `OR(${previousIds.map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`).join(",")})`;
+      const previousRecords = await airtable(COUNTER_OFFERS_TABLE)
+        .select({ filterByFormula: previousFormula, fields: ["Seller Counter Price", "Seller Original Price", "Store Counter Price"] })
+        .all();
+
+      previousSellerCounterById = new Map(
+        previousRecords.map((r) => {
+          const sellerCounter = numberValue(r.fields?.["Seller Counter Price"]);
+          return [r.id, sellerCounter > 0 ? sellerCounter : numberValue(r.fields?.["Seller Original Price"])];
+        })
+      );
+      previousStoreCounterById = new Map(
+        previousRecords.map((r) => [r.id, numberValue(r.fields?.["Store Counter Price"])])
+      );
+    }
+
+    const orderFieldsById = new Map(myOrders.map((r) => [r.id, r.fields || {}]));
+
+    const items = await Promise.all(preFiltered.map(async (record) => {
+      const f = record.fields || {};
+      const orderId = firstLinkedRecordId(f["Order"]);
+      const orderFields = orderFieldsById.get(orderId) || {};
+      const vatType = asText(f["Seller Original VAT Type"]);
+
+      const previousOfferId = firstLinkedRecordId(f["Previous Record ID"]);
+
+      const ownStoreCounter = numberValue(f["Store Counter Price"]);
+      const myLastOffer = ownStoreCounter > 0
+        ? ownStoreCounter
+        : (previousOfferId ? previousStoreCounterById.get(previousOfferId) : null);
+
+      const sellerCounter = numberValue(f["Seller Counter Price"]);
+      let sellersOffer;
+      if (sellerCounter > 0) {
+        sellersOffer = sellerCounter;
+      } else {
+        const chainTraced = await findSellersTrueLastCounter(record.id);
+        sellersOffer = chainTraced ?? numberValue(f["Seller Original Price"]);
+      }
+
+      const sellersOfferInStoreTerms = calculateStoreCounterEquivalent(sellersOffer, vatType, orderFields);
+
+      return {
+        id: record.id,
+        order_record_id: orderId,
+        seller_offer_record_id: asText(f["Seller Offer Record ID"]),
+        order_number: displayValue(orderFields["Shopify Order Number"]),
+        product: displayValue(orderFields["Shopify Product Name"]),
+        sku: displayValue(orderFields["SKU"]),
+        size: displayValue(orderFields["Size"]),
+        brand: displayValue(orderFields["Brand"]),
+        my_offer: Number.isFinite(myLastOffer) && myLastOffer > 0 ? moneySmartValue(myLastOffer) : null,
+        sellers_offer: Number.isFinite(sellersOfferInStoreTerms) ? moneySmartValue(sellersOfferInStoreTerms) : null,
+        sellers_offer_payout: Number.isFinite(sellersOffer) ? sellersOffer : null,
+        vat_type: vatType,
+        previous_record_id: previousOfferId,
+        previous_seller_counter: previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
+          ? moneySmartValue(previousSellerCounterById.get(previousOfferId))
+          : null,
+        previous_seller_counter_payout: previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
+          ? previousSellerCounterById.get(previousOfferId)
+          : null,
+        raw_date: asText(f["Created At"]),
+        // Kept only for the visibility filter right below — not part
+        // of the response shape.
+        __sellerId: firstLinkedRecordId(f["Seller ID"])
+      };
+    }));
+
+    // Same "single best position only" rule as buying-counter-offers —
+    // if some OTHER seller's active round on this order already beats
+    // this one, hide this one (it belongs to whichever seller is
+    // actually winning right now).
+    const visibleItems = await Promise.all(
+      items.map(async (item) => {
+        const betterElsewhere = (await getCurrentGlobalLowestNormalized(
+          "Seller Offer",
+          item.order_record_id,
+          item.__sellerId
+        )).normalized;
+        if (!Number.isFinite(betterElsewhere)) return item;
+
+        const ownRawPrice = item.sellers_offer_payout;
+        const ownVatType = item.vat_type;
+        const ownNormalized = Number.isFinite(Number(ownRawPrice))
+          ? (asText(ownVatType) === "VAT21" ? Number(ownRawPrice) : Number(ownRawPrice) * 1.21)
+          : null;
+
+        if (ownNormalized == null) return item;
+
+        return betterElsewhere < ownNormalized ? null : item;
+      })
+    ).then((results) => results.filter(Boolean));
+
+    const finalItems = visibleItems.map(({ __sellerId, ...rest }) => rest);
+
+    res.json({
+      count: finalItems.length,
+      items: sortDashboardItemsNewestFirst(finalItems)
+    });
+  } catch (err) {
+    console.error("Failed to load store counter offers:", err);
+    res.status(500).json({
+      error: "Failed to load store counter offers",
+      details: err.message
+    });
+  }
+});
+// ---------------------------------------------------------------------
 async function closeCompetingCountersForOrder(orderRecordId, acceptedCounterOfferRecordId) {
   const openCountersForOrderMatch = await airtable(COUNTER_OFFERS_TABLE)
     .select({
