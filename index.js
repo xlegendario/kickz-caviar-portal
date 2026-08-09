@@ -8172,6 +8172,100 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
 // (airtable-discord-updates-main) can call it, the same way it already
 // calls the consignment store-accept/store-deny endpoints.
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// NEW — additive only: his explicit, confirmed decision — Accept on a
+// fresh (never-countered) offer must still finalize through the same
+// single, already-fixed place a deal ever gets finalized: store-accept.
+// This endpoint does ONLY the "shape a round for it" part — it does
+// NOT close the deal itself. Creates one Open Counter Offers round for
+// the given seller, with "Seller Counter Price" set to their own raw
+// ask (mirroring exactly what a genuine seller-placed round looks
+// like — store-accept already knows how to handle that shape
+// correctly, untouched). The caller is expected to immediately call
+// store-accept with the returned id.
+//
+// Re-verifies this seller is genuinely still the current best fresh
+// position before creating anything — guards against a stale click
+// (e.g. a better offer appeared in the meantime, or this seller
+// already went into negotiation).
+// ---------------------------------------------------------------------
+app.post("/api/counter-offers/create-fresh-round", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (
+      !process.env.COUNTER_OFFERS_SECRET ||
+      secret !== process.env.COUNTER_OFFERS_SECRET
+    ) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const orderRecordId = asText(req.body?.order_record_id);
+    const sellerOfferRecordId = asText(req.body?.seller_offer_record_id);
+    const requestedStoreName = asText(req.body?.store_name);
+
+    if (!orderRecordId || !sellerOfferRecordId) {
+      return res.status(400).json({ error: "Missing order_record_id or seller_offer_record_id" });
+    }
+
+    const ownsIt = await verifyStoreOwnsOrderForRound(orderRecordId, requestedStoreName);
+    if (!ownsIt) {
+      return res.status(403).json({ error: "Not allowed for this store." });
+    }
+
+    const sellerOfferRecord = await airtable(SELLER_OFFERS_TABLE).find(sellerOfferRecordId);
+    const sof = sellerOfferRecord.fields || {};
+
+    if (sof["Delete Offer"] || sof["Denied?"] || sof["Withdrawn?"]) {
+      return res.status(409).json({ error: "This offer is no longer available." });
+    }
+
+    const sellerRecordId = firstLinkedRecordId(sof["Seller ID"]);
+    const sellerOriginalPrice = numberValue(sof["Seller Offer"]);
+    const sellerVatType = asText(sof["Offer VAT Type"]);
+
+    if (!sellerRecordId || !(sellerOriginalPrice > 0) || !sellerVatType) {
+      return res.status(409).json({ error: "This offer is missing required pricing information." });
+    }
+
+    // Re-confirm this seller is genuinely still the current best fresh
+    // position, using the one central function everything else in this
+    // build already goes through — not a second, separately-derived
+    // check.
+    const best = await getCurrentGlobalLowestNormalized("Seller Offer", orderRecordId, null);
+    if (best.winningSource === "counter_offer_round" || best.winningRecordId !== sellerOfferRecordId) {
+      return res.status(409).json({ error: "This offer is no longer the current best position — please refresh." });
+    }
+
+    const createdRound = await airtable(COUNTER_OFFERS_TABLE).create({
+      "Order": [orderRecordId],
+      "Seller ID": [sellerRecordId],
+      "Source Type": "Seller Offer",
+      "Seller Offer Record ID": sellerOfferRecordId,
+
+      "Seller Original Price": sellerOriginalPrice,
+      "Seller Original VAT Type": sellerVatType,
+
+      // Shaped exactly like a genuine seller-placed round — this is
+      // what tells store-accept "the seller's number to honor is
+      // this one," using the exact same branch it already uses for a
+      // real seller counter-back.
+      "Seller Counter Price": sellerOriginalPrice,
+
+      "Counter Payout": sellerOriginalPrice,
+      "Counter Payout VAT Type": sellerVatType,
+
+      "Status": "Open",
+      "Created At": new Date().toISOString()
+    });
+
+    res.json({ ok: true, counter_offer_record_id: createdRound.id });
+  } catch (err) {
+    console.error("Failed to create fresh round for instant accept:", err);
+    res.status(500).json({ error: "Failed to prepare offer for acceptance", details: err.message });
+  }
+});
+
 app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
   try {
     const secret = asText(req.headers["x-kc-secret"]);
@@ -20636,84 +20730,157 @@ app.post("/api/seller-offers/:offerId/edit-after-denial", async (req, res) => {
 // existing /api/place-offer relay internally (via placeOfferFromPortal
 // below) — no new offer-placement logic is introduced.
 // ---------------------------------------------------------------------
+// NEW — additive only: pure extraction of the logic that used to live
+// directly inside the /api/notify-seller-offer-denied route below — no
+// behavior changed, only moved into a callable function so a second
+// caller (the new deny-fresh endpoint, for the Lojiq Portal) can use
+// the exact same code in-process instead of a second, separately
+// written copy.
+async function notifySellerOfferDeniedCore({
+  orderRecordId,
+  orderId,
+  sellerOfferRecordId,
+  sellerRecordId,
+  sellerDiscordId,
+  productName,
+  sku,
+  size,
+  shopifyOrderNumber,
+  deniedAmount,
+  vatType
+}) {
+  if (!sellerDiscordId || !orderRecordId || !sellerRecordId) {
+    const err = new Error("Missing sellerDiscordId, orderRecordId, or sellerRecordId");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  let resolvedSellerOfferRecordId = asText(sellerOfferRecordId);
+
+  if (!resolvedSellerOfferRecordId) {
+    const candidateOffers = await airtable(SELLER_OFFERS_TABLE)
+      .select({ fields: ["Seller ID", "Linked Orders"] })
+      .all();
+
+    const match = candidateOffers.find(
+      (r) =>
+        linkedRecordIncludes(r.fields?.["Seller ID"], sellerRecordId) &&
+        firstLinkedRecordId(r.fields?.["Linked Orders"]) === orderRecordId
+    );
+
+    resolvedSellerOfferRecordId = match?.id || null;
+  }
+
+  if (resolvedSellerOfferRecordId) {
+    await airtable(SELLER_OFFERS_TABLE).update(resolvedSellerOfferRecordId, {
+      "Denied?": true,
+      "Denied At": new Date().toISOString(),
+      "Denied Amount": Number(deniedAmount) || null,
+      "Denied VAT Type": asText(vatType)
+    }).catch((err) => console.error("Failed to write structured denial to Seller Offer (non-blocking):", err));
+  }
+
+  await sendOfferDeniedDiscordDM({
+    orderRecordId,
+    orderId,
+    sellerOfferRecordId,
+    sellerRecordId,
+    sellerDiscordId,
+    productName,
+    sku,
+    size,
+    shopifyOrderNumber,
+    deniedAmount,
+    vatType
+  });
+}
+
 app.post("/api/notify-seller-offer-denied", async (req, res) => {
   try {
-    const {
+    await notifySellerOfferDeniedCore(req.body || {});
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    console.error("Failed to notify seller of offer denial:", err);
+    res.status(500).json({ error: "Failed to notify seller", details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------
+// NEW — additive only: Lojiq Portal's Deny on a fresh (never-countered)
+// offer. Resolves the info notifySellerOfferDeniedCore needs (seller's
+// Discord ID via the Sellers Database) and calls that exact same
+// function in-process — the store-side write path already proven for
+// Store Orders, no separate deny logic.
+// ---------------------------------------------------------------------
+app.post("/api/counter-offers/deny-fresh", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (
+      !process.env.COUNTER_OFFERS_SECRET ||
+      secret !== process.env.COUNTER_OFFERS_SECRET
+    ) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const orderRecordId = asText(req.body?.order_record_id);
+    const sellerOfferRecordId = asText(req.body?.seller_offer_record_id);
+    const requestedStoreName = asText(req.body?.store_name);
+
+    if (!orderRecordId || !sellerOfferRecordId) {
+      return res.status(400).json({ error: "Missing order_record_id or seller_offer_record_id" });
+    }
+
+    const ownsIt = await verifyStoreOwnsOrderForRound(orderRecordId, requestedStoreName);
+    if (!ownsIt) {
+      return res.status(403).json({ error: "Not allowed for this store." });
+    }
+
+    const [orderRecord, sellerOfferRecord] = await Promise.all([
+      airtable(ORDERS_TABLE).find(orderRecordId),
+      airtable(SELLER_OFFERS_TABLE).find(sellerOfferRecordId)
+    ]);
+
+    const orderFields = orderRecord.fields || {};
+    const sof = sellerOfferRecord.fields || {};
+
+    const sellerRecordId = firstLinkedRecordId(sof["Seller ID"]);
+
+    if (!sellerRecordId) {
+      return res.status(409).json({ error: "This offer has no linked seller." });
+    }
+
+    const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId);
+    const sellerDiscordId = asText(sellerRecord.fields?.["Discord ID"]);
+
+    if (!sellerDiscordId) {
+      return res.status(409).json({ error: "Seller has no Discord ID on file." });
+    }
+
+    await notifySellerOfferDeniedCore({
       orderRecordId,
-      orderId,
+      orderId: asText(orderFields["Order ID"]),
       sellerOfferRecordId,
       sellerRecordId,
       sellerDiscordId,
-      productName,
-      sku,
-      size,
-      shopifyOrderNumber,
-      deniedAmount,
-      vatType
-    } = req.body || {};
-
-    if (!sellerDiscordId || !orderRecordId || !sellerRecordId) {
-      return res.status(400).json({
-        error: "Missing sellerDiscordId, orderRecordId, or sellerRecordId"
-      });
-    }
-
-    // NEW — additive only: this denial previously only existed as a
-    // one-time Discord DM (sendOfferDeniedDiscordDM below) — nothing
-    // structured was ever written anywhere, so the Portal's Denied
-    // pill had no way to know this happened at all. Writes a proper
-    // Denied flag onto the Seller Offer record itself, matching the
-    // fields /api/seller-offers/:offerId/edit-after-denial already
-    // expects/reads (deniedAmount, vatType) for the Retry flow.
-    // FIXED — this previously silently skipped the structured write
-    // whenever sellerOfferRecordId wasn't passed in, even though the
-    // DM below sends fine without it — so a denial could correctly
-    // notify the seller on Discord while never showing up in the
-    // Portal's Denied pill at all. Falls back to an Order+Seller
-    // match in JS (never a raw-ID formula) when it's missing.
-    let resolvedSellerOfferRecordId = asText(sellerOfferRecordId);
-
-    if (!resolvedSellerOfferRecordId) {
-      const candidateOffers = await airtable(SELLER_OFFERS_TABLE)
-        .select({ fields: ["Seller ID", "Linked Orders"] })
-        .all();
-
-      const match = candidateOffers.find(
-        (r) =>
-          linkedRecordIncludes(r.fields?.["Seller ID"], sellerRecordId) &&
-          firstLinkedRecordId(r.fields?.["Linked Orders"]) === orderRecordId
-      );
-
-      resolvedSellerOfferRecordId = match?.id || null;
-    }
-
-    if (resolvedSellerOfferRecordId) {
-      await airtable(SELLER_OFFERS_TABLE).update(resolvedSellerOfferRecordId, {
-        "Denied?": true,
-        "Denied At": new Date().toISOString(),
-        "Denied Amount": Number(deniedAmount) || null,
-        "Denied VAT Type": asText(vatType)
-      }).catch((err) => console.error("Failed to write structured denial to Seller Offer (non-blocking):", err));
-    }
-
-    await sendOfferDeniedDiscordDM({
-      orderRecordId,
-      orderId,
-      sellerOfferRecordId,
-      sellerRecordId,
-      sellerDiscordId,
-      productName,
-      sku,
-      size,
-      shopifyOrderNumber,
-      deniedAmount,
-      vatType
+      productName: asText(orderFields["Shopify Product Name"]),
+      sku: asText(orderFields["SKU"]),
+      size: asText(orderFields["Size"]),
+      shopifyOrderNumber: asText(orderFields["Shopify Order Number"]),
+      deniedAmount: numberValue(sof["Seller Offer"]),
+      vatType: asText(sof["Offer VAT Type"])
     });
 
     res.json({ ok: true });
   } catch (err) {
-    console.error("Failed to notify seller of offer denial:", err);
-    res.status(500).json({ error: "Failed to notify seller", details: err.message });
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    console.error("Failed to deny fresh offer:", err);
+    res.status(500).json({ error: "Failed to deny offer", details: err.message });
   }
 });
 
