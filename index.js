@@ -14670,8 +14670,8 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
       return res.status(400).json({ error: "Missing store_name" });
     }
 
-    if (filter !== "open") {
-      return res.status(400).json({ error: `filter=${filter} isn't built yet — only filter=open is available so far` });
+    if (filter !== "open" && filter !== "countered") {
+      return res.status(400).json({ error: `filter=${filter} isn't built yet — only filter=open and filter=countered are available so far` });
     }
 
     const safeStoreName = escapeFormulaValue(storeName);
@@ -14701,10 +14701,14 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
       );
 
     // "open" wants rows where the SELLER just moved (store must
-    // respond) — same distinction as buying-counter-offers.
+    // respond); "countered" wants the opposite — the store's own
+    // pending counter, awaiting the seller. Same inversion as
+    // buying-counter-offers.
     const preFiltered = records.filter((record) => {
       const f = record.fields || {};
-      return f["Seller Counter Price"] !== undefined && f["Seller Counter Price"] !== null && f["Seller Counter Price"] !== "";
+      const sellerAlreadyCountered =
+        f["Seller Counter Price"] !== undefined && f["Seller Counter Price"] !== null && f["Seller Counter Price"] !== "";
+      return filter === "open" ? sellerAlreadyCountered : !sellerAlreadyCountered;
     });
 
     const previousIds = [...new Set(preFiltered.map((r) => firstLinkedRecordId(r.fields?.["Previous Record ID"])).filter(Boolean))];
