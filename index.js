@@ -8325,6 +8325,28 @@ app.post("/api/counter-offers/create-fresh-round", async (req, res) => {
       return res.status(409).json({ error: "This offer is no longer the current best position — please refresh." });
     }
 
+    // FIXED — a real bug, his catch: this used to always accept the
+    // seller's raw "Seller Offer" field (their very first-ever ask),
+    // even when their TRUE current position was actually different —
+    // e.g. a seller who countered a few times, got denied, and never
+    // responded to the reopened round; getCurrentGlobalLowestNormalized
+    // already correctly chain-traces to their real last position (via
+    // findSellersTrueLastCounter) for DISPLAY, but this endpoint kept
+    // re-deriving a separate, stale number for the actual accept —
+    // exactly the "second, parallel computation" bug class flagged
+    // repeatedly in this project. Now uses best.raw/best.vatType (the
+    // same, already-validated computation) for the price that's
+    // actually accepted. "Seller Original Price"/VAT Type still store
+    // the seller's true, literal first-ever ask — untouched, since
+    // that field's meaning elsewhere in this codebase depends on it
+    // never being anything else.
+    const currentTruePrice = numberValue(best.raw);
+    const currentTrueVatType = asText(best.vatType);
+
+    if (!(currentTruePrice > 0) || !currentTrueVatType) {
+      return res.status(409).json({ error: "Could not determine this seller's current price." });
+    }
+
     const createdRound = await airtable(COUNTER_OFFERS_TABLE).create({
       "Order": [orderRecordId],
       "Seller ID": [sellerRecordId],
@@ -8337,11 +8359,12 @@ app.post("/api/counter-offers/create-fresh-round", async (req, res) => {
       // Shaped exactly like a genuine seller-placed round — this is
       // what tells store-accept "the seller's number to honor is
       // this one," using the exact same branch it already uses for a
-      // real seller counter-back.
-      "Seller Counter Price": sellerOriginalPrice,
+      // real seller counter-back. Uses the seller's TRUE current
+      // price (see fix above), not necessarily their original ask.
+      "Seller Counter Price": currentTruePrice,
 
-      "Counter Payout": sellerOriginalPrice,
-      "Counter Payout VAT Type": sellerVatType,
+      "Counter Payout": currentTruePrice,
+      "Counter Payout VAT Type": currentTrueVatType,
 
       "Status": "Open",
       "Created At": new Date().toISOString()
