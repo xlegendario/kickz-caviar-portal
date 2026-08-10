@@ -7726,56 +7726,27 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
     let skipped = 0;
     const errors = [];
 
-    console.error("DEBUG edit-broadcast:", {
-      typedProposedPrice: proposedPrice,
-      currentWinnerVatType: currentWinnerForEditBroadcast.vatType,
-      isDutchBuyerForEditBroadcast,
-      respondingToVatSourceForEditBroadcast
-    });
-
     for (const record of roundOneRecords) {
       const f = record.fields || {};
       const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
       const sellerVatType = asText(f["Seller Original VAT Type"]);
 
-      // FIXED — proposedPrice is a STORE price (what the store is
-      // willing to pay), while sellerOriginalPrice is in SELLER terms
-      // (what the seller asked for) — comparing them directly ignored
-      // our margin. Convert the seller's ask UP to what the store would
-      // need to pay for it, and compare on that scale instead.
-      // NEW — additive only: his exact catch — proposedPrice may now be
-      // on the non-Dutch-adjusted scale (see the conversion above), but
-      // this comparison was still computing sellerAskInStoreTerms on
-      // the raw, unadjusted scale — comparing two different scales and
-      // wrongly skipping every VAT-source sibling. Applies the SAME
-      // adjustment here, based on THIS sibling's own VAT type (not the
-      // current-winner's, which only decided whether proposedPrice
-      // itself needed converting).
-      const isVatSourceForThisSibling = sellerVatType === "VAT21" || sellerVatType === "VAT0";
-      const sellerAskInStoreTerms = calculateStoreCounterEquivalent(
-        sellerOriginalPrice,
-        sellerVatType,
-        orderFieldsForBroadcast,
-        (!isDutchBuyerForEditBroadcast && isVatSourceForThisSibling) ? 1.21 : 1
-      );
-
-      console.error("DEBUG edit-broadcast sibling:", {
-        recordId: record.id,
-        sellerVatType,
-        sellerOriginalPrice,
-        sellerAskInStoreTerms,
-        proposedPrice,
-        willSkip: (!sellerOriginalPrice || !Number.isFinite(sellerAskInStoreTerms) || proposedPrice >= sellerAskInStoreTerms)
-      });
-
-      if (!sellerOriginalPrice || !Number.isFinite(sellerAskInStoreTerms) || proposedPrice >= sellerAskInStoreTerms) {
+      if (!sellerOriginalPrice) {
         skipped++;
         continue;
       }
 
+      // FIXED — the skip-check must compare like-for-like. Both the
+      // resulting payout AND the seller's own raw ask are in SELLER
+      // terms, so compare those directly: skip only if this counter
+      // wouldn't actually land below what the seller already asked.
+      // (The earlier version compared proposedPrice — a store-scale,
+      // margin-less, possibly ×1.21-adjusted number — against the
+      // seller's ask converted to store terms WITH margin, i.e. two
+      // different scales, which wrongly skipped VAT-source siblings.)
       const recomputedPayout = calculateCounterPayoutForVatType(proposedPrice, sellerVatType, orderFieldsForBroadcast);
 
-      if (!Number.isFinite(recomputedPayout) || recomputedPayout <= 0) {
+      if (!Number.isFinite(recomputedPayout) || recomputedPayout <= 0 || recomputedPayout >= sellerOriginalPrice) {
         skipped++;
         continue;
       }
