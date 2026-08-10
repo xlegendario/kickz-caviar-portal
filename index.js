@@ -13320,7 +13320,20 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           ? Math.min(memberWtbCompetingMin, ownNormalizedForMemberWtb)
           : (memberWtbCompetingMin ?? ownNormalizedForMemberWtb);
 
-        const currentLowest = isMemberWtb ? memberWtbLowest : orderLowest;
+        const currentLowestShared = isMemberWtb ? memberWtbLowest : orderLowest;
+
+        // FIXED — a real, confirmed bug found via his live testing,
+        // introduced by today's earlier fix: currentLowestShared lives
+        // on the shared normalized (VAT21-equivalent) scale, but this
+        // was returned to the frontend as-is regardless of THIS row's
+        // own vatType — a VAT0 seller was shown the raw normalized
+        // number unconverted (e.g. 232 instead of their own
+        // comparable 232/1.21=191.73), instead of de-normalized back
+        // into their own terms. VAT21/Margin need no conversion since
+        // they're already on that scale.
+        const currentLowest = Number.isFinite(currentLowestShared)
+          ? (asText(vatType) === "VAT0" ? currentLowestShared / 1.21 : currentLowestShared)
+          : null;
 
         const isLowest = isMemberWtb
           ? (Number.isFinite(ownNormalizedForMemberWtb) &&
@@ -16753,11 +16766,30 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
         }
         isLowest = ownWins;
       } else {
-        currentLowest =
-          vatType === "VAT0"
-            ? numberValue(orderFields["Current Lowest (VAT0)"])
-            : numberValue(orderFields["Current Lowest (Normalized)"]);
-        isLowest = displayValue(orderFields["Lowest Offer Seller ID"]) === displayValue(req.query.seller_id);
+        // FIXED — a real, confirmed bug found via his live testing:
+        // the exact same stale-rollup pattern already fixed elsewhere
+        // today, just never applied to THIS endpoint (a separate,
+        // parallel implementation of the same "current lowest"
+        // concept for Store Orders' fresh/open offers). Reuses the
+        // same live, already-proven getCurrentGlobalLowestNormalized
+        // function the Member WTB branch right above already calls,
+        // instead of the stale "Current Lowest (VAT0)/(Normalized)"
+        // rollup fields and the separate stale "Lowest Offer Seller
+        // ID" field. De-normalizes the winning shared-scale value back
+        // into THIS seller's own vatType before display (only VAT0
+        // needs the /1.21 reversal — VAT21/Margin are already on that
+        // scale).
+        const othersResultForOrder = await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, linkedSellerId);
+        const othersMinForOrder = othersResultForOrder.normalized;
+        const ownNormalizedForOrder = asText(vatType) === "VAT0" ? offerAmount * 1.21 : offerAmount;
+
+        const ownWinsForOrder = Number.isFinite(ownNormalizedForOrder) && (!Number.isFinite(othersMinForOrder) || ownNormalizedForOrder <= othersMinForOrder);
+        const winningSharedForOrder = ownWinsForOrder ? ownNormalizedForOrder : othersMinForOrder;
+
+        currentLowest = Number.isFinite(winningSharedForOrder)
+          ? (asText(vatType) === "VAT0" ? winningSharedForOrder / 1.21 : winningSharedForOrder)
+          : null;
+        isLowest = ownWinsForOrder;
       }
 
       return {
