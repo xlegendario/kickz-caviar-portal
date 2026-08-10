@@ -15048,11 +15048,22 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
       // conversion built earlier tonight.
       const isDutchStoreForDisplay = isDutchClientCountry(orderFields["Client Country"]);
       const isVatSourceForDisplay = vatType === "VAT21" || vatType === "VAT0";
-      const displayDivisor = (!isDutchStoreForDisplay && isVatSourceForDisplay) ? 1.21 : 1;
+      const needsConversionForDisplay = !isDutchStoreForDisplay && isVatSourceForDisplay;
 
-      const myLastOfferForDisplay = Number.isFinite(myLastOffer) && myLastOffer > 0 ? myLastOffer / displayDivisor : null;
+      // my_offer is the store's OWN typed input — it was multiplied by
+      // 1.21 on the way IN (to reach the internal all-in scale before
+      // storing), so showing it back means reversing that: divide.
+      const myLastOfferForDisplay = Number.isFinite(myLastOffer) && myLastOffer > 0
+        ? (needsConversionForDisplay ? myLastOffer / 1.21 : myLastOffer)
+        : null;
+
+      // sellers_offer never went through that input path — it's a
+      // fresh calculateStoreCounterEquivalent computation, which
+      // always lands on the internal Dutch-equivalent scale. A non-
+      // Dutch store needs to see this multiplied UP to match the same
+      // scale the original fresh-offer embed already showed them.
       const sellersOfferInStoreTermsForDisplay = Number.isFinite(sellersOfferInStoreTerms)
-        ? sellersOfferInStoreTerms / displayDivisor
+        ? (needsConversionForDisplay ? sellersOfferInStoreTerms * 1.21 : sellersOfferInStoreTerms)
         : null;
 
       return {
