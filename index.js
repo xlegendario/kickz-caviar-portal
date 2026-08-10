@@ -4098,7 +4098,7 @@ function bindConsignmentDiscordButtons(client) {
               const denyingSellerTruePosition = await findSellersTrueLastCounter(counterOfferRecordId);
               const denyingSellerVatType = asText(deniedFields["Seller Original VAT Type"]);
               const denyingSellerOwnNormalized = Number.isFinite(denyingSellerTruePosition)
-                ? (denyingSellerVatType === "VAT21" ? denyingSellerTruePosition : denyingSellerTruePosition * 1.21)
+                ? (denyingSellerVatType === "VAT0" ? denyingSellerTruePosition * 1.21 : denyingSellerTruePosition)
                 : null;
 
               const shouldNotifyBuyer =
@@ -4165,7 +4165,7 @@ function bindConsignmentDiscordButtons(client) {
           const denyingSellerTruePositionForFallback = await findSellersTrueLastCounter(counterOfferRecordId);
           const denyingSellerVatTypeForFallback = asText(deniedFields["Seller Original VAT Type"]);
           const denyingSellerOwnNormalizedForFallback = Number.isFinite(denyingSellerTruePositionForFallback)
-            ? (denyingSellerVatTypeForFallback === "VAT21" ? denyingSellerTruePositionForFallback : denyingSellerTruePositionForFallback * 1.21)
+            ? (denyingSellerVatTypeForFallback === "VAT0" ? denyingSellerTruePositionForFallback * 1.21 : denyingSellerTruePositionForFallback)
             : null;
 
           const shouldNotifyBuyerForFallback =
@@ -5290,7 +5290,7 @@ function bindConsignmentDiscordButtons(client) {
           const denyingSellerTruePositionForStore = await findSellersTrueLastCounter(counterOfferRecordId);
           const denyingSellerVatTypeForStore = asText(deniedFields["Seller Original VAT Type"]);
           const denyingSellerOwnNormalizedForStore = Number.isFinite(denyingSellerTruePositionForStore)
-            ? (denyingSellerVatTypeForStore === "VAT21" ? denyingSellerTruePositionForStore : denyingSellerTruePositionForStore * 1.21)
+            ? (denyingSellerVatTypeForStore === "VAT0" ? denyingSellerTruePositionForStore * 1.21 : denyingSellerTruePositionForStore)
             : null;
 
           const shouldNotifyStore =
@@ -7919,7 +7919,15 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
     let crossSellerCeilingRaw = null;
     let crossSellerReferenceRaw = null;
     if (Number.isFinite(globalLowestForValidation)) {
-      const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestForValidation : globalLowestForValidation / 1.21;
+      // FIXED — a real, confirmed bug found via his sharp catch: VAT21
+      // and Margin are both already VAT-inclusive; only VAT0 is
+      // exclusive and needs the /1.21 reversal to get back to this
+      // seller's own raw terms. This previously checked "=== VAT21",
+      // wrongly dividing Margin sellers too — this is the exact
+      // computation behind the "Another seller already offers a
+      // better price" message, so this bug directly produced wrong
+      // (too-low) ceilings for Margin sellers.
+      const rawThreshold = asText(sellerVatType) === "VAT0" ? globalLowestForValidation / 1.21 : globalLowestForValidation;
       crossSellerCeilingRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
       crossSellerReferenceRaw = rawThreshold;
     }
@@ -12939,10 +12947,12 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     // NEW — additive only: builds "am I still the lowest seller" for
     // Member WTB, which never existed before (only Store Orders had an
     // equivalent, via the "Current Lowest (Normalized)/(VAT0)" rollup).
-    // Same normalization convention already used elsewhere in this
-    // file ("Offer Cost (Normalized)"): VAT21 stays as-is, VAT0/Margin
-    // get ×1.21, bringing every competing position onto one comparable
-    // scale regardless of VAT type. Fetches every OTHER seller's
+    // FIXED — a real, confirmed bug found via his sharp catch: VAT21
+    // and Margin are both already VAT-inclusive and stay as-is; only
+    // VAT0 is exclusive and needs ×1.21 to land on the same comparable
+    // scale. This previously checked "=== VAT21" (treating Margin the
+    // same as VAT0), which unfairly inflated every Margin seller's
+    // position by 21% in this comparison. Fetches every OTHER seller's
     // current position on the same Member WTB — a fresh, never-touched
     // Seller Offer if they haven't been countered yet, or their live
     // Counter Offers round's current price if they're mid-negotiation
@@ -12953,7 +12963,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       const normalize = (price, vatType) => {
         const p = Number(price);
         if (!Number.isFinite(p)) return null;
-        return asText(vatType) === "VAT21" ? p : p * 1.21;
+        return asText(vatType) === "VAT0" ? p * 1.21 : p;
       };
 
       const [competingSellerOffers, competingCounterRounds] = await Promise.all([
@@ -13211,7 +13221,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         const memberWtbId = isMemberWtb ? firstLinkedRecordId(f["Member WTB"]) : null;
         const memberWtbCompetingMin = memberWtbId ? memberWtbMinNormalizedPrice.get(memberWtbId) : null;
         const ownNormalizedForMemberWtb = isMemberWtb && Number.isFinite(sellerLastOffer)
-          ? (asText(vatType) === "VAT21" ? sellerLastOffer : sellerLastOffer * 1.21)
+          ? (asText(vatType) === "VAT0" ? sellerLastOffer * 1.21 : sellerLastOffer)
           : null;
 
         const memberWtbLowest = Number.isFinite(memberWtbCompetingMin) && Number.isFinite(ownNormalizedForMemberWtb)
@@ -14311,7 +14321,13 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
   const normalize = (price, vatType) => {
     const p = Number(price);
     if (!Number.isFinite(p)) return null;
-    return asText(vatType) === "VAT21" ? p : p * 1.21;
+    // FIXED — a real, confirmed bug found via his sharp catch: VAT21
+    // and Margin are both already VAT-inclusive and stay as-is; only
+    // VAT0 is exclusive and needs ×1.21 to land on the same comparable
+    // scale. This previously checked "=== VAT21", treating Margin the
+    // same as VAT0 — unfairly inflating every Margin seller's position
+    // by 21% in every cross-seller comparison this function powers.
+    return asText(vatType) === "VAT0" ? p * 1.21 : p;
   };
 
   const [rawOffers, activeCounters, allRoundsAnyStatus] = await Promise.all([
@@ -14646,7 +14662,7 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
       Array.from(winningSellerOfferByOrderId.keys()).map(async (orderId) => {
         const bestActiveCounter = (await getCurrentGlobalLowestNormalized("Seller Offer", orderId, null)).normalized;
         const winner = winningSellerOfferByOrderId.get(orderId);
-        const freshNormalized = asText(winner.vatType) === "VAT21" ? winner.price : winner.price * 1.21;
+        const freshNormalized = asText(winner.vatType) === "VAT0" ? winner.price * 1.21 : winner.price;
         if (Number.isFinite(bestActiveCounter) && Number.isFinite(freshNormalized) && bestActiveCounter < freshNormalized) {
           winningSellerOfferByOrderId.delete(orderId);
         }
@@ -14915,7 +14931,7 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
         const ownRawPrice = item.sellers_offer_payout;
         const ownVatType = item.vat_type;
         const ownNormalized = Number.isFinite(Number(ownRawPrice))
-          ? (asText(ownVatType) === "VAT21" ? Number(ownRawPrice) : Number(ownRawPrice) * 1.21)
+          ? (asText(ownVatType) === "VAT0" ? Number(ownRawPrice) * 1.21 : Number(ownRawPrice))
           : null;
 
         if (ownNormalized == null) return item;
@@ -16622,7 +16638,7 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
         const normalize = (price, vt) => {
           const p = Number(price);
           if (!Number.isFinite(p)) return null;
-          return asText(vt) === "VAT21" ? p : p * 1.21;
+          return asText(vt) === "VAT0" ? p * 1.21 : p;
         };
         const othersResult = await getCurrentGlobalLowestNormalized("Member WTB", linkedMemberWtbId, linkedSellerId);
         const othersMin = othersResult.normalized;
@@ -17797,7 +17813,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         const ownRawPrice = item.sellers_offer_payout;
         const ownVatType = item.vat_type;
         const ownNormalized = Number.isFinite(Number(ownRawPrice))
-          ? (asText(ownVatType) === "VAT21" ? Number(ownRawPrice) : Number(ownRawPrice) * 1.21)
+          ? (asText(ownVatType) === "VAT0" ? Number(ownRawPrice) * 1.21 : Number(ownRawPrice))
           : null;
 
         if (ownNormalized == null) return item; // can't compare — don't hide
@@ -18603,7 +18619,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
     const normalizeForCompare = (price, vt) => {
       const p = Number(price);
       if (!Number.isFinite(p)) return null;
-      return asText(vt) === "VAT21" ? p : p * 1.21;
+      return asText(vt) === "VAT0" ? p * 1.21 : p;
     };
     await Promise.all(
       Array.from(winningSellerOfferByWtbId.entries()).map(async ([wtbId, winner]) => {
@@ -23584,7 +23600,9 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
     let crossSellerCeilingRaw = null;
     let crossSellerReferenceRaw = null;
     if (Number.isFinite(globalLowestForValidation)) {
-      const rawThreshold = asText(sellerVatType) === "VAT21" ? globalLowestForValidation : globalLowestForValidation / 1.21;
+      // FIXED — same bug and fix as the Store Orders equivalent: only
+      // VAT0 needs the /1.21 reversal, VAT21 and Margin stay as-is.
+      const rawThreshold = asText(sellerVatType) === "VAT0" ? globalLowestForValidation / 1.21 : globalLowestForValidation;
       crossSellerCeilingRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
       crossSellerReferenceRaw = rawThreshold;
     }
