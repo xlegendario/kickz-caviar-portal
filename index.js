@@ -7331,7 +7331,7 @@ app.post("/api/counter-offers/create", async (req, res) => {
     }
 
     const orderRecordId = asText(req.body?.order_record_id);
-    const storeCounterPrice = Number(req.body?.store_counter_price);
+    let storeCounterPrice = Number(req.body?.store_counter_price);
 
     if (!orderRecordId) {
       return res.status(400).json({ error: "Missing order_record_id" });
@@ -7343,6 +7343,24 @@ app.post("/api/counter-offers/create", async (req, res) => {
 
     const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
     const orderFields = orderRecord.fields || {};
+
+    // NEW — additive only: his refined design — a non-Dutch buyer sees
+    // the CURRENTLY WINNING position (whichever seller's offer is
+    // actually shown to them) as excl. VAT when it's VAT-sourced, or
+    // already-inclusive when Margin-sourced, and types their counter
+    // in that same scale. A Dutch buyer always types the plain all-in
+    // figure, unchanged. Looks up the live current-best position (same
+    // function every cross-seller comparison already uses) purely to
+    // know which VAT type this typed number should be interpreted as,
+    // then converts back to the internal all-in scale every
+    // calculation below assumes.
+    const currentWinnerForCreate = await getCurrentGlobalLowestNormalized("Seller Offer", orderRecordId, null);
+    const isDutchBuyerForCreate = isDutchClientCountry(orderFields["Client Country"]);
+    const respondingToVatSourceForCreate =
+      currentWinnerForCreate.vatType === "VAT21" || currentWinnerForCreate.vatType === "VAT0";
+    if (!isDutchBuyerForCreate && respondingToVatSourceForCreate) {
+      storeCounterPrice = Math.round(storeCounterPrice * 1.21);
+    }
 
     const orderId = asText(orderFields["Order ID"]);
     const productName =
@@ -7611,7 +7629,7 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
     }
 
     const orderRecordId = asText(req.body?.order_record_id);
-    const proposedPrice = Number(req.body?.price);
+    let proposedPrice = Number(req.body?.price);
 
     if (!orderRecordId) {
       return res.status(400).json({ error: "Missing order_record_id" });
@@ -7619,6 +7637,20 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
 
     if (!Number.isInteger(proposedPrice) || proposedPrice <= 0) {
       return res.status(400).json({ error: "Offer must be a valid whole number." });
+    }
+
+    // NEW — additive only: same reinterpretation as create — a non-
+    // Dutch buyer editing their round-1 broadcast types in whatever
+    // scale the CURRENTLY WINNING position implies (excl. for a VAT-
+    // source, already-inclusive for Margin). Convert back to the
+    // internal all-in scale before validation/anything below runs.
+    const orderFieldsForInputInterpretation = (await airtable(ORDERS_TABLE).find(orderRecordId)).fields || {};
+    const currentWinnerForEditBroadcast = await getCurrentGlobalLowestNormalized("Seller Offer", orderRecordId, null);
+    const isDutchBuyerForEditBroadcast = isDutchClientCountry(orderFieldsForInputInterpretation["Client Country"]);
+    const respondingToVatSourceForEditBroadcast =
+      currentWinnerForEditBroadcast.vatType === "VAT21" || currentWinnerForEditBroadcast.vatType === "VAT0";
+    if (!isDutchBuyerForEditBroadcast && respondingToVatSourceForEditBroadcast) {
+      proposedPrice = Math.round(proposedPrice * 1.21);
     }
 
     // NEW — additive only, same pattern as the other Store Orders
@@ -8074,7 +8106,7 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
     }
 
     const previousRecordId = asText(req.params.id);
-    const proposedPrice = Number(req.body?.price);
+    let proposedPrice = Number(req.body?.price);
 
     if (!Number.isInteger(proposedPrice) || proposedPrice <= 0) {
       return res.status(400).json({ error: "Offer must be a valid whole number." });
@@ -8150,6 +8182,23 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
     const orderRecordForBand = await airtable(ORDERS_TABLE).find(linkedOrderIdForBand);
     const orderFieldsForBand = orderRecordForBand.fields || {};
     const sellerVatTypeForBand = asText(f["Seller Original VAT Type"]);
+
+    // NEW — additive only: his refined design — a non-Dutch buyer sees
+    // a VAT-source offer (VAT21 or VAT0) as excl. VAT and types their
+    // counter in that same excl. scale; they see a Margin-source offer
+    // as already-inclusive (Margin goods are never truly excl.) and
+    // type their counter in that scale directly. A Dutch buyer always
+    // types the plain all-in figure, same as before. Converts whatever
+    // was typed back into the internal all-in (Dutch-equivalent) scale
+    // every calculation below already assumes, before anything else
+    // runs — this is the exact root cause of tonight's reported bug
+    // (a non-Dutch buyer's excl.-intended counter being treated as
+    // already all-in, silently underpaying every seller).
+    const isDutchBuyerForCounter = isDutchClientCountry(orderFieldsForBand["Client Country"]);
+    const respondingToVatSourceForCounter = sellerVatTypeForBand === "VAT21" || sellerVatTypeForBand === "VAT0";
+    if (!isDutchBuyerForCounter && respondingToVatSourceForCounter) {
+      proposedPrice = Math.round(proposedPrice * 1.21);
+    }
 
     // FIXED — same scale mismatch as the seller-counter endpoint, other
     // direction: "priorStorePrice" is STORE terms, but "sellerCounterPrice"
@@ -8828,7 +8877,7 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
 
     const recordId = asText(req.params.id);
     const actor = asText(req.body?.actor); // "seller" or "store"
-    const proposedPrice = Number(req.body?.price);
+    let proposedPrice = Number(req.body?.price);
 
     if (!["seller", "store"].includes(actor)) {
       return res.status(400).json({ error: "actor must be 'seller' or 'store'" });
@@ -8919,6 +8968,17 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
       const orderRecordForEdit = await airtable(ORDERS_TABLE).find(orderIdForEdit);
       orderFieldsForEdit = orderRecordForEdit.fields || {};
       const sellerVatTypeForEdit = asText(f["Seller Original VAT Type"]);
+
+      // NEW — additive only: same reinterpretation as store-counter —
+      // a non-Dutch buyer editing their own counter against a VAT-
+      // source round types in excl. terms; against a Margin-source
+      // round they type the already-inclusive figure directly. Convert
+      // back to the internal all-in scale before anything below runs.
+      const isDutchBuyerForEdit = isDutchClientCountry(orderFieldsForEdit["Client Country"]);
+      const respondingToVatSourceForEdit = sellerVatTypeForEdit === "VAT21" || sellerVatTypeForEdit === "VAT0";
+      if (!isDutchBuyerForEdit && respondingToVatSourceForEdit) {
+        proposedPrice = Math.round(proposedPrice * 1.21);
+      }
 
       // FIXED — this was recomputing "own reference" from the seller's
       // ORIGINAL price via margin conversion, producing a theoretical
