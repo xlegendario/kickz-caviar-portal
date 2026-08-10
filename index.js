@@ -7705,7 +7705,9 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
     const currentRoundOnePrice = numberValue(roundOneRecords[0].fields?.["Store Counter Price"]);
 
     if (Number.isFinite(currentRoundOnePrice)) {
-      const editValidation = validateNextCounterPrice(currentRoundOnePrice, Infinity, proposedPrice);
+      const editValidation = validateNextCounterPrice(currentRoundOnePrice, Infinity, proposedPrice, {
+        requireInteger: !(!isDutchBuyerForEditBroadcast && respondingToVatSourceForEditBroadcast)
+      });
       if (!editValidation.ok) {
         return res.status(400).json({ error: editValidation.reason, band: editValidation.band });
       }
@@ -8216,7 +8218,9 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
       return res.status(500).json({ error: "Could not compute margin conversion for this order." });
     }
 
-    const validation = validateNextCounterPrice(priorStorePrice, sellerCounterInStoreTerms, proposedPrice);
+    const validation = validateNextCounterPrice(priorStorePrice, sellerCounterInStoreTerms, proposedPrice, {
+      requireInteger: !(!isDutchBuyerForCounter && respondingToVatSourceForCounter)
+    });
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
@@ -8944,6 +8948,7 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
     let ownReferencePrice;
     let counterpartPrice;
     let orderFieldsForEdit = null;
+    let editConversionApplied = false;
 
     if (hasSellerCounter) {
       // FIXED — same bug as the seller-counter endpoint: always using
@@ -8978,6 +8983,7 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
       const respondingToVatSourceForEdit = sellerVatTypeForEdit === "VAT21" || sellerVatTypeForEdit === "VAT0";
       if (!isDutchBuyerForEdit && respondingToVatSourceForEdit) {
         proposedPrice = proposedPrice * 1.21; // no rounding here — precision preserved so the store sees back their exact typed number
+        editConversionApplied = true;
       }
 
       // FIXED — this was recomputing "own reference" from the seller's
@@ -9006,7 +9012,9 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
     // the gap is too small for a real counter, it's also too small to
     // "sneak through" via an edit — everyone hits the same wall at the
     // same time, rather than Edit being a quiet exception to the rule.
-    const validation = validateNextCounterPrice(ownReferencePrice, counterpartPrice, proposedPrice);
+    const validation = validateNextCounterPrice(ownReferencePrice, counterpartPrice, proposedPrice, {
+      requireInteger: !editConversionApplied
+    });
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
@@ -10936,9 +10944,16 @@ function numberValue(value) {
 const MIN_COUNTER_STEP = 2.5;
 
 function validateNextCounterPrice(ownReferencePrice, counterpartPrice, proposed, options = {}) {
-  const { enforceMinStep = true } = options;
+  const { enforceMinStep = true, requireInteger = true } = options;
 
-  if (!Number.isInteger(proposed)) {
+  // NEW — additive only: his exact catch — a non-Dutch buyer typing a
+  // whole-number counter (e.g. 175) against a VAT-source position gets
+  // multiplied by 1.21 for internal storage before reaching here,
+  // which legitimately isn't a whole number anymore (211.75) even
+  // though what the person actually typed was. requireInteger lets
+  // the 4 VAT-context conversion call sites skip this specific check
+  // without loosening it for every other, untouched caller.
+  if (requireInteger && !Number.isInteger(proposed)) {
     return { ok: false, reason: "Counter offers must be a whole number." };
   }
 
