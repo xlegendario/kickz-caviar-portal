@@ -17822,7 +17822,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
     let mergedFinalItems = finalItems;
 
     if (filter === "denied") {
-      const deniedSellerOfferRecords = await airtable(SELLER_OFFERS_TABLE)
+      const deniedSellerOfferRecordsRaw = await airtable(SELLER_OFFERS_TABLE)
         .select({ filterByFormula: `{Denied?} = TRUE()`, fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Denied At", "Withdrawn?"] })
         .all()
         .then((records) =>
@@ -17832,6 +17832,29 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
               myMemberWtbIds.has(firstLinkedRecordId(r.fields?.["Member WTBs"]))
           )
         );
+
+      // NEW — additive only: his explicit catch — since a Deny on a
+      // fresh offer now denies every OTHER untouched fresh seller on
+      // the same WTB too (not just the one clicked), a WTB can have
+      // several simultaneously-denied Seller Offer records. Without
+      // this, the buyer's Denied pill showed one row per denied
+      // record instead of one row per WTB — same "pick the single
+      // best" collapse already proven for the Open pill's fresh
+      // offers (winningSellerOfferByWtbId above), same raw-price
+      // comparison for consistency.
+      const bestDeniedByWtbId = new Map();
+      for (const record of deniedSellerOfferRecordsRaw) {
+        const wtbId = firstLinkedRecordId(record.fields?.["Member WTBs"]);
+        const price = numberValue(record.fields?.["Seller Offer"]);
+        if (!wtbId || !Number.isFinite(price)) continue;
+
+        const current = bestDeniedByWtbId.get(wtbId);
+        if (!current || price < numberValue(current.fields?.["Seller Offer"])) {
+          bestDeniedByWtbId.set(wtbId, record);
+        }
+      }
+
+      const deniedSellerOfferRecords = Array.from(bestDeniedByWtbId.values());
 
       const freshDeniedItems = deniedSellerOfferRecords.map((record) => {
         const f = record.fields || {};
