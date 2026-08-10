@@ -15039,6 +15039,22 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
 
       const sellersOfferInStoreTerms = calculateStoreCounterEquivalent(sellersOffer, vatType, orderFields);
 
+      // NEW — additive only: his refined design, display side — the
+      // store's own values (my_offer, sellers_offer) are stored/
+      // computed on the internal all-in (Dutch-equivalent) scale, but
+      // a non-Dutch store needs to SEE them back in their own natural
+      // context (excl. for a VAT-source round, already-inclusive for
+      // Margin) — same rule, opposite direction, as the price-input
+      // conversion built earlier tonight.
+      const isDutchStoreForDisplay = isDutchClientCountry(orderFields["Client Country"]);
+      const isVatSourceForDisplay = vatType === "VAT21" || vatType === "VAT0";
+      const displayDivisor = (!isDutchStoreForDisplay && isVatSourceForDisplay) ? 1.21 : 1;
+
+      const myLastOfferForDisplay = Number.isFinite(myLastOffer) && myLastOffer > 0 ? myLastOffer / displayDivisor : null;
+      const sellersOfferInStoreTermsForDisplay = Number.isFinite(sellersOfferInStoreTerms)
+        ? sellersOfferInStoreTerms / displayDivisor
+        : null;
+
       return {
         id: record.id,
         order_record_id: orderId,
@@ -15056,8 +15072,8 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
         offer_date: formatDateEU(orderFields["Offer Sent At"]),
         eta: displayValue(orderFields["Estimated Time"]),
         date: formatDateEU(orderFields["Order Date"]),
-        my_offer: Number.isFinite(myLastOffer) && myLastOffer > 0 ? moneySmartValue(myLastOffer) : null,
-        sellers_offer: Number.isFinite(sellersOfferInStoreTerms) ? moneySmartValue(sellersOfferInStoreTerms) : null,
+        my_offer: Number.isFinite(myLastOfferForDisplay) && myLastOfferForDisplay > 0 ? moneySmartValue(myLastOfferForDisplay) : null,
+        sellers_offer: Number.isFinite(sellersOfferInStoreTermsForDisplay) ? moneySmartValue(sellersOfferInStoreTermsForDisplay) : null,
         sellers_offer_payout: Number.isFinite(sellersOffer) ? sellersOffer : null,
         vat_type: vatType,
         previous_record_id: previousOfferId,
