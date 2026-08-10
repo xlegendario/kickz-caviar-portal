@@ -675,7 +675,8 @@ async function sendConsignmentCounterOfferDiscordMessage({
   storeOfferVatType,
   yourPreviousCounter,
   noRoomToCounter,
-  deniedAmount
+  deniedAmount,
+  isFirstStoreResponse = false
 }) {
   await initDiscord();
 
@@ -741,7 +742,7 @@ async function sendConsignmentCounterOfferDiscordMessage({
       ...deniedNote,
       `The store sent a counter offer.`,
       "",
-      `**Your Previous Counter**`,
+      `**${isFirstStoreResponse ? "Your Price" : "Your Previous Counter"}**`,
       `€${Number(yourPreviousCounter).toFixed(2)}`,
       "",
       `**New Counter**`,
@@ -8705,6 +8706,26 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
               "Discord Delivery Type": discordResult.deliveryType
             });
           }
+
+          // NEW — additive only: mirrors Member WTB's buyer-deny — denying
+          // the store's currently-lowest seller is effectively a "no" to
+          // everyone at their current positions too, since if the store
+          // won't accept the lowest, they won't accept anything higher
+          // either. Broadcasts the store's real floor (their highest-ever
+          // position on this order, not just this one denied round) to
+          // every OTHER seller still in the game, using the same
+          // reengageDeniedSellers mechanism already proven for Counter/Edit.
+          const storeFloorForBroadcast = await getBuyerHighestEverPosition("Seller Offer", linkedOrderId);
+
+          if (Number.isFinite(storeFloorForBroadcast) && storeFloorForBroadcast > 0) {
+            await reengageDeniedSellers({
+              sourceType: "Seller Offer",
+              recordId: linkedOrderId,
+              newBuyerCounterPrice: storeFloorForBroadcast,
+              excludeSellerId: sellerRecordId,
+              isDenyBroadcast: true
+            }).catch((err) => console.error("Failed to broadcast store floor to other sellers after store-deny (non-blocking):", err));
+          }
         }
       }
     }
@@ -9718,7 +9739,8 @@ app.post("/api/consignment/offers/:id/store-counter", async (req, res) => {
         storeOfferPrice: proposedPrice,
         storeOfferVatType,
         yourPreviousCounter: Number(previousOffer.consignor_counter_price),
-        noRoomToCounter
+        noRoomToCounter,
+        isFirstStoreResponse: !hasStoreOwnReference
       });
 
       await supabase
@@ -21157,6 +21179,71 @@ app.post("/api/counter-offers/deny-fresh", async (req, res) => {
       vatType: asText(sof["Offer VAT Type"])
     });
 
+    // NEW — additive only: his explicit rule — denying one seller's
+    // fresh offer means the store isn't happy with ANY current fresh
+    // asking price on this order, not just this one seller's. Every
+    // OTHER seller who still has a genuinely untouched, fresh offer
+    // here (not already mid-negotiation, not already denied/withdrawn)
+    // gets denied + notified too, so as many sellers as possible know
+    // they need to come back with something better. Mirrors the
+    // multi-seller broadcast already proven for Counter/Edit, but for
+    // Deny specifically at the fresh, no-floor-yet stage.
+    try {
+      const [allSellerOffersForThisOrder, activeCounterRoundsForOrder] = await Promise.all([
+        airtable(SELLER_OFFERS_TABLE)
+          .select({ fields: ["Linked Orders", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer", "Denied?", "Withdrawn?"] })
+          .all(),
+        airtable(COUNTER_OFFERS_TABLE)
+          .select({
+            filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Seller Offer')`,
+            fields: ["Order", "Seller ID"]
+          })
+          .all()
+      ]);
+
+      const sellerIdsMidNegotiationForThisOrder = new Set(
+        activeCounterRoundsForOrder
+          .filter((r) => firstLinkedRecordId(r.fields?.["Order"]) === orderRecordId)
+          .map((r) => firstLinkedRecordId(r.fields?.["Seller ID"]))
+          .filter(Boolean)
+      );
+
+      const otherFreshSellerOffers = allSellerOffersForThisOrder.filter((r) => {
+        if (r.id === sellerOfferRecordId) return false;
+        if (firstLinkedRecordId(r.fields?.["Linked Orders"]) !== orderRecordId) return false;
+        if (r.fields?.["Delete Offer"] || r.fields?.["Denied?"] || r.fields?.["Withdrawn?"]) return false;
+        const otherSellerId = firstLinkedRecordId(r.fields?.["Seller ID"]);
+        if (otherSellerId && sellerIdsMidNegotiationForThisOrder.has(otherSellerId)) return false;
+        return true;
+      });
+
+      for (const otherOffer of otherFreshSellerOffers) {
+        const otherFields = otherOffer.fields || {};
+        const otherSellerRecordId = firstLinkedRecordId(otherFields["Seller ID"]);
+        if (!otherSellerRecordId) continue;
+
+        const otherSellerRecord = await airtable(SELLERS_TABLE).find(otherSellerRecordId).catch(() => null);
+        const otherSellerDiscordId = asText(otherSellerRecord?.fields?.["Discord ID"]);
+        if (!otherSellerDiscordId) continue;
+
+        await notifySellerOfferDeniedCore({
+          orderRecordId,
+          orderId: asText(orderFields["Order ID"]),
+          sellerOfferRecordId: otherOffer.id,
+          sellerRecordId: otherSellerRecordId,
+          sellerDiscordId: otherSellerDiscordId,
+          productName: asText(orderFields["Shopify Product Name"]),
+          sku: asText(orderFields["SKU"]),
+          size: asText(orderFields["Size"]),
+          shopifyOrderNumber: asText(orderFields["Shopify Order Number"]),
+          deniedAmount: numberValue(otherFields["Seller Offer"]),
+          vatType: asText(otherFields["Offer VAT Type"])
+        }).catch((err) => console.error("Failed to notify other fresh seller of denial (non-blocking):", err));
+      }
+    } catch (broadcastErr) {
+      console.error("Failed to broadcast fresh-offer deny to other sellers (non-blocking):", broadcastErr);
+    }
+
     res.json({ ok: true });
   } catch (err) {
     if (err.statusCode) {
@@ -23240,6 +23327,79 @@ app.post("/api/dashboard/buying-offers/:memberWtbRecordId/deny", async (req, res
           vatType: sellerVatType,
           contextLabel: "Member WTB"
         }).catch((err) => console.error("Failed to send fresh-offer denial DM (non-blocking):", err));
+      }
+
+      // NEW — additive only: his explicit rule — denying one seller's
+      // fresh offer means the buyer isn't happy with ANY current fresh
+      // asking price on this WTB, not just this one seller's. Every
+      // OTHER seller who still has a genuinely untouched, fresh offer
+      // here (not already mid-negotiation, not already denied/withdrawn)
+      // gets denied + notified too, so as many sellers as possible know
+      // they need to come back with something better. Mirrors the
+      // Store Orders fresh-deny broadcast (same fix, same reasoning).
+      try {
+        const [allSellerOffersForThisWtb, activeCounterRoundsForWtb] = await Promise.all([
+          airtable(SELLER_OFFERS_TABLE)
+            .select({ fields: ["Linked Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer", "Denied?", "Withdrawn?"] })
+            .all(),
+          airtable(COUNTER_OFFERS_TABLE)
+            .select({
+              filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Member WTB')`,
+              fields: ["Member WTB", "Seller ID"]
+            })
+            .all()
+        ]);
+
+        const sellerIdsMidNegotiationForThisWtb = new Set(
+          activeCounterRoundsForWtb
+            .filter((r) => firstLinkedRecordId(r.fields?.["Member WTB"]) === memberWtbRecordId)
+            .map((r) => firstLinkedRecordId(r.fields?.["Seller ID"]))
+            .filter(Boolean)
+        );
+
+        const otherFreshSellerOffers = allSellerOffersForThisWtb.filter((r) => {
+          if (r.id === sellerOfferId) return false;
+          if (firstLinkedRecordId(r.fields?.["Linked Member WTBs"]) !== memberWtbRecordId) return false;
+          if (r.fields?.["Delete Offer"] || r.fields?.["Denied?"] || r.fields?.["Withdrawn?"]) return false;
+          const otherSellerId = firstLinkedRecordId(r.fields?.["Seller ID"]);
+          if (otherSellerId && sellerIdsMidNegotiationForThisWtb.has(otherSellerId)) return false;
+          return true;
+        });
+
+        for (const otherOffer of otherFreshSellerOffers) {
+          const otherFields = otherOffer.fields || {};
+          const otherSellerRecordId = firstLinkedRecordId(otherFields["Seller ID"]);
+          if (!otherSellerRecordId) continue;
+
+          const otherPrice = numberValue(otherFields["Seller Offer"]);
+          if (!otherPrice) continue;
+
+          const otherSellerRecord = await airtable(SELLERS_TABLE).find(otherSellerRecordId).catch(() => null);
+          const otherSellerDiscordId = asText(otherSellerRecord?.fields?.["Discord ID"]);
+          if (!otherSellerDiscordId) continue;
+
+          await airtable(SELLER_OFFERS_TABLE).update(otherOffer.id, {
+            "Denied?": true,
+            "Denied At": new Date().toISOString(),
+            "Denied Amount": otherPrice,
+            "Denied VAT Type": asText(otherFields["Offer VAT Type"])
+          }).catch((err) => console.error("Failed to mark other fresh seller offer denied (non-blocking):", err));
+
+          await sendOfferDeniedDiscordDM({
+            orderId: asText(wtbFields["Member WTB ID"]) || memberWtbRecordId,
+            sellerOfferRecordId: otherOffer.id,
+            sellerRecordId: otherSellerRecordId,
+            sellerDiscordId: otherSellerDiscordId,
+            productName: asText(wtbFields["Product Name"]),
+            sku: asText(wtbFields["SKU"]),
+            size: asText(wtbFields["Size"]),
+            deniedAmount: otherPrice,
+            vatType: asText(otherFields["Offer VAT Type"]),
+            contextLabel: "Member WTB"
+          }).catch((err) => console.error("Failed to notify other fresh seller of denial (non-blocking):", err));
+        }
+      } catch (broadcastErr) {
+        console.error("Failed to broadcast fresh-offer deny to other sellers (non-blocking):", broadcastErr);
       }
 
       return res.json({ ok: true, denied_type: "fresh_no_floor" });
