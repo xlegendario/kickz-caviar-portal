@@ -7649,8 +7649,16 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
     const isDutchBuyerForEditBroadcast = isDutchClientCountry(orderFieldsForInputInterpretation["Client Country"]);
     const respondingToVatSourceForEditBroadcast =
       currentWinnerForEditBroadcast.vatType === "VAT21" || currentWinnerForEditBroadcast.vatType === "VAT0";
-    if (!isDutchBuyerForEditBroadcast && respondingToVatSourceForEditBroadcast) {
-      proposedPrice = proposedPrice * 1.21; // no rounding here — precision preserved so the store sees back their exact typed number
+    // The scale the store actually typed in: for a non-Dutch buyer
+    // responding to a VAT-source position, they type an excl.-VAT
+    // (÷1.21) figure; otherwise the plain all-in figure. storeScaleTyped
+    // keeps their original number for a correctly-worded error message;
+    // proposedPrice gets converted to the internal all-in scale for
+    // storage/payout.
+    const editVatDivisor = (!isDutchBuyerForEditBroadcast && respondingToVatSourceForEditBroadcast) ? 1.21 : 1;
+    const storeScaleTyped = proposedPrice;
+    if (editVatDivisor !== 1) {
+      proposedPrice = proposedPrice * editVatDivisor; // no rounding here — precision preserved so the store sees back their exact typed number
     }
 
     // NEW — additive only, same pattern as the other Store Orders
@@ -7702,12 +7710,27 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
     // behavior: a floor of "current + MIN_COUNTER_STEP," no artificial
     // ceiling — same function, same band logic, same error wording as
     // everywhere else, not a separate reimplementation.
-    const currentRoundOnePrice = numberValue(roundOneRecords[0].fields?.["Store Counter Price"]);
+    // FIXED (2) — validate against the HIGHEST Store Counter Price
+    // across ALL round-1 siblings, not just roundOneRecords[0]. If the
+    // rows ever fall momentarily out of sync (e.g. an earlier edit
+    // skipped one seller), checking a single arbitrary row could let a
+    // non-increasing edit through against a stale sibling. The highest
+    // is the true current position the edit must beat.
+    const currentRoundOnePrice = Math.max(
+      ...roundOneRecords
+        .map((r) => numberValue(r.fields?.["Store Counter Price"]))
+        .filter((n) => Number.isFinite(n))
+    );
 
     if (Number.isFinite(currentRoundOnePrice)) {
-      const editValidation = validateNextCounterPrice(currentRoundOnePrice, Infinity, proposedPrice, {
-        requireInteger: !(!isDutchBuyerForEditBroadcast && respondingToVatSourceForEditBroadcast)
-      });
+      // Validate in the STORE's own scale (divide the internal current
+      // price back by the same divisor, compare against what the store
+      // literally typed) so the error message's amounts read in the
+      // store's terms — e.g. "higher than €175 — minimum €178" rather
+      // than the internal VAT-inclusive "€211.75 / €215". storeScaleTyped
+      // is the whole number the store typed, so requireInteger stays on.
+      const currentRoundOneInStoreScale = currentRoundOnePrice / editVatDivisor;
+      const editValidation = validateNextCounterPrice(currentRoundOneInStoreScale, Infinity, storeScaleTyped);
       if (!editValidation.ok) {
         return res.status(400).json({ error: editValidation.reason, band: editValidation.band });
       }
