@@ -5317,6 +5317,16 @@ function bindConsignmentDiscordButtons(client) {
                 orderFields
               );
 
+              // NEW — additive only: store-facing embed values in the
+              // store's own VAT scale.
+              const reopenEmbedDivisor = storeDisplayDivisor(priorVatType, orderFields);
+              const reopenDeniedForDisplay = deniedPrice / reopenEmbedDivisor;
+              const reopenSellerCounterForDisplay = computeSellerCounterForStoreDisplay(
+                priorSellerCounter,
+                priorVatType,
+                orderFields
+              );
+
               if (shouldNotifyStore) {
                 await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
                   method: "POST",
@@ -5331,11 +5341,10 @@ function bindConsignmentDiscordButtons(client) {
                     size: asText(deniedFields["Size"]),
                     counter_offer_record_id: priorRoundId,
                     selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
-                    your_previous_counter: deniedPrice,
-                    // FIXED — same display bug: show the seller's raw
-                    // counter here, not the store-converted equivalent.
-                    seller_counter_price: priorSellerCounterInStoreTerms ?? priorSellerCounter,
-                    denied_price: deniedPrice
+                    your_previous_counter: reopenDeniedForDisplay,
+                    // FIXED — both numbers in the store's own VAT scale.
+                    seller_counter_price: reopenSellerCounterForDisplay ?? priorSellerCounterInStoreTerms ?? priorSellerCounter,
+                    denied_price: reopenDeniedForDisplay
                   })
                 });
               }
@@ -8065,6 +8074,21 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
         orderFields
       );
 
+      // NEW — additive only: the store-facing embed must show both
+      // numbers in the STORE's own negotiating scale (e.g. VAT0 for a
+      // non-Dutch store on a VAT-source position), not the internal
+      // all-in scale. storeVatContext is the seller's VAT type, which
+      // (per the store-facing relabel rule) drives whether the store
+      // is in a VAT-source or Margin context.
+      const storeVatContextForEmbed = sellerVatType;
+      const embedDivisor = storeDisplayDivisor(storeVatContextForEmbed, orderFields);
+      const yourPreviousCounterForDisplay = numberValue(f["Store Counter Price"]) / embedDivisor;
+      const sellerNewCounterForDisplay = computeSellerCounterForStoreDisplay(
+        proposedPrice,
+        storeVatContextForEmbed,
+        orderFields
+      );
+
       // NEW — proactively check whether the STORE would have any room
       // left to counter again, so the notification can show "no room,
       // accept or deny" upfront instead of the store discovering it
@@ -8088,16 +8112,16 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
           size: asText(f["Size"]),
           counter_offer_record_id: newRound.id,
           selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
-          your_previous_counter: numberValue(f["Store Counter Price"]),
+          your_previous_counter: yourPreviousCounterForDisplay,
           // FIXED — this was sending the STORE-CONVERTED equivalent
           // (e.g. €155, seller's ask + margin) under "seller_counter_price",
           // which the embed displays as "Seller's New Counter" — making
           // it look like the seller asked for €155 when they actually
           // asked for €145. That's what led to real confusion tracing
           // an accepted deal (confirmed by comparing the raw Counter
-          // Offers records). Now sends the seller's RAW counter here,
-          // and the store-converted number separately, clearly labeled.
-          seller_counter_price: sellerCounterInStoreTerms ?? proposedPrice,
+          // Offers records). Now sends the seller's counter marked up
+          // to store terms, in the store's own VAT scale.
+          seller_counter_price: sellerNewCounterForDisplay ?? sellerCounterInStoreTerms ?? proposedPrice,
           no_room_to_counter: noRoomToCounter
         })
       }).catch((err) => console.error("Failed to notify store of seller counter (non-blocking):", err));
@@ -9062,11 +9086,15 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
       // channel/format as a fresh seller-counter notification.
       if (AIRTABLE_DISCORD_UPDATES_URL) {
         // FIXED — same as the seller-counter endpoint: the store must
-        // see the store-equivalent (margin-adjusted) price, not the
-        // seller's raw edited ask.
-        const editedSellerPriceInStoreTerms = calculateStoreCounterEquivalent(
+        // see the store-equivalent (margin-adjusted) price in their
+        // own VAT scale, not the seller's raw edited ask nor the
+        // internal all-in figure.
+        const storeVatContextForEditEmbed = asText(f["Seller Original VAT Type"]);
+        const editEmbedDivisor = storeDisplayDivisor(storeVatContextForEditEmbed, orderFields);
+        const editedYourPreviousForDisplay = numberValue(previousFields["Store Counter Price"]) / editEmbedDivisor;
+        const editedSellerPriceInStoreTerms = computeSellerCounterForStoreDisplay(
           proposedPrice,
-          asText(f["Seller Original VAT Type"]),
+          storeVatContextForEditEmbed,
           orderFields
         );
 
@@ -9083,10 +9111,10 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
             size: asText(f["Size"]),
             counter_offer_record_id: recordId,
             selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
-            your_previous_counter: numberValue(previousFields["Store Counter Price"]),
-            // FIXED — same display bug as the seller-counter endpoint:
-            // must show the seller's raw edited counter here, not the
-            // store-converted (margin-included) equivalent.
+            your_previous_counter: editedYourPreviousForDisplay,
+            // FIXED — must show both numbers in the store's own VAT
+            // scale (e.g. VAT0 for a non-Dutch store), not the internal
+            // all-in figure.
             seller_counter_price: editedSellerPriceInStoreTerms ?? proposedPrice
           })
         }).catch((err) => console.error("Failed to notify store of edited counter (non-blocking):", err));
@@ -11335,6 +11363,49 @@ function calculateStoreCounterEquivalent(sellerAskPrice, vatType, orderFields = 
   }
 
   return roundToNearestStep(storePrice, 2.5);
+}
+
+// NEW — additive only: the store types/sees/pays in the VAT-scale of
+// the offer embed they're responding to. For a non-Dutch store
+// responding to a VAT-source (VAT21/VAT0) position, that scale is
+// excl.-VAT (÷1.21 vs the internal all-in scale); for a Dutch store,
+// or a Margin-source position, it's the plain all-in scale (÷1). This
+// divisor converts an internal all-in figure back to what the store
+// should SEE in a store-facing embed / the Portal.
+function storeDisplayDivisor(storeVatContext, orderFields = {}) {
+  const isDutch = isDutchClientCountry(orderFields["Client Country"]);
+  const isVatSource = storeVatContext === "VAT21" || storeVatContext === "VAT0";
+  return (!isDutch && isVatSource) ? 1.21 : 1;
+}
+
+// NEW — additive only: computes the "Seller's New Counter" figure a
+// store-facing embed should show, in the STORE's own scale. The
+// seller's counter is already in the same VAT context the store is
+// negotiating in (VAT0→VAT0 for a non-Dutch store on a VAT-source
+// position — no ÷1.21 — or all-in for a Dutch store / Margin), so we
+// apply the store's margin markup directly via the Margin path (no
+// VAT deling), then the store-display divisor stays 1 in that case.
+// For a Dutch store the internal all-in figure IS what they see, so
+// the divisor is 1 there too. This mirrors his confirmed rule:
+// "Seller's New Counter is the margin formula on the seller's
+// counter, without ×1.21 for VAT0→VAT0, but ×1.21 if the store is
+// Dutch."
+function computeSellerCounterForStoreDisplay(sellerCounterPrice, storeVatContext, orderFields = {}) {
+  const isDutch = isDutchClientCountry(orderFields["Client Country"]);
+  const isVatSource = storeVatContext === "VAT21" || storeVatContext === "VAT0";
+
+  if (!isDutch && isVatSource) {
+    // VAT0→VAT0 (or VAT21 excl.): seller's counter is already in the
+    // store's excl. scale — apply margin markup with NO VAT deling by
+    // routing through the Margin path.
+    return calculateStoreCounterEquivalent(sellerCounterPrice, "Margin", orderFields);
+  }
+
+  // Dutch store, or Margin source: the store sees the plain all-in
+  // figure, computed with the seller's real VAT type (which applies
+  // ÷1.21 internally for VAT0, giving the incl. all-in the Dutch store
+  // expects).
+  return calculateStoreCounterEquivalent(sellerCounterPrice, storeVatContext, orderFields);
 }
 
 // NEW — additive only: replicates the EXACT VAT-exclusion rule used
@@ -13990,6 +14061,17 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
         orderFields
       );
 
+      // NEW — additive only: store-facing embed values in the store's
+      // own VAT scale (see storeDisplayDivisor / computeSellerCounter-
+      // ForStoreDisplay).
+      const retryEmbedDivisor = storeDisplayDivisor(sellerVatType, orderFields);
+      const retryYourPreviousForDisplay = storeLastPosition / retryEmbedDivisor;
+      const retrySellerCounterForDisplay = computeSellerCounterForStoreDisplay(
+        proposedPrice,
+        sellerVatType,
+        orderFields
+      );
+
       const noRoomToCounter =
         Number.isFinite(storeLastPosition) &&
         Number.isFinite(sellerCounterInStoreTerms) &&
@@ -14008,8 +14090,8 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
           size: asText(f["Size"]),
           counter_offer_record_id: newRound.id,
           selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
-          your_previous_counter: storeLastPosition,
-          seller_counter_price: sellerCounterInStoreTerms ?? proposedPrice,
+          your_previous_counter: retryYourPreviousForDisplay,
+          seller_counter_price: retrySellerCounterForDisplay ?? sellerCounterInStoreTerms ?? proposedPrice,
           no_room_to_counter: noRoomToCounter
         })
       }).catch((err) => console.error("Failed to notify store of retry counter (non-blocking):", err));
@@ -15426,6 +15508,16 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
             orderFields
           );
 
+          // NEW — additive only: store-facing embed values in the
+          // store's own VAT scale.
+          const reopen2EmbedDivisor = storeDisplayDivisor(priorVatType, orderFields);
+          const reopen2DeniedForDisplay = deniedPrice / reopen2EmbedDivisor;
+          const reopen2SellerCounterForDisplay = computeSellerCounterForStoreDisplay(
+            priorSellerCounter,
+            priorVatType,
+            orderFields
+          );
+
           await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -15439,9 +15531,9 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
               size: asText(deniedFields["Size"]),
               counter_offer_record_id: priorRoundId,
               selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
-              your_previous_counter: deniedPrice,
-              seller_counter_price: priorSellerCounterInStoreTerms ?? priorSellerCounter,
-              denied_price: deniedPrice
+              your_previous_counter: reopen2DeniedForDisplay,
+              seller_counter_price: reopen2SellerCounterForDisplay ?? priorSellerCounterInStoreTerms ?? priorSellerCounter,
+              denied_price: reopen2DeniedForDisplay
             })
           }).catch((err) => console.error("Failed to notify store of reopened round (non-blocking):", err));
         }
