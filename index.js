@@ -9612,9 +9612,17 @@ app.post("/api/consignment/offers/:id/store-counter", async (req, res) => {
       storeOwnReference = Number(grandparent?.store_counter_price) || null;
     }
 
-    if (!(storeOwnReference > 0)) {
-      return res.status(500).json({ error: "Could not determine the store's previous counter." });
-    }
+    // NEW — additive only: a row with no store_counter_price anywhere in
+    // its chain AND no previous_offer_id (e.g. AutoAllocateBestUnit's
+    // pre-offer for a non-auto-accepting store) means the store has
+    // never actually responded yet — there IS no prior store position to
+    // validate a two-sided band against. This used to hard-error here
+    // ("Could not determine the store's previous counter"), blocking the
+    // store from ever countering this type of offer. Falls through to a
+    // one-sided check below instead (same shape a genuine round-1 counter
+    // uses elsewhere in this system) rather than requiring an own
+    // reference that legitimately doesn't exist yet.
+    const hasStoreOwnReference = storeOwnReference > 0;
 
     // Counterpart: consignor's counter, converted UP to store terms
     // (forward direction — same functions the initial broadcast uses).
@@ -9632,7 +9640,15 @@ app.post("/api/consignment/offers/:id/store-counter", async (req, res) => {
       return res.status(500).json({ error: "Could not compute margin conversion for this order." });
     }
 
-    const validation = validateNextCounterPrice(storeOwnReference, consignorCounterInStoreTerms, proposedPrice);
+    const validation = hasStoreOwnReference
+      ? validateNextCounterPrice(storeOwnReference, consignorCounterInStoreTerms, proposedPrice)
+      : (proposedPrice <= Math.floor(consignorCounterInStoreTerms - MIN_COUNTER_STEP)
+          ? { ok: true, band: [1, Math.floor(consignorCounterInStoreTerms - MIN_COUNTER_STEP)] }
+          : {
+              ok: false,
+              reason: `Your counter must be lower than the consignor's offer (€${consignorCounterInStoreTerms}) — maximum €${Math.floor(consignorCounterInStoreTerms - MIN_COUNTER_STEP)}.`,
+              band: [1, Math.floor(consignorCounterInStoreTerms - MIN_COUNTER_STEP)]
+            });
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
