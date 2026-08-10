@@ -23340,7 +23340,7 @@ app.post("/api/dashboard/buying-offers/:memberWtbRecordId/deny", async (req, res
       try {
         const [allSellerOffersForThisWtb, activeCounterRoundsForWtb] = await Promise.all([
           airtable(SELLER_OFFERS_TABLE)
-            .select({ fields: ["Linked Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer", "Denied?", "Withdrawn?"] })
+            .select({ fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer", "Denied?", "Withdrawn?"] })
             .all(),
           airtable(COUNTER_OFFERS_TABLE)
             .select({
@@ -23359,7 +23359,7 @@ app.post("/api/dashboard/buying-offers/:memberWtbRecordId/deny", async (req, res
 
         const otherFreshSellerOffers = allSellerOffersForThisWtb.filter((r) => {
           if (r.id === sellerOfferId) return false;
-          if (firstLinkedRecordId(r.fields?.["Linked Member WTBs"]) !== memberWtbRecordId) return false;
+          if (firstLinkedRecordId(r.fields?.["Member WTBs"]) !== memberWtbRecordId) return false;
           if (r.fields?.["Delete Offer"] || r.fields?.["Denied?"] || r.fields?.["Withdrawn?"]) return false;
           const otherSellerId = firstLinkedRecordId(r.fields?.["Seller ID"]);
           if (otherSellerId && sellerIdsMidNegotiationForThisWtb.has(otherSellerId)) return false;
