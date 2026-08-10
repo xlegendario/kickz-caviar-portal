@@ -13061,6 +13061,92 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       }
     }
 
+    // NEW — additive only: his exact catch via live testing — the
+    // Store Orders equivalent of memberWtbMinNormalizedPrice just
+    // above, which already correctly handles this for Member WTB. The
+    // OLD rollupLowest below (still used further down) only reads a
+    // static Airtable rollup over raw Seller Offers — a DIFFERENT
+    // seller's live Counter Offers round never touches it, so seller
+    // B's fresh counter never showed up as "beating" seller A's own
+    // stale, untouched raw offer, leaving A wrongly marked "Lowest".
+    // Same exact pattern as the Member WTB block above: only counts a
+    // competing round once genuinely countered (Seller Counter Price
+    // set), chain-traces through supersessions, takes the true minimum
+    // per order across every seller.
+    let orderMinNormalizedPrice = new Map();
+    if (orderIdsForStatusCheck.length) {
+      const normalizeForOrders = (price, vatType) => {
+        const p = Number(price);
+        if (!Number.isFinite(p)) return null;
+        return asText(vatType) === "VAT0" ? p * 1.21 : p;
+      };
+
+      const [competingSellerOffersForOrders, competingCounterRoundsForOrders] = await Promise.all([
+        airtable(SELLER_OFFERS_TABLE)
+          .select({ fields: ["Linked Orders", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
+          .all()
+          .then((records) =>
+            records.filter(
+              (r) =>
+                !r.fields?.["Delete Offer"] &&
+                orderIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Linked Orders"]))
+            )
+          ),
+        airtable(COUNTER_OFFERS_TABLE)
+          .select({
+            filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Seller Offer')`,
+            fields: ["Order", "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
+          })
+          .all()
+          .then((records) =>
+            records.filter((r) => orderIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Order"])))
+          )
+      ]);
+
+      const sellerIdsWithGenuineCounterForOrders = new Set(
+        competingCounterRoundsForOrders
+          .filter((r) => numberValue(r.fields?.["Seller Counter Price"]) > 0)
+          .map((r) => firstLinkedRecordId(r.fields?.["Seller ID"]))
+          .filter(Boolean)
+      );
+
+      const activeRoundIdBySellerForOrders = new Map();
+      for (const cr of competingCounterRoundsForOrders) {
+        const sellerId = firstLinkedRecordId(cr.fields?.["Seller ID"]);
+        if (sellerId && !activeRoundIdBySellerForOrders.has(sellerId)) {
+          activeRoundIdBySellerForOrders.set(sellerId, cr.id);
+        }
+      }
+
+      for (const so of competingSellerOffersForOrders) {
+        const sellerId = firstLinkedRecordId(so.fields?.["Seller ID"]);
+        if (sellerId && sellerIdsWithGenuineCounterForOrders.has(sellerId)) continue;
+
+        const orderId = firstLinkedRecordId(so.fields?.["Linked Orders"]);
+        const activeRoundId = sellerId ? activeRoundIdBySellerForOrders.get(sellerId) : null;
+        const chainTraced = activeRoundId ? await findSellersTrueLastCounter(activeRoundId) : null;
+        const effectivePrice = chainTraced ?? numberValue(so.fields?.["Seller Offer"]);
+        const normalized = normalizeForOrders(effectivePrice, so.fields?.["Offer VAT Type"]);
+        if (normalized == null) continue;
+
+        const current = orderMinNormalizedPrice.get(orderId);
+        if (current == null || normalized < current) orderMinNormalizedPrice.set(orderId, normalized);
+      }
+
+      for (const cr of competingCounterRoundsForOrders) {
+        const sellerCounter = numberValue(cr.fields?.["Seller Counter Price"]);
+        if (!(sellerCounter > 0)) continue;
+
+        const orderId = firstLinkedRecordId(cr.fields?.["Order"]);
+        const vatType = cr.fields?.["Seller Original VAT Type"];
+        const normalized = normalizeForOrders(sellerCounter, vatType);
+        if (normalized == null) continue;
+
+        const current = orderMinNormalizedPrice.get(orderId);
+        if (current == null || normalized < current) orderMinNormalizedPrice.set(orderId, normalized);
+      }
+    }
+
     const preFiltered = preFilteredByStatus.filter((record) => {
       const f = record.fields || {};
       const memberWtbId = firstLinkedRecordId(f["Member WTB"]);
@@ -13196,22 +13282,28 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           sellerLastOffer = trueLastCounter ?? numberValue(f["Seller Original Price"]);
         }
 
-        // FIXED — the rollup fields below ("Current Lowest ...") are
-        // Airtable rollups over the raw Seller Offers table price,
-        // which an in-progress Counter Offers negotiation never
-        // touches — so a seller's own current position (own pending
-        // counter, OR their last position while the store's counter
-        // sits with them) never showed up there. This previously only
-        // applied to "open" — extended to "countered" too, since that
-        // pill needs the exact same comparison (this doesn't fix the
-        // full picture: a DIFFERENT seller's own in-progress counter
-        // still won't be reflected here either — that's a separate,
-        // bigger question).
-        const rollupLowest = !isMemberWtb
-          ? (vatType === "VAT0"
-              ? numberValue(orderFields["Current Lowest (VAT0)"])
-              : numberValue(orderFields["Current Lowest (Normalized)"]))
+        // FIXED — a real, confirmed bug found via his live testing:
+        // the rollup fields below ("Current Lowest ...") are Airtable
+        // rollups over the raw Seller Offers table price, which an
+        // in-progress Counter Offers negotiation never touches — so a
+        // DIFFERENT seller's live counter (e.g. seller X countering to
+        // 140) never showed up here, leaving seller Y wrongly marked
+        // "Lowest" at their own stale, unbeaten-looking 145. Replaced
+        // with orderMinNormalizedPrice (built above) — the exact same
+        // live, cross-seller computation already proven for Member
+        // WTB — instead of the stale rollup. Also drops the separate
+        // "Lowest Offer Seller ID" field as a fallback signal for
+        // isLowest, since it's the same class of stale, non-live field
+        // and is no longer needed now this is computed live.
+        const orderId = firstLinkedRecordId(f["Order"]);
+        const orderCompetingMin = orderId ? orderMinNormalizedPrice.get(orderId) : null;
+        const ownNormalizedForOrder = !isMemberWtb && Number.isFinite(sellerLastOffer)
+          ? (asText(vatType) === "VAT0" ? sellerLastOffer * 1.21 : sellerLastOffer)
           : null;
+
+        const orderLowest = Number.isFinite(orderCompetingMin) && Number.isFinite(ownNormalizedForOrder)
+          ? Math.min(orderCompetingMin, ownNormalizedForOrder)
+          : (orderCompetingMin ?? ownNormalizedForOrder);
 
         // NEW — additive only: the Member WTB equivalent of the above,
         // using memberWtbMinNormalizedPrice (built above from every
@@ -13228,19 +13320,13 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           ? Math.min(memberWtbCompetingMin, ownNormalizedForMemberWtb)
           : (memberWtbCompetingMin ?? ownNormalizedForMemberWtb);
 
-        const currentLowest = isMemberWtb
-          ? memberWtbLowest
-          : (Number.isFinite(rollupLowest) && Number.isFinite(sellerLastOffer)
-              ? Math.min(rollupLowest, sellerLastOffer)
-              : (rollupLowest ?? sellerLastOffer));
+        const currentLowest = isMemberWtb ? memberWtbLowest : orderLowest;
 
         const isLowest = isMemberWtb
           ? (Number.isFinite(ownNormalizedForMemberWtb) &&
               (!Number.isFinite(memberWtbCompetingMin) || ownNormalizedForMemberWtb <= memberWtbCompetingMin))
-          : (
-              displayValue(orderFields["Lowest Offer Seller ID"]) === displayValue(req.query.seller_id) ||
-              (Number.isFinite(sellerLastOffer) && Number.isFinite(rollupLowest) && sellerLastOffer <= rollupLowest)
-            );
+          : (Number.isFinite(ownNormalizedForOrder) &&
+              (!Number.isFinite(orderCompetingMin) || ownNormalizedForOrder <= orderCompetingMin));
 
         return {
           id: record.id,
