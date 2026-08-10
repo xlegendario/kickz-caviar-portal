@@ -7726,6 +7726,13 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
     let skipped = 0;
     const errors = [];
 
+    console.error("DEBUG edit-broadcast:", {
+      typedProposedPrice: proposedPrice,
+      currentWinnerVatType: currentWinnerForEditBroadcast.vatType,
+      isDutchBuyerForEditBroadcast,
+      respondingToVatSourceForEditBroadcast
+    });
+
     for (const record of roundOneRecords) {
       const f = record.fields || {};
       const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
@@ -7736,11 +7743,30 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
       // (what the seller asked for) — comparing them directly ignored
       // our margin. Convert the seller's ask UP to what the store would
       // need to pay for it, and compare on that scale instead.
+      // NEW — additive only: his exact catch — proposedPrice may now be
+      // on the non-Dutch-adjusted scale (see the conversion above), but
+      // this comparison was still computing sellerAskInStoreTerms on
+      // the raw, unadjusted scale — comparing two different scales and
+      // wrongly skipping every VAT-source sibling. Applies the SAME
+      // adjustment here, based on THIS sibling's own VAT type (not the
+      // current-winner's, which only decided whether proposedPrice
+      // itself needed converting).
+      const isVatSourceForThisSibling = sellerVatType === "VAT21" || sellerVatType === "VAT0";
       const sellerAskInStoreTerms = calculateStoreCounterEquivalent(
         sellerOriginalPrice,
         sellerVatType,
-        orderFieldsForBroadcast
+        orderFieldsForBroadcast,
+        (!isDutchBuyerForEditBroadcast && isVatSourceForThisSibling) ? 1.21 : 1
       );
+
+      console.error("DEBUG edit-broadcast sibling:", {
+        recordId: record.id,
+        sellerVatType,
+        sellerOriginalPrice,
+        sellerAskInStoreTerms,
+        proposedPrice,
+        willSkip: (!sellerOriginalPrice || !Number.isFinite(sellerAskInStoreTerms) || proposedPrice >= sellerAskInStoreTerms)
+      });
 
       if (!sellerOriginalPrice || !Number.isFinite(sellerAskInStoreTerms) || proposedPrice >= sellerAskInStoreTerms) {
         skipped++;
