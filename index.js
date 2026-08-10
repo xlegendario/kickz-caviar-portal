@@ -7359,7 +7359,7 @@ app.post("/api/counter-offers/create", async (req, res) => {
     const respondingToVatSourceForCreate =
       currentWinnerForCreate.vatType === "VAT21" || currentWinnerForCreate.vatType === "VAT0";
     if (!isDutchBuyerForCreate && respondingToVatSourceForCreate) {
-      storeCounterPrice = Math.round(storeCounterPrice * 1.21);
+      storeCounterPrice = storeCounterPrice * 1.21; // no rounding here — precision preserved so the store sees back their exact typed number
     }
 
     const orderId = asText(orderFields["Order ID"]);
@@ -7650,7 +7650,7 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
     const respondingToVatSourceForEditBroadcast =
       currentWinnerForEditBroadcast.vatType === "VAT21" || currentWinnerForEditBroadcast.vatType === "VAT0";
     if (!isDutchBuyerForEditBroadcast && respondingToVatSourceForEditBroadcast) {
-      proposedPrice = Math.round(proposedPrice * 1.21);
+      proposedPrice = proposedPrice * 1.21; // no rounding here — precision preserved so the store sees back their exact typed number
     }
 
     // NEW — additive only, same pattern as the other Store Orders
@@ -8197,7 +8197,7 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
     const isDutchBuyerForCounter = isDutchClientCountry(orderFieldsForBand["Client Country"]);
     const respondingToVatSourceForCounter = sellerVatTypeForBand === "VAT21" || sellerVatTypeForBand === "VAT0";
     if (!isDutchBuyerForCounter && respondingToVatSourceForCounter) {
-      proposedPrice = Math.round(proposedPrice * 1.21);
+      proposedPrice = proposedPrice * 1.21; // no rounding here — precision preserved so the store sees back their exact typed number
     }
 
     // FIXED — same scale mismatch as the seller-counter endpoint, other
@@ -8977,7 +8977,7 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
       const isDutchBuyerForEdit = isDutchClientCountry(orderFieldsForEdit["Client Country"]);
       const respondingToVatSourceForEdit = sellerVatTypeForEdit === "VAT21" || sellerVatTypeForEdit === "VAT0";
       if (!isDutchBuyerForEdit && respondingToVatSourceForEdit) {
-        proposedPrice = Math.round(proposedPrice * 1.21);
+        proposedPrice = proposedPrice * 1.21; // no rounding here — precision preserved so the store sees back their exact typed number
       }
 
       // FIXED — this was recomputing "own reference" from the seller's
@@ -11261,10 +11261,18 @@ function roundToNearestStep(value, step = 2.5) {
 // scale — without this, a seller's raw ask and a store's raw counter
 // price look like two unrelated numbers even when the margin between
 // them is the only real difference.
-function calculateStoreCounterEquivalent(sellerAskPrice, vatType, orderFields = {}) {
-  const converted = getCounterEquivalentPriceForVatType(sellerAskPrice, vatType);
+function calculateStoreCounterEquivalent(sellerAskPrice, vatType, orderFields = {}, preAdjustmentMultiplier = 1) {
+  let converted = getCounterEquivalentPriceForVatType(sellerAskPrice, vatType);
 
   if (!Number.isFinite(converted) || converted <= 0) return null;
+
+  // NEW — additive only: his exact catch — applying a non-Dutch
+  // display adjustment AFTER this function's own internal rounding
+  // (roundToNearestStep below) loses precision (e.g. €192.50 becoming
+  // €193.60). Applying it here, before the margin math and before the
+  // single rounding step at the end, gives the exact same figure the
+  // store originally saw on the fresh-offer embed.
+  converted = converted * preAdjustmentMultiplier;
 
   const margin = numberValue(orderFields["Offer Margin"]);
   const percentage = numberValue(orderFields["Offer Percentage"]);
@@ -15037,34 +15045,29 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
         sellersOffer = chainTraced ?? numberValue(f["Seller Original Price"]);
       }
 
-      const sellersOfferInStoreTerms = calculateStoreCounterEquivalent(sellersOffer, vatType, orderFields);
-
-      // NEW — additive only: his refined design, display side — the
-      // store's own values (my_offer, sellers_offer) are stored/
-      // computed on the internal all-in (Dutch-equivalent) scale, but
-      // a non-Dutch store needs to SEE them back in their own natural
-      // context (excl. for a VAT-source round, already-inclusive for
-      // Margin) — same rule, opposite direction, as the price-input
-      // conversion built earlier tonight.
       const isDutchStoreForDisplay = isDutchClientCountry(orderFields["Client Country"]);
       const isVatSourceForDisplay = vatType === "VAT21" || vatType === "VAT0";
       const needsConversionForDisplay = !isDutchStoreForDisplay && isVatSourceForDisplay;
 
+      const sellersOfferInStoreTerms = calculateStoreCounterEquivalent(
+        sellersOffer,
+        vatType,
+        orderFields,
+        needsConversionForDisplay ? 1.21 : 1
+      );
+
       // my_offer is the store's OWN typed input — it was multiplied by
       // 1.21 on the way IN (to reach the internal all-in scale before
-      // storing), so showing it back means reversing that: divide.
+      // storing, kept unrounded there for exactly this reason), so
+      // showing it back means reversing that: divide.
       const myLastOfferForDisplay = Number.isFinite(myLastOffer) && myLastOffer > 0
         ? (needsConversionForDisplay ? myLastOffer / 1.21 : myLastOffer)
         : null;
 
-      // sellers_offer never went through that input path — it's a
-      // fresh calculateStoreCounterEquivalent computation, which
-      // always lands on the internal Dutch-equivalent scale. A non-
-      // Dutch store needs to see this multiplied UP to match the same
-      // scale the original fresh-offer embed already showed them.
-      const sellersOfferInStoreTermsForDisplay = Number.isFinite(sellersOfferInStoreTerms)
-        ? (needsConversionForDisplay ? sellersOfferInStoreTerms * 1.21 : sellersOfferInStoreTerms)
-        : null;
+      // sellersOfferInStoreTerms above already applied the non-Dutch
+      // adjustment BEFORE its own internal rounding (via
+      // preAdjustmentMultiplier) — no further conversion needed here.
+      const sellersOfferInStoreTermsForDisplay = sellersOfferInStoreTerms;
 
       return {
         id: record.id,
