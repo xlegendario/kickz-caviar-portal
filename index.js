@@ -15213,8 +15213,8 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
       return res.status(400).json({ error: "Missing store_name" });
     }
 
-    if (filter !== "open" && filter !== "countered") {
-      return res.status(400).json({ error: `filter=${filter} isn't built yet — only filter=open and filter=countered are available so far` });
+    if (filter !== "open" && filter !== "countered" && filter !== "denied") {
+      return res.status(400).json({ error: `filter=${filter} isn't built yet — only filter=open, filter=countered, and filter=denied are available so far` });
     }
 
     const safeStoreName = escapeFormulaValue(storeName);
@@ -15234,9 +15234,10 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
       return res.json({ count: 0, items: [] });
     }
 
+    const statusForQuery = filter === "denied" ? "Denied" : "Open";
     const records = await airtable(COUNTER_OFFERS_TABLE)
       .select({
-        filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Seller Offer')`
+        filterByFormula: `AND({Status} = '${statusForQuery}', {Source Type} = 'Seller Offer')`
       })
       .all()
       .then((records) =>
@@ -15245,14 +15246,59 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
 
     // "open" wants rows where the SELLER just moved (store must
     // respond); "countered" wants the opposite — the store's own
-    // pending counter, awaiting the seller. Same inversion as
+    // pending counter, awaiting the seller. "denied" wants every
+    // denied round (no seller-moved inversion). Same inversion as
     // buying-counter-offers.
-    const preFiltered = records.filter((record) => {
+    let preFiltered = records.filter((record) => {
+      if (filter === "denied") return true;
       const f = record.fields || {};
       const sellerAlreadyCountered =
         f["Seller Counter Price"] !== undefined && f["Seller Counter Price"] !== null && f["Seller Counter Price"] !== "";
       return filter === "open" ? sellerAlreadyCountered : !sellerAlreadyCountered;
     });
+
+    // NEW — additive only: same supersession-collapse the buying-side
+    // Denied pill uses. A deny-with-reopen permanently leaves the
+    // just-denied round at Status="Denied"; the negotiation continues
+    // via the REOPENED round before it, not through this one, so that
+    // old denial would show the same order twice. A denied round is
+    // superseded if a later sibling shares its "Previous Record ID"
+    // (another round placed later from that same reopened position) —
+    // only the round with no later sibling is the real, current dead
+    // end. Fetch broadly and match by Order ID in JS (never
+    // FIND(rawId, ARRAYJOIN(...)), a documented pitfall).
+    if (filter === "denied" && preFiltered.length) {
+      const allSellerRounds = await airtable(COUNTER_OFFERS_TABLE)
+        .select({
+          filterByFormula: `{Source Type} = 'Seller Offer'`,
+          fields: ["Order", "Previous Record ID", "Created At"]
+        })
+        .all();
+
+      const siblingsByPrevId = new Map();
+      for (const r of allSellerRounds) {
+        if (!myOrderIds.has(firstLinkedRecordId(r.fields?.["Order"]))) continue;
+        const prevId = firstLinkedRecordId(r.fields?.["Previous Record ID"]);
+        if (!prevId) continue;
+        if (!siblingsByPrevId.has(prevId)) siblingsByPrevId.set(prevId, []);
+        siblingsByPrevId.get(prevId).push({
+          id: r.id,
+          createdAt: displayValue(r.fields?.["Created At"])
+        });
+      }
+
+      preFiltered = preFiltered.filter((record) => {
+        const f = record.fields || {};
+        const ownPrevId = firstLinkedRecordId(f["Previous Record ID"]);
+        const ownCreatedAt = displayValue(f["Created At"]);
+        if (!ownPrevId) return true;
+        const siblings = siblingsByPrevId.get(ownPrevId) || [];
+        const hasLaterSibling = siblings.some(
+          (s) => s.id !== record.id && s.createdAt && ownCreatedAt && s.createdAt > ownCreatedAt
+        );
+        return !hasLaterSibling;
+      });
+    }
 
     const previousIds = [...new Set(preFiltered.map((r) => firstLinkedRecordId(r.fields?.["Previous Record ID"])).filter(Boolean))];
 
@@ -15352,6 +15398,7 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
           ? previousSellerCounterById.get(previousOfferId)
           : null,
         raw_date: asText(f["Created At"]),
+        denied_at: filter === "denied" ? formatDateEU(f["Denied At"]) : null,
         // Kept only for the visibility filter right below — not part
         // of the response shape.
         __sellerId: firstLinkedRecordId(f["Seller ID"])
@@ -15364,6 +15411,11 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
     // actually winning right now).
     const visibleItems = await Promise.all(
       items.map(async (item) => {
+        // Denied rounds are closed records — always show them in the
+        // Denied pill; the "single best position only" rule only makes
+        // sense for live Open/Countered rounds.
+        if (filter === "denied") return item;
+
         const betterElsewhere = (await getCurrentGlobalLowestNormalized(
           "Seller Offer",
           item.order_record_id,
