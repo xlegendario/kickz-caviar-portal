@@ -8525,7 +8525,9 @@ app.post("/api/counter-offers/create-fresh-round", async (req, res) => {
 });
 
 app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
+    // ENTRY-DEBUG
   try {
+    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const secret = asText(req.headers["x-kc-secret"]);
 
     if (
@@ -10675,7 +10677,9 @@ app.post("/api/consignment/offers/:id/confirm", async (req, res) => {
 // accept mechanism, just a new way to reach the existing one.
 // ---------------------------------------------------------------------
 app.post("/api/consignment/offers/:id/accept-previous", async (req, res) => {
+    // ENTRY-DEBUG
   try {
+    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const pendingOfferId = asText(req.params.id);
     const requestingSellerRecordId = asText(req.body?.seller_record_id);
 
@@ -10778,7 +10782,9 @@ app.post("/api/consignment/offers/:id/cancel", async (req, res) => {
 });
 
 app.post("/api/consignment/offers/:id/store-accept", async (req, res) => {
+    // ENTRY-DEBUG
   try {
+    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const secret = asText(req.headers["x-kc-secret"]);
 
     if (
@@ -13818,7 +13824,9 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/cancel", async (req, res) =
 // Portal action doesn't need.
 // ---------------------------------------------------------------------
 app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (req, res) => {
+    // ENTRY-DEBUG
   try {
+    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const pendingOfferId = asText(req.params.offerId);
     const sellerRecordId = asText(req.body?.seller_record_id);
 
@@ -15332,7 +15340,9 @@ async function closeCompetingCountersForOrder(orderRecordId, acceptedCounterOffe
 }
 
 app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-accept", async (req, res) => {
+    // ENTRY-DEBUG
   try {
+    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const counterOfferRecordId = asText(req.params.offerId);
     const sellerRecordId = asText(req.body?.seller_record_id);
 
@@ -15894,7 +15904,9 @@ app.post("/api/dashboard/wtb-counter-offers/:id/deny", async (req, res) => {
 });
 
 app.post("/api/dashboard/wtb-counter-offers/:id/accept", async (req, res) => {
+    // ENTRY-DEBUG
   try {
+    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const counterOfferId = asText(req.params.id);
     const sellerRecordId = asText(req.body?.seller_record_id);
 
@@ -18377,7 +18389,9 @@ async function closeCompetingCountersForMemberWtb(memberWtbRecordId, acceptedCou
 // NEW — additive only: buyer accepts the seller's current position on
 // this round (Open pill). Mirrors member_wtb_buyer_counter_accept:.
 app.post("/api/dashboard/buying-counter-offers/:offerId/buyer-accept", async (req, res) => {
+    // ENTRY-DEBUG
   try {
+    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const counterOfferRecordId = asText(req.params.offerId);
     const buyerSellerRecordId = asText(req.body?.seller_record_id);
 
@@ -19729,7 +19743,9 @@ app.post("/api/dashboard/buying/deny-offer", async (req, res) => {
 });
 
 app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
+    // ENTRY-DEBUG
   try {
+    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
     // NEW — additive only: this endpoint always accepted the raw
     // "Current Lowest Seller Offer" price, ignoring any negotiated
