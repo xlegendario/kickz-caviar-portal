@@ -7373,7 +7373,7 @@ app.post("/api/counter-offers/create", async (req, res) => {
     const respondingToVatSourceForCreate =
       currentWinnerForCreate.vatType === "VAT21" || currentWinnerForCreate.vatType === "VAT0";
     if (!isDutchBuyerForCreate && respondingToVatSourceForCreate) {
-      storeCounterPrice = storeCounterPrice * 1.21; // no rounding here — precision preserved so the store sees back their exact typed number
+      storeCounterPrice = storeCounterPrice * storeInputMultiplier(orderFields); // client-rate, unrounded — so the store's exact typed number round-trips through Store Counter Price Excl VAT
     }
 
     const orderId = asText(orderFields["Order ID"]);
@@ -7669,10 +7669,10 @@ app.post("/api/counter-offers/edit-broadcast", async (req, res) => {
     // keeps their original number for a correctly-worded error message;
     // proposedPrice gets converted to the internal all-in scale for
     // storage/payout.
-    const editVatDivisor = (!isDutchBuyerForEditBroadcast && respondingToVatSourceForEditBroadcast) ? 1.21 : 1;
+    const editVatDivisor = (!isDutchBuyerForEditBroadcast && respondingToVatSourceForEditBroadcast) ? storeInputMultiplier(orderFieldsForInputInterpretation) : 1;
     const storeScaleTyped = proposedPrice;
     if (editVatDivisor !== 1) {
-      proposedPrice = proposedPrice * editVatDivisor; // no rounding here — precision preserved so the store sees back their exact typed number
+      proposedPrice = proposedPrice * editVatDivisor; // client-rate, unrounded — so the store's exact typed number round-trips
     }
 
     // NEW — additive only, same pattern as the other Store Orders
@@ -8258,7 +8258,7 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
     //   - the price they just typed (e.g. €180)
     // Without this, the store's typed €180 was multiplied to €217.80 and
     // compared against the internal €215, wrongly rejecting a valid move.
-    const storeScaleDivisor = (!isDutchBuyerForCounter && respondingToVatSourceForCounter) ? 1.21 : 1;
+    const storeScaleDivisor = (!isDutchBuyerForCounter && respondingToVatSourceForCounter) ? storeInputMultiplier(orderFieldsForBand) : 1;
 
     // The price the store typed, kept in the store's own scale (NOT
     // multiplied to internal all-in). This is what the band check and
@@ -8291,7 +8291,7 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
     // Now convert the store's typed price UP to the internal all-in scale
     // that every calculation below (payouts, storage) already assumes.
     if (!isDutchBuyerForCounter && respondingToVatSourceForCounter) {
-      proposedPrice = proposedPrice * 1.21; // no rounding — precision preserved so the store sees back their exact typed number
+      proposedPrice = proposedPrice * storeInputMultiplier(orderFieldsForBand); // client-rate, unrounded — so Store Counter Price Excl VAT returns the store's exact typed number
     }
 
     // NEW — additive only: his explicit request — the store only ever
@@ -9062,7 +9062,7 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
       const isDutchBuyerForEdit = isDutchClientCountry(orderFieldsForEdit["Client Country"]);
       const respondingToVatSourceForEdit = sellerVatTypeForEdit === "VAT21" || sellerVatTypeForEdit === "VAT0";
       if (!isDutchBuyerForEdit && respondingToVatSourceForEdit) {
-        proposedPrice = proposedPrice * 1.21; // no rounding here — precision preserved so the store sees back their exact typed number
+        proposedPrice = proposedPrice * storeInputMultiplier(orderFieldsForEdit); // client-rate, unrounded — so Store Counter Price Excl VAT returns the store's exact typed number
         editConversionApplied = true;
       }
 
@@ -11414,14 +11414,39 @@ function calculateStoreCounterEquivalent(sellerAskPrice, vatType, orderFields = 
 // NEW — additive only: the store types/sees/pays in the VAT-scale of
 // the offer embed they're responding to. For a non-Dutch store
 // responding to a VAT-source (VAT21/VAT0) position, that scale is
-// excl.-VAT (÷1.21 vs the internal all-in scale); for a Dutch store,
-// or a Margin-source position, it's the plain all-in scale (÷1). This
+// excl.-VAT vs the internal all-in scale; for a Dutch store, or a
+// Margin-source position, it's the plain all-in scale (÷1). This
 // divisor converts an internal all-in figure back to what the store
 // should SEE in a store-facing embed / the Portal.
+// FIXED — the excl. divisor now uses the client's REAL VAT rate (e.g.
+// 22% for Italy → ÷1.22) so the store's displayed "Your Previous
+// Counter" matches the invoice's "Store Counter Price Excl VAT" (which
+// also uses the real rate) instead of drifting by the 1.21-vs-1.22 gap
+// (e.g. 220 all-in showed €181.82 but the invoice said €180.33). Falls
+// back to 1.21 only if the rate field is missing. This is display-only
+// — it does not touch any payout, band, or accept math.
 function storeDisplayDivisor(storeVatContext, orderFields = {}) {
   const isDutch = isDutchClientCountry(orderFields["Client Country"]);
   const isVatSource = storeVatContext === "VAT21" || storeVatContext === "VAT0";
-  return (!isDutch && isVatSource) ? 1.21 : 1;
+  if (isDutch || !isVatSource) return 1;
+  const rate = numberValue(orderFields["Client VAT Rate"]);
+  return (Number.isFinite(rate) && rate > 0) ? (1 + rate) : 1.21;
+}
+
+// NEW — additive only: the multiplier that converts a store's typed
+// VAT0/VAT21 counter (in the store's own excl. scale) UP to the
+// internal all-in scale for storage. Uses the client's REAL VAT rate
+// (e.g. 22% Italy → ×1.22) so that "Store Counter Price Excl VAT"
+// (which divides by that same real rate) comes back to EXACTLY what the
+// store typed — e.g. store types €185 → stored 225.70 → excl €185, not
+// the old ×1.21 → 223.85 → excl €183.48 mismatch. This is the exact
+// inverse of storeDisplayDivisor, so input and display round-trip
+// perfectly. Falls back to 1.21 if the rate field is missing. Does NOT
+// affect the seller payout (that stays ÷1.21 — VAT21 is a real Dutch
+// 21% and VAT0 payouts were already correct).
+function storeInputMultiplier(orderFields = {}) {
+  const rate = numberValue(orderFields["Client VAT Rate"]);
+  return (Number.isFinite(rate) && rate > 0) ? (1 + rate) : 1.21;
 }
 
 // NEW — additive only: computes the "Seller's New Counter" figure a
@@ -15290,7 +15315,7 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
       // storing, kept unrounded there for exactly this reason), so
       // showing it back means reversing that: divide.
       const myLastOfferForDisplay = Number.isFinite(myLastOffer) && myLastOffer > 0
-        ? (needsConversionForDisplay ? myLastOffer / 1.21 : myLastOffer)
+        ? (needsConversionForDisplay ? myLastOffer / storeDisplayDivisor(vatType, orderFields) : myLastOffer)
         : null;
 
       // sellersOfferInStoreTerms above already applied the non-Dutch
