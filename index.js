@@ -9827,7 +9827,7 @@ app.post("/api/consignment/offers/:id/store-counter", async (req, res) => {
           ? { ok: true, band: [1, Math.floor(consignorCounterInStoreTerms - MIN_COUNTER_STEP)] }
           : {
               ok: false,
-              reason: `Your counter must be lower than the consignor's offer (€${consignorCounterInStoreTerms}) — maximum €${Math.floor(consignorCounterInStoreTerms - MIN_COUNTER_STEP)}.`,
+              reason: `Your counter must be lower than the consignor's offer (€${fmtEuroAmount(consignorCounterInStoreTerms)}) — maximum €${Math.floor(consignorCounterInStoreTerms - MIN_COUNTER_STEP)}.`,
               band: [1, Math.floor(consignorCounterInStoreTerms - MIN_COUNTER_STEP)]
             });
     if (!validation.ok) {
@@ -11184,7 +11184,7 @@ function validateNextCounterPriceWithCrossSellerCeiling(ownReferencePrice, count
       // using the actual reference price when given (avoids rounding
       // artifacts from reconstructing it off the computed ceiling).
       const displayPrice = Number.isFinite(crossSellerReferencePrice) ? crossSellerReferencePrice : (crossSellerCeiling + MIN_COUNTER_STEP);
-      reason = `Your counter must be lower than the current lowest offer of €${displayPrice} — maximum €${maxAllowed}.`;
+      reason = `Your counter must be lower than the current lowest offer of €${fmtEuroAmount(displayPrice)} — maximum €${fmtEuroAmount(maxAllowed)}.`;
     } else {
       reason = movingDown
         ? `Your counter must be lower than your previous €${fmtEuroAmount(ownReferencePrice)} — maximum €${fmtEuroAmount(maxAllowed)}.`
