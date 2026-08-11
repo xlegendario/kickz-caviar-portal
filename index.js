@@ -5522,19 +5522,14 @@ function bindConsignmentDiscordButtons(client) {
           ? "Margin"
           : (isDutchClientCountry(orderRecord.fields?.["Client Country"]) ? "VAT21" : "VAT0");
 
-      console.error("DEBUG discord counter_offer_accept:", {
-        counterOfferRecordId,
-        linkedOrderId,
-        sellerVatTypeForAcceptWrite,
-        clientCountry: asText(orderRecord.fields?.["Client Country"]),
-        isDutch: isDutchClientCountry(orderRecord.fields?.["Client Country"]),
-        storeCounterPrice: numberValue(f["Store Counter Price"]),
-        offerVatTypeForAcceptWrite
-      });
 
       try {
         await airtable(ORDERS_TABLE).update(linkedOrderId, {
-          "Custom Offer": numberValue(f["Store Counter Price"]),
+          "Custom Offer": customOfferValueForAccept(
+            offerVatTypeForAcceptWrite,
+            numberValue(f["Store Counter Price"]),
+            numberValue(f["Store Counter Price Excl VAT"])
+          ),
           "Offer VAT Type": offerVatTypeForAcceptWrite,
           "Offer Accepted?": true,
           "Offer Sent?": false
@@ -8525,9 +8520,7 @@ app.post("/api/counter-offers/create-fresh-round", async (req, res) => {
 });
 
 app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
-    // ENTRY-DEBUG
   try {
-    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const secret = asText(req.headers["x-kc-secret"]);
 
     if (
@@ -8588,17 +8581,6 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
     const sellerCounterPriceForAccept = numberValue(f["Seller Counter Price"]);
     const isSellerPlacedRound = !!sellerCounterPriceForAccept;
 
-    console.error("DEBUG store-accept (via Lojiq Portal):", {
-      acceptedRecordId: counterOfferRecordId,
-      sellerVatTypeForAccept,
-      sellerCounterPrice: sellerCounterPriceForAccept,
-      storeCounterPrice: numberValue(f["Store Counter Price"]),
-      counterPayout: numberValue(f["Counter Payout"]),
-      counterPayoutVatType: asText(f["Counter Payout VAT Type"]),
-      isSellerPlacedRound,
-      clientCountry: asText(orderFieldsForAccept["Client Country"]),
-      isDutch: isDutchClientCountry(orderFieldsForAccept?.["Client Country"])
-    });
 
     const acceptedStorePrice = isSellerPlacedRound
       ? calculateStoreCounterEquivalent(sellerCounterPriceForAccept, sellerVatTypeForAccept, orderFieldsForAccept)
@@ -10677,9 +10659,7 @@ app.post("/api/consignment/offers/:id/confirm", async (req, res) => {
 // accept mechanism, just a new way to reach the existing one.
 // ---------------------------------------------------------------------
 app.post("/api/consignment/offers/:id/accept-previous", async (req, res) => {
-    // ENTRY-DEBUG
   try {
-    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const pendingOfferId = asText(req.params.id);
     const requestingSellerRecordId = asText(req.body?.seller_record_id);
 
@@ -10782,9 +10762,7 @@ app.post("/api/consignment/offers/:id/cancel", async (req, res) => {
 });
 
 app.post("/api/consignment/offers/:id/store-accept", async (req, res) => {
-    // ENTRY-DEBUG
   try {
-    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const secret = asText(req.headers["x-kc-secret"]);
 
     if (
@@ -11457,6 +11435,42 @@ function computeStoreExclVatForOrder(storeAllInPrice, vatType, orderFields = {})
   }
 
   return Math.round(price * 100) / 100;
+}
+
+// NEW — additive only: the value to write into "Custom Offer" when a
+// deal is accepted. calculateLinkedUnitPrice.js takes Custom Offer
+// essentially 1:1 (it only divides by 1.21 for a NL + VAT21 order, to
+// force the VAT-exclusive Final Buying Price a Dutch VAT product
+// requires). So Custom Offer must ALREADY be on the right scale per
+// VAT type:
+//   - VAT21 (only ever a NL store): store was offered/accepted an
+//     ALL-IN figure → write the all-in Store Counter Price; the
+//     downstream script divides it by 1.21 itself.
+//   - VAT0 (only ever a non-NL store): we invoice that store VAT-
+//     EXCLUSIVE, and the downstream script does NOT divide for VAT0 →
+//     so Custom Offer must already be the excl. figure. Use the
+//     Airtable-computed "Store Counter Price Excl VAT" (which uses the
+//     client's real VAT rate, e.g. 22% for Italy — more correct than a
+//     hardcoded 1.21), falling back to the store all-in price if that
+//     field is somehow empty.
+//   - Margin: no VAT at all → the full Store Counter Price.
+// This is the fix for "accepted a VAT0 deal but the store got invoiced
+// the full incl. price": Custom Offer was the all-in figure with VAT
+// type VAT0, and the downstream script took it as-is (no VAT0 branch
+// there), so the store was billed the gross amount instead of the net.
+function customOfferValueForAccept(vatType, storeAllInPrice, storeExclVatPrice) {
+  const type = asText(vatType).toUpperCase().replace(/\s+/g, "");
+  const allIn = Number(storeAllInPrice);
+
+  if (type === "VAT0") {
+    const excl = Number(storeExclVatPrice);
+    if (Number.isFinite(excl) && excl > 0) return excl;
+    // Fallback only if the Excl VAT formula field is unexpectedly empty.
+    return Number.isFinite(allIn) ? allIn : null;
+  }
+
+  // VAT21 and Margin: write the all-in Store Counter Price unchanged.
+  return Number.isFinite(allIn) ? allIn : null;
 }
 
 // NEW — Member WTB margin conversion. Much simpler than Store Orders:
@@ -13824,9 +13838,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/cancel", async (req, res) =
 // Portal action doesn't need.
 // ---------------------------------------------------------------------
 app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (req, res) => {
-    // ENTRY-DEBUG
   try {
-    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const pendingOfferId = asText(req.params.offerId);
     const sellerRecordId = asText(req.body?.seller_record_id);
 
@@ -13970,9 +13982,24 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
       }).catch((err) => console.error("Failed to fire accept webhook (non-blocking):", err));
     }
 
+    // FIXED — same missing-VAT-Type bug as seller-accept: wrote Custom
+    // Offer but never Offer VAT Type, leaving a stale (often Margin)
+    // value that produced a wrong invoice VAT type. Margin stays
+    // Margin; otherwise follow the client's country.
+    const sellerVatTypeForAcceptPrevious = asText(f["Seller Original VAT Type"]);
+    const offerVatTypeForAcceptPrevious =
+      sellerVatTypeForAcceptPrevious === "Margin"
+        ? "Margin"
+        : (isDutchClientCountry(orderRecord.fields?.["Client Country"]) ? "VAT21" : "VAT0");
+
     try {
       await airtable(ORDERS_TABLE).update(linkedOrderId, {
-        "Custom Offer": numberValue(f["Store Counter Price"]),
+        "Custom Offer": customOfferValueForAccept(
+          offerVatTypeForAcceptPrevious,
+          numberValue(f["Store Counter Price"]),
+          numberValue(f["Store Counter Price Excl VAT"])
+        ),
+        "Offer VAT Type": offerVatTypeForAcceptPrevious,
         "Offer Accepted?": true,
         "Offer Sent?": false
       });
@@ -15340,9 +15367,7 @@ async function closeCompetingCountersForOrder(orderRecordId, acceptedCounterOffe
 }
 
 app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-accept", async (req, res) => {
-    // ENTRY-DEBUG
   try {
-    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const counterOfferRecordId = asText(req.params.offerId);
     const sellerRecordId = asText(req.body?.seller_record_id);
 
@@ -15468,9 +15493,28 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-accept", async (req,
       }).catch((err) => console.error("Failed to fire accept webhook (non-blocking):", err));
     }
 
+    // FIXED — the exact bug behind "accepted VAT0 seller but Custom
+    // Offer stayed VAT Type Margin": this endpoint wrote "Custom Offer"
+    // but NEVER "Offer VAT Type", unlike store-accept and the Discord
+    // counter_offer_accept handler. So Custom Offer became the right
+    // price (215) but Offer VAT Type kept its stale value (Margin).
+    // Same rule as every other accept path: Margin stays Margin;
+    // otherwise follow the CLIENT's country (Dutch → VAT21, non-Dutch
+    // → VAT0).
+    const sellerVatTypeForSellerAccept = asText(f["Seller Original VAT Type"]);
+    const offerVatTypeForSellerAccept =
+      sellerVatTypeForSellerAccept === "Margin"
+        ? "Margin"
+        : (isDutchClientCountry(orderRecord.fields?.["Client Country"]) ? "VAT21" : "VAT0");
+
     try {
       await airtable(ORDERS_TABLE).update(linkedOrderId, {
-        "Custom Offer": numberValue(f["Store Counter Price"]),
+        "Custom Offer": customOfferValueForAccept(
+          offerVatTypeForSellerAccept,
+          numberValue(f["Store Counter Price"]),
+          numberValue(f["Store Counter Price Excl VAT"])
+        ),
+        "Offer VAT Type": offerVatTypeForSellerAccept,
         "Offer Accepted?": true,
         "Offer Sent?": false
       });
@@ -15904,9 +15948,7 @@ app.post("/api/dashboard/wtb-counter-offers/:id/deny", async (req, res) => {
 });
 
 app.post("/api/dashboard/wtb-counter-offers/:id/accept", async (req, res) => {
-    // ENTRY-DEBUG
   try {
-    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const counterOfferId = asText(req.params.id);
     const sellerRecordId = asText(req.body?.seller_record_id);
 
@@ -15968,17 +16010,6 @@ app.post("/api/dashboard/wtb-counter-offers/:id/accept", async (req, res) => {
         ? "Margin"
         : (isDutchClientCountry(orderFieldsForAccept?.["Client Country"]) ? "VAT21" : "VAT0");
 
-    console.error("DEBUG wtb-counter-offers/accept:", {
-      counterOfferId,
-      acceptedRecordFields_StoreCounterPrice: numberValue(f["Store Counter Price"]),
-      acceptedRecordFields_SellerCounterPrice: numberValue(f["Seller Counter Price"]),
-      acceptedRecordFields_CounterPayout: numberValue(f["Counter Payout"]),
-      sellerVatTypeForAccept,
-      acceptedStorePrice,
-      offerVatTypeForAcceptWrite,
-      willWrite: Number.isFinite(acceptedStorePrice) && acceptedStorePrice > 0,
-      clientCountry: asText(orderFieldsForAccept?.["Client Country"])
-    });
 
     try {
       if (Number.isFinite(acceptedStorePrice) && acceptedStorePrice > 0) {
@@ -18389,9 +18420,7 @@ async function closeCompetingCountersForMemberWtb(memberWtbRecordId, acceptedCou
 // NEW — additive only: buyer accepts the seller's current position on
 // this round (Open pill). Mirrors member_wtb_buyer_counter_accept:.
 app.post("/api/dashboard/buying-counter-offers/:offerId/buyer-accept", async (req, res) => {
-    // ENTRY-DEBUG
   try {
-    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const counterOfferRecordId = asText(req.params.offerId);
     const buyerSellerRecordId = asText(req.body?.seller_record_id);
 
@@ -19743,9 +19772,7 @@ app.post("/api/dashboard/buying/deny-offer", async (req, res) => {
 });
 
 app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
-    // ENTRY-DEBUG
   try {
-    console.error("ENTRY-DEBUG accept endpoint hit:", req.path, req.params);
     const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
     // NEW — additive only: this endpoint always accepted the raw
     // "Current Lowest Seller Offer" price, ignoring any negotiated
