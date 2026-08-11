@@ -8576,6 +8576,17 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
     const sellerCounterPriceForAccept = numberValue(f["Seller Counter Price"]);
     const isSellerPlacedRound = !!sellerCounterPriceForAccept;
 
+    console.error("DEBUG store-accept:", {
+      acceptedRecordId: counterOfferRecordId,
+      sellerVatType: sellerVatTypeForAccept,
+      sellerCounterPrice: sellerCounterPriceForAccept,
+      storeCounterPrice: numberValue(f["Store Counter Price"]),
+      counterPayout: numberValue(f["Counter Payout"]),
+      counterPayoutVatType: asText(f["Counter Payout VAT Type"]),
+      sellerOriginalPrice: numberValue(f["Seller Original Price"]),
+      isSellerPlacedRound
+    });
+
     const acceptedStorePrice = isSellerPlacedRound
       ? calculateStoreCounterEquivalent(sellerCounterPriceForAccept, sellerVatTypeForAccept, orderFieldsForAccept)
       : numberValue(f["Store Counter Price"]);
