@@ -8576,17 +8576,6 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
     const sellerCounterPriceForAccept = numberValue(f["Seller Counter Price"]);
     const isSellerPlacedRound = !!sellerCounterPriceForAccept;
 
-    console.error("DEBUG store-accept:", {
-      acceptedRecordId: counterOfferRecordId,
-      sellerVatType: sellerVatTypeForAccept,
-      sellerCounterPrice: sellerCounterPriceForAccept,
-      storeCounterPrice: numberValue(f["Store Counter Price"]),
-      counterPayout: numberValue(f["Counter Payout"]),
-      counterPayoutVatType: asText(f["Counter Payout VAT Type"]),
-      sellerOriginalPrice: numberValue(f["Seller Original Price"]),
-      isSellerPlacedRound
-    });
-
     const acceptedStorePrice = isSellerPlacedRound
       ? calculateStoreCounterEquivalent(sellerCounterPriceForAccept, sellerVatTypeForAccept, orderFieldsForAccept)
       : numberValue(f["Store Counter Price"]);
@@ -15923,6 +15912,42 @@ app.post("/api/dashboard/wtb-counter-offers/:id/accept", async (req, res) => {
       "Accepted At": new Date().toISOString(),
       "Closed At": new Date().toISOString()
     });
+
+    // FIXED — a real, confirmed bug: this endpoint (a seller accepting
+    // the STORE's counter on a Store Order) never wrote "Custom Offer"/
+    // "Offer VAT Type" back onto the Order — it only fired the webhook.
+    // So the accepted price/VAT was never frozen on the order the way
+    // store-accept does it, and whatever stale value another automation
+    // last wrote (e.g. a raw Margin figure from a different round) stuck
+    // — his exact symptom: accepting Seller B (VAT0) left Custom Offer
+    // at 210 with VAT Type Margin. Mirrors store-accept's proven logic:
+    // this is a store-placed round (the seller is accepting the store's
+    // counter), so the accepted store price is "Store Counter Price"
+    // directly, and the VAT type follows the seller's own type / the
+    // client-country rule. sellerVatTypeForAccept / orderFieldsForAccept
+    // computed here for the write below.
+    const orderFieldsForAccept = orderRecord.fields || {};
+    const sellerVatTypeForAccept = asText(f["Seller Original VAT Type"]);
+    const acceptedStorePrice = numberValue(f["Store Counter Price"]);
+    const offerVatTypeForAcceptWrite =
+      sellerVatTypeForAccept === "Margin"
+        ? "Margin"
+        : (isDutchClientCountry(orderFieldsForAccept?.["Client Country"]) ? "VAT21" : "VAT0");
+
+    try {
+      if (Number.isFinite(acceptedStorePrice) && acceptedStorePrice > 0) {
+        await airtable(ORDERS_TABLE).update(linkedOrderId, {
+          "Custom Offer": acceptedStorePrice,
+          "Offer VAT Type": offerVatTypeForAcceptWrite,
+          "Offer Accepted?": true,
+          "Offer Sent?": false
+        });
+      } else {
+        console.error("Could not compute a valid accepted store price to write back for order:", linkedOrderId);
+      }
+    } catch (writeErr) {
+      console.error("Failed to write Custom Offer on seller-accept (non-blocking):", writeErr);
+    }
 
     if (!COUNTER_OFFER_ACCEPT_WEBHOOK_URL) {
       throw new Error("Missing COUNTER_OFFER_ACCEPT_WEBHOOK_URL");
