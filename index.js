@@ -5522,6 +5522,16 @@ function bindConsignmentDiscordButtons(client) {
           ? "Margin"
           : (isDutchClientCountry(orderRecord.fields?.["Client Country"]) ? "VAT21" : "VAT0");
 
+      console.error("DEBUG discord counter_offer_accept:", {
+        counterOfferRecordId,
+        linkedOrderId,
+        sellerVatTypeForAcceptWrite,
+        clientCountry: asText(orderRecord.fields?.["Client Country"]),
+        isDutch: isDutchClientCountry(orderRecord.fields?.["Client Country"]),
+        storeCounterPrice: numberValue(f["Store Counter Price"]),
+        offerVatTypeForAcceptWrite
+      });
+
       try {
         await airtable(ORDERS_TABLE).update(linkedOrderId, {
           "Custom Offer": numberValue(f["Store Counter Price"]),
@@ -8575,6 +8585,18 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
     const sellerVatTypeForAccept = asText(f["Seller Original VAT Type"]);
     const sellerCounterPriceForAccept = numberValue(f["Seller Counter Price"]);
     const isSellerPlacedRound = !!sellerCounterPriceForAccept;
+
+    console.error("DEBUG store-accept (via Lojiq Portal):", {
+      acceptedRecordId: counterOfferRecordId,
+      sellerVatTypeForAccept,
+      sellerCounterPrice: sellerCounterPriceForAccept,
+      storeCounterPrice: numberValue(f["Store Counter Price"]),
+      counterPayout: numberValue(f["Counter Payout"]),
+      counterPayoutVatType: asText(f["Counter Payout VAT Type"]),
+      isSellerPlacedRound,
+      clientCountry: asText(orderFieldsForAccept["Client Country"]),
+      isDutch: isDutchClientCountry(orderFieldsForAccept?.["Client Country"])
+    });
 
     const acceptedStorePrice = isSellerPlacedRound
       ? calculateStoreCounterEquivalent(sellerCounterPriceForAccept, sellerVatTypeForAccept, orderFieldsForAccept)
