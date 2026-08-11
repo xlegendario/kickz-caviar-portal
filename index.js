@@ -8247,31 +8247,51 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
     // already all-in, silently underpaying every seller).
     const isDutchBuyerForCounter = isDutchClientCountry(orderFieldsForBand["Client Country"]);
     const respondingToVatSourceForCounter = sellerVatTypeForBand === "VAT21" || sellerVatTypeForBand === "VAT0";
-    if (!isDutchBuyerForCounter && respondingToVatSourceForCounter) {
-      proposedPrice = proposedPrice * 1.21; // no rounding here — precision preserved so the store sees back their exact typed number
-    }
 
-    // FIXED — same scale mismatch as the seller-counter endpoint, other
-    // direction: "priorStorePrice" is STORE terms, but "sellerCounterPrice"
-    // is SELLER terms. Convert the seller's counter UP to what the store
-    // would need to pay for it (adding margin back), so both sides of
-    // the comparison are in store terms — matching what the store
-    // actually types into the modal.
-    const sellerCounterInStoreTerms = calculateStoreCounterEquivalent(
+    // The scale the store actually sees and types in. For a non-Dutch
+    // store responding to a VAT-source (VAT0/VAT21) offer, everything on
+    // their screen is the excl. (÷1.21) figure; otherwise it's the plain
+    // all-in figure. We run the whole band check in THIS scale so the
+    // three numbers being compared are exactly what the store sees:
+    //   - their previous counter  (e.g. €177.69, not the internal €215)
+    //   - the seller's new counter (e.g. €195, the visible offer)
+    //   - the price they just typed (e.g. €180)
+    // Without this, the store's typed €180 was multiplied to €217.80 and
+    // compared against the internal €215, wrongly rejecting a valid move.
+    const storeScaleDivisor = (!isDutchBuyerForCounter && respondingToVatSourceForCounter) ? 1.21 : 1;
+
+    // The price the store typed, kept in the store's own scale (NOT
+    // multiplied to internal all-in). This is what the band check and
+    // its error message should use.
+    const typedStorePrice = proposedPrice;
+
+    // Convert the store's internal all-in "previous counter" back down to
+    // the store's visible scale.
+    const priorStorePriceInStoreScale = priorStorePrice / storeScaleDivisor;
+
+    // The seller's new counter as the store SEES it (the same figure the
+    // embed/Portal show), not the internal ÷1.21 all-in version.
+    const sellerCounterAsStoreSees = computeSellerCounterForStoreDisplay(
       sellerCounterPrice,
       sellerVatTypeForBand,
       orderFieldsForBand
     );
 
-    if (!Number.isFinite(sellerCounterInStoreTerms)) {
+    if (!Number.isFinite(sellerCounterAsStoreSees)) {
       return res.status(500).json({ error: "Could not compute margin conversion for this order." });
     }
 
-    const validation = validateNextCounterPrice(priorStorePrice, sellerCounterInStoreTerms, proposedPrice, {
+    const validation = validateNextCounterPrice(priorStorePriceInStoreScale, sellerCounterAsStoreSees, typedStorePrice, {
       requireInteger: !(!isDutchBuyerForCounter && respondingToVatSourceForCounter)
     });
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    // Now convert the store's typed price UP to the internal all-in scale
+    // that every calculation below (payouts, storage) already assumes.
+    if (!isDutchBuyerForCounter && respondingToVatSourceForCounter) {
+      proposedPrice = proposedPrice * 1.21; // no rounding — precision preserved so the store sees back their exact typed number
     }
 
     // NEW — additive only: his explicit request — the store only ever
@@ -8582,8 +8602,18 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
     const isSellerPlacedRound = !!sellerCounterPriceForAccept;
 
 
+    // FIXED — his exact, repeated rule: on a store accept, Custom Offer
+    // (and the accepted store price everywhere) must be EXACTLY the
+    // value the store SEES as the offer — the same figure the embed /
+    // Portal shows via computeSellerCounterForStoreDisplay — not the
+    // internal all-in ÷1.21 version from calculateStoreCounterEquivalent.
+    // For a non-Dutch VAT0-context store, seller's 180 VAT0 shows as
+    // €195 (margin markup, no ÷1.21), so accepting must write 195 VAT0,
+    // NOT 160. calculateLinkedUnitPrice.js takes Custom Offer 1:1, and
+    // Final Buying Price for a VAT product is always VAT-excl, so the
+    // visible VAT0 figure IS the excl price to bill.
     const acceptedStorePrice = isSellerPlacedRound
-      ? calculateStoreCounterEquivalent(sellerCounterPriceForAccept, sellerVatTypeForAccept, orderFieldsForAccept)
+      ? computeSellerCounterForStoreDisplay(sellerCounterPriceForAccept, sellerVatTypeForAccept, orderFieldsForAccept)
       : numberValue(f["Store Counter Price"]);
 
     const acceptedSellerPayout = isSellerPlacedRound
