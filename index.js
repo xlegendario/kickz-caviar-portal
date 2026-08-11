@@ -14990,6 +14990,23 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
       }
     }
 
+    console.error("DEBUG store-offers (Open pill):", {
+      storeName,
+      totalOrdersMatchingBaseFilter: orderRecords.length,
+      orderIds: orderRecords.map((r) => r.id),
+      ordersWithFreshWinner: [...winningSellerOfferByOrderId.keys()],
+      sellersMidNegotiationByOrder: [...sellerIdsWithActiveCounterByOrderId.entries()].map(([oid, s]) => ({ order: oid, sellers: [...s] })),
+      freshSellerOffersFound: allSellerOffersForTheseOrders.map((so) => ({
+        order: firstLinkedRecordId(so.fields?.["Linked Orders"]),
+        seller: firstLinkedRecordId(so.fields?.["Seller ID"]),
+        price: numberValue(so.fields?.["Seller Offer"]),
+        vat: asText(so.fields?.["Offer VAT Type"]),
+        withdrawn: !!so.fields?.["Withdrawn?"],
+        denied: !!so.fields?.["Denied?"],
+        deleteOffer: !!so.fields?.["Delete Offer"]
+      }))
+    });
+
     const items = orderRecords
       .filter((record) => winningSellerOfferByOrderId.has(record.id))
       .map((record) => {
