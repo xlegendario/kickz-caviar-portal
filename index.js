@@ -5344,12 +5344,20 @@ function bindConsignmentDiscordButtons(client) {
                     your_previous_counter: reopenDeniedForDisplay,
                     // FIXED — both numbers in the store's own VAT scale.
                     seller_counter_price: reopenSellerCounterForDisplay ?? priorSellerCounterInStoreTerms ?? priorSellerCounter,
-                    denied_price: reopenDeniedForDisplay
+                    denied_price: reopenDeniedForDisplay,
+                    store_display_vat_type: priorVatType
                   })
                 });
               }
             }
           } else if (shouldNotifyStore) {
+            // FIXED — the store-facing "Your Denied Counter" was sent as
+            // the internal all-in Store Counter Price (e.g. 195.20)
+            // instead of the store's own VAT scale (€160 VAT0). Divide
+            // by the same storeDisplayDivisor the reopen paths use, from
+            // the denied round's own VAT type.
+            const deniedVatTypeForDisplay = asText(deniedFields["Seller Original VAT Type"]);
+            const deniedPriceForStoreDisplay = deniedPrice / storeDisplayDivisor(deniedVatTypeForDisplay, orderFields);
             await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -5361,7 +5369,8 @@ function bindConsignmentDiscordButtons(client) {
                 product_name: asText(deniedFields["Product Name"]),
                 sku: asText(deniedFields["SKU"]),
                 size: asText(deniedFields["Size"]),
-                denied_price: deniedPrice
+                denied_price: deniedPriceForStoreDisplay,
+                denied_vat_type: deniedVatTypeForDisplay
               })
             });
           }
@@ -8127,6 +8136,7 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
           // Offers records). Now sends the seller's counter marked up
           // to store terms, in the store's own VAT scale.
           seller_counter_price: sellerNewCounterForDisplay ?? sellerCounterInStoreTerms ?? proposedPrice,
+          store_display_vat_type: sellerVatType,
           no_room_to_counter: noRoomToCounter
         })
       }).catch((err) => console.error("Failed to notify store of seller counter (non-blocking):", err));
@@ -8893,18 +8903,204 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
 // the negotiation outside what was already agreed as the boundary.
 // ---------------------------------------------------------------------
 // ---------------------------------------------------------------------
-// NEW — additive only: his explicit ask — 1:1 mirror of Member WTB's
-// buyer-cancel (/api/dashboard/buying-counter-offers/:offerId/buyer-
-// cancel). Lets the store withdraw their OWN pending counter (a round
-// where they moved last, still awaiting the seller) from the Countered
-// pill. Deliberately a bare ownership check + destroy() — no cascade,
-// no soft-delete of the underlying Seller Offer, matching the
-// reference exactly (that only happens on the SELLER's own cancel,
-// which is a different, unrelated endpoint). Also deliberately doesn't
-// check Status before destroying, exactly like the reference doesn't
-// — flagged to him as worth knowing, not changed, since this is a
-// requested 1:1 mirror.
+// NEW — additive only: STORE-side retry-counter for Store Orders.
+// Ported from the proven /api/dashboard/wtb-counter-offers/:offerId/
+// retry-counter, but store-facing: when a seller denied the store's
+// counter, the store can send a NEW counter from the Denied pill. The
+// store-deny auto-reopened the store's prior round, so this places a
+// fresh store round against the seller's denied position, validated in
+// the STORE's own visible scale (client-rate), same as store-counter.
 // ---------------------------------------------------------------------
+app.post("/api/counter-offers/:id/store-retry-counter", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+    if (!process.env.COUNTER_OFFERS_SECRET || secret !== process.env.COUNTER_OFFERS_SECRET) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const deniedRoundId = asText(req.params.id);
+    const requestedStoreName = asText(req.body?.store_name);
+    let proposedPrice = Number(req.body?.price);
+
+    if (!deniedRoundId) {
+      return res.status(400).json({ error: "Missing counter offer id" });
+    }
+    if (!Number.isFinite(proposedPrice) || proposedPrice <= 0) {
+      return res.status(400).json({ error: "Offer must be a valid number." });
+    }
+
+    const deniedRecord = await airtable(COUNTER_OFFERS_TABLE).find(deniedRoundId);
+    const f = deniedRecord.fields || {};
+
+    const linkedOrderId = firstLinkedRecordId(f["Order"]);
+    if (!linkedOrderId) {
+      return res.status(500).json({ error: "Counter Offer missing linked Order" });
+    }
+
+    if (requestedStoreName) {
+      const ownsIt = await verifyStoreOwnsOrderForRound(linkedOrderId, requestedStoreName);
+      if (!ownsIt) {
+        return res.status(403).json({ error: "Not allowed for this store." });
+      }
+    }
+
+    const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
+    const orderFields = orderRecord.fields || {};
+
+    // The seller's denied counter (their last real position) and the
+    // store's own last counter (the round the denied one was answering,
+    // via Previous Record ID) — the band narrows between these two,
+    // exactly like the seller-side retry. Both start on the internal
+    // all-in scale.
+    const sellerVatType = asText(f["Seller Original VAT Type"]);
+    const deniedSellerCounter = numberValue(f["Seller Counter Price"]);
+    const priorRoundId = firstLinkedRecordId(f["Previous Record ID"]);
+
+    if (!priorRoundId) {
+      return res.status(409).json({ error: "There's no prior position to retry against." });
+    }
+
+    const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId);
+    const priorFields = priorRound.fields || {};
+    const storeLastPosition = numberValue(priorFields["Store Counter Price"]);
+
+    if (!Number.isFinite(storeLastPosition) || !Number.isFinite(deniedSellerCounter)) {
+      return res.status(500).json({ error: "Missing price data to validate against." });
+    }
+
+    // Validate in the STORE's own visible scale (same as store-counter),
+    // so the band the store sees matches what they can type. The seller's
+    // denied counter as the store sees it, and the store's prior counter
+    // in store scale, are the two ends; the typed price stays as typed.
+    const isDutchBuyer = isDutchClientCountry(orderFields["Client Country"]);
+    const respondingToVatSource = sellerVatType === "VAT21" || sellerVatType === "VAT0";
+    const storeScaleDivisor = (!isDutchBuyer && respondingToVatSource) ? storeInputMultiplier(orderFields) : 1;
+
+    const priorStorePriceInStoreScale = storeLastPosition / storeScaleDivisor;
+    const sellerCounterAsStoreSees = computeSellerCounterForStoreDisplay(deniedSellerCounter, sellerVatType, orderFields);
+
+    if (!Number.isFinite(sellerCounterAsStoreSees)) {
+      return res.status(500).json({ error: "Could not compute margin conversion for this order." });
+    }
+
+    const validation = validateNextCounterPrice(priorStorePriceInStoreScale, sellerCounterAsStoreSees, proposedPrice, {
+      requireInteger: !(!isDutchBuyer && respondingToVatSource)
+    });
+    if (!validation.ok) {
+      return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    // Convert the typed price UP to the internal all-in scale for storage.
+    if (!isDutchBuyer && respondingToVatSource) {
+      proposedPrice = proposedPrice * storeInputMultiplier(orderFields);
+    }
+
+    const linkedSellerId = firstLinkedRecordId(f["Seller ID"]);
+    const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
+
+    // Store's new counter → payout to the seller in the seller's own
+    // VAT scale (same conversion the main store-counter uses).
+    const storeCounterPayout = calculateCounterPayoutForVatType(proposedPrice, sellerVatType, orderFields);
+
+    const newRound = await airtable(COUNTER_OFFERS_TABLE).create({
+      "Order": [linkedOrderId],
+      "Seller ID": linkedSellerId ? [linkedSellerId] : undefined,
+      "Source Type": asText(f["Source Type"]) || "Seller Offer",
+      "Seller Offer Record ID": asText(f["Seller Offer Record ID"]),
+      "Seller Original Price": sellerOriginalPrice,
+      "Seller Original VAT Type": sellerVatType,
+      "Store Counter Price": proposedPrice,
+      "Counter Payout": storeCounterPayout,
+      "Counter Payout VAT Type": sellerVatType,
+      "Previous Record ID": priorRoundId,
+      "Created At": new Date().toISOString(),
+      "Status": "Open"
+    });
+
+    // Notify the seller of the store's new counter — reuse the exact
+    // same DM path the main store-counter endpoint uses.
+    const sellerDiscordId = asText(f["Seller Discord ID"]);
+    if (sellerDiscordId) {
+      const sellerOwnPosition = deniedSellerCounter;
+      const noRoomToCounter =
+        Number.isFinite(sellerOwnPosition) &&
+        Number.isFinite(storeCounterPayout) &&
+        !hasRoomForNextStep(sellerOwnPosition, storeCounterPayout);
+
+      const discordResult = await sendCounterOfferDiscordDM({
+        counterOfferRecordId: newRound.id,
+        sellerDiscordId,
+        productName: asText(f["Product Name"]),
+        sku: asText(f["SKU"]),
+        size: asText(f["Size"]),
+        orderId: asText(orderFields["Order ID"]),
+        payout: storeCounterPayout,
+        vatType: sellerVatType,
+        sellerOriginalPrice,
+        sellerOriginalVatType: sellerVatType,
+        sellerLastOfferPrice: sellerOwnPosition,
+        noRoomToCounter
+      }).catch((err) => {
+        console.error("Failed to DM seller of store retry counter (non-blocking):", err);
+        return null;
+      });
+
+      if (discordResult) {
+        await airtable(COUNTER_OFFERS_TABLE).update(newRound.id, {
+          "Discord Channel ID": discordResult.channelId,
+          "Discord Message ID": discordResult.messageId,
+          "Discord Delivery Type": discordResult.deliveryType
+        }).catch(() => {});
+      }
+    }
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to store-retry-counter:", err);
+    return res.status(500).json({ error: "Failed to retry counter", details: err.message });
+  }
+});
+
+
+// NEW — additive only: store hides a denied FRESH seller offer (case
+// A) from its Denied pill. Sets "Delete Offer" = true on the Seller
+// Offer, which every portal listing already filters out — so it
+// visually disappears for the store, but the seller can still make a
+// new offer while the order is Outsource (no cascade, no hard delete).
+app.post("/api/counter-offers/fresh-denied/:sellerOfferId/hide", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+    if (!process.env.COUNTER_OFFERS_SECRET || secret !== process.env.COUNTER_OFFERS_SECRET) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const sellerOfferId = asText(req.params.sellerOfferId);
+    const requestedStoreName = asText(req.body?.store_name);
+    if (!sellerOfferId) {
+      return res.status(400).json({ error: "Missing seller offer id" });
+    }
+
+    const offerRecord = await airtable(SELLER_OFFERS_TABLE).find(sellerOfferId);
+    const of = offerRecord.fields || {};
+    const linkedOrderId = firstLinkedRecordId(of["Linked Orders"]);
+
+    if (requestedStoreName && linkedOrderId) {
+      const ownsIt = await verifyStoreOwnsOrderForRound(linkedOrderId, requestedStoreName);
+      if (!ownsIt) {
+        return res.status(403).json({ error: "Not allowed for this store." });
+      }
+    }
+
+    await airtable(SELLER_OFFERS_TABLE).update(sellerOfferId, { "Delete Offer": true });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to hide denied fresh offer:", err);
+    res.status(500).json({ error: "Failed to hide offer", details: err.message });
+  }
+});
+
+// STORE-cancel: store withdraws their OWN pending counter.
 app.post("/api/counter-offers/:id/store-cancel", async (req, res) => {
   try {
     const secret = asText(req.headers["x-kc-secret"]);
@@ -9151,7 +9347,8 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
             // FIXED — must show both numbers in the store's own VAT
             // scale (e.g. VAT0 for a non-Dutch store), not the internal
             // all-in figure.
-            seller_counter_price: editedSellerPriceInStoreTerms ?? proposedPrice
+            seller_counter_price: editedSellerPriceInStoreTerms ?? proposedPrice,
+            store_display_vat_type: storeVatContextForEditEmbed
           })
         }).catch((err) => console.error("Failed to notify store of edited counter (non-blocking):", err));
       }
@@ -14215,6 +14412,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
           selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
           your_previous_counter: retryYourPreviousForDisplay,
           seller_counter_price: retrySellerCounterForDisplay ?? sellerCounterInStoreTerms ?? proposedPrice,
+          store_display_vat_type: sellerVatType,
           no_room_to_counter: noRoomToCounter
         })
       }).catch((err) => console.error("Failed to notify store of retry counter (non-blocking):", err));
@@ -15437,9 +15635,69 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
 
     const finalItems = visibleItems.map(({ __sellerId, ...rest }) => rest);
 
+    // NEW — additive only: "denied" must also include fresh,
+    // never-countered offers the STORE denied outright — those never
+    // touch the Counter Offers table (they're marked Denied? on the
+    // Seller Offer itself by notifySellerOfferDeniedCore), so the query
+    // above alone always missed this whole category (case A). Merged in
+    // with round_type "denied" + _kind "fresh_denied" so the Lojiq
+    // frontend can offer Accept/Counter/Delete on the raw seller offer.
+    let mergedItems = finalItems;
+    if (filter === "denied") {
+      const deniedSellerOfferRecords = await airtable(SELLER_OFFERS_TABLE)
+        .select({ filterByFormula: `{Denied?} = TRUE()` })
+        .all();
+
+      const deniedFreshItems = deniedSellerOfferRecords
+        .filter((record) => myOrderIds.has(firstLinkedRecordId(record.fields?.["Linked Orders"])))
+        .filter((record) => !record.fields?.["Withdrawn?"])
+        .filter((record) => !record.fields?.["Delete Offer"])
+        .map((record) => {
+          const f = record.fields || {};
+          const orderId = firstLinkedRecordId(f["Linked Orders"]);
+          const orderFields = orderFieldsById.get(orderId) || {};
+          const deniedVatType = displayValue(f["Denied VAT Type"]) || asText(f["Offer VAT Type"]);
+          const rawDeniedAmount = numberValue(f["Denied Amount"]) || numberValue(f["Seller Offer"]);
+
+          // Show the seller's denied fresh offer in the store's own
+          // scale (marked up + VAT-converted), same as everywhere else.
+          const sellersOfferInStoreTerms = calculateStoreCounterEquivalent(
+            rawDeniedAmount,
+            deniedVatType,
+            orderFields,
+            (!isDutchClientCountry(orderFields["Client Country"]) && (deniedVatType === "VAT0" || deniedVatType === "VAT21")) ? 1.21 : 1
+          );
+
+          return {
+            id: record.id,
+            _kind: "fresh_denied",
+            round_type: "denied",
+            order_record_id: orderId,
+            seller_offer_record_id: asText(f["Seller Offer Record ID"]) || record.id,
+            order_number: displayValue(orderFields["Shopify Order Number"]),
+            product: displayValue(f["Product Name"]) || displayValue(orderFields["Shopify Product Name"]),
+            sku: displayValue(f["SKU"]) || displayValue(orderFields["SKU"]),
+            size: displayValue(f["Size"]) || displayValue(orderFields["Size"]),
+            brand: displayValue(f["Brand"]) || displayValue(orderFields["Brand"]),
+            selling_price: Number.isFinite(numberValue(orderFields["Selling Price"])) && numberValue(orderFields["Selling Price"]) > 0
+              ? moneySmartValue(numberValue(orderFields["Selling Price"]))
+              : "-",
+            // No store counter existed (store denied a fresh offer), so
+            // there is no "my_offer" — only the seller's offer.
+            my_offer: null,
+            sellers_offer: Number.isFinite(sellersOfferInStoreTerms) ? moneySmartValue(sellersOfferInStoreTerms) : null,
+            sellers_offer_payout: Number.isFinite(rawDeniedAmount) ? rawDeniedAmount : null,
+            vat_type: deniedVatType,
+            denied_at: formatDateEU(f["Denied At"])
+          };
+        });
+
+      mergedItems = [...finalItems, ...deniedFreshItems];
+    }
+
     res.json({
-      count: finalItems.length,
-      items: sortDashboardItemsNewestFirst(finalItems)
+      count: mergedItems.length,
+      items: sortDashboardItemsNewestFirst(mergedItems)
     });
   } catch (err) {
     console.error("Failed to load store counter offers:", err);
@@ -15741,11 +15999,16 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
               selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
               your_previous_counter: reopen2DeniedForDisplay,
               seller_counter_price: reopen2SellerCounterForDisplay ?? priorSellerCounterInStoreTerms ?? priorSellerCounter,
-              denied_price: reopen2DeniedForDisplay
+              denied_price: reopen2DeniedForDisplay,
+              store_display_vat_type: priorVatType
             })
           }).catch((err) => console.error("Failed to notify store of reopened round (non-blocking):", err));
         }
       } else {
+        // FIXED — same as path 1: show the denied counter in the
+        // store's own VAT scale, not the internal all-in value.
+        const deniedVatTypeForDisplay2 = asText(deniedFields["Seller Original VAT Type"]);
+        const deniedPriceForStoreDisplay2 = deniedPrice / storeDisplayDivisor(deniedVatTypeForDisplay2, orderFields);
         await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -15757,7 +16020,8 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
             product_name: asText(deniedFields["Product Name"]),
             sku: asText(deniedFields["SKU"]),
             size: asText(deniedFields["Size"]),
-            denied_price: deniedPrice
+            denied_price: deniedPriceForStoreDisplay2,
+            denied_vat_type: deniedVatTypeForDisplay2
           })
         }).catch((err) => console.error("Failed to notify store of denial (non-blocking):", err));
       }
