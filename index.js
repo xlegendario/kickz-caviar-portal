@@ -11027,6 +11027,16 @@ function numberValue(value) {
 // unanswered offer.
 const MIN_COUNTER_STEP = 2.5;
 
+// NEW — additive only: format a money amount for an error message.
+// Shows 2 decimals only when the value actually has a fractional part,
+// so a store's VAT0-scale figure reads €181.82 (not €181.8181818…) but
+// a whole-euro figure still reads €185 (not €185.00).
+function fmtEuroAmount(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value);
+  return Number.isInteger(n) ? String(n) : n.toFixed(2);
+}
+
 function validateNextCounterPrice(ownReferencePrice, counterpartPrice, proposed, options = {}) {
   const { enforceMinStep = true, requireInteger = true } = options;
 
@@ -11071,8 +11081,8 @@ function validateNextCounterPrice(ownReferencePrice, counterpartPrice, proposed,
     // noise. State only the bound that's actually relevant to which
     // direction this mover is going.
     const reason = movingDown
-      ? `Your counter must be lower than your previous €${ownReferencePrice} — maximum €${maxAllowed}.`
-      : `Your counter must be higher than your previous €${ownReferencePrice} — minimum €${minAllowed}.`;
+      ? `Your counter must be lower than your previous €${fmtEuroAmount(ownReferencePrice)} — maximum €${fmtEuroAmount(maxAllowed)}.`
+      : `Your counter must be higher than your previous €${fmtEuroAmount(ownReferencePrice)} — minimum €${fmtEuroAmount(minAllowed)}.`;
     return {
       ok: false,
       reason,
@@ -11177,8 +11187,8 @@ function validateNextCounterPriceWithCrossSellerCeiling(ownReferencePrice, count
       reason = `Your counter must be lower than the current lowest offer of €${displayPrice} — maximum €${maxAllowed}.`;
     } else {
       reason = movingDown
-        ? `Your counter must be lower than your previous €${ownReferencePrice} — maximum €${maxAllowed}.`
-        : `Your counter must be higher than your previous €${ownReferencePrice} — minimum €${minAllowed}.`;
+        ? `Your counter must be lower than your previous €${fmtEuroAmount(ownReferencePrice)} — maximum €${fmtEuroAmount(maxAllowed)}.`
+        : `Your counter must be higher than your previous €${fmtEuroAmount(ownReferencePrice)} — minimum €${fmtEuroAmount(minAllowed)}.`;
     }
     return { ok: false, reason, band: [minAllowed, maxAllowed] };
   }
