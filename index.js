@@ -11267,7 +11267,7 @@ function roundDownToStep(value, step = 2.5) {
   return Math.floor(n / step) * step;
 }
 
-function getCounterEquivalentPriceForVatType(storeCounterAllInPrice, vatType) {
+function getCounterEquivalentPriceForVatType(storeCounterAllInPrice, vatType, orderFields = {}) {
   const price = Number(storeCounterAllInPrice);
   const type = asText(vatType);
 
@@ -11472,6 +11472,7 @@ function customOfferValueForAccept(vatType, storeAllInPrice, storeExclVatPrice) 
   // VAT21 and Margin: write the all-in Store Counter Price unchanged.
   return Number.isFinite(allIn) ? allIn : null;
 }
+
 
 // NEW — Member WTB margin conversion. Much simpler than Store Orders:
 // always a flat €10 between seller and buyer, no per-seller or
