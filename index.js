@@ -15934,6 +15934,18 @@ app.post("/api/dashboard/wtb-counter-offers/:id/accept", async (req, res) => {
         ? "Margin"
         : (isDutchClientCountry(orderFieldsForAccept?.["Client Country"]) ? "VAT21" : "VAT0");
 
+    console.error("DEBUG wtb-counter-offers/accept:", {
+      counterOfferId,
+      acceptedRecordFields_StoreCounterPrice: numberValue(f["Store Counter Price"]),
+      acceptedRecordFields_SellerCounterPrice: numberValue(f["Seller Counter Price"]),
+      acceptedRecordFields_CounterPayout: numberValue(f["Counter Payout"]),
+      sellerVatTypeForAccept,
+      acceptedStorePrice,
+      offerVatTypeForAcceptWrite,
+      willWrite: Number.isFinite(acceptedStorePrice) && acceptedStorePrice > 0,
+      clientCountry: asText(orderFieldsForAccept?.["Client Country"])
+    });
+
     try {
       if (Number.isFinite(acceptedStorePrice) && acceptedStorePrice > 0) {
         await airtable(ORDERS_TABLE).update(linkedOrderId, {
