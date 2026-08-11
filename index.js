@@ -14939,12 +14939,26 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
       const price = numberValue(so.fields?.["Seller Offer"]);
       if (!Number.isFinite(price)) continue;
 
+      // FIXED — a real, confirmed bug: this compared RAW seller prices
+      // across sellers, but different VAT types live on different
+      // scales. VAT0 is exclusive and must be ×1.21 to compare against
+      // Margin/VAT21 (both already inclusive) — the exact same
+      // normalization getCurrentGlobalLowestNormalized uses. Without it,
+      // e.g. 185 VAT0 (=223.85 normalized) was wrongly picked as
+      // "winner" over 220 Margin (=220), AND then the beats-fresh
+      // exclusion below compared that mis-picked 223.85 against the
+      // correctly-normalized 220 from getCurrentGlobalLowestNormalized,
+      // so the order EXCLUDED ITSELF from Open entirely (220 < 223.85).
+      const vatType = asText(so.fields?.["Offer VAT Type"]);
+      const normalizedPrice = vatType === "VAT0" ? price * 1.21 : price;
+
       const current = winningSellerOfferByOrderId.get(orderId);
-      if (!current || price < current.price) {
+      if (!current || normalizedPrice < current.normalizedPrice) {
         winningSellerOfferByOrderId.set(orderId, {
           price,
+          normalizedPrice,
           id: so.id,
-          vatType: asText(so.fields?.["Offer VAT Type"])
+          vatType
         });
       }
     }
@@ -14957,7 +14971,7 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
       Array.from(winningSellerOfferByOrderId.keys()).map(async (orderId) => {
         const bestActiveCounter = (await getCurrentGlobalLowestNormalized("Seller Offer", orderId, null)).normalized;
         const winner = winningSellerOfferByOrderId.get(orderId);
-        const freshNormalized = asText(winner.vatType) === "VAT0" ? winner.price * 1.21 : winner.price;
+        const freshNormalized = winner.normalizedPrice;
         if (Number.isFinite(bestActiveCounter) && Number.isFinite(freshNormalized) && bestActiveCounter < freshNormalized) {
           winningSellerOfferByOrderId.delete(orderId);
         }
@@ -14989,23 +15003,6 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
         myHighestEverByOrderId.set(orderId, price);
       }
     }
-
-    console.error("DEBUG store-offers (Open pill):", {
-      storeName,
-      totalOrdersMatchingBaseFilter: orderRecords.length,
-      orderIds: orderRecords.map((r) => r.id),
-      ordersWithFreshWinner: [...winningSellerOfferByOrderId.keys()],
-      sellersMidNegotiationByOrder: [...sellerIdsWithActiveCounterByOrderId.entries()].map(([oid, s]) => ({ order: oid, sellers: [...s] })),
-      freshSellerOffersFound: allSellerOffersForTheseOrders.map((so) => ({
-        order: firstLinkedRecordId(so.fields?.["Linked Orders"]),
-        seller: firstLinkedRecordId(so.fields?.["Seller ID"]),
-        price: numberValue(so.fields?.["Seller Offer"]),
-        vat: asText(so.fields?.["Offer VAT Type"]),
-        withdrawn: !!so.fields?.["Withdrawn?"],
-        denied: !!so.fields?.["Denied?"],
-        deleteOffer: !!so.fields?.["Delete Offer"]
-      }))
-    });
 
     const items = orderRecords
       .filter((record) => winningSellerOfferByOrderId.has(record.id))
