@@ -2155,7 +2155,7 @@ function renderWtbUnifiedOfferRows(items) {
 
       return `
         <tr>
-          <td>${(!isFreshDenied && item.status) ? `<div class="dashboard-status-dot ${item.status === "Lowest" ? "dashboard-status-dot-lowest" : "dashboard-status-dot-beaten"}"></div>` : ""}</td>
+          <td>${item.status ? `<div class="dashboard-status-dot ${item.status === "Lowest" ? "dashboard-status-dot-lowest" : "dashboard-status-dot-beaten"}"></div>` : ""}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
           <td>${escapeHtml(item.product || "-")}</td>
           <td>${escapeHtml(item.sku || "-")}</td>
