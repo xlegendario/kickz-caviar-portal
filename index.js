@@ -13850,16 +13850,19 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         // correctly factored in as a candidate for the lowest.
         const previousOfferId = firstLinkedRecordId(f["Previous Record ID"]);
         let previousStorePrice = previousOfferId ? previousPriceById.get(previousOfferId) : null;
+
+        // FIXED — for a DENIED round, the deny is ON this round, so the
+        // store's last position toward THIS seller is this round's own
+        // "Counter Payout" (e.g. 75), NOT the previous round's payout
+        // (e.g. 70, an older position). The default previous-round-first
+        // resolution above is correct for open/countered rows, but for a
+        // denied row it showed the stale earlier figure as "Buyer's Last
+        // Offer". Prefer this round's own Counter Payout when denied.
         if (asText(f["Status"]) === "Denied") {
-          console.error("DEBUG buyers-last-offer denied:", {
-            roundId: record.id,
-            status: asText(f["Status"]),
-            previousOfferId,
-            previousRoundPayout: previousOfferId ? previousPriceById.get(previousOfferId) : null,
-            ownRoundCounterPayout: numberValue(f["Counter Payout"]),
-            ownRoundStoreCounter: numberValue(f["Store Counter Price"]),
-            resolvedSoFar: previousStorePrice
-          });
+          const deniedOwnPayout = numberValue(f["Counter Payout"]);
+          if (Number.isFinite(deniedOwnPayout) && deniedOwnPayout > 0) {
+            previousStorePrice = deniedOwnPayout;
+          }
         }
 
         // NEW — additive only: when the seller denied a buyer offer
