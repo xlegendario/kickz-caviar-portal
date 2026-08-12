@@ -761,11 +761,11 @@ async function sendConsignmentCounterOfferDiscordMessage({
         type: 1,
         components: noRoomToCounter
           ? [
-              { type: 2, style: 3, label: "Accept", custom_id: `consignment_counter_accept:${offer.id}` },
+              { type: 2, style: 3, label: `Accept €${Number(consignorEquivalent)}`, custom_id: `consignment_counter_accept:${offer.id}` },
               { type: 2, style: 4, label: "Deny", custom_id: `consignment_counter_deny:${offer.id}` }
             ]
           : [
-              { type: 2, style: 3, label: "Accept", custom_id: `consignment_counter_accept:${offer.id}` },
+              { type: 2, style: 3, label: `Accept €${Number(consignorEquivalent)}`, custom_id: `consignment_counter_accept:${offer.id}` },
               { type: 2, style: 1, label: "Counter", custom_id: `consignment_counter_counter:${offer.id}` },
               { type: 2, style: 4, label: "Deny", custom_id: `consignment_counter_deny:${offer.id}` }
             ]
@@ -825,6 +825,53 @@ async function disableCounterOfferDiscordButtons(channelId, messageId, note) {
 // to the store's offer (Accept) or come back with a new counter (Counter)
 // straight from Discord, exactly like the Portal allows. Everything works
 // on Discord too, safely (no Deny-on-an-already-denied). Best-effort.
+
+// NEW — stage 2: after the seller re-counters (via Portal or Discord),
+// transform their embed to the "you countered, waiting on the buyer"
+// state: Accept €X (still fall back to the buyer's offer) + Edit (adjust
+// the new counter). Deny gone. editTargetRoundId is the seller's just-
+// placed round; acceptTargetRoundId is what Accept falls back to; the
+// accept amount is the seller-payout the buyer offered. Best-effort.
+async function setCounterOfferDiscordToCounteredRevisable(channelId, messageId, acceptTargetRoundId, editTargetRoundId, acceptAmount, editButtonPrefix = "counter_offer_edit") {
+  await initKickzDealDiscord();
+
+  const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
+  if (!channel) return false;
+
+  const message = await channel.messages.fetch(messageId).catch(() => null);
+  if (!message) return false;
+
+  const acceptLabel = Number.isFinite(Number(acceptAmount)) && Number(acceptAmount) > 0
+    ? `Accept €${Number(acceptAmount)}`
+    : "Accept";
+
+  await message.edit({
+    content: "🔁 You countered on this order. You can still edit the counter. Waiting on the buyer.",
+    embeds: message.embeds,
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 3,
+            label: acceptLabel,
+            custom_id: `counter_offer_accept:${acceptTargetRoundId}`
+          },
+          {
+            type: 2,
+            style: 1,
+            label: "Edit",
+            custom_id: `${editButtonPrefix}:${editTargetRoundId}`
+          }
+        ]
+      }
+    ]
+  }).catch((err) => console.error("Could not set counter embed to countered-revisable (non-blocking):", err.message));
+
+  return true;
+}
+
 async function setCounterOfferDiscordToDeniedRevisable(channelId, messageId, counterOfferRecordId, storeAmountForAcceptLabel) {
   await initKickzDealDiscord();
 
@@ -4328,7 +4375,7 @@ function bindConsignmentDiscordButtons(client) {
                       {
                         type: 2,
                         style: 3,
-                        label: "Accept Offer",
+                        label: `Accept €${Number(offerToBuyerForFallback)}`,
                         custom_id: `accept_member_wtb_buyer_offer:${memberWtbRecordIdForFallback}:${sellerOfferRecordIdForFallback}`
                       },
                       {
@@ -5293,7 +5340,7 @@ function bindConsignmentDiscordButtons(client) {
       };
 
       await interaction.message.edit({
-        content: "🔁 You countered on this order. You can still edit the counter. Waiting on the store.",
+        content: "🔁 You countered on this order. You can still edit the counter. Waiting on the buyer.",
         embeds: interaction.message.embeds,
         components: [editRow]
       }).catch((err) => console.error("Failed to update message with Edit button:", err));
@@ -12097,7 +12144,7 @@ async function sendCounterOfferDiscordDM({
     ],
     components: (() => {
       const isDenial = deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "";
-      const acceptBtn = { type: 2, style: 3, label: "Accept", custom_id: `counter_offer_accept:${counterOfferRecordId}` };
+      const acceptBtn = { type: 2, style: 3, label: `Accept €${Number(payout)}`, custom_id: `counter_offer_accept:${counterOfferRecordId}` };
       const counterBtn = { type: 2, style: 1, label: "Counter", custom_id: `counter_offer_counter:${counterOfferRecordId}` };
       const denyBtn = { type: 2, style: 4, label: "Deny", custom_id: `counter_offer_deny:${counterOfferRecordId}` };
       // FIXED — Counter is ALWAYS shown (even with no room left): the
@@ -12211,7 +12258,7 @@ async function sendMemberWtbCounterOfferDiscordDM({
     ],
     components: (() => {
       const isDenial = deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "";
-      const acceptBtn = { type: 2, style: 3, label: "Accept", custom_id: `member_wtb_counter_accept:${counterOfferRecordId}` };
+      const acceptBtn = { type: 2, style: 3, label: `Accept €${Number(payout)}`, custom_id: `member_wtb_counter_accept:${counterOfferRecordId}` };
       const counterBtn = { type: 2, style: 1, label: "Counter", custom_id: `member_wtb_counter_counter:${counterOfferRecordId}` };
       const denyBtn = { type: 2, style: 4, label: "Deny", custom_id: `member_wtb_counter_deny:${counterOfferRecordId}` };
       // FIXED — Counter is ALWAYS shown (even with no room left): the
@@ -12300,7 +12347,7 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
               {
                 type: 2,
                 style: 3,
-                label: "Accept",
+                label: `Accept €${Number(newPrice)}`,
                 custom_id: `member_wtb_buyer_counter_accept:${counterOfferRecordId}`
               },
               {
@@ -12314,7 +12361,7 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
               {
                 type: 2,
                 style: 3,
-                label: "Accept",
+                label: `Accept €${Number(newPrice)}`,
                 custom_id: `member_wtb_buyer_counter_accept:${counterOfferRecordId}`
               },
               {
@@ -14745,6 +14792,20 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
         }).catch((err) => console.error("Failed to notify store of no-prior retry counter (non-blocking):", err));
       }
 
+      // Stage 2: flip the seller's Discord embed to "you countered,
+      // waiting on the buyer" — Accept €X (fall back to the buyer's
+      // offer) + Edit (adjust this new counter). Accept target stays the
+      // denied round (its Counter Payout is the buyer's position).
+      {
+        const dmChannelId = asText(f["Discord Channel ID"]);
+        const dmMessageId = asText(f["Discord Message ID"]);
+        const acceptAmount = numberValue(f["Counter Payout"]);
+        if (dmChannelId && dmMessageId) {
+          setCounterOfferDiscordToCounteredRevisable(dmChannelId, dmMessageId, offerId, newRoundFresh.id, acceptAmount)
+            .catch((err) => console.error("Failed to set embed to countered-revisable (non-blocking):", err.message));
+        }
+      }
+
       return res.json({ ok: true, new_round_id: newRoundFresh.id });
     }
 
@@ -14896,6 +14957,20 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
           no_room_to_counter: noRoomToCounter
         })
       }).catch((err) => console.error("Failed to notify store of retry counter (non-blocking):", err));
+    }
+
+    // Stage 2: flip the seller's Discord embed to "you countered,
+    // waiting on the buyer" — Accept €X + Edit. Accept falls back to the
+    // denied round's buyer position (its Counter Payout); Edit adjusts
+    // the new round.
+    {
+      const dmChannelId = asText(f["Discord Channel ID"]);
+      const dmMessageId = asText(f["Discord Message ID"]);
+      const acceptAmount = numberValue(f["Counter Payout"]);
+      if (dmChannelId && dmMessageId) {
+        setCounterOfferDiscordToCounteredRevisable(dmChannelId, dmMessageId, offerId, newRound.id, acceptAmount)
+          .catch((err) => console.error("Failed to set embed to countered-revisable (non-blocking):", err.message));
+      }
     }
 
     res.json({ ok: true, band: validation.band, new_round_id: newRound.id });
@@ -23929,7 +24004,7 @@ async function sendBuyingKcOfferRequest({ memberWtbRecordId, fields }) {
         {
           type: 2,
           style: 3,
-          label: "Accept KC Offer",
+          label: `Accept €${Number(maxPrice)}`,
           custom_id: `accept_member_wtb_kc_offer:${memberWtbRecordId}`
         },
         {
@@ -24497,7 +24572,7 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
             {
               type: 2,
               style: 3,
-              label: "Accept Offer",
+              label: `Accept €${Number(offerToBuyer)}`,
               custom_id: `accept_member_wtb_buyer_offer:${memberWtbRecordId}:${currentSellerOfferId}`
             },
             {
