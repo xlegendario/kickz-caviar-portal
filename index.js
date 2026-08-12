@@ -14018,14 +14018,34 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         .select({ filterByFormula: deniedSellerOffersFormula })
         .all();
 
-      const deniedFreshItems = deniedSellerOfferRecords
+      const deniedFreshItems = await Promise.all(deniedSellerOfferRecords
         .filter((record) => linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId))
         // NEW — additive only: a soft-deleted ("Withdrawn?") offer must
         // never show anywhere in the Portal — it only survives
         // physically for the undercut-check in discord-wtb-bot-main.
         .filter((record) => !record.fields?.["Withdrawn?"])
-        .map((record) => {
+        .map(async (record) => {
           const f = record.fields || {};
+
+          // FIXED — a denied fresh offer never carried "Current Lowest",
+          // so the Denied pill always showed "-". Compute it live like
+          // the Open pill does: the cross-seller lowest for this
+          // order/WTB (denied fresh offers still count — they're only
+          // excluded by Delete Offer, not by Denied?), de-normalized
+          // into this row's own VAT type (VAT0 → ÷1.21).
+          const deniedOrderId = firstLinkedRecordId(f["Linked Orders"]);
+          const deniedWtbId = firstLinkedRecordId(f["Member WTBs"]);
+          const deniedSourceType = deniedWtbId ? "Member WTB" : "Seller Offer";
+          const deniedLinkId = deniedWtbId || deniedOrderId;
+          const deniedVatType = displayValue(f["Denied VAT Type"]);
+          let currentLowestForDenied = null;
+          if (deniedLinkId) {
+            const lowestNorm = (await getCurrentGlobalLowestNormalized(deniedSourceType, deniedLinkId, null)).normalized;
+            if (Number.isFinite(lowestNorm)) {
+              const deNorm = asText(deniedVatType) === "VAT0" ? lowestNorm / 1.21 : lowestNorm;
+              currentLowestForDenied = moneySmartValue(deNorm);
+            }
+          }
 
           return {
             id: record.id,
@@ -14036,10 +14056,11 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
             size: displayValue(f["Size (MWTB)"]) || displayValue(f["Size"]),
             brand: displayValue(f["Brand (MWTB)"]) || displayValue(f["Brand"]),
             original_offer: moneyValue(f["Denied Amount"]),
-            vat_type: displayValue(f["Denied VAT Type"]),
+            vat_type: deniedVatType,
+            current_lowest: currentLowestForDenied,
             denied_at: displayValue(f["Denied At"])
           };
-        });
+        }));
 
       mergedItems = [...items, ...deniedFreshItems];
     }
