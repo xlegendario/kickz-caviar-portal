@@ -5297,6 +5297,16 @@ function bindConsignmentDiscordButtons(client) {
             !Number.isFinite(otherSellerExistsForStore) ||
             (Number.isFinite(denyingSellerOwnNormalizedForStore) && otherSellerExistsForStore >= denyingSellerOwnNormalizedForStore);
 
+          console.error("DEBUG seller-deny shouldNotifyStore:", {
+            deniedOrderId,
+            denyingSellerIdForStore,
+            otherSellerExistsForStore,
+            denyingSellerTruePositionForStore,
+            denyingSellerVatTypeForStore,
+            denyingSellerOwnNormalizedForStore,
+            shouldNotifyStore
+          });
+
           if (priorRoundId) {
             const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
 
