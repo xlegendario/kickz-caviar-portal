@@ -16084,6 +16084,15 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
             sellers_offer_payout: Number.isFinite(rawDeniedAmount) ? rawDeniedAmount : null,
             vat_type: storeFacingVatType(deniedVatType, orderFields),
             denied_at: formatDateEU(f["Denied At"]),
+            // FIXED — these were missing on a fresh_denied row, so Date /
+            // Offer Date / ETA showed blank. Same sources as the
+            // counter-round items: order date + ETA from the order,
+            // offer date from the seller offer's own Offer Date
+            // (fallback to the order's Offer Sent At).
+            date: formatDateEU(orderFields["Order Date"]),
+            offer_date: formatDateEU(f["Offer Date"]) || formatDateEU(orderFields["Offer Sent At"]),
+            eta: displayValue(orderFields["Estimated Time"]),
+            raw_date: asText(f["Denied At"]) || asText(f["Offer Date"]),
             // internal only — for the one-per-order collapse below
             __realSellerVat: deniedVatType,
             __rawAmount: rawDeniedAmount
