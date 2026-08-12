@@ -14460,6 +14460,46 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
         "Status": "Open"
       });
 
+      // NEW — additive only: the old denied round is now superseded by
+      // this fresh counter — close it so it leaves the Denied pill in
+      // both portals (the denied filter only shows {Status}='Denied').
+      // Without this the seller's own denied round + the store's Denied
+      // pill both kept showing the stale, now-replaced record.
+      await airtable(COUNTER_OFFERS_TABLE).update(offerId, {
+        "Status": "Closed",
+        "Closed At": new Date().toISOString()
+      }).catch((err) => console.error("Failed to close superseded denied round (non-blocking):", err));
+
+      // NEW — additive only: notify the store of this new counter, same
+      // as the prior-round retry branch below — otherwise the store got
+      // no embed for a re-engaging seller's fresh counter.
+      if (AIRTABLE_DISCORD_UPDATES_URL) {
+        const freshRetrySellerCounterForDisplay = computeSellerCounterForStoreDisplay(
+          proposedPrice,
+          sellerVatType,
+          orderFields
+        );
+        const freshRetryStoreEquivalent = calculateStoreCounterEquivalent(proposedPrice, sellerVatType, orderFields);
+        await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            trigger_type: "counter-offer-seller-countered",
+            store_name: asText(orderFields["Store Name"]),
+            record_id: linkedOrderId,
+            shopify_order_number: asText(orderFields["Shopify Order Number"]),
+            product_name: asText(f["Product Name"]),
+            sku: asText(f["SKU"]),
+            size: asText(f["Size"]),
+            counter_offer_record_id: newRoundFresh.id,
+            selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
+            your_previous_counter: buyerOfferInSellerTerms != null ? (buyerOfferInSellerTerms / storeDisplayDivisor(sellerVatType, orderFields)) : null,
+            seller_counter_price: freshRetrySellerCounterForDisplay ?? freshRetryStoreEquivalent ?? proposedPrice,
+            store_display_vat_type: sellerVatType
+          })
+        }).catch((err) => console.error("Failed to notify store of no-prior retry counter (non-blocking):", err));
+      }
+
       return res.json({ ok: true, new_round_id: newRoundFresh.id });
     }
 
