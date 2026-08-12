@@ -13850,6 +13850,17 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         // correctly factored in as a candidate for the lowest.
         const previousOfferId = firstLinkedRecordId(f["Previous Record ID"]);
         let previousStorePrice = previousOfferId ? previousPriceById.get(previousOfferId) : null;
+        if (asText(f["Status"]) === "Denied") {
+          console.error("DEBUG buyers-last-offer denied:", {
+            roundId: record.id,
+            status: asText(f["Status"]),
+            previousOfferId,
+            previousRoundPayout: previousOfferId ? previousPriceById.get(previousOfferId) : null,
+            ownRoundCounterPayout: numberValue(f["Counter Payout"]),
+            ownRoundStoreCounter: numberValue(f["Store Counter Price"]),
+            resolvedSoFar: previousStorePrice
+          });
+        }
 
         // NEW — additive only: when the seller denied a buyer offer
         // OUTRIGHT (no prior round of their own — Previous Record ID is
