@@ -818,6 +818,54 @@ async function disableCounterOfferDiscordButtons(channelId, messageId, note) {
   return true;
 }
 
+// NEW — after a seller denies (via the Portal) a store counter they were
+// still able to respond to, transform that counter embed on Discord into
+// the denial state: title flips to "Counter Offer Denied", Deny is
+// removed, but Accept + Counter stay — so the seller can still fall back
+// to the store's offer (Accept) or come back with a new counter (Counter)
+// straight from Discord, exactly like the Portal allows. Everything works
+// on Discord too, safely (no Deny-on-an-already-denied). Best-effort.
+async function setCounterOfferDiscordToDeniedRevisable(channelId, messageId, counterOfferRecordId) {
+  await initKickzDealDiscord();
+
+  const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
+  if (!channel) return false;
+
+  const message = await channel.messages.fetch(messageId).catch(() => null);
+  if (!message) return false;
+
+  const oldEmbed = message.embeds?.[0];
+  const newEmbed = oldEmbed
+    ? { ...oldEmbed.toJSON?.() ?? oldEmbed, title: "❌ Counter Offer Denied", color: 0xe74c3c }
+    : { title: "❌ Counter Offer Denied", color: 0xe74c3c };
+
+  await message.edit({
+    content: message.content,
+    embeds: [newEmbed],
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 3,
+            label: "Accept",
+            custom_id: `counter_offer_accept:${counterOfferRecordId}`
+          },
+          {
+            type: 2,
+            style: 1,
+            label: "Counter",
+            custom_id: `counter_offer_counter:${counterOfferRecordId}`
+          }
+        ]
+      }
+    ]
+  }).catch((err) => console.error("Could not set counter embed to denied-revisable (non-blocking):", err.message));
+
+  return true;
+}
+
 async function setCounterOfferDiscordToEditOnly(channelId, messageId, note, editTargetRoundId, editButtonPrefix = "counter_offer_edit") {
   await initKickzDealDiscord();
 
@@ -16440,6 +16488,19 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
       "Denied At": new Date().toISOString(),
       "Closed At": new Date().toISOString()
     });
+
+    // NEW — the seller denied this store counter via the Portal, but the
+    // matching Discord counter embed was left fully live (incl. Deny).
+    // Transform it to the denial state: Deny removed, Accept + Counter
+    // kept, so the seller can still fall back or re-counter from Discord.
+    {
+      const deniedEmbedChannelId = asText(deniedFields["Discord Channel ID"]);
+      const deniedEmbedMessageId = asText(deniedFields["Discord Message ID"]);
+      if (deniedEmbedChannelId && deniedEmbedMessageId) {
+        setCounterOfferDiscordToDeniedRevisable(deniedEmbedChannelId, deniedEmbedMessageId, counterOfferRecordId)
+          .catch((err) => console.error("Failed to transform denied counter embed (non-blocking):", err.message));
+      }
+    }
 
     const deniedOrderId = firstLinkedRecordId(deniedFields["Order"]);
     const deniedPrice = numberValue(deniedFields["Store Counter Price"]);
