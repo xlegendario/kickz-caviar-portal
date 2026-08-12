@@ -14647,13 +14647,15 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
     const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId);
     const priorFields = priorRound.fields || {};
 
-    // FIXED — the store's last position to THIS seller is the Store
-    // Counter Price on the DENIED round the seller is responding to (f,
-    // e.g. 85), not priorRoundId's (an older 70). The retry is a reply
-    // to the denied round, so the narrowing band must run against that.
-    // Using priorRoundId made the band (and Buyer's Last Offer) use the
-    // stale earlier figure.
-    const storeLastPosition = numberValue(f["Store Counter Price"]) || numberValue(priorFields["Store Counter Price"]);
+    // FIXED — the store's last position to THIS seller, IN SELLER-PAYOUT
+    // SCALE, is the denied round's "Counter Payout" (e.g. 75 — what the
+    // seller would receive), NOT "Store Counter Price" (85 — the buyer's
+    // all-in figure). The band compares against the seller's own ref
+    // (105 payout) and the seller's proposed price, both payout-scale;
+    // a buyer bid and a seller payout are different scales for Margin.
+    // Using Store Counter Price (85) wrongly forced the lower bound to
+    // 86 and rejected a valid seller counter of 85.
+    const storeLastPosition = numberValue(f["Counter Payout"]) || numberValue(priorFields["Counter Payout"]);
 
     // FIXED — a seller who denied OUTRIGHT (no counter of their own on
     // the denied round) has Seller Counter Price = 0 here, and
@@ -14686,15 +14688,6 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
       crossSellerReferenceRawPrior = rawThresholdPrior;
     }
 
-    console.error("DEBUG retry has-prior band:", {
-      ownReferenceForRetry,
-      storeLastPosition,
-      proposedPrice,
-      sellerVatType,
-      globalLowestForRetryPrior,
-      crossSellerCeilingRawPrior,
-      crossSellerReferenceRawPrior
-    });
     const validation = validateNextCounterPriceWithCrossSellerCeiling(
       ownReferenceForRetry,
       storeLastPosition,
