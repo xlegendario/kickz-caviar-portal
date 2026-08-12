@@ -13748,15 +13748,27 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         // Last Offer" and offer Accept on it (his confirmed want: a
         // seller can still come back on their own deny).
         if (!Number.isFinite(previousStorePrice)) {
-          const ownRoundStoreCounter = numberValue(f["Store Counter Price"]);
-          if (Number.isFinite(ownRoundStoreCounter) && ownRoundStoreCounter > 0) {
-            const ownRoundBuyerPayout = calculateCounterPayoutForVatType(
-              ownRoundStoreCounter,
-              displayValue(f["Seller Original VAT Type"]),
-              orderFields
-            );
-            if (Number.isFinite(ownRoundBuyerPayout)) {
-              previousStorePrice = ownRoundBuyerPayout;
+          // Prefer the payout already stored on this round (what the
+          // store actually offered this seller, e.g. 180 Margin) — the
+          // store-counter endpoint writes "Counter Payout" on every
+          // round. Recomputing from the all-in Store Counter Price can
+          // fail here because the order's margin config (Offer Margin /
+          // Percentage / Method) isn't always reachable in this scope,
+          // which returned null and left Buyer's Last Offer blank.
+          const ownRoundCounterPayout = numberValue(f["Counter Payout"]);
+          if (Number.isFinite(ownRoundCounterPayout) && ownRoundCounterPayout > 0) {
+            previousStorePrice = ownRoundCounterPayout;
+          } else {
+            const ownRoundStoreCounter = numberValue(f["Store Counter Price"]);
+            if (Number.isFinite(ownRoundStoreCounter) && ownRoundStoreCounter > 0) {
+              const ownRoundBuyerPayout = calculateCounterPayoutForVatType(
+                ownRoundStoreCounter,
+                displayValue(f["Seller Original VAT Type"]),
+                orderFields
+              );
+              if (Number.isFinite(ownRoundBuyerPayout)) {
+                previousStorePrice = ownRoundBuyerPayout;
+              }
             }
           }
         }
@@ -13769,6 +13781,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
             storeCounterPrice: numberValue(f["Store Counter Price"]),
             sellerCounterPrice: numberValue(f["Seller Counter Price"]),
             sellerOrigVatType: displayValue(f["Seller Original VAT Type"]),
+            counterPayout: numberValue(f["Counter Payout"]),
             computedPreviousStorePrice: previousStorePrice
           });
         }
