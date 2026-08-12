@@ -14720,6 +14720,17 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
       // ForStoreDisplay).
       const retryEmbedDivisor = storeDisplayDivisor(sellerVatType, orderFields);
       const retryYourPreviousForDisplay = storeLastPosition / retryEmbedDivisor;
+      const debugBuyerHighestForRetry = await getBuyerHighestEverPosition("Seller Offer", linkedOrderId);
+      const debugGlobalLowestForRetry = await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, null);
+      console.error("DEBUG retry has-prior embed:", {
+        storeLastPosition_fromSellerAChain: storeLastPosition,
+        buyerHighestEver_globalThread: debugBuyerHighestForRetry,
+        retryYourPreviousForDisplay,
+        retryEmbedDivisor,
+        sellerVatType,
+        proposedPrice,
+        globalLowestAfterRetry: debugGlobalLowestForRetry
+      });
       const retrySellerCounterForDisplay = computeSellerCounterForStoreDisplay(
         proposedPrice,
         sellerVatType,
