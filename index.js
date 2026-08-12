@@ -15976,11 +15976,13 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
     // actually winning right now).
     const visibleItems = await Promise.all(
       items.map(async (item) => {
-        // Denied rounds are closed records — always show them in the
-        // Denied pill; the "single best position only" rule only makes
-        // sense for live Open/Countered rounds.
-        if (filter === "denied") return item;
-
+        // A seller who denied while NOT the cheapest steps out silently
+        // — the store never saw an embed for it and must not see it in
+        // the Denied pill either (his rule: they re-enter only by
+        // countering back to lowest, or by Accepting). So the Denied
+        // pill uses the SAME "hide if a better position exists
+        // elsewhere" collapse as Open/Countered — only the seller who
+        // was actually the lowest when they denied stays visible.
         const betterElsewhere = (await getCurrentGlobalLowestNormalized(
           "Seller Offer",
           item.order_record_id,
