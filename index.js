@@ -16013,6 +16013,16 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
           ? (asText(ownVatType) === "VAT0" ? Number(ownRawPrice) * 1.21 : Number(ownRawPrice))
           : null;
 
+        console.error("DEBUG store-open collapse:", {
+          sellerId: item.__sellerId,
+          round_type: item.round_type,
+          sellers_offer_payout: ownRawPrice,
+          store_facing_vat_type: ownVatType,
+          ownNormalized,
+          betterElsewhere,
+          willHide: ownNormalized != null && betterElsewhere < ownNormalized
+        });
+
         if (ownNormalized == null) return item;
 
         return betterElsewhere < ownNormalized ? null : item;
