@@ -13761,6 +13761,18 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           }
         }
 
+        if (filter === "denied") {
+          console.error("DEBUG denied-item:", {
+            recordId: record.id,
+            status: displayValue(f["Status"]),
+            previousOfferId,
+            storeCounterPrice: numberValue(f["Store Counter Price"]),
+            sellerCounterPrice: numberValue(f["Seller Counter Price"]),
+            sellerOrigVatType: displayValue(f["Seller Original VAT Type"]),
+            computedPreviousStorePrice: previousStorePrice
+          });
+        }
+
         // FIXED — "Your Offer" must be the SELLER's actual current
         // position, not the fixed, never-updated "Seller Original
         // Price". For "open" (own_counter): this round's own "Seller
@@ -17518,7 +17530,7 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
     // at once. Excludes any Seller Offer that already has a currently-
     // open Counter Offers record referencing it.
     const activeCounterFormula = `AND(
-      {Status} = 'Open',
+      OR({Status} = 'Open', {Status} = 'Denied'),
       OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')
     )`;
     const activeCounterRecords = await airtable(COUNTER_OFFERS_TABLE)
