@@ -16041,7 +16041,7 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
         .select({ filterByFormula: `{Denied?} = TRUE()` })
         .all();
 
-      const deniedFreshItems = deniedSellerOfferRecords
+      const deniedFreshItemsRaw = deniedSellerOfferRecords
         .filter((record) => myOrderIds.has(firstLinkedRecordId(record.fields?.["Linked Orders"])))
         .filter((record) => !record.fields?.["Withdrawn?"])
         .filter((record) => !record.fields?.["Delete Offer"])
@@ -16083,9 +16083,36 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
             sellers_offer: Number.isFinite(sellersOfferInStoreTerms) ? moneySmartValue(sellersOfferInStoreTerms) : null,
             sellers_offer_payout: Number.isFinite(rawDeniedAmount) ? rawDeniedAmount : null,
             vat_type: storeFacingVatType(deniedVatType, orderFields),
-            denied_at: formatDateEU(f["Denied At"])
+            denied_at: formatDateEU(f["Denied At"]),
+            // internal only — for the one-per-order collapse below
+            __realSellerVat: deniedVatType,
+            __rawAmount: rawDeniedAmount
           };
         });
+
+      // FIXED — the store must see only the single BEST denied offer per
+      // order, not one row per seller (his rule: buyers/stores always
+      // see only the best position). This merge added every denied
+      // fresh offer, so a store that denied both Seller A (162.50
+      // Margin) and Seller B (157.50 VAT21) saw two rows. Collapse to
+      // the lowest per order, normalizing with the seller's REAL vat
+      // (VAT0 → ×1.21), same scale getCurrentGlobalLowestNormalized uses.
+      const bestFreshDeniedByOrder = new Map();
+      for (const item of deniedFreshItemsRaw) {
+        if (!item.order_record_id) continue;
+        const norm = asText(item.__realSellerVat) === "VAT0"
+          ? Number(item.__rawAmount) * 1.21
+          : Number(item.__rawAmount);
+        if (!Number.isFinite(norm)) continue;
+        const current = bestFreshDeniedByOrder.get(item.order_record_id);
+        if (!current || norm < current.norm) {
+          bestFreshDeniedByOrder.set(item.order_record_id, { norm, item });
+        }
+      }
+      const deniedFreshItems = [...bestFreshDeniedByOrder.values()].map(({ item }) => {
+        const { __realSellerVat, __rawAmount, ...rest } = item;
+        return rest;
+      });
 
       mergedItems = [...finalItems, ...deniedFreshItems];
     }
