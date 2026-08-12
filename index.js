@@ -14642,6 +14642,20 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
     const storeLastPosition = numberValue(priorFields["Store Counter Price"]);
     const deniedSellerCounter = numberValue(f["Seller Counter Price"]);
 
+    const debugSellerTrueLast = await findSellersTrueLastCounter(req.params.offerId);
+    const debugGlobalLowest = await getCurrentGlobalLowestNormalized("Order", linkedOrderId, linkedSellerId);
+    console.error("DEBUG retry-counter has-prior:", {
+      offerId: req.params.offerId,
+      priorRoundId,
+      deniedSellerCounter,
+      storeLastPosition,
+      sellerOriginalPrice,
+      sellerVatType,
+      sellerTrueLast: debugSellerTrueLast,
+      currentGlobalLowest: debugGlobalLowest,
+      proposedPrice
+    });
+
     if (!Number.isFinite(storeLastPosition) || !Number.isFinite(deniedSellerCounter)) {
       return res.status(500).json({ error: "Missing price data to validate against." });
     }
