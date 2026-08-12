@@ -14729,6 +14729,16 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
       "Status": "Open"
     });
 
+    // FIXED — close the old denied round now that this retry supersedes
+    // it (mirrors the no-prior branch). Without this the denied round
+    // stayed at Status="Denied" — lingering in the seller's Denied pill
+    // AND still counting in the cross-seller global-lowest, which kept
+    // the other seller wrongly visible in the store's Open pill.
+    await airtable(COUNTER_OFFERS_TABLE).update(offerId, {
+      "Status": "Closed",
+      "Closed At": new Date().toISOString()
+    }).catch((err) => console.error("Failed to close superseded denied round (non-blocking):", err));
+
     if (AIRTABLE_DISCORD_UPDATES_URL) {
       const sellerCounterInStoreTerms = calculateStoreCounterEquivalent(
         proposedPrice,
