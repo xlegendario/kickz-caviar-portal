@@ -13918,6 +13918,20 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           ? Math.min(orderCompetingMin, ownNormalizedForOrder)
           : (orderCompetingMin ?? ownNormalizedForOrder);
 
+        if (filter === "denied" && !isMemberWtb) {
+          console.error("DEBUG denied current-lowest:", {
+            roundId: record.id,
+            orderId,
+            orderCompetingMin,
+            sellerLastOffer,
+            ownNormalizedForOrder,
+            orderLowest,
+            vatType,
+            orderMapSize: orderMinNormalizedPrice.size,
+            orderInMap: orderId ? orderMinNormalizedPrice.has(orderId) : false
+          });
+        }
+
         // NEW — additive only: the Member WTB equivalent of the above,
         // using memberWtbMinNormalizedPrice (built above from every
         // other seller's current position, normalized to the same
@@ -14956,17 +14970,17 @@ async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPric
   const pendingSellerCounterRounds = await airtable(COUNTER_OFFERS_TABLE)
     .select({
       filterByFormula: `AND({Status} = 'Open', {Source Type} = '${escapeFormulaValue(sourceType)}')`,
-      fields: [counterLinkField, "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type", "Seller Offer Record ID"]
+      fields: [counterLinkField, "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type", "Seller Offer Record ID", "Status"]
     })
     .all()
-    .then((records) =>
-      records.filter((r) => {
+    .then((records) => {
+      return records.filter((r) => {
         if (firstLinkedRecordId(r.fields?.[counterLinkField]) !== recordId) return false;
         const sellerId = firstLinkedRecordId(r.fields?.["Seller ID"]);
         if (!sellerId || sellerId === excludeSellerId) return false;
         return true;
-      })
-    );
+      });
+    });
 
 for (const round of pendingSellerCounterRounds) {
     const rf = round.fields || {};
