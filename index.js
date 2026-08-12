@@ -8434,24 +8434,6 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
       }
     }
 
-    // NEW — additive only: the store just countered, so any older
-    // store-facing offer embed for this order (e.g. the original
-    // "Offer Request" the store is responding to) is now stale and
-    // must not stay clickable — otherwise the store could later Deny an
-    // offer they've already countered, leaving a stale round in two
-    // pills at once. Fire the pure disable sweep (no new embed).
-    if (AIRTABLE_DISCORD_UPDATES_URL && linkedOrderId) {
-      fetch(AIRTABLE_DISCORD_UPDATES_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          trigger_type: "disable-offer-messages",
-          store_name: asText(orderFields["Store Name"]),
-          record_id: linkedOrderId
-        })
-      }).catch((err) => console.error("Failed to fire disable-offer-messages sweep (non-blocking):", err));
-    }
-
     res.json({ ok: true, band: validation.band, new_round_id: newRound.id });
   } catch (err) {
     console.error("Failed to submit store counter-back:", err);
