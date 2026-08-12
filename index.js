@@ -14188,7 +14188,12 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
     const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(acceptTargetId);
     const f = counterOffer.fields || {};
 
-    if (!acceptSelfDeniedRound && asText(f["Status"]) !== "Open") {
+    if (!acceptSelfDeniedRound && asText(f["Status"]) === "Accepted") {
+      // His design: the store's last offer stays grabbable AT ANY
+      // MOMENT — even after the seller countered again (which closed
+      // this prior round). So a Closed/Denied prior round is still a
+      // valid accept target; only an already-Accepted one is genuinely
+      // gone (the deal closed with someone).
       return res.status(409).json({ error: "That previous offer is no longer available." });
     }
 
