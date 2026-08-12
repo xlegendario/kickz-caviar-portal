@@ -14686,6 +14686,15 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
       crossSellerReferenceRawPrior = rawThresholdPrior;
     }
 
+    console.error("DEBUG retry has-prior band:", {
+      ownReferenceForRetry,
+      storeLastPosition,
+      proposedPrice,
+      sellerVatType,
+      globalLowestForRetryPrior,
+      crossSellerCeilingRawPrior,
+      crossSellerReferenceRawPrior
+    });
     const validation = validateNextCounterPriceWithCrossSellerCeiling(
       ownReferenceForRetry,
       storeLastPosition,
