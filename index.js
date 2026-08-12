@@ -12046,46 +12046,23 @@ async function sendCounterOfferDiscordDM({
         color: deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "" ? 0xe74c3c : 0xf1c40f
       }
     ],
-    components: [
-      {
-        type: 1,
-        components: noRoomToCounter
-          ? [
-              {
-                type: 2,
-                style: 3,
-                label: "Accept",
-                custom_id: `counter_offer_accept:${counterOfferRecordId}`
-              },
-              {
-                type: 2,
-                style: 4,
-                label: "Deny",
-                custom_id: `counter_offer_deny:${counterOfferRecordId}`
-              }
-            ]
-          : [
-          {
-            type: 2,
-            style: 3,
-            label: "Accept",
-            custom_id: `counter_offer_accept:${counterOfferRecordId}`
-          },
-          {
-            type: 2,
-            style: 1,
-            label: "Counter",
-            custom_id: `counter_offer_counter:${counterOfferRecordId}`
-          },
-          {
-            type: 2,
-            style: 4,
-            label: "Deny",
-            custom_id: `counter_offer_deny:${counterOfferRecordId}`
-          }
-        ]
+    components: (() => {
+      const isDenial = deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "";
+      const acceptBtn = { type: 2, style: 3, label: "Accept", custom_id: `counter_offer_accept:${counterOfferRecordId}` };
+      const counterBtn = { type: 2, style: 1, label: "Counter", custom_id: `counter_offer_counter:${counterOfferRecordId}` };
+      const denyBtn = { type: 2, style: 4, label: "Deny", custom_id: `counter_offer_deny:${counterOfferRecordId}` };
+      // FIXED — deny-after-own-counter: on a DENIAL of the seller's own
+      // counter, they may only Accept the store's last position or Retry
+      // (Counter); they cannot Deny what the store already denied. A
+      // genuine store counter (not a denial) still offers Deny.
+      let row;
+      if (noRoomToCounter) {
+        row = isDenial ? [acceptBtn] : [acceptBtn, denyBtn];
+      } else {
+        row = isDenial ? [acceptBtn, counterBtn] : [acceptBtn, counterBtn, denyBtn];
       }
-    ]
+      return [{ type: 1, components: row }];
+    })()
   });
 
   return {
@@ -12186,46 +12163,23 @@ async function sendMemberWtbCounterOfferDiscordDM({
         color: deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "" ? 0xe74c3c : 0xf1c40f
       }
     ],
-    components: [
-      {
-        type: 1,
-        components: noRoomToCounter
-          ? [
-              {
-                type: 2,
-                style: 3,
-                label: "Accept",
-                custom_id: `member_wtb_counter_accept:${counterOfferRecordId}`
-              },
-              {
-                type: 2,
-                style: 4,
-                label: "Deny",
-                custom_id: `member_wtb_counter_deny:${counterOfferRecordId}`
-              }
-            ]
-          : [
-              {
-                type: 2,
-                style: 3,
-                label: "Accept",
-                custom_id: `member_wtb_counter_accept:${counterOfferRecordId}`
-              },
-              {
-                type: 2,
-                style: 1,
-                label: "Counter",
-                custom_id: `member_wtb_counter_counter:${counterOfferRecordId}`
-              },
-              {
-                type: 2,
-                style: 4,
-                label: "Deny",
-                custom_id: `member_wtb_counter_deny:${counterOfferRecordId}`
-              }
-            ]
+    components: (() => {
+      const isDenial = deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "";
+      const acceptBtn = { type: 2, style: 3, label: "Accept", custom_id: `member_wtb_counter_accept:${counterOfferRecordId}` };
+      const counterBtn = { type: 2, style: 1, label: "Counter", custom_id: `member_wtb_counter_counter:${counterOfferRecordId}` };
+      const denyBtn = { type: 2, style: 4, label: "Deny", custom_id: `member_wtb_counter_deny:${counterOfferRecordId}` };
+      // FIXED — deny-after-own-counter (buyer side): on a DENIAL of the
+      // buyer's own counter they may only Accept the seller's last
+      // position or Retry (Counter), not Deny what was already denied.
+      // A genuine seller counter (not a denial) still offers Deny.
+      let row;
+      if (noRoomToCounter) {
+        row = isDenial ? [acceptBtn] : [acceptBtn, denyBtn];
+      } else {
+        row = isDenial ? [acceptBtn, counterBtn] : [acceptBtn, counterBtn, denyBtn];
       }
-    ]
+      return [{ type: 1, components: row }];
+    })()
   });
 
   return {
@@ -15043,7 +14997,12 @@ for (const round of pendingSellerCounterRounds) {
       "Counter Payout VAT Type": sellerVatType,
       "Previous Record ID": round.id,
       "Created At": new Date().toISOString(),
-      "Status": "Open"
+      // FIXED — on a deny-broadcast the store denied the lowest seller,
+      // which implicitly denies every higher seller too; they receive a
+      // denied embed, so their new round must land in Denied (not Open).
+      // A normal reengage (store counter/edit) keeps it Open as before.
+      "Status": isDenyBroadcast ? "Denied" : "Open",
+      ...(isDenyBroadcast ? { "Denied At": new Date().toISOString() } : {})
     };
     createFields[sourceType === "Member WTB" ? "Member WTB" : "Order"] = [recordId];
 
