@@ -15983,7 +15983,8 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
         denied_at: filter === "denied" ? formatDateEU(f["Denied At"]) : null,
         // Kept only for the visibility filter right below — not part
         // of the response shape.
-        __sellerId: firstLinkedRecordId(f["Seller ID"])
+        __sellerId: firstLinkedRecordId(f["Seller ID"]),
+        __realSellerVat: vatType
       };
     }));
 
@@ -16008,20 +16009,10 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
         if (!Number.isFinite(betterElsewhere)) return item;
 
         const ownRawPrice = item.sellers_offer_payout;
-        const ownVatType = item.vat_type;
+        const ownVatType = item.__realSellerVat;
         const ownNormalized = Number.isFinite(Number(ownRawPrice))
           ? (asText(ownVatType) === "VAT0" ? Number(ownRawPrice) * 1.21 : Number(ownRawPrice))
           : null;
-
-        console.error("DEBUG store-open collapse:", {
-          sellerId: item.__sellerId,
-          round_type: item.round_type,
-          sellers_offer_payout: ownRawPrice,
-          store_facing_vat_type: ownVatType,
-          ownNormalized,
-          betterElsewhere,
-          willHide: ownNormalized != null && betterElsewhere < ownNormalized
-        });
 
         if (ownNormalized == null) return item;
 
@@ -16029,7 +16020,7 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
       })
     ).then((results) => results.filter(Boolean));
 
-    const finalItems = visibleItems.map(({ __sellerId, ...rest }) => rest);
+    const finalItems = visibleItems.map(({ __sellerId, __realSellerVat, ...rest }) => rest);
 
     // NEW — additive only: "denied" must also include fresh,
     // never-countered offers the STORE denied outright — those never
