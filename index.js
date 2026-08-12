@@ -13850,16 +13850,6 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         // correctly factored in as a candidate for the lowest.
         const previousOfferId = firstLinkedRecordId(f["Previous Record ID"]);
         let previousStorePrice = previousOfferId ? previousPriceById.get(previousOfferId) : null;
-        if (filter === "open" && numberValue(f["Seller Counter Price"]) > 0) {
-          console.error("DEBUG open buyers-last-offer:", {
-            roundId: record.id,
-            sellerCounterPrice: numberValue(f["Seller Counter Price"]),
-            previousOfferId,
-            previousRoundPayout: previousOfferId ? previousPriceById.get(previousOfferId) : null,
-            ownRoundCounterPayout: numberValue(f["Counter Payout"]),
-            resolvedPreviousStorePrice: previousStorePrice
-          });
-        }
 
         // FIXED — for a DENIED round, the deny is ON this round, so the
         // store's last position toward THIS seller is this round's own
@@ -14657,13 +14647,13 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
     const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId);
     const priorFields = priorRound.fields || {};
 
-    // The store's last real position — validated against directly, not
-    // the prior round's own status, since it's expected to already be
-    // Closed (correctly superseded by the denied round). His
-    // requirement: the retry must respect the normal narrowing band
-    // against THIS, not just beat the denied price, so it can never
-    // accidentally go lower than what the store already offered.
-    const storeLastPosition = numberValue(priorFields["Store Counter Price"]);
+    // FIXED — the store's last position to THIS seller is the Store
+    // Counter Price on the DENIED round the seller is responding to (f,
+    // e.g. 85), not priorRoundId's (an older 70). The retry is a reply
+    // to the denied round, so the narrowing band must run against that.
+    // Using priorRoundId made the band (and Buyer's Last Offer) use the
+    // stale earlier figure.
+    const storeLastPosition = numberValue(f["Store Counter Price"]) || numberValue(priorFields["Store Counter Price"]);
 
     // FIXED — a seller who denied OUTRIGHT (no counter of their own on
     // the denied round) has Seller Counter Price = 0 here, and
@@ -14727,7 +14717,12 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
       // conversion needed.
       "Counter Payout": proposedPrice,
       "Counter Payout VAT Type": sellerVatType,
-      "Previous Record ID": priorRoundId,
+      // FIXED — point at the DENIED round the seller just responded to
+      // (offerId), not priorRoundId (the round before it). The store's
+      // last position to this seller (75) lives on the denied round;
+      // pointing at priorRoundId made "Buyer's Last Offer" read the
+      // older 70 instead of the actual last 75.
+      "Previous Record ID": offerId,
       "Created At": new Date().toISOString(),
       "Status": "Open"
     });
