@@ -22323,6 +22323,26 @@ app.post("/api/seller-offers/:offerId/edit-after-denial", async (req, res) => {
 
     const normalizedOffer = vatType === "VAT0" ? offerAmount * 1.21 : offerAmount;
 
+    // FIXED — a retried fresh offer must also BEAT the current
+    // cross-seller lowest, not merely be €2.50 below the seller's own
+    // denied amount. Without this, Seller A could retry 145 Margin
+    // (normalized 145) while Seller B sits at 120 VAT0 (normalized
+    // 145.20) — 145 doesn't undercut 145.20, so it must be rejected.
+    // Compares on the shared normalized scale, against the best of the
+    // OTHER sellers (this seller excluded).
+    const retrySourceType = linkedMemberWtbId ? "Member WTB" : "Seller Offer";
+    const retryLinkId = linkedMemberWtbId || linkedOrderId;
+    const othersLowestNorm = (await getCurrentGlobalLowestNormalized(retrySourceType, retryLinkId, sellerRecordId)).normalized;
+    if (Number.isFinite(othersLowestNorm) && normalizedOffer > othersLowestNorm - MIN_COUNTER_STEP) {
+      // Show the ceiling in the seller's own VAT scale — they must beat
+      // the other seller's lowest by at least the min step.
+      const ceilingRawInOwnScale = vatType === "VAT0" ? othersLowestNorm / 1.21 : othersLowestNorm;
+      const maxToBeat = Math.floor(ceilingRawInOwnScale - MIN_COUNTER_STEP);
+      return res.status(400).json({
+        error: `Another seller already offers a better price. To be the lowest you'd need at most €${maxToBeat} (${vatType}).`
+      });
+    }
+
     await airtable(SELLER_OFFERS_TABLE).update(offerId, {
       "Seller Offer": offerAmount,
       "Offer VAT Type": vatType,
