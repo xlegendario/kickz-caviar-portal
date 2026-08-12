@@ -12051,16 +12051,13 @@ async function sendCounterOfferDiscordDM({
       const acceptBtn = { type: 2, style: 3, label: "Accept", custom_id: `counter_offer_accept:${counterOfferRecordId}` };
       const counterBtn = { type: 2, style: 1, label: "Counter", custom_id: `counter_offer_counter:${counterOfferRecordId}` };
       const denyBtn = { type: 2, style: 4, label: "Deny", custom_id: `counter_offer_deny:${counterOfferRecordId}` };
-      // FIXED — deny-after-own-counter: on a DENIAL of the seller's own
-      // counter, they may only Accept the store's last position or Retry
-      // (Counter); they cannot Deny what the store already denied. A
-      // genuine store counter (not a denial) still offers Deny.
-      let row;
-      if (noRoomToCounter) {
-        row = isDenial ? [acceptBtn] : [acceptBtn, denyBtn];
-      } else {
-        row = isDenial ? [acceptBtn, counterBtn] : [acceptBtn, counterBtn, denyBtn];
-      }
+      // FIXED — Counter is ALWAYS shown (even with no room left): the
+      // no-room message is surfaced when they click it, so they see WHY,
+      // instead of the button silently vanishing. Only Deny is dropped
+      // on a DENIAL of the seller's own counter (deny-after-own-counter:
+      // they can't Deny what the store already denied). A genuine store
+      // counter keeps Deny.
+      const row = isDenial ? [acceptBtn, counterBtn] : [acceptBtn, counterBtn, denyBtn];
       return [{ type: 1, components: row }];
     })()
   });
@@ -12168,16 +12165,11 @@ async function sendMemberWtbCounterOfferDiscordDM({
       const acceptBtn = { type: 2, style: 3, label: "Accept", custom_id: `member_wtb_counter_accept:${counterOfferRecordId}` };
       const counterBtn = { type: 2, style: 1, label: "Counter", custom_id: `member_wtb_counter_counter:${counterOfferRecordId}` };
       const denyBtn = { type: 2, style: 4, label: "Deny", custom_id: `member_wtb_counter_deny:${counterOfferRecordId}` };
-      // FIXED — deny-after-own-counter (buyer side): on a DENIAL of the
-      // buyer's own counter they may only Accept the seller's last
-      // position or Retry (Counter), not Deny what was already denied.
-      // A genuine seller counter (not a denial) still offers Deny.
-      let row;
-      if (noRoomToCounter) {
-        row = isDenial ? [acceptBtn] : [acceptBtn, denyBtn];
-      } else {
-        row = isDenial ? [acceptBtn, counterBtn] : [acceptBtn, counterBtn, denyBtn];
-      }
+      // FIXED — Counter is ALWAYS shown (even with no room left): the
+      // no-room message is surfaced when they click it, so they see WHY.
+      // Only Deny is dropped on a DENIAL of the buyer's own counter
+      // (deny-after-own-counter). A genuine seller counter keeps Deny.
+      const row = isDenial ? [acceptBtn, counterBtn] : [acceptBtn, counterBtn, denyBtn];
       return [{ type: 1, components: row }];
     })()
   });
