@@ -13397,6 +13397,16 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       if (filter === "denied") return true;
 
       const f = record.fields || {};
+
+      // FIXED — Open/Countered must only show ACTIVE rounds. This split
+      // never checked Status, so a round that was Closed (e.g. the old
+      // round a deny-broadcast superseded) or Denied still showed up in
+      // Countered purely because it carried a Store Counter Price —
+      // leaving a stale row the seller could still act on. Exclude any
+      // non-active status here; the "denied" filter has its own logic.
+      const status = asText(f["Status"]);
+      if (status === "Closed" || status === "Denied" || status === "Accepted") return false;
+
       const storeAlreadyCountered =
         f["Store Counter Price"] !== undefined &&
         f["Store Counter Price"] !== null &&
@@ -14972,18 +14982,6 @@ for (const round of pendingSellerCounterRounds) {
         : calculateCounterPayoutForVatType(newBuyerCounterPrice, sellerVatType, contextFields);
 
     if (!Number.isFinite(recomputedPayout) || recomputedPayout <= 0) continue;
-
-    if (isDenyBroadcast) {
-      console.error("DEBUG deny-broadcast reengage:", {
-        oldRoundId: round.id,
-        oldRoundStatus: asText(rf["Status"]),
-        oldRoundSellerCounterPrice: numberValue(rf["Seller Counter Price"]),
-        sellerId,
-        newBuyerCounterPrice,
-        recomputedPayout,
-        willCloseOldAndCreateDenied: true
-      });
-    }
 
     await airtable(COUNTER_OFFERS_TABLE).update(round.id, {
       "Status": "Closed",
