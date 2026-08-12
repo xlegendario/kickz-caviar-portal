@@ -14038,12 +14038,21 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           const deniedSourceType = deniedWtbId ? "Member WTB" : "Seller Offer";
           const deniedLinkId = deniedWtbId || deniedOrderId;
           const deniedVatType = displayValue(f["Denied VAT Type"]);
+          const deniedAmountRaw = numberValue(f["Denied Amount"]);
           let currentLowestForDenied = null;
+          let statusForDenied = null;
           if (deniedLinkId) {
             const lowestNorm = (await getCurrentGlobalLowestNormalized(deniedSourceType, deniedLinkId, null)).normalized;
             if (Number.isFinite(lowestNorm)) {
               const deNorm = asText(deniedVatType) === "VAT0" ? lowestNorm / 1.21 : lowestNorm;
               currentLowestForDenied = moneySmartValue(deNorm);
+              // Green/red dot: is this denied offer still the cheapest
+              // across all sellers on the order/WTB? Compare on the
+              // shared normalized scale (VAT0 → ×1.21).
+              if (Number.isFinite(deniedAmountRaw) && deniedAmountRaw > 0) {
+                const ownNorm = asText(deniedVatType) === "VAT0" ? deniedAmountRaw * 1.21 : deniedAmountRaw;
+                statusForDenied = ownNorm <= lowestNorm + 0.01 ? "Lowest" : "Beaten";
+              }
             }
           }
 
@@ -14058,6 +14067,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
             original_offer: moneyValue(f["Denied Amount"]),
             vat_type: deniedVatType,
             current_lowest: currentLowestForDenied,
+            status: statusForDenied,
             denied_at: displayValue(f["Denied At"])
           };
         }));
