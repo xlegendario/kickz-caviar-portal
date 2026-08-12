@@ -15386,7 +15386,7 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
     // must be skipped when picking the "fresh" winner below.
     const activeCountersForTheseOrders = await airtable(COUNTER_OFFERS_TABLE)
       .select({
-        filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Seller Offer')`,
+        filterByFormula: `AND(OR({Status} = 'Open', {Status} = 'Denied'), {Source Type} = 'Seller Offer')`,
         fields: ["Order", "Seller ID"]
       })
       .all()
