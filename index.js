@@ -13773,19 +13773,6 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           }
         }
 
-        if (filter === "denied") {
-          console.error("DEBUG denied-item:", {
-            recordId: record.id,
-            status: displayValue(f["Status"]),
-            previousOfferId,
-            storeCounterPrice: numberValue(f["Store Counter Price"]),
-            sellerCounterPrice: numberValue(f["Seller Counter Price"]),
-            sellerOrigVatType: displayValue(f["Seller Original VAT Type"]),
-            counterPayout: numberValue(f["Counter Payout"]),
-            computedPreviousStorePrice: previousStorePrice
-          });
-        }
-
         // FIXED — "Your Offer" must be the SELLER's actual current
         // position, not the fixed, never-updated "Seller Original
         // Price". For "open" (own_counter): this round's own "Seller
