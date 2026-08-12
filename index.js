@@ -17914,6 +17914,16 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
         const othersMinForOrder = othersResultForOrder.normalized;
         const ownNormalizedForOrder = asText(vatType) === "VAT0" ? offerAmount * 1.21 : offerAmount;
 
+        console.error("DEBUG open-offers current-lowest:", {
+          linkedOrderId,
+          linkedSellerId,
+          offerAmount,
+          vatType,
+          ownNormalizedForOrder,
+          othersMinForOrder,
+          othersWinningSource: othersResultForOrder.winningSource
+        });
+
         const ownWinsForOrder = Number.isFinite(ownNormalizedForOrder) && (!Number.isFinite(othersMinForOrder) || ownNormalizedForOrder <= othersMinForOrder);
         const winningSharedForOrder = ownWinsForOrder ? ownNormalizedForOrder : othersMinForOrder;
 
