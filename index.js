@@ -825,7 +825,7 @@ async function disableCounterOfferDiscordButtons(channelId, messageId, note) {
 // to the store's offer (Accept) or come back with a new counter (Counter)
 // straight from Discord, exactly like the Portal allows. Everything works
 // on Discord too, safely (no Deny-on-an-already-denied). Best-effort.
-async function setCounterOfferDiscordToDeniedRevisable(channelId, messageId, counterOfferRecordId) {
+async function setCounterOfferDiscordToDeniedRevisable(channelId, messageId, counterOfferRecordId, storeAmountForAcceptLabel) {
   await initKickzDealDiscord();
 
   const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
@@ -834,14 +834,18 @@ async function setCounterOfferDiscordToDeniedRevisable(channelId, messageId, cou
   const message = await channel.messages.fetch(messageId).catch(() => null);
   if (!message) return false;
 
-  const oldEmbed = message.embeds?.[0];
-  const newEmbed = oldEmbed
-    ? { ...oldEmbed.toJSON?.() ?? oldEmbed, title: "❌ Counter Offer Denied", color: 0xe74c3c }
-    : { title: "❌ Counter Offer Denied", color: 0xe74c3c };
+  const acceptLabel = Number.isFinite(Number(storeAmountForAcceptLabel)) && Number(storeAmountForAcceptLabel) > 0
+    ? `Accept €${Number(storeAmountForAcceptLabel)}`
+    : "Accept";
 
+  // Leave the counter embed itself fully intact (no red, no title
+  // change — turning it red wrongly implied the STORE denied). Only put
+  // a status line above it via the message content, and swap the
+  // buttons to Accept (fall back to the store's offer) + Counter
+  // (place a new counter).
   await message.edit({
-    content: message.content,
-    embeds: [newEmbed],
+    content: "❌ Counter offer denied",
+    embeds: message.embeds,
     components: [
       {
         type: 1,
@@ -849,7 +853,7 @@ async function setCounterOfferDiscordToDeniedRevisable(channelId, messageId, cou
           {
             type: 2,
             style: 3,
-            label: "Accept",
+            label: acceptLabel,
             custom_id: `counter_offer_accept:${counterOfferRecordId}`
           },
           {
@@ -5277,27 +5281,19 @@ function bindConsignmentDiscordButtons(client) {
             type: 2,
             style: 3,
             label: "Accept",
-            custom_id: "counter_offer_accept_disabled",
-            disabled: true
+            custom_id: `counter_offer_accept:${counterOfferRecordId}`
           },
           {
             type: 2,
             style: 1,
             label: "Edit",
             custom_id: `counter_offer_edit:${data.new_round_id || counterOfferRecordId}`
-          },
-          {
-            type: 2,
-            style: 4,
-            label: "Deny",
-            custom_id: "counter_offer_deny_disabled",
-            disabled: true
           }
         ]
       };
 
       await interaction.message.edit({
-        content: `🔁 You countered with €${counterPrice}. Waiting on the store.`,
+        content: "🔁 You countered on this order. You can still edit the counter. Waiting on the store.",
         embeds: interaction.message.embeds,
         components: [editRow]
       }).catch((err) => console.error("Failed to update message with Edit button:", err));
@@ -5514,7 +5510,7 @@ function bindConsignmentDiscordButtons(client) {
       }
       const f = counterOffer.fields || {};
     
-      if (asText(f["Status"]) !== "Open") {
+      if (asText(f["Status"]) === "Accepted") {
         await disableCounterOfferDiscordButtons(
           interaction.channelId,
           interaction.message.id,
@@ -8019,7 +8015,7 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
       return res.status(403).json({ error: "Not allowed" });
     }
 
-    if (asText(f["Status"]) !== "Open") {
+    if (asText(f["Status"]) !== "Open" && asText(f["Status"]) !== "Denied") {
       return res.status(409).json({ error: "This counter offer is no longer open." });
     }
 
@@ -16489,15 +16485,18 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
       "Closed At": new Date().toISOString()
     });
 
-    // NEW — the seller denied this store counter via the Portal, but the
-    // matching Discord counter embed was left fully live (incl. Deny).
-    // Transform it to the denial state: Deny removed, Accept + Counter
-    // kept, so the seller can still fall back or re-counter from Discord.
+    // NEW — the seller denied this store counter via the Portal. Leave
+    // the Discord counter embed intact, but put "Counter offer denied"
+    // above it and swap buttons to Accept €X (fall back to the store's
+    // offer) + Counter (place a new counter) — so the seller can still
+    // act from Discord. The Accept amount is the store's seller-payout
+    // (Counter Payout) on this round.
     {
       const deniedEmbedChannelId = asText(deniedFields["Discord Channel ID"]);
       const deniedEmbedMessageId = asText(deniedFields["Discord Message ID"]);
+      const storeAcceptAmount = numberValue(deniedFields["Counter Payout"]);
       if (deniedEmbedChannelId && deniedEmbedMessageId) {
-        setCounterOfferDiscordToDeniedRevisable(deniedEmbedChannelId, deniedEmbedMessageId, counterOfferRecordId)
+        setCounterOfferDiscordToDeniedRevisable(deniedEmbedChannelId, deniedEmbedMessageId, counterOfferRecordId, storeAcceptAmount)
           .catch((err) => console.error("Failed to transform denied counter embed (non-blocking):", err.message));
       }
     }
