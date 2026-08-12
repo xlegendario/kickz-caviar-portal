@@ -8154,7 +8154,12 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
           // Offers records). Now sends the seller's counter marked up
           // to store terms, in the store's own VAT scale.
           seller_counter_price: sellerNewCounterForDisplay ?? sellerCounterInStoreTerms ?? proposedPrice,
-          store_display_vat_type: sellerVatType,
+          // FIXED — a Dutch store NEVER sees VAT0 (Lojiq buys VAT0
+          // abroad, sells VAT21 to the NL store). Relabel the seller's
+          // VAT0 to VAT21 for the store-facing embed. Both amounts above
+          // are already in the store's VAT21 scale via
+          // computeSellerCounterForStoreDisplay.
+          store_display_vat_type: storeFacingVatType(sellerVatType, orderFields),
           no_room_to_counter: noRoomToCounter
         })
       }).catch((err) => console.error("Failed to notify store of seller counter (non-blocking):", err));
@@ -11676,6 +11681,19 @@ function storeInputMultiplier(orderFields = {}) {
 // "Seller's New Counter is the margin formula on the seller's
 // counter, without ×1.21 for VAT0→VAT0, but ×1.21 if the store is
 // Dutch."
+// NEW — additive only: the VAT type a store SEES for a seller's
+// position. Mirrors the outputVatType relabel rule in
+// computeAndPushLowestOffer: a Dutch client never sees VAT0 (Lojiq is
+// the middleman, buys VAT0 abroad and sells VAT21 to the NL store), so
+// VAT0 becomes VAT21; VAT21 stays VAT21; Margin stays Margin. Non-Dutch
+// clients keep the seller's own type unchanged (VAT0 stays VAT0).
+function storeFacingVatType(sellerVatType, orderFields = {}) {
+  const type = asText(sellerVatType);
+  if (type === "Margin") return "Margin";
+  if (isDutchClientCountry(orderFields["Client Country"])) return "VAT21";
+  return type;
+}
+
 function computeSellerCounterForStoreDisplay(sellerCounterPrice, storeVatContext, orderFields = {}) {
   const isDutch = isDutchClientCountry(orderFields["Client Country"]);
   const isVatSource = storeVatContext === "VAT21" || storeVatContext === "VAT0";
@@ -11687,10 +11705,23 @@ function computeSellerCounterForStoreDisplay(sellerCounterPrice, storeVatContext
     return calculateStoreCounterEquivalent(sellerCounterPrice, "Margin", orderFields);
   }
 
-  // Dutch store, or Margin source: the store sees the plain all-in
-  // figure, computed with the seller's real VAT type (which applies
-  // ÷1.21 internally for VAT0, giving the incl. all-in the Dutch store
-  // expects).
+  // NEW — additive only: Dutch client + VAT0 seller. Lojiq is the
+  // middleman — buys VAT0 abroad, sells VAT21 to the NL store — so a NL
+  // store NEVER sees VAT0. Mirror the "Offer To Store" formula exactly:
+  // "Lowest Offer" holds the seller's VAT0 price already grossed up
+  // ×1.21 to the VAT21 sale base (the "Lowest Seller Offer (Normalized)"
+  // field in computeAndPushLowestOffer), THEN the margin formula runs.
+  // So gross up ×1.21 here, then route through the Margin path (margin
+  // + 2.5-grid rounding, no further VAT division). e.g. 80 VAT0 →
+  // 96.80 → MAX(106.80, 106.64) → 107.50 VAT21.
+  if (isDutch && storeVatContext === "VAT0") {
+    return calculateStoreCounterEquivalent(sellerCounterPrice * 1.21, "Margin", orderFields);
+  }
+
+  // Dutch store (VAT21 or Margin source), or Margin source generally:
+  // the store sees the plain all-in figure, computed with the seller's
+  // real VAT type (which applies ÷1.21 internally for VAT0 — not hit
+  // here anymore for a Dutch store — giving the incl. all-in expected).
   return calculateStoreCounterEquivalent(sellerCounterPrice, storeVatContext, orderFields);
 }
 
