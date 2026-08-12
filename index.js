@@ -9022,6 +9022,21 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
       const orderFields = orderRecord.fields || {};
       const orderId = asText(orderFields["Order ID"]);
 
+      // #3 — disable the seller's OLD counter embed (the round the store
+      // just denied) so a new embed always supersedes the prior one and
+      // the seller can never act on a stale round. Best-effort.
+      {
+        const oldChannelId = asText(f["Discord Channel ID"]);
+        const oldMessageId = asText(f["Discord Message ID"]);
+        if (oldChannelId && oldMessageId) {
+          await disableCounterOfferDiscordButtons(
+            oldChannelId,
+            oldMessageId,
+            "❌ Counter offer denied"
+          ).catch((err) => console.error("Failed to disable prior counter embed on store-deny (non-blocking):", err.message));
+        }
+      }
+
       if (priorRoundId) {
         const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
 
@@ -9078,6 +9093,33 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
             }).catch((err) => console.error("Failed to broadcast store floor to other sellers after store-deny (non-blocking):", err));
           }
         }
+      }
+    }
+
+    // #2 — tell the store bot to transform the store's offer embed to
+    // Accept €X + Counter (denied-revisable), so the store can still act
+    // from Discord after denying via the Portal. Amount is the seller's
+    // counter converted to the store's own scale.
+    if (AIRTABLE_DISCORD_UPDATES_URL && linkedOrderId) {
+      try {
+        const denyOrderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId).catch(() => null);
+        const denyOrderFields = denyOrderRecord?.fields || {};
+        const storeFacingAcceptAmount = computeSellerCounterForStoreDisplay(
+          numberValue(f["Seller Counter Price"]),
+          asText(f["Seller Original VAT Type"]),
+          denyOrderFields
+        );
+        fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            trigger_type: "store-denied-revisable",
+            record_id: linkedOrderId,
+            accept_amount: Number.isFinite(storeFacingAcceptAmount) ? storeFacingAcceptAmount : ""
+          })
+        }).catch((err) => console.error("Failed to fire store-denied-revisable trigger (non-blocking):", err.message));
+      } catch (triggerErr) {
+        console.error("Failed to build store-denied-revisable trigger (non-blocking):", triggerErr.message);
       }
     }
 
@@ -15255,6 +15297,21 @@ for (const round of pendingSellerCounterRounds) {
       Number.isFinite(sellerLastOfferForNotify) ? sellerLastOfferForNotify : sellerOriginalPrice,
       recomputedPayout
     );
+
+    // #3 — disable this seller's PRIOR embed (the round being
+    // superseded) before sending the new one, so a new embed always
+    // supersedes the old and they can't act on a stale round.
+    {
+      const oldChannelId = asText(rf["Discord Channel ID"]);
+      const oldMessageId = asText(rf["Discord Message ID"]);
+      if (oldChannelId && oldMessageId) {
+        await disableCounterOfferDiscordButtons(
+          oldChannelId,
+          oldMessageId,
+          "❌ This offer was superseded by a newer one."
+        ).catch((err) => console.error("Failed to disable prior reengage embed (non-blocking):", err.message));
+      }
+    }
 
     if (sourceType === "Member WTB") {
       await sendMemberWtbCounterOfferDiscordDM({
