@@ -14640,28 +14640,52 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
     // against THIS, not just beat the denied price, so it can never
     // accidentally go lower than what the store already offered.
     const storeLastPosition = numberValue(priorFields["Store Counter Price"]);
-    const deniedSellerCounter = numberValue(f["Seller Counter Price"]);
 
-    const debugSellerTrueLast = await findSellersTrueLastCounter(req.params.offerId);
-    const debugGlobalLowest = await getCurrentGlobalLowestNormalized("Order", linkedOrderId, linkedSellerId);
-    console.error("DEBUG retry-counter has-prior:", {
-      offerId: req.params.offerId,
-      priorRoundId,
-      deniedSellerCounter,
-      storeLastPosition,
-      sellerOriginalPrice,
-      sellerVatType,
-      sellerTrueLast: debugSellerTrueLast,
-      currentGlobalLowest: debugGlobalLowest,
-      proposedPrice
-    });
+    // FIXED — a seller who denied OUTRIGHT (no counter of their own on
+    // the denied round) has Seller Counter Price = 0 here, and
+    // findSellersTrueLastCounter returns null for the same reason — so
+    // the old `deniedSellerCounter` reference was 0, producing "must be
+    // higher than your previous €0". Fall back to the seller's real last
+    // position: their true last counter if any, else their original
+    // price. Mirrors the no-prior branch above.
+    const sellerTrueLastForRetry = await findSellersTrueLastCounter(req.params.offerId);
+    const ownReferenceForRetry = (Number.isFinite(sellerTrueLastForRetry) && sellerTrueLastForRetry > 0)
+      ? sellerTrueLastForRetry
+      : sellerOriginalPrice;
 
-    if (!Number.isFinite(storeLastPosition) || !Number.isFinite(deniedSellerCounter)) {
+    if (!Number.isFinite(storeLastPosition) || !Number.isFinite(ownReferenceForRetry) || ownReferenceForRetry <= 0) {
       return res.status(500).json({ error: "Missing price data to validate against." });
     }
 
-    const validation = validateNextCounterPrice(deniedSellerCounter, storeLastPosition, proposedPrice);
+    // FIXED — the seller is re-entering a cross-seller race, so the
+    // retry must also stay UNDER the current global lowest (another
+    // seller would win otherwise). The old branch used a plain
+    // validateNextCounterPrice with no ceiling. Mirror the no-prior
+    // branch's cross-seller ceiling (VAT0 lowest de-normalized ÷1.21
+    // back into the seller's own scale).
+    const globalLowestForRetryPrior = (await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, linkedSellerId)).normalized;
+    let crossSellerCeilingRawPrior = null;
+    let crossSellerReferenceRawPrior = null;
+    if (Number.isFinite(globalLowestForRetryPrior)) {
+      const rawThresholdPrior = asText(sellerVatType) === "VAT0" ? globalLowestForRetryPrior / 1.21 : globalLowestForRetryPrior;
+      crossSellerCeilingRawPrior = Math.floor(rawThresholdPrior - MIN_COUNTER_STEP);
+      crossSellerReferenceRawPrior = rawThresholdPrior;
+    }
+
+    const validation = validateNextCounterPriceWithCrossSellerCeiling(
+      ownReferenceForRetry,
+      storeLastPosition,
+      proposedPrice,
+      crossSellerCeilingRawPrior,
+      crossSellerReferenceRawPrior
+    );
     if (!validation.ok) {
+      if (validation.reason.startsWith("No room left") && Number.isFinite(crossSellerCeilingRawPrior)) {
+        return res.status(400).json({
+          error: `Another seller already offers a better price for this order — at most €${crossSellerCeilingRawPrior.toFixed(2)} (${sellerVatType}) to beat it — and the gap is too small for another step. Please accept or deny.`,
+          band: validation.band
+        });
+      }
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
 
