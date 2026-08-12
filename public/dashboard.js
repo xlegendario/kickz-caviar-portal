@@ -2122,7 +2122,7 @@ function renderWtbUnifiedOfferRows(items) {
 
   const isDenied = activeOfferStatusFilter === "denied";
   const columns = isDenied
-    ? ["Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "VAT Type", "Buyer's Last Offer", "Denied", "Actions"]
+    ? ["", "Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", "VAT Type", "Buyer's Last Offer", "Current Lowest", "Denied", "Actions"]
     : ["", "Order ID", "Product", "SKU", "Size", "Brand", "Your Offer", (activeOfferStatusFilter === "counter" ? "Counter Offer" : "Buyer's Last Offer"), "VAT Type", "Current Lowest", "Date", "Actions"];
 
   dashboardTableHead.innerHTML = columns.map((c) => `<th>${c}</th>`).join("");
@@ -2155,6 +2155,7 @@ function renderWtbUnifiedOfferRows(items) {
 
       return `
         <tr>
+          <td>${(!isFreshDenied && item.status) ? `<div class="dashboard-status-dot ${item.status === "Lowest" ? "dashboard-status-dot-lowest" : "dashboard-status-dot-beaten"}"></div>` : ""}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
           <td>${escapeHtml(item.product || "-")}</td>
           <td>${escapeHtml(item.sku || "-")}</td>
@@ -2163,6 +2164,7 @@ function renderWtbUnifiedOfferRows(items) {
           <td>${escapeHtml(amount || "-")}</td>
           <td>${escapeHtml(item.vat_type || "-")}</td>
           <td>${isFreshDenied ? "-" : escapeHtml(item.previous_store_price || "-")}</td>
+          <td>${(!isFreshDenied && item.current_lowest) ? escapeHtml(item.current_lowest) : "-"}</td>
           <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
