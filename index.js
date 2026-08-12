@@ -7503,6 +7503,11 @@ app.post("/api/counter-offers/create", async (req, res) => {
 
       createdSellerCounters++;
 
+      // NEW — the store countered after denying, so this seller now has
+      // a live counter round; disable their old "Place New Offer" denied
+      // embed so it can't create a stray fresh offer (non-blocking).
+      disableSellerOfferDeniedEmbed(sellerOfferRecord.id);
+
       try {
         const discordResult = await sendCounterOfferDiscordDM({
           counterOfferRecordId: createdCounter.id,
@@ -12331,7 +12336,7 @@ async function sendOfferDeniedDiscordDM({
       ? `€${Number(deniedAmount).toFixed(2)}`
       : "—";
 
-  await dm.send({
+  const sentDeniedMsg = await dm.send({
     embeds: [
       {
         title: "❌ Offer Denied",
@@ -12369,10 +12374,64 @@ async function sendOfferDeniedDiscordDM({
       }
     ]
   });
+
+  // NEW — track this denied embed so it can be disabled later if the
+  // store comes back and counters after denying (the "Place New Offer"
+  // button must not stay live once a counter round exists). Best-effort:
+  // if these Airtable fields don't exist yet, the .catch swallows it and
+  // nothing breaks — the backend guard in edit-after-denial still blocks
+  // the stale action regardless.
+  if (sellerOfferRecordId && sentDeniedMsg?.id) {
+    airtable(SELLER_OFFERS_TABLE).update(sellerOfferRecordId, {
+      "Denied Discord Message ID": asText(sentDeniedMsg.id),
+      "Denied Discord Channel ID": asText(sentDeniedMsg.channelId || sentDeniedMsg.channel?.id || "")
+    }).catch((err) => console.error("Could not store denied embed message id (non-blocking):", err.message));
+  }
 }
 
 function roundUpToStep(value, step = 2.5) {
   return Math.ceil(Number(value || 0) / step) * step;
+}
+
+// NEW — disable a seller's stale "Offer Denied / Place New Offer" DM
+// embed once the store has moved on (e.g. countered after denying), so
+// the seller can't place a fresh offer through a message that no longer
+// reflects reality. Fully best-effort: any missing field, deleted
+// message, or client error is swallowed — the edit-after-denial backend
+// guard is the hard stop; this is the UX cleanup on top of it.
+async function disableSellerOfferDeniedEmbed(sellerOfferRecordId) {
+  try {
+    if (!sellerOfferRecordId) return;
+    const rec = await airtable(SELLER_OFFERS_TABLE).find(sellerOfferRecordId).catch(() => null);
+    const f = rec?.fields || {};
+    const messageId = asText(f["Denied Discord Message ID"]);
+    const channelId = asText(f["Denied Discord Channel ID"]);
+    if (!messageId || !channelId) return;
+
+    await initKickzDealDiscord();
+    const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
+    if (!channel) return;
+    const message = await channel.messages.fetch(messageId).catch(() => null);
+    if (!message) return;
+
+    const oldEmbed = message.embeds?.[0];
+    await message.edit({
+      embeds: [
+        {
+          title: "❌ Offer Denied (expired)",
+          description: [
+            (oldEmbed?.description || "").split("\n").filter((l) => l && !l.startsWith("You can place a new offer")).join("\n"),
+            "",
+            "This offer has moved on — please respond from your Countered or Denied tab in the portal."
+          ].join("\n"),
+          color: 0x95a5a6
+        }
+      ],
+      components: []
+    }).catch((err) => console.error("Could not disable denied embed (non-blocking):", err.message));
+  } catch (err) {
+    console.error("disableSellerOfferDeniedEmbed failed (non-blocking):", err.message);
+  }
 }
 
 function isDutchClientCountry(country) {
@@ -22340,6 +22399,32 @@ app.post("/api/seller-offers/:offerId/edit-after-denial", async (req, res) => {
 
     if (!linkedOrderId && !linkedMemberWtbId) {
       return res.status(409).json({ error: "This offer is not linked to an order or Member WTB" });
+    }
+
+    // GUARD (his live catch): after the store denied the fresh offers
+    // and THEN countered, a counter round exists for this seller. The
+    // old "Place New Offer" embed was still live, letting the seller
+    // place a fresh offer alongside that counter round — it landed
+    // wrong (stuck in Countered instead of moving to Open). Once any
+    // counter round exists for this seller on this order/WTB, the
+    // negotiation has moved to counter rounds; the seller must respond
+    // via their Countered/Denied pill, not this fresh-retry path.
+    const guardLinkField = linkedMemberWtbId ? "Member WTB" : "Order";
+    const guardLinkId = linkedMemberWtbId || linkedOrderId;
+    const existingCounterRounds = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `AND(OR({Status} = 'Open', {Status} = 'Denied', {Status} = 'Countered'), {Source Type} = '${linkedMemberWtbId ? "Member WTB" : "Seller Offer"}')`,
+        fields: [guardLinkField, "Seller ID"]
+      })
+      .all()
+      .then((records) => records.filter((r) =>
+        firstLinkedRecordId(r.fields?.[guardLinkField]) === guardLinkId &&
+        firstLinkedRecordId(r.fields?.["Seller ID"]) === sellerRecordId
+      ));
+    if (existingCounterRounds.length > 0) {
+      return res.status(409).json({
+        error: "This offer is already in a live counter negotiation — please respond from your Countered or Denied tab, not this old message."
+      });
     }
 
     const normalizedOffer = vatType === "VAT0" ? offerAmount * 1.21 : offerAmount;
