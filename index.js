@@ -9298,7 +9298,7 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
       const previousSellerCounter = numberValue(previousFields["Seller Counter Price"]);
 
       counterpartPrice = previousSellerCounter
-        ? calculateStoreCounterEquivalent(previousSellerCounter, sellerVatTypeForEdit, orderFieldsForEdit)
+        ? computeSellerCounterForStoreDisplay(previousSellerCounter, sellerVatTypeForEdit, orderFieldsForEdit)
         : ownReferencePrice;
 
       if (!Number.isFinite(ownReferencePrice) || !Number.isFinite(counterpartPrice)) {
