@@ -14733,18 +14733,18 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
       // own VAT scale (see storeDisplayDivisor / computeSellerCounter-
       // ForStoreDisplay).
       const retryEmbedDivisor = storeDisplayDivisor(sellerVatType, orderFields);
-      const retryYourPreviousForDisplay = storeLastPosition / retryEmbedDivisor;
-      const debugBuyerHighestForRetry = await getBuyerHighestEverPosition("Seller Offer", linkedOrderId);
-      const debugGlobalLowestForRetry = await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, null);
-      console.error("DEBUG retry has-prior embed:", {
-        storeLastPosition_fromSellerAChain: storeLastPosition,
-        buyerHighestEver_globalThread: debugBuyerHighestForRetry,
-        retryYourPreviousForDisplay,
-        retryEmbedDivisor,
-        sellerVatType,
-        proposedPrice,
-        globalLowestAfterRetry: debugGlobalLowestForRetry
-      });
+      // FIXED — the store sees ONE unified thread, so "Your Previous
+      // Counter" must be the store's CURRENT position across the whole
+      // order (the highest Store Counter Price they've offered any
+      // seller on it — e.g. 85 to Seller B), NOT storeLastPosition,
+      // which is only the store's figure in THIS seller's own old chain
+      // (e.g. 80 to Seller A before he denied). Otherwise a re-entering
+      // seller's embed shows a stale, lower store number.
+      const storeCurrentThreadPosition = await getBuyerHighestEverPosition("Seller Offer", linkedOrderId);
+      const storePositionForRetryEmbed = (Number.isFinite(storeCurrentThreadPosition) && storeCurrentThreadPosition > 0)
+        ? storeCurrentThreadPosition
+        : storeLastPosition;
+      const retryYourPreviousForDisplay = storePositionForRetryEmbed / retryEmbedDivisor;
       const retrySellerCounterForDisplay = computeSellerCounterForStoreDisplay(
         proposedPrice,
         sellerVatType,
