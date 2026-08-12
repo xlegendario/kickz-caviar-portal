@@ -22689,22 +22689,6 @@ app.post("/api/counter-offers/deny-fresh", async (req, res) => {
         return true;
       });
 
-      console.error("DEBUG fresh-deny broadcast:", {
-        deniedOfferId: sellerOfferRecordId,
-        midNegotiationSellerIds: [...sellerIdsMidNegotiationForThisOrder],
-        allOnOrder: allSellerOffersForThisOrder
-          .filter((r) => firstLinkedRecordId(r.fields?.["Linked Orders"]) === orderRecordId)
-          .map((r) => ({
-            id: r.id,
-            sellerId: firstLinkedRecordId(r.fields?.["Seller ID"]),
-            deleteOffer: !!r.fields?.["Delete Offer"],
-            denied: !!r.fields?.["Denied?"],
-            withdrawn: !!r.fields?.["Withdrawn?"],
-            isMidNeg: sellerIdsMidNegotiationForThisOrder.has(firstLinkedRecordId(r.fields?.["Seller ID"]))
-          })),
-        willBroadcastTo: otherFreshSellerOffers.map((r) => r.id)
-      });
-
       for (const otherOffer of otherFreshSellerOffers) {
         const otherFields = otherOffer.fields || {};
         const otherSellerRecordId = firstLinkedRecordId(otherFields["Seller ID"]);
