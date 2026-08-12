@@ -14973,6 +14973,18 @@ for (const round of pendingSellerCounterRounds) {
 
     if (!Number.isFinite(recomputedPayout) || recomputedPayout <= 0) continue;
 
+    if (isDenyBroadcast) {
+      console.error("DEBUG deny-broadcast reengage:", {
+        oldRoundId: round.id,
+        oldRoundStatus: asText(rf["Status"]),
+        oldRoundSellerCounterPrice: numberValue(rf["Seller Counter Price"]),
+        sellerId,
+        newBuyerCounterPrice,
+        recomputedPayout,
+        willCloseOldAndCreateDenied: true
+      });
+    }
+
     await airtable(COUNTER_OFFERS_TABLE).update(round.id, {
       "Status": "Closed",
       "Closed At": new Date().toISOString()
