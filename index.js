@@ -22285,21 +22285,6 @@ app.post("/api/seller-offers/:offerId/edit-after-denial", async (req, res) => {
       return res.status(400).json({ error: "Invalid VAT type" });
     }
 
-    // Minimum-decrease check: must be at least €2.50 below what was
-    // already denied, otherwise the seller is just resubmitting the same
-    // rejected price. Combined with the whole-number rule above, €441
-    // denied means the new offer must be €438 at most (438.50 rounds
-    // down, since 438.50 isn't a valid whole-number offer).
-    if (
-      Number.isFinite(previousDeniedAmount) &&
-      offerAmount > previousDeniedAmount - 2.5
-    ) {
-      const maxAllowed = Math.floor(previousDeniedAmount - 2.5);
-      return res.status(400).json({
-        error: `Your new offer must be a whole number at least €2.50 lower than your denied offer (€${previousDeniedAmount.toFixed(2)}). Maximum allowed: €${maxAllowed}.`
-      });
-    }
-
     const offerRecord = await airtable(SELLER_OFFERS_TABLE).find(offerId);
     const f = offerRecord.fields || {};
 
@@ -22323,23 +22308,40 @@ app.post("/api/seller-offers/:offerId/edit-after-denial", async (req, res) => {
 
     const normalizedOffer = vatType === "VAT0" ? offerAmount * 1.21 : offerAmount;
 
-    // FIXED — a retried fresh offer must also BEAT the current
-    // cross-seller lowest, not merely be €2.50 below the seller's own
-    // denied amount. Without this, Seller A could retry 145 Margin
-    // (normalized 145) while Seller B sits at 120 VAT0 (normalized
-    // 145.20) — 145 doesn't undercut 145.20, so it must be rejected.
-    // Compares on the shared normalized scale, against the best of the
-    // OTHER sellers (this seller excluded).
+    // Two independent limits, both in the seller's own VAT scale:
+    // (1) the own-min-decrease rule — at least €2.50 below their own
+    // denied amount, so they aren't just resubmitting the rejected
+    // price; (2) the cross-seller ceiling — must beat the current
+    // lowest across the OTHER sellers by the min step, exactly like a
+    // counter. We enforce the STRICTEST (lowest max) and word the error
+    // for whichever one actually binds, so a seller never sees a
+    // higher "max" from the own-rule while a lower cross-seller max
+    // really applies (his live catch: 150 wrongly showed max €147
+    // when the real cap was €142).
+    const ownMax = Number.isFinite(previousDeniedAmount)
+      ? Math.floor(previousDeniedAmount - MIN_COUNTER_STEP)
+      : null;
+
     const retrySourceType = linkedMemberWtbId ? "Member WTB" : "Seller Offer";
     const retryLinkId = linkedMemberWtbId || linkedOrderId;
     const othersLowestNorm = (await getCurrentGlobalLowestNormalized(retrySourceType, retryLinkId, sellerRecordId)).normalized;
-    if (Number.isFinite(othersLowestNorm) && normalizedOffer > othersLowestNorm - MIN_COUNTER_STEP) {
-      // Show the ceiling in the seller's own VAT scale — they must beat
-      // the other seller's lowest by at least the min step.
+    let crossMax = null;
+    if (Number.isFinite(othersLowestNorm)) {
       const ceilingRawInOwnScale = vatType === "VAT0" ? othersLowestNorm / 1.21 : othersLowestNorm;
-      const maxToBeat = Math.floor(ceilingRawInOwnScale - MIN_COUNTER_STEP);
+      crossMax = Math.floor(ceilingRawInOwnScale - MIN_COUNTER_STEP);
+    }
+
+    // The cross-seller limit binds when it's the lower of the two.
+    const crossBinds = Number.isFinite(crossMax) && (!Number.isFinite(ownMax) || crossMax <= ownMax);
+
+    if (crossBinds && offerAmount > crossMax) {
       return res.status(400).json({
-        error: `Another seller already offers a better price. To be the lowest you'd need at most €${maxToBeat} (${vatType}).`
+        error: `Another seller already offers a better price. To be the lowest you'd need at most €${crossMax} (${vatType}).`
+      });
+    }
+    if (Number.isFinite(ownMax) && offerAmount > ownMax) {
+      return res.status(400).json({
+        error: `Your new offer must be a whole number at least €2.50 lower than your denied offer (€${previousDeniedAmount.toFixed(2)}). Maximum allowed: €${ownMax}.`
       });
     }
 
