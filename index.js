@@ -14480,6 +14480,16 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
           orderFields
         );
         const freshRetryStoreEquivalent = calculateStoreCounterEquivalent(proposedPrice, sellerVatType, orderFields);
+        // FIXED — "Your Previous Counter" is the STORE's own counter on
+        // this denied round, shown in the store's display scale — NOT
+        // buyerOfferInSellerTerms, which is the SELLER's payout (e.g.
+        // 180 Margin). The store's 160 VAT0 counter must read as its
+        // Margin-context display value 195.20 (160 × client rate), the
+        // same as everywhere else the store sees its own position.
+        const freshRetryStoreOwnCounter = numberValue(f["Store Counter Price"]);
+        const freshRetryYourPreviousForDisplay = Number.isFinite(freshRetryStoreOwnCounter) && freshRetryStoreOwnCounter > 0
+          ? freshRetryStoreOwnCounter / storeDisplayDivisor(sellerVatType, orderFields)
+          : null;
         await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -14493,7 +14503,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
             size: asText(f["Size"]),
             counter_offer_record_id: newRoundFresh.id,
             selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
-            your_previous_counter: buyerOfferInSellerTerms != null ? (buyerOfferInSellerTerms / storeDisplayDivisor(sellerVatType, orderFields)) : null,
+            your_previous_counter: freshRetryYourPreviousForDisplay,
             seller_counter_price: freshRetrySellerCounterForDisplay ?? freshRetryStoreEquivalent ?? proposedPrice,
             store_display_vat_type: sellerVatType
           })
