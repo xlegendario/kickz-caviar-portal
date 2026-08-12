@@ -16155,25 +16155,23 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
 
       const denyingSellerTruePositionForStore = await findSellersTrueLastCounter(counterOfferRecordId);
       const denyingSellerVatTypeForStore = asText(deniedFields["Seller Original VAT Type"]);
-      const denyingSellerOwnNormalizedForStore = Number.isFinite(denyingSellerTruePositionForStore)
-        ? (denyingSellerVatTypeForStore === "VAT0" ? denyingSellerTruePositionForStore * 1.21 : denyingSellerTruePositionForStore)
+      // NEW — additive only: a seller who denied the store's counter
+      // WITHOUT ever placing their own counter has no "true last
+      // counter" (findSellersTrueLastCounter returns null), which left
+      // denyingSellerOwnNormalized null and wrongly failed the gate —
+      // so even the CURRENT LOWEST seller's deny sent no embed. Fall
+      // back to their original offer price on this round, which IS
+      // their position in the cross-seller compare.
+      const denyingSellerPositionRaw = Number.isFinite(denyingSellerTruePositionForStore)
+        ? denyingSellerTruePositionForStore
+        : numberValue(deniedFields["Seller Original Price"]);
+      const denyingSellerOwnNormalizedForStore = (Number.isFinite(denyingSellerPositionRaw) && denyingSellerPositionRaw > 0)
+        ? (denyingSellerVatTypeForStore === "VAT0" ? denyingSellerPositionRaw * 1.21 : denyingSellerPositionRaw)
         : null;
 
       const shouldNotifyStore =
         !Number.isFinite(otherSellerExistsForStore) ||
         (Number.isFinite(denyingSellerOwnNormalizedForStore) && otherSellerExistsForStore >= denyingSellerOwnNormalizedForStore);
-
-      console.error("DEBUG seller-deny gate:", {
-        deniedOrderId,
-        denyingSellerIdForStore,
-        otherSellerExistsForStore,
-        denyingSellerTruePositionForStore,
-        denyingSellerVatTypeForStore,
-        denyingSellerOwnNormalizedForStore,
-        deniedStoreCounterPrice: numberValue(deniedFields["Store Counter Price"]),
-        deniedSellerCounterPrice: numberValue(deniedFields["Seller Counter Price"]),
-        shouldNotifyStore
-      });
 
       if (!shouldNotifyStore) {
         // Non-lowest seller denied — done. Their own round is already
