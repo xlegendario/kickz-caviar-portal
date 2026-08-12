@@ -13850,6 +13850,16 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         // correctly factored in as a candidate for the lowest.
         const previousOfferId = firstLinkedRecordId(f["Previous Record ID"]);
         let previousStorePrice = previousOfferId ? previousPriceById.get(previousOfferId) : null;
+        if (filter === "open" && numberValue(f["Seller Counter Price"]) > 0) {
+          console.error("DEBUG open buyers-last-offer:", {
+            roundId: record.id,
+            sellerCounterPrice: numberValue(f["Seller Counter Price"]),
+            previousOfferId,
+            previousRoundPayout: previousOfferId ? previousPriceById.get(previousOfferId) : null,
+            ownRoundCounterPayout: numberValue(f["Counter Payout"]),
+            resolvedPreviousStorePrice: previousStorePrice
+          });
+        }
 
         // FIXED — for a DENIED round, the deny is ON this round, so the
         // store's last position toward THIS seller is this round's own
