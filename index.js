@@ -16163,6 +16163,18 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
         !Number.isFinite(otherSellerExistsForStore) ||
         (Number.isFinite(denyingSellerOwnNormalizedForStore) && otherSellerExistsForStore >= denyingSellerOwnNormalizedForStore);
 
+      console.error("DEBUG seller-deny gate:", {
+        deniedOrderId,
+        denyingSellerIdForStore,
+        otherSellerExistsForStore,
+        denyingSellerTruePositionForStore,
+        denyingSellerVatTypeForStore,
+        denyingSellerOwnNormalizedForStore,
+        deniedStoreCounterPrice: numberValue(deniedFields["Store Counter Price"]),
+        deniedSellerCounterPrice: numberValue(deniedFields["Seller Counter Price"]),
+        shouldNotifyStore
+      });
+
       if (!shouldNotifyStore) {
         // Non-lowest seller denied — done. Their own round is already
         // marked Denied above; nothing happens store-side.
