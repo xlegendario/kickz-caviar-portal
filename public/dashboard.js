@@ -2164,12 +2164,12 @@ function renderWtbUnifiedOfferRows(items) {
           <td>${escapeHtml(amount || "-")}</td>
           <td>${escapeHtml(item.vat_type || "-")}</td>
           <td>${isFreshDenied ? "-" : escapeHtml(item.previous_store_price || "-")}</td>
-          <td>${(!isFreshDenied && item.current_lowest) ? escapeHtml(item.current_lowest) : "-"}</td>
+          <td>${item.current_lowest ? escapeHtml(item.current_lowest) : "-"}</td>
           <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
               ${isFreshDenied ? `
-                <button class="dashboard-confirm-btn" type="button" data-wtb-retry-fresh-offer-id="${escapeHtml(item.id || "")}" data-vat-type="${escapeHtml(item.vat_type || "")}" data-denied-amount="${escapeHtml(item.original_offer || "")}">Retry</button>
+                <button class="dashboard-counter-btn" type="button" data-wtb-retry-fresh-offer-id="${escapeHtml(item.id || "")}" data-vat-type="${escapeHtml(item.vat_type || "")}" data-denied-amount="${escapeHtml(item.original_offer || "")}">Retry</button>
                 <button class="dashboard-deny-btn" type="button" data-wtb-delete-fresh-offer-id="${escapeHtml(item.id || "")}">Delete</button>
               ` : `
                 ${(item.previous_record_id || item.previous_store_price) ? `
