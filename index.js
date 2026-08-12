@@ -818,6 +818,50 @@ async function disableCounterOfferDiscordButtons(channelId, messageId, note) {
   return true;
 }
 
+async function setCounterOfferDiscordToEditOnly(channelId, messageId, note, editTargetRoundId, editButtonPrefix = "counter_offer_edit") {
+  await initKickzDealDiscord();
+
+  const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
+  if (!channel) return false;
+
+  const message = await channel.messages.fetch(messageId).catch(() => null);
+  if (!message) return false;
+
+  await message.edit({
+    content: note || message.content,
+    embeds: message.embeds,
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 3,
+            label: "Accept",
+            custom_id: "counter_offer_accept_disabled",
+            disabled: true
+          },
+          {
+            type: 2,
+            style: 1,
+            label: "Edit",
+            custom_id: `${editButtonPrefix}:${editTargetRoundId}`
+          },
+          {
+            type: 2,
+            style: 4,
+            label: "Deny",
+            custom_id: "counter_offer_deny_disabled",
+            disabled: true
+          }
+        ]
+      }
+    ]
+  });
+
+  return true;
+}
+
 async function disableConsignmentDiscordButtons(channelId, messageId, note, preferredClient = null) {
   const clients = preferredClient
     ? [preferredClient]
@@ -8163,6 +8207,24 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
           no_room_to_counter: noRoomToCounter
         })
       }).catch((err) => console.error("Failed to notify store of seller counter (non-blocking):", err));
+    }
+
+    // NEW — close the Deny-after-own-counter leak on the SELLER side
+    // for the Portal route. When the seller counters via Discord the
+    // button handler already transforms the buyer-counter embed to
+    // Edit-only; the Portal route left that DM embed fully clickable, so
+    // the seller could still click Deny on a position they'd now
+    // responded to. Transform it here too, wired to counter_offer_edit
+    // for the seller's just-placed round. Best-effort, non-blocking.
+    const sellerDmChannelId = asText(f["Discord Channel ID"]);
+    const sellerDmMessageId = asText(f["Discord Message ID"]);
+    if (sellerDmChannelId && sellerDmMessageId) {
+      await setCounterOfferDiscordToEditOnly(
+        sellerDmChannelId,
+        sellerDmMessageId,
+        `🔁 You countered with €${proposedPrice}. Waiting on the store.`,
+        newRound.id
+      ).catch((err) => console.error("Failed to set seller DM embed to Edit-only (non-blocking):", err.message));
     }
 
     res.json({ ok: true, band: validation.band, new_round_id: newRound.id });
@@ -24829,6 +24891,22 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
       }
     }
 
+    // NEW — close the Deny-after-own-counter leak on the Member WTB
+    // seller side (Portal route): transform the buyer-counter DM embed
+    // the seller just responded to into Edit-only, wired to
+    // member_wtb_edit for the seller's just-placed round. Non-blocking.
+    const mwSellerDmChannelId = asText(f["Discord Channel ID"]);
+    const mwSellerDmMessageId = asText(f["Discord Message ID"]);
+    if (mwSellerDmChannelId && mwSellerDmMessageId) {
+      await setCounterOfferDiscordToEditOnly(
+        mwSellerDmChannelId,
+        mwSellerDmMessageId,
+        `🔁 You countered with €${proposedPrice}. Waiting on the buyer.`,
+        newRound.id,
+        "member_wtb_edit"
+      ).catch((err) => console.error("Failed to set MW seller DM embed to Edit-only (non-blocking):", err.message));
+    }
+
     res.json({ ok: true, counter_offer_record_id: newRound.id, dm_sent: dmSent });
   } catch (err) {
     console.error("Failed to process member WTB seller-counter:", err);
@@ -25025,6 +25103,23 @@ app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) =>
           "Discord Delivery Type": discordResult.deliveryType
         });
       }
+    }
+
+    // NEW — close the Deny-after-own-counter leak on the Member WTB
+    // buyer side (Portal route): f (previousRound) carries the DM embed
+    // the BUYER received when the seller countered; transform it to
+    // Edit-only now that the buyer has responded, wired to
+    // member_wtb_edit for the buyer's just-placed round. Non-blocking.
+    const mwBuyerDmChannelId = asText(f["Discord Channel ID"]);
+    const mwBuyerDmMessageId = asText(f["Discord Message ID"]);
+    if (mwBuyerDmChannelId && mwBuyerDmMessageId) {
+      await setCounterOfferDiscordToEditOnly(
+        mwBuyerDmChannelId,
+        mwBuyerDmMessageId,
+        `🔁 You countered with €${proposedPrice}. Waiting on the seller.`,
+        newRound.id,
+        "member_wtb_edit"
+      ).catch((err) => console.error("Failed to set MW buyer DM embed to Edit-only (non-blocking):", err.message));
     }
 
     res.json({ ok: true, counter_offer_record_id: newRound.id, dm_sent: dmSent });
