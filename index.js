@@ -8439,6 +8439,25 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
       }
     }
 
+    // NEW — close the Deny-after-own-counter leak at the per-round
+    // stage: the store just countered a SELLER's counter, so the
+    // existing "Seller Countered" embed for this order must stop being
+    // fully clickable (otherwise the store could still Deny a position
+    // it has now responded to). Transform it to Edit-only, wired to the
+    // store_counter_edit flow for the round the store just created.
+    if (AIRTABLE_DISCORD_UPDATES_URL && linkedOrderId) {
+      fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trigger_type: "disable-seller-countered-messages",
+          store_name: asText(orderFields["Store Name"]),
+          record_id: linkedOrderId,
+          new_round_id: newRound.id
+        })
+      }).catch((err) => console.error("Failed to fire disable-seller-countered-messages sweep (non-blocking):", err));
+    }
+
     res.json({ ok: true, band: validation.band, new_round_id: newRound.id });
   } catch (err) {
     console.error("Failed to submit store counter-back:", err);
