@@ -5297,16 +5297,6 @@ function bindConsignmentDiscordButtons(client) {
             !Number.isFinite(otherSellerExistsForStore) ||
             (Number.isFinite(denyingSellerOwnNormalizedForStore) && otherSellerExistsForStore >= denyingSellerOwnNormalizedForStore);
 
-          console.error("DEBUG seller-deny shouldNotifyStore:", {
-            deniedOrderId,
-            denyingSellerIdForStore,
-            otherSellerExistsForStore,
-            denyingSellerTruePositionForStore,
-            denyingSellerVatTypeForStore,
-            denyingSellerOwnNormalizedForStore,
-            shouldNotifyStore
-          });
-
           if (priorRoundId) {
             const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
 
@@ -15986,6 +15976,37 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
     if (deniedOrderId && AIRTABLE_DISCORD_UPDATES_URL) {
       const orderRecord = await airtable(ORDERS_TABLE).find(deniedOrderId);
       const orderFields = orderRecord.fields || {};
+
+      // NEW — additive only: same gate the other seller-deny path
+      // (counter_offer_deny) already has. Only touch the store side
+      // (reopen the store's prior round + send a denied/reopen embed)
+      // when the seller who just denied was the CURRENT BEST across all
+      // sellers. A higher, non-lowest seller denying must do nothing
+      // store-side — the current lowest seller stays active, the store
+      // keeps its Countered row and can still Edit. Without this the
+      // store gets a denied embed for every non-winning seller's deny.
+      const denyingSellerIdForStore = firstLinkedRecordId(deniedFields["Seller ID"]);
+      const otherSellerExistsForStore = (await getCurrentGlobalLowestNormalized(
+        "Seller Offer",
+        deniedOrderId,
+        denyingSellerIdForStore
+      )).normalized;
+
+      const denyingSellerTruePositionForStore = await findSellersTrueLastCounter(counterOfferRecordId);
+      const denyingSellerVatTypeForStore = asText(deniedFields["Seller Original VAT Type"]);
+      const denyingSellerOwnNormalizedForStore = Number.isFinite(denyingSellerTruePositionForStore)
+        ? (denyingSellerVatTypeForStore === "VAT0" ? denyingSellerTruePositionForStore * 1.21 : denyingSellerTruePositionForStore)
+        : null;
+
+      const shouldNotifyStore =
+        !Number.isFinite(otherSellerExistsForStore) ||
+        (Number.isFinite(denyingSellerOwnNormalizedForStore) && otherSellerExistsForStore >= denyingSellerOwnNormalizedForStore);
+
+      if (!shouldNotifyStore) {
+        // Non-lowest seller denied — done. Their own round is already
+        // marked Denied above; nothing happens store-side.
+        return res.json({ ok: true, notified_store: false });
+      }
 
       if (priorRoundId) {
         const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
