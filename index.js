@@ -5345,7 +5345,7 @@ function bindConsignmentDiscordButtons(client) {
                     // FIXED — both numbers in the store's own VAT scale.
                     seller_counter_price: reopenSellerCounterForDisplay ?? priorSellerCounterInStoreTerms ?? priorSellerCounter,
                     denied_price: reopenDeniedForDisplay,
-                    store_display_vat_type: priorVatType
+                    store_display_vat_type: storeFacingVatType(priorVatType, orderFields)
                   })
                 });
               }
@@ -5370,7 +5370,7 @@ function bindConsignmentDiscordButtons(client) {
                 sku: asText(deniedFields["SKU"]),
                 size: asText(deniedFields["Size"]),
                 denied_price: deniedPriceForStoreDisplay,
-                denied_vat_type: deniedVatTypeForDisplay
+                denied_vat_type: storeFacingVatType(deniedVatTypeForDisplay, orderFields)
               })
             });
           }
@@ -9371,7 +9371,7 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
             // scale (e.g. VAT0 for a non-Dutch store), not the internal
             // all-in figure.
             seller_counter_price: editedSellerPriceInStoreTerms ?? proposedPrice,
-            store_display_vat_type: storeVatContextForEditEmbed
+            store_display_vat_type: storeFacingVatType(storeVatContextForEditEmbed, orderFields)
           })
         }).catch((err) => console.error("Failed to notify store of edited counter (non-blocking):", err));
       }
@@ -14541,7 +14541,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
             selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
             your_previous_counter: freshRetryYourPreviousForDisplay,
             seller_counter_price: freshRetrySellerCounterForDisplay ?? freshRetryStoreEquivalent ?? proposedPrice,
-            store_display_vat_type: sellerVatType
+            store_display_vat_type: storeFacingVatType(sellerVatType, orderFields)
           })
         }).catch((err) => console.error("Failed to notify store of no-prior retry counter (non-blocking):", err));
       }
@@ -14627,7 +14627,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
           selling_price: numberValue(orderFields["Selling Price"]) || numberValue(orderFields["Shopify Selling Price"]),
           your_previous_counter: retryYourPreviousForDisplay,
           seller_counter_price: retrySellerCounterForDisplay ?? sellerCounterInStoreTerms ?? proposedPrice,
-          store_display_vat_type: sellerVatType,
+          store_display_vat_type: storeFacingVatType(sellerVatType, orderFields),
           no_room_to_counter: noRoomToCounter
         })
       }).catch((err) => console.error("Failed to notify store of retry counter (non-blocking):", err));
@@ -15574,7 +15574,7 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
             ? moneySmartValue(myHighestEver)
             : null,
           no_room_to_counter: noRoomToCounter,
-          vat_type: winningSellerOffer.vatType || null,
+          vat_type: winningSellerOffer.vatType ? storeFacingVatType(winningSellerOffer.vatType, f) : null,
           status: "Offer Received",
           date: formatDateEU(f["Order Date"]),
           raw_date: f["Order Date"]
@@ -15762,11 +15762,19 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
       const isVatSourceForDisplay = vatType === "VAT21" || vatType === "VAT0";
       const needsConversionForDisplay = !isDutchStoreForDisplay && isVatSourceForDisplay;
 
-      const sellersOfferInStoreTerms = calculateStoreCounterEquivalent(
+      // FIXED — use computeSellerCounterForStoreDisplay (the same helper
+      // the embeds use), which now handles the Dutch middleman case:
+      // a Dutch store's VAT0 seller is grossed ×1.21 to the VAT21 sale
+      // base before margin. The old direct calculateStoreCounterEquivalent
+      // call passed preAdjustment=1 for a Dutch store, so VAT0 went
+      // through ÷1.21 (getCounterEquivalentPriceForVatType) — showing
+      // €75 instead of €107.50. Non-Dutch behavior is unchanged (the
+      // helper's non-Dutch VAT-source branch routes through the Margin
+      // path exactly as this did with preAdjustment 1.21 before).
+      const sellersOfferInStoreTerms = computeSellerCounterForStoreDisplay(
         sellersOffer,
         vatType,
-        orderFields,
-        needsConversionForDisplay ? 1.21 : 1
+        orderFields
       );
 
       // my_offer is the store's OWN typed input — it was multiplied by
@@ -15802,7 +15810,7 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
         my_offer: Number.isFinite(myLastOfferForDisplay) && myLastOfferForDisplay > 0 ? moneySmartValue(myLastOfferForDisplay) : null,
         sellers_offer: Number.isFinite(sellersOfferInStoreTermsForDisplay) ? moneySmartValue(sellersOfferInStoreTermsForDisplay) : null,
         sellers_offer_payout: Number.isFinite(sellersOffer) ? sellersOffer : null,
-        vat_type: vatType,
+        vat_type: storeFacingVatType(vatType, orderFields),
         previous_record_id: previousOfferId,
         previous_seller_counter: previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
           ? moneySmartValue(previousSellerCounterById.get(previousOfferId))
@@ -15876,11 +15884,13 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
 
           // Show the seller's denied fresh offer in the store's own
           // scale (marked up + VAT-converted), same as everywhere else.
-          const sellersOfferInStoreTerms = calculateStoreCounterEquivalent(
+          // Uses computeSellerCounterForStoreDisplay so the Dutch
+          // middleman case (VAT0 seller → ×1.21 to VAT21 base) is
+          // handled, not the old ÷1.21 path.
+          const sellersOfferInStoreTerms = computeSellerCounterForStoreDisplay(
             rawDeniedAmount,
             deniedVatType,
-            orderFields,
-            (!isDutchClientCountry(orderFields["Client Country"]) && (deniedVatType === "VAT0" || deniedVatType === "VAT21")) ? 1.21 : 1
+            orderFields
           );
 
           return {
@@ -15902,7 +15912,7 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
             my_offer: null,
             sellers_offer: Number.isFinite(sellersOfferInStoreTerms) ? moneySmartValue(sellersOfferInStoreTerms) : null,
             sellers_offer_payout: Number.isFinite(rawDeniedAmount) ? rawDeniedAmount : null,
-            vat_type: deniedVatType,
+            vat_type: storeFacingVatType(deniedVatType, orderFields),
             denied_at: formatDateEU(f["Denied At"])
           };
         });
@@ -16256,7 +16266,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
               your_previous_counter: reopen2DeniedForDisplay,
               seller_counter_price: reopen2SellerCounterForDisplay ?? priorSellerCounterInStoreTerms ?? priorSellerCounter,
               denied_price: reopen2DeniedForDisplay,
-              store_display_vat_type: priorVatType
+              store_display_vat_type: storeFacingVatType(priorVatType, orderFields)
             })
           }).catch((err) => console.error("Failed to notify store of reopened round (non-blocking):", err));
         }
@@ -16277,7 +16287,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
             sku: asText(deniedFields["SKU"]),
             size: asText(deniedFields["Size"]),
             denied_price: deniedPriceForStoreDisplay2,
-            denied_vat_type: deniedVatTypeForDisplay2
+            denied_vat_type: storeFacingVatType(deniedVatTypeForDisplay2, orderFields)
           })
         }).catch((err) => console.error("Failed to notify store of denial (non-blocking):", err));
       }
