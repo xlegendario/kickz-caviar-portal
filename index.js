@@ -13737,7 +13737,29 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         // but at minimum this seller's own current position is now
         // correctly factored in as a candidate for the lowest.
         const previousOfferId = firstLinkedRecordId(f["Previous Record ID"]);
-        const previousStorePrice = previousOfferId ? previousPriceById.get(previousOfferId) : null;
+        let previousStorePrice = previousOfferId ? previousPriceById.get(previousOfferId) : null;
+
+        // NEW — additive only: when the seller denied a buyer offer
+        // OUTRIGHT (no prior round of their own — Previous Record ID is
+        // empty), there's no "previous" store price, but the buyer
+        // offer they denied still lives on THIS denied round as its own
+        // "Store Counter Price". Fall back to that, converted into the
+        // seller's payout scale, so the Denied pill can show "Buyer's
+        // Last Offer" and offer Accept on it (his confirmed want: a
+        // seller can still come back on their own deny).
+        if (!Number.isFinite(previousStorePrice)) {
+          const ownRoundStoreCounter = numberValue(f["Store Counter Price"]);
+          if (Number.isFinite(ownRoundStoreCounter) && ownRoundStoreCounter > 0) {
+            const ownRoundBuyerPayout = calculateCounterPayoutForVatType(
+              ownRoundStoreCounter,
+              displayValue(f["Seller Original VAT Type"]),
+              orderFields
+            );
+            if (Number.isFinite(ownRoundBuyerPayout)) {
+              previousStorePrice = ownRoundBuyerPayout;
+            }
+          }
+        }
 
         // FIXED — "Your Offer" must be the SELLER's actual current
         // position, not the fixed, never-updated "Seller Original
@@ -14136,14 +14158,25 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
 
     const previousOfferId = firstLinkedRecordId(pendingFields["Previous Record ID"]);
 
-    if (!previousOfferId) {
+    // NEW — additive only: when the seller denied a buyer offer
+    // OUTRIGHT (no prior round of their own), there's no "previous" to
+    // fall back to — but the buyer offer they denied lives on THIS
+    // round. His confirmed want: the seller can still come back on
+    // their own deny and Accept it. So accept THIS (denied) round
+    // itself, and tolerate its Denied status (reviving it is the point).
+    const acceptSelfDeniedRound = !previousOfferId;
+    const acceptTargetId = previousOfferId || pendingOfferId;
+
+    if (!previousOfferId && asText(pendingFields["Status"]) !== "Denied") {
+      // No previous AND this round isn't a denied one to revive —
+      // genuinely nothing to accept.
       return res.status(409).json({ error: "There is no previous offer to accept." });
     }
 
-    const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(previousOfferId);
+    const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(acceptTargetId);
     const f = counterOffer.fields || {};
 
-    if (asText(f["Status"]) !== "Open") {
+    if (!acceptSelfDeniedRound && asText(f["Status"]) !== "Open") {
       return res.status(409).json({ error: "That previous offer is no longer available." });
     }
 
@@ -14167,19 +14200,22 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
       const acceptedPayout = numberValue(f["Counter Payout"]);
       const acceptedVatType = asText(f["Counter Payout VAT Type"] || f["Seller Original VAT Type"]);
 
-      await airtable(COUNTER_OFFERS_TABLE).update(previousOfferId, {
+      await airtable(COUNTER_OFFERS_TABLE).update(acceptTargetId, {
         "Status": "Accepted",
         "Accepted At": new Date().toISOString(),
         "Closed At": new Date().toISOString()
       });
 
       // Abandon the seller's own pending counter — they're choosing
-      // the buyer's earlier position instead.
+      // the buyer's earlier position instead. Skipped when accepting
+      // the denied round itself (pending === target).
+      if (!acceptSelfDeniedRound) {
       await airtable(COUNTER_OFFERS_TABLE).update(pendingOfferId, {
         "Status": "Denied",
         "Denied At": new Date().toISOString(),
         "Closed At": new Date().toISOString()
       }).catch((err) => console.error("Failed to close abandoned own counter (non-blocking):", err));
+      }
 
       const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
 
@@ -14207,7 +14243,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
         return res.status(dealResponse.status).json({ error: dealData.error || "Failed to accept offer" });
       }
 
-      await closeCompetingCountersForMemberWtb(linkedMemberWtbIdForPrevious, previousOfferId).catch((err) =>
+      await closeCompetingCountersForMemberWtb(linkedMemberWtbIdForPrevious, acceptTargetId).catch((err) =>
         console.error("Failed to close competing counters (non-blocking):", err)
       );
 
@@ -14227,19 +14263,23 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
       return res.status(409).json({ error: "This order is no longer available." });
     }
 
-    await airtable(COUNTER_OFFERS_TABLE).update(previousOfferId, {
+    await airtable(COUNTER_OFFERS_TABLE).update(acceptTargetId, {
       "Status": "Accepted",
       "Accepted At": new Date().toISOString(),
       "Closed At": new Date().toISOString()
     });
 
     // Abandon the seller's own pending counter — they're choosing the
-    // buyer's earlier position instead.
+    // buyer's earlier position instead. Skipped when we're accepting
+    // the denied round ITSELF (pending === target), since that round is
+    // the one we just set to Accepted.
+    if (!acceptSelfDeniedRound) {
     await airtable(COUNTER_OFFERS_TABLE).update(pendingOfferId, {
       "Status": "Denied",
       "Denied At": new Date().toISOString(),
       "Closed At": new Date().toISOString()
     }).catch((err) => console.error("Failed to close abandoned own counter (non-blocking):", err));
+    }
 
     if (COUNTER_OFFER_ACCEPT_WEBHOOK_URL) {
       await fetch(COUNTER_OFFER_ACCEPT_WEBHOOK_URL, {
@@ -14247,7 +14287,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           trigger_type: "counter-offer-accepted",
-          counter_offer_record_id: previousOfferId,
+          counter_offer_record_id: acceptTargetId,
           order_record_id: linkedOrderId,
           seller_record_id: firstLinkedRecordId(f["Seller ID"]),
           seller_offer_record_id: asText(f["Seller Offer Record ID"]),
@@ -14291,7 +14331,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
     // NEW — additive only: same as seller-accept above — matches the
     // Discord accept handler's existing behavior of closing every
     // other competing seller's open counter for this order.
-    await closeCompetingCountersForOrder(linkedOrderId, previousOfferId).catch((err) =>
+    await closeCompetingCountersForOrder(linkedOrderId, acceptTargetId).catch((err) =>
       console.error("Failed to close competing counters (non-blocking):", err)
     );
 
@@ -14341,8 +14381,74 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
 
     const priorRoundId = firstLinkedRecordId(f["Previous Record ID"]);
 
+    const linkedOrderId = firstLinkedRecordId(f["Order"]);
+    const linkedSellerId = firstLinkedRecordId(f["Seller ID"]);
+    const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
+    const orderFields = orderRecord.fields || {};
+    const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
+    const sellerVatType = asText(f["Seller Original VAT Type"]);
+
     if (!priorRoundId) {
-      return res.status(409).json({ error: "There's no prior position to retry against." });
+      // NEW — additive only: the seller denied a buyer offer OUTRIGHT
+      // (no prior round of their own to retry against). His confirmed
+      // want: they can still Counter, but it must stay UNDER the
+      // current lowest seller's position across all sellers (that
+      // seller would win otherwise) — e.g. Seller B at 235.95 Margin →
+      // Seller A may ask at most 233. The store's own buyer offer on
+      // THIS denied round is the lower reference (they countered up
+      // from there). Validate with the same cross-seller-ceiling helper
+      // the normal seller-counter uses.
+      const buyerOfferOnDeniedRound = numberValue(f["Store Counter Price"]);
+      const buyerOfferInSellerTerms = calculateCounterPayoutForVatType(
+        buyerOfferOnDeniedRound,
+        sellerVatType,
+        orderFields
+      );
+
+      const globalLowestForRetry = (await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, linkedSellerId)).normalized;
+      let crossSellerCeilingRaw = null;
+      let crossSellerReferenceRaw = null;
+      if (Number.isFinite(globalLowestForRetry)) {
+        const rawThreshold = asText(sellerVatType) === "VAT0" ? globalLowestForRetry / 1.21 : globalLowestForRetry;
+        crossSellerCeilingRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
+        crossSellerReferenceRaw = rawThreshold;
+      }
+
+      const validationFresh = validateNextCounterPriceWithCrossSellerCeiling(
+        sellerOriginalPrice,
+        buyerOfferInSellerTerms,
+        proposedPrice,
+        crossSellerCeilingRaw,
+        crossSellerReferenceRaw
+      );
+      if (!validationFresh.ok) {
+        if (validationFresh.reason.startsWith("No room left") && Number.isFinite(crossSellerCeilingRaw)) {
+          return res.status(400).json({
+            error: `Another seller already offers a better price for this order — at most €${crossSellerCeilingRaw.toFixed(2)} (${sellerVatType}) to beat it — and the gap is too small for another step. Please accept or deny.`,
+            band: validationFresh.band
+          });
+        }
+        return res.status(400).json({ error: validationFresh.reason, band: validationFresh.band });
+      }
+
+      const storeCounterPayout = calculateCounterPayoutForVatType(proposedPrice, sellerVatType, orderFields);
+
+      const newRoundFresh = await airtable(COUNTER_OFFERS_TABLE).create({
+        "Order": [linkedOrderId],
+        "Seller ID": linkedSellerId ? [linkedSellerId] : undefined,
+        "Source Type": asText(f["Source Type"]) || "Seller Offer",
+        "Seller Offer Record ID": asText(f["Seller Offer Record ID"]),
+        "Seller Original Price": sellerOriginalPrice,
+        "Seller Original VAT Type": sellerVatType,
+        "Seller Counter Price": proposedPrice,
+        "Counter Payout": storeCounterPayout,
+        "Counter Payout VAT Type": sellerVatType,
+        "Previous Record ID": offerId,
+        "Created At": new Date().toISOString(),
+        "Status": "Open"
+      });
+
+      return res.json({ ok: true, new_round_id: newRoundFresh.id });
     }
 
     const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId);
@@ -14365,13 +14471,6 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
     if (!validation.ok) {
       return res.status(400).json({ error: validation.reason, band: validation.band });
     }
-
-    const linkedOrderId = firstLinkedRecordId(f["Order"]);
-    const linkedSellerId = firstLinkedRecordId(f["Seller ID"]);
-    const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
-    const orderFields = orderRecord.fields || {};
-    const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
-    const sellerVatType = asText(f["Seller Original VAT Type"]);
 
     const newRound = await airtable(COUNTER_OFFERS_TABLE).create({
       "Order": [linkedOrderId],
