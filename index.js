@@ -4593,6 +4593,51 @@ function bindConsignmentDiscordButtons(client) {
         const memberWtbRecordId = firstLinkedRecordId(deniedFields["Member WTB"]);
         const sellerRecordId = firstLinkedRecordId(deniedFields["Seller ID"]);
 
+        // First: send the DENIED seller their OWN Denied embed (their bid
+        // was rejected) with the buyer's standing position as the Accept
+        // fallback — mirrors the Store Orders deny. Without this the denied
+        // seller got no embed at all.
+        if (memberWtbRecordId && sellerRecordId) {
+          const memberWtbForDeny = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId).catch(() => null);
+          const wtbFieldsForDeny = memberWtbForDeny?.fields || {};
+          const sellerRecordForDeny = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+          const sellerDiscordIdForDeny = asText(sellerRecordForDeny?.fields?.["Discord ID"]);
+
+          const buyerFloorForDeny = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
+          const sellerVatTypeForDeny = asText(deniedFields["Seller Original VAT Type"]);
+          const standingPayoutForDeny = Number.isFinite(buyerFloorForDeny) && buyerFloorForDeny > 0
+            ? calculateMemberWtbSellerPayout(buyerFloorForDeny, sellerVatTypeForDeny, wtbFieldsForDeny)
+            : numberValue(deniedFields["Counter Payout"]);
+
+          if (sellerDiscordIdForDeny) {
+            const deniedDiscordResult = await sendMemberWtbCounterOfferDiscordDM({
+              counterOfferRecordId,
+              sellerDiscordId: sellerDiscordIdForDeny,
+              productName: asText(wtbFieldsForDeny["Product Name"]),
+              sku: asText(wtbFieldsForDeny["SKU"]),
+              size: asText(wtbFieldsForDeny["Size"]),
+              memberWtbId: asText(wtbFieldsForDeny["Member WTB ID"]) || memberWtbRecordId,
+              payout: standingPayoutForDeny,
+              vatType: sellerVatTypeForDeny,
+              sellerOriginalPrice: numberValue(deniedFields["Seller Original Price"]),
+              sellerOriginalVatType: sellerVatTypeForDeny,
+              sellerLastOfferPrice: numberValue(deniedFields["Seller Counter Price"]),
+              deniedAmount: numberValue(deniedFields["Seller Counter Price"]) || numberValue(deniedFields["Counter Payout"])
+            }).catch((err) => {
+              console.error("Failed to send denied seller their MW Denied embed (non-blocking):", err);
+              return null;
+            });
+
+            if (deniedDiscordResult) {
+              await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+                "Discord Channel ID": deniedDiscordResult.channelId,
+                "Discord Message ID": deniedDiscordResult.messageId,
+                "Discord Delivery Type": deniedDiscordResult.deliveryType
+              }).catch(() => {});
+            }
+          }
+        }
+
         if (memberWtbRecordId) {
           const buyerFloorForBroadcast = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
 
@@ -12250,7 +12295,7 @@ async function sendMemberWtbCounterOfferDiscordDM({
     components: (() => {
       const isDenial = deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "";
       const acceptBtn = { type: 2, style: 3, label: `Accept €${Number(payout)}`, custom_id: `member_wtb_counter_accept:${counterOfferRecordId}` };
-      const counterBtn = { type: 2, style: 1, label: "Counter", custom_id: `member_wtb_counter_counter:${counterOfferRecordId}` };
+      const counterBtn = { type: 2, style: 1, label: isDenial ? "Retry" : "Counter", custom_id: `member_wtb_counter_counter:${counterOfferRecordId}` };
       const denyBtn = { type: 2, style: 4, label: "Deny", custom_id: `member_wtb_counter_deny:${counterOfferRecordId}` };
       // FIXED — Counter is ALWAYS shown (even with no room left): the
       // no-room message is surfaced when they click it, so they see WHY.
@@ -19707,6 +19752,46 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/buyer-deny", async (req,
     // or not a prior round exists. Mirrors the Discord buyer-deny handler.
     const sellerRecordId = firstLinkedRecordId(deniedFields["Seller ID"]);
     const buyerFloorForBroadcast = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
+
+    // First: send the DENIED seller their OWN Denied embed (their bid was
+    // rejected), with the buyer's standing position as the Accept fallback.
+    if (sellerRecordId) {
+      const wtbFieldsForDeny = memberWtb?.fields || {};
+      const sellerRecordForDeny = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+      const sellerDiscordIdForDeny = asText(sellerRecordForDeny?.fields?.["Discord ID"]);
+      const sellerVatTypeForDeny = asText(deniedFields["Seller Original VAT Type"]);
+      const standingPayoutForDeny = Number.isFinite(buyerFloorForBroadcast) && buyerFloorForBroadcast > 0
+        ? calculateMemberWtbSellerPayout(buyerFloorForBroadcast, sellerVatTypeForDeny, wtbFieldsForDeny)
+        : numberValue(deniedFields["Counter Payout"]);
+
+      if (sellerDiscordIdForDeny) {
+        const deniedDiscordResult = await sendMemberWtbCounterOfferDiscordDM({
+          counterOfferRecordId,
+          sellerDiscordId: sellerDiscordIdForDeny,
+          productName: asText(wtbFieldsForDeny["Product Name"]),
+          sku: asText(wtbFieldsForDeny["SKU"]),
+          size: asText(wtbFieldsForDeny["Size"]),
+          memberWtbId: asText(wtbFieldsForDeny["Member WTB ID"]) || memberWtbRecordId,
+          payout: standingPayoutForDeny,
+          vatType: sellerVatTypeForDeny,
+          sellerOriginalPrice: numberValue(deniedFields["Seller Original Price"]),
+          sellerOriginalVatType: sellerVatTypeForDeny,
+          sellerLastOfferPrice: numberValue(deniedFields["Seller Counter Price"]),
+          deniedAmount: numberValue(deniedFields["Seller Counter Price"]) || numberValue(deniedFields["Counter Payout"])
+        }).catch((err) => {
+          console.error("Failed to send denied seller their MW Denied embed (non-blocking):", err);
+          return null;
+        });
+
+        if (deniedDiscordResult) {
+          await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+            "Discord Channel ID": deniedDiscordResult.channelId,
+            "Discord Message ID": deniedDiscordResult.messageId,
+            "Discord Delivery Type": deniedDiscordResult.deliveryType
+          }).catch(() => {});
+        }
+      }
+    }
 
     if (Number.isFinite(buyerFloorForBroadcast) && buyerFloorForBroadcast > 0) {
       await reengageDeniedSellers({
