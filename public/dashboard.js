@@ -1994,7 +1994,7 @@ function renderBuyingUnifiedOfferRows(items) {
   // isn't always literally a counter (could be their original,
   // never-countered ask).
   const columns = isDenied
-    ? ["WTB ID", "Product", "SKU", "Size", "Brand", "Max Price", "My Last Offer", "Seller's Last Offer", "Denied", "Actions"]
+    ? ["WTB ID", "Product", "SKU", "Size", "Brand", "Max Price", "My Last Offer", "Seller's Last Offer", "VAT Type", "Denied", "Actions"]
     : isOpen
       ? ["WTB ID", "Product", "SKU", "Size", "Brand", "Max Price", "My Last Offer", "Seller's Offer", "VAT Type", "Date", "Actions"]
       : ["WTB ID", "Product", "SKU", "Size", "Brand", "Max Price", "My Offer", "Seller's Last Offer", "VAT Type", "Date", "Actions"];
@@ -2047,6 +2047,7 @@ function renderBuyingUnifiedOfferRows(items) {
           <td>${escapeHtml(maxPrice || "-")}</td>
           <td>${escapeHtml(myLastOffer || "-")}</td>
           <td>${escapeHtml(sellersOffer || "-")}</td>
+          <td>${escapeHtml(item.vat_type || "-")}</td>
           <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
