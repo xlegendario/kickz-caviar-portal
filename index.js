@@ -863,6 +863,48 @@ async function disableOtherSellerRoundEmbedsForOrder({
   }
 }
 
+// NEW — enforce "one active round per seller per order/WTB": when a
+// seller places a new round (counter / retry-counter), close ALL their
+// OTHER non-final rounds on the same order/WTB, so a stale older Open
+// round can't linger in the Open/Countered pill. Accepted/Closed rounds
+// are left untouched. keepRoundId is the just-created round (never close
+// that). Best-effort, non-blocking.
+async function closeOtherOpenRoundsForSellerOnOrder({
+  sellerRecordId,
+  orderRecordId,
+  memberWtbRecordId,
+  keepRoundId
+}) {
+  try {
+    if (!sellerRecordId || (!orderRecordId && !memberWtbRecordId)) return;
+
+    const linkField = memberWtbRecordId ? "Member WTB" : "Order";
+    const linkId = memberWtbRecordId || orderRecordId;
+
+    const allRounds = await airtable(COUNTER_OFFERS_TABLE)
+      .select({ fields: ["Seller ID", "Order", "Member WTB", "Status"] })
+      .all()
+      .catch(() => []);
+
+    const mine = allRounds.filter((r) =>
+      firstLinkedRecordId(r.fields?.["Seller ID"]) === sellerRecordId &&
+      firstLinkedRecordId(r.fields?.[linkField]) === linkId
+    );
+
+    for (const r of mine) {
+      if (keepRoundId && r.id === keepRoundId) continue;
+      const status = asText(r.fields?.["Status"]);
+      if (status === "Accepted" || status === "Closed") continue;
+      await airtable(COUNTER_OFFERS_TABLE).update(r.id, {
+        "Status": "Closed",
+        "Closed At": new Date().toISOString()
+      }).catch(() => {});
+    }
+  } catch (err) {
+    console.error("closeOtherOpenRoundsForSellerOnOrder failed (non-blocking):", err.message);
+  }
+}
+
 // NEW — after a seller denies (via the Portal) a store counter they were
 // still able to respond to, transform that counter embed on Discord into
 // the denial state: title flips to "Counter Offer Denied", Deny is
@@ -8141,6 +8183,15 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
       "Closed At": new Date().toISOString()
     });
 
+    // Close any OTHER stale live rounds this seller still has on the order
+    // so only the new round is active (spook-row fix).
+    await closeOtherOpenRoundsForSellerOnOrder({
+      sellerRecordId: linkedSellerId,
+      orderRecordId: linkedOrderId,
+      memberWtbRecordId: null,
+      keepRoundId: newRound.id
+    });
+
     // Notify the store — this reuses the SAME notification path as a
     // brand new counter, since from the store's perspective this is just
     // a fresh number to respond to. Private-channel logic does not apply
@@ -14046,20 +14097,6 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           ? Math.min(orderCompetingMin, ownNormalizedForOrder)
           : (orderCompetingMin ?? ownNormalizedForOrder);
 
-        if (filter === "denied" && !isMemberWtb) {
-          console.error("DEBUG denied current-lowest:", {
-            roundId: record.id,
-            orderId,
-            orderCompetingMin,
-            sellerLastOffer,
-            ownNormalizedForOrder,
-            orderLowest,
-            vatType,
-            orderMapSize: orderMinNormalizedPrice.size,
-            orderInMap: orderId ? orderMinNormalizedPrice.has(orderId) : false
-          });
-        }
-
         // NEW — additive only: the Member WTB equivalent of the above,
         // using memberWtbMinNormalizedPrice (built above from every
         // other seller's current position, normalized to the same
@@ -14077,24 +14114,40 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
 
         const currentLowestShared = isMemberWtb ? memberWtbLowest : orderLowest;
 
-        // FIXED — a real, confirmed bug found via his live testing,
-        // introduced by today's earlier fix: currentLowestShared lives
-        // on the shared normalized (VAT21-equivalent) scale, but this
-        // was returned to the frontend as-is regardless of THIS row's
-        // own vatType — a VAT0 seller was shown the raw normalized
-        // number unconverted (e.g. 232 instead of their own
-        // comparable 232/1.21=191.73), instead of de-normalized back
-        // into their own terms. VAT21/Margin need no conversion since
-        // they're already on that scale.
-        const currentLowest = Number.isFinite(currentLowestShared)
-          ? (asText(vatType) === "VAT0" ? currentLowestShared / 1.21 : currentLowestShared)
+        // FIXED (his live test): for the DENIED pill the Open-only
+        // orderMinNormalizedPrice / memberWtbMinNormalizedPrice maps miss
+        // co-sellers who were ALSO denied (a store deny of the lowest
+        // denies every seller), so a seller wrongly saw his OWN price as
+        // Current Lowest. Recompute the true cross-seller lowest via
+        // getCurrentGlobalLowestNormalized (no exclude — include everyone;
+        // it chain-traces and counts denied positions too), and use it in
+        // place of the stale map value. Normalized (VAT21-equivalent) scale.
+        let effectiveLowestShared = currentLowestShared;
+        let effectiveCompetingMin = isMemberWtb ? memberWtbCompetingMin : orderCompetingMin;
+        if (filter === "denied") {
+          const deniedLinkId = isMemberWtb ? memberWtbId : orderId;
+          const deniedSrcType = isMemberWtb ? "Member WTB" : "Seller Offer";
+          if (deniedLinkId) {
+            const globalLowest = (await getCurrentGlobalLowestNormalized(deniedSrcType, deniedLinkId, null)).normalized;
+            if (Number.isFinite(globalLowest)) {
+              const ownNorm = isMemberWtb ? ownNormalizedForMemberWtb : ownNormalizedForOrder;
+              effectiveLowestShared = Number.isFinite(ownNorm) ? Math.min(globalLowest, ownNorm) : globalLowest;
+              // competing min = the lowest EXCLUDING this seller's own, for
+              // the Lowest/Beaten dot; recompute with this seller excluded.
+              effectiveCompetingMin = (await getCurrentGlobalLowestNormalized(deniedSrcType, deniedLinkId, firstLinkedRecordId(f["Seller ID"]))).normalized;
+            }
+          }
+        }
+
+        const currentLowest = Number.isFinite(effectiveLowestShared)
+          ? (asText(vatType) === "VAT0" ? effectiveLowestShared / 1.21 : effectiveLowestShared)
           : null;
 
         const isLowest = isMemberWtb
           ? (Number.isFinite(ownNormalizedForMemberWtb) &&
-              (!Number.isFinite(memberWtbCompetingMin) || ownNormalizedForMemberWtb <= memberWtbCompetingMin))
+              (!Number.isFinite(effectiveCompetingMin) || ownNormalizedForMemberWtb <= effectiveCompetingMin + 0.01))
           : (Number.isFinite(ownNormalizedForOrder) &&
-              (!Number.isFinite(orderCompetingMin) || ownNormalizedForOrder <= orderCompetingMin));
+              (!Number.isFinite(effectiveCompetingMin) || ownNormalizedForOrder <= effectiveCompetingMin + 0.01));
 
         return {
           id: record.id,
@@ -14703,8 +14756,12 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
         return res.status(400).json({ error: validationFresh.reason, band: validationFresh.band });
       }
 
-      const storeCounterPayout = calculateCounterPayoutForVatType(proposedPrice, sellerVatType, orderFields);
-
+      // Counter Payout on a SELLER-created round is the seller's own bid
+      // (what the store pays them), NOT the store-margin-inverted value —
+      // calculateCounterPayoutForVatType treats its input as a STORE all-in
+      // price and subtracts the margin, which is wrong here (130 Margin was
+      // becoming 117.50 and corrupting Buyer's Last Offer + the pill).
+      // Mirror the has-prior branch: Counter Payout = proposedPrice.
       const newRoundFresh = await airtable(COUNTER_OFFERS_TABLE).create({
         "Order": [linkedOrderId],
         "Seller ID": linkedSellerId ? [linkedSellerId] : undefined,
@@ -14713,7 +14770,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
         "Seller Original Price": sellerOriginalPrice,
         "Seller Original VAT Type": sellerVatType,
         "Seller Counter Price": proposedPrice,
-        "Counter Payout": storeCounterPayout,
+        "Counter Payout": proposedPrice,
         "Counter Payout VAT Type": sellerVatType,
         "Previous Record ID": offerId,
         "Created At": new Date().toISOString(),
@@ -14729,6 +14786,17 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
         "Status": "Closed",
         "Closed At": new Date().toISOString()
       }).catch((err) => console.error("Failed to close superseded denied round (non-blocking):", err));
+
+      // Close any OTHER stale live rounds this seller still has on the
+      // order (e.g. an older store-counter round left Open) so only the
+      // new round is active — prevents a spook row in the Open/Countered
+      // pill.
+      await closeOtherOpenRoundsForSellerOnOrder({
+        sellerRecordId,
+        orderRecordId: linkedOrderId,
+        memberWtbRecordId: null,
+        keepRoundId: newRoundFresh.id
+      });
 
       // NEW — additive only: notify the store of this new counter, same
       // as the prior-round retry branch below — otherwise the store got
@@ -14882,6 +14950,15 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
       "Status": "Closed",
       "Closed At": new Date().toISOString()
     }).catch((err) => console.error("Failed to close superseded denied round (non-blocking):", err));
+
+    // Close any OTHER stale live rounds this seller still has on the order
+    // so only the new round is active (spook-row fix).
+    await closeOtherOpenRoundsForSellerOnOrder({
+      sellerRecordId,
+      orderRecordId: linkedOrderId,
+      memberWtbRecordId: null,
+      keepRoundId: newRound.id
+    });
 
     if (AIRTABLE_DISCORD_UPDATES_URL) {
       const sellerCounterInStoreTerms = calculateStoreCounterEquivalent(
@@ -18155,16 +18232,6 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
         const othersResultForOrder = await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, linkedSellerId);
         const othersMinForOrder = othersResultForOrder.normalized;
         const ownNormalizedForOrder = asText(vatType) === "VAT0" ? offerAmount * 1.21 : offerAmount;
-
-        console.error("DEBUG open-offers current-lowest:", {
-          linkedOrderId,
-          linkedSellerId,
-          offerAmount,
-          vatType,
-          ownNormalizedForOrder,
-          othersMinForOrder,
-          othersWinningSource: othersResultForOrder.winningSource
-        });
 
         const ownWinsForOrder = Number.isFinite(ownNormalizedForOrder) && (!Number.isFinite(othersMinForOrder) || ownNormalizedForOrder <= othersMinForOrder);
         const winningSharedForOrder = ownWinsForOrder ? ownNormalizedForOrder : othersMinForOrder;
