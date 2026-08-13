@@ -4280,6 +4280,18 @@ function bindConsignmentDiscordButtons(client) {
                 !Number.isFinite(otherSellerExists) ||
                 (Number.isFinite(denyingSellerOwnNormalized) && otherSellerExists >= denyingSellerOwnNormalized);
 
+              console.error("[MW-SELLER-DENY-DEBUG]", JSON.stringify({
+                priorRoundId,
+                priorSellerCounter,
+                priorSellerCounterInBuyerTerms,
+                deniedPrice,
+                otherSellerExists,
+                denyingSellerTruePosition,
+                denyingSellerOwnNormalized,
+                shouldNotifyBuyer,
+                buyerDiscordId: buyerDiscordId ? "present" : "MISSING"
+              }));
+
               if (shouldNotifyBuyer) {
                 await disableAllMemberWtbBuyerOfferMessages(memberWtbRecordId).catch((err) =>
                   console.error("Failed to disable prior MW buyer embeds (non-blocking):", err.message)
