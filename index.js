@@ -13944,14 +13944,19 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         const previousOfferId = firstLinkedRecordId(f["Previous Record ID"]);
         let previousStorePrice = previousOfferId ? previousPriceById.get(previousOfferId) : null;
 
-        // FIXED — for a DENIED round, the deny is ON this round, so the
-        // store's last position toward THIS seller is this round's own
-        // "Counter Payout" (e.g. 75), NOT the previous round's payout
-        // (e.g. 70, an older position). The default previous-round-first
-        // resolution above is correct for open/countered rows, but for a
-        // denied row it showed the stale earlier figure as "Buyer's Last
-        // Offer". Prefer this round's own Counter Payout when denied.
-        if (asText(f["Status"]) === "Denied") {
+        // FIXED (regression from the Counter Payout fix): on a denied
+        // round, "Buyer's Last Offer" = the STORE's last position toward
+        // this seller = the round they responded to (Previous Record ID),
+        // which the default resolution above already returns. Only when the
+        // seller denied a buyer offer OUTRIGHT (no counter of their own —
+        // Seller Counter Price empty) does this round's own "Counter Payout"
+        // hold the store's position; a seller-COUNTER round's Counter Payout
+        // now holds the SELLER's own bid (e.g. 130), which must NOT be shown
+        // as Buyer's Last Offer. So prefer own payout only for an outright
+        // deny; a counter keeps the previous-round value.
+        const ownSellerCounterPrice = numberValue(f["Seller Counter Price"]);
+        const isOutrightDeny = !(Number.isFinite(ownSellerCounterPrice) && ownSellerCounterPrice > 0);
+        if (asText(f["Status"]) === "Denied" && isOutrightDeny) {
           const deniedOwnPayout = numberValue(f["Counter Payout"]);
           if (Number.isFinite(deniedOwnPayout) && deniedOwnPayout > 0) {
             previousStorePrice = deniedOwnPayout;
