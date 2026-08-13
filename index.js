@@ -14130,6 +14130,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         const currentLowest = Number.isFinite(effectiveLowestShared)
           ? (asText(vatType) === "VAT0" ? effectiveLowestShared / 1.21 : effectiveLowestShared)
           : null;
+        if (isMemberWtb) console.error("DEBUG MW current_lowest:", { seller: firstLinkedRecordId(f["Seller ID"]), vatType: asText(vatType), memberWtbCompetingMin, ownNormalizedForMemberWtb, memberWtbLowest, effectiveLowestShared, currentLowest, filter });
 
         const isLowest = isMemberWtb
           ? (Number.isFinite(ownNormalizedForMemberWtb) &&
