@@ -8939,6 +8939,7 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
     // to be computed further down, so a denial can't happen at all for
     // a store that doesn't own this order.
     const linkedOrderId = firstLinkedRecordId(f["Order"]);
+    console.error("DEBUG store-deny HIT:", { counterOfferRecordId, sellerDiscordId: asText(f["Seller Discord ID"]), sellerCounterPrice: numberValue(f["Seller Counter Price"]), linkedOrderId });
     const requestedStoreNameForDeny = asText(req.body?.store_name);
     if (requestedStoreNameForDeny) {
       const ownsIt = await verifyStoreOwnsOrderForRound(linkedOrderId, requestedStoreNameForDeny);
@@ -8974,28 +8975,54 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
     // lower counter against it — reusing the existing, already-tested
     // seller-counter mechanism rather than inventing a new one.
     if (sellerDiscordId && linkedOrderId) {
-      // #3 — disable the seller's OLD counter embed (the round the store
-      // just denied) so a new embed always supersedes the prior one and
-      // the seller can never act on a stale round. Best-effort.
-      {
-        const oldChannelId = asText(f["Discord Channel ID"]);
-        const oldMessageId = asText(f["Discord Message ID"]);
-        if (oldChannelId && oldMessageId) {
-          await disableCounterOfferDiscordButtons(
-            oldChannelId,
-            oldMessageId,
-            "❌ Counter offer denied"
-          ).catch((err) => console.error("Failed to disable prior counter embed on store-deny (non-blocking):", err.message));
-        }
+      // Send the DENIED seller their own Denied embed (same shape the
+      // co-sellers get via the deny-broadcast) — a clear "your counter was
+      // denied" with the store's standing offer as the fall-back Accept, so
+      // they can accept it, counter again (under the current lowest), or
+      // step out — all from their Denied pill. We do NOT reopen the prior
+      // round (that caused the spook); the round stays Denied. The universal
+      // superseding disables their old counter embed automatically.
+      const orderRecordForDeny = await airtable(ORDERS_TABLE).find(linkedOrderId).catch(() => null);
+      const orderFieldsForDeny = orderRecordForDeny?.fields || {};
+      const priorRoundIdForDeny = asText(f["Previous Record ID"]);
+      let storeStandingPayout = null;
+      if (priorRoundIdForDeny) {
+        const priorRoundForDeny = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundIdForDeny).catch(() => null);
+        storeStandingPayout = numberValue(priorRoundForDeny?.fields?.["Counter Payout"]);
+      }
+      // Fall back to the store's highest-ever position (seller-payout scale)
+      // if the prior round has no payout, so Accept always has a number.
+      if (!Number.isFinite(storeStandingPayout) || storeStandingPayout <= 0) {
+        storeStandingPayout = await getBuyerHighestEverPosition("Seller Offer", linkedOrderId);
       }
 
-      // OPTIE 1 (his decision): on a store deny, the seller's round simply
-      // lands in Denied — do NOT reopen the prior store round. The seller's
-      // Denied pill already gives them every option: counter again (under
-      // the current lowest), accept the store's previous position, or Delete
-      // to step out. Reopening the prior round only created a spook row in
-      // the Countered pill and duplicated what the Denied pill already does.
-      //
+      const deniedDiscordResult = await sendCounterOfferDiscordDM({
+        counterOfferRecordId,
+        sellerDiscordId,
+        productName: asText(f["Product Name"]),
+        sku: asText(f["SKU"]),
+        size: asText(f["Size"]),
+        orderId: asText(orderFieldsForDeny["Order ID"]),
+        payout: Number.isFinite(storeStandingPayout) ? storeStandingPayout : numberValue(f["Counter Payout"]),
+        vatType: asText(f["Seller Original VAT Type"]),
+        sellerOriginalPrice: numberValue(f["Seller Original Price"]),
+        sellerOriginalVatType: asText(f["Seller Original VAT Type"]),
+        sellerLastOfferPrice: numberValue(f["Seller Counter Price"]),
+        deniedAmount: numberValue(f["Seller Counter Price"]) || numberValue(f["Counter Payout"])
+      }).catch((err) => {
+        console.error("Failed to send denied seller their Denied embed (non-blocking):", err);
+        return null;
+      });
+      console.error("DEBUG denied-seller embed:", { sellerDiscordId, counterOfferRecordId, storeStandingPayout, sentOk: !!deniedDiscordResult, msgId: deniedDiscordResult?.messageId });
+
+      if (deniedDiscordResult) {
+        await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+          "Discord Channel ID": deniedDiscordResult.channelId,
+          "Discord Message ID": deniedDiscordResult.messageId,
+          "Discord Delivery Type": deniedDiscordResult.deliveryType
+        }).catch(() => {});
+      }
+
       // Still broadcast the store's floor to OTHER sellers — denying the
       // lowest is implicitly a "no" to everyone higher too. This no longer
       // depends on a prior round existing.
