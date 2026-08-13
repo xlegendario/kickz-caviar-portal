@@ -14466,16 +14466,30 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
 
     const previousOfferId = firstLinkedRecordId(pendingFields["Previous Record ID"]);
 
+    // FIXED (same "which round holds the store's last position" class as
+    // the deny-scenario fixes): when the seller clicks Accept on a denied
+    // round that ITSELF carries a store position (Store Counter Price > 0 —
+    // the store countered on this very round, e.g. 95 VAT21 → 67.50), that
+    // round IS the store's latest offer, so accept it directly. The old
+    // code always followed Previous Record ID, which points at an OLDER
+    // store round (e.g. 90 → 62.50) — so the seller accepted a stale,
+    // lower price than the store's real last position. Only fall back to
+    // the previous round when the pending round has no store position of
+    // its own (a pure seller-counter round the store never answered).
+    const pendingHasOwnStorePosition = numberValue(pendingFields["Store Counter Price"]) > 0;
+
     // NEW — additive only: when the seller denied a buyer offer
     // OUTRIGHT (no prior round of their own), there's no "previous" to
     // fall back to — but the buyer offer they denied lives on THIS
     // round. His confirmed want: the seller can still come back on
     // their own deny and Accept it. So accept THIS (denied) round
     // itself, and tolerate its Denied status (reviving it is the point).
-    const acceptSelfDeniedRound = !previousOfferId;
-    const acceptTargetId = previousOfferId || pendingOfferId;
+    const acceptSelfDeniedRound = pendingHasOwnStorePosition || !previousOfferId;
+    const acceptTargetId = pendingHasOwnStorePosition
+      ? pendingOfferId
+      : (previousOfferId || pendingOfferId);
 
-    if (!previousOfferId && asText(pendingFields["Status"]) !== "Denied") {
+    if (!pendingHasOwnStorePosition && !previousOfferId && asText(pendingFields["Status"]) !== "Denied") {
       // No previous AND this round isn't a denied one to revive —
       // genuinely nothing to accept.
       return res.status(409).json({ error: "There is no previous offer to accept." });
