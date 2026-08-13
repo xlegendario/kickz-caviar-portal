@@ -19133,6 +19133,9 @@ app.get("/api/dashboard/buying-open-wtbs", async (req, res) => {
           current_lowest: currentLowest
             ? moneySmartValue(currentLowest)
             : "-",
+          vat_type: winningSellerOffer?.vatType
+            ? memberWtbBuyerFacingVatType(winningSellerOffer.vatType, f)
+            : "-",
           status: "Open",
           inventory_filter: displayValue(f["Buying Inventory Filter"]),
           date: formatDateEU(f["Date"]),
