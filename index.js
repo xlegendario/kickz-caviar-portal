@@ -19489,7 +19489,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
 
         if (ownNormalized == null) return item; // can't compare — don't hide
 
-        if (filter === "open") console.error("DEBUG buying open visibility:", { sellerId: item.__sellerId, sellers_offer: item.sellers_offer, sellers_offer_payout: item.sellers_offer_payout, vat_type: item.vat_type, ownNormalized, betterElsewhere, willHide: betterElsewhere < ownNormalized });
+        console.error("DEBUG visibility [" + filter + "]:", { sellerId: item.__sellerId, sellers_offer: item.sellers_offer, sellers_offer_payout: item.sellers_offer_payout, vat_type: item.vat_type, ownNormalized, betterElsewhere, willHide: betterElsewhere < ownNormalized });
 
         return betterElsewhere < ownNormalized ? null : item;
       })
