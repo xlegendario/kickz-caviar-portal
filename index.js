@@ -818,6 +818,51 @@ async function disableCounterOfferDiscordButtons(channelId, messageId, note) {
   return true;
 }
 
+// NEW — UNIVERSAL EMBED SUPERSEDING (his decisive simplification). Every
+// time a new embed is sent to a seller, disable ALL of that seller's
+// OTHER round embeds for the same order/WTB, so they can never act on a
+// stale round — no matter who triggered the new embed (the seller via
+// Portal/Discord, the store countering, a cross-seller broadcast). No new
+// Airtable field: each Counter Offer round already stores the Discord
+// Channel/Message ID of the embed it sent, so we just query this seller's
+// rounds on this order/WTB and disable each one's embed (except the one
+// we just sent, identified by keepMessageId). Best-effort throughout.
+async function disableOtherSellerRoundEmbedsForOrder({
+  sellerRecordId,
+  orderRecordId,
+  memberWtbRecordId,
+  keepMessageId,
+  note = "↩️ A newer round is now active — please respond to the latest message (or manage this in your dashboard)."
+}) {
+  try {
+    if (!sellerRecordId || (!orderRecordId && !memberWtbRecordId)) return;
+
+    const linkField = memberWtbRecordId ? "Member WTB" : "Order";
+    const linkId = memberWtbRecordId || orderRecordId;
+
+    const allRounds = await airtable(COUNTER_OFFERS_TABLE)
+      .select({ fields: ["Seller ID", "Order", "Member WTB", "Discord Channel ID", "Discord Message ID"] })
+      .all()
+      .catch(() => []);
+
+    const mine = allRounds.filter((r) =>
+      firstLinkedRecordId(r.fields?.["Seller ID"]) === sellerRecordId &&
+      firstLinkedRecordId(r.fields?.[linkField]) === linkId
+    );
+
+    for (const r of mine) {
+      const rf = r.fields || {};
+      const channelId = asText(rf["Discord Channel ID"]);
+      const messageId = asText(rf["Discord Message ID"]);
+      if (!channelId || !messageId) continue;
+      if (keepMessageId && messageId === asText(keepMessageId)) continue;
+      await disableCounterOfferDiscordButtons(channelId, messageId, note).catch(() => {});
+    }
+  } catch (err) {
+    console.error("disableOtherSellerRoundEmbedsForOrder failed (non-blocking):", err.message);
+  }
+}
+
 // NEW — after a seller denies (via the Portal) a store counter they were
 // still able to respond to, transform that counter embed on Discord into
 // the denial state: title flips to "Counter Offer Denied", Deny is
@@ -825,97 +870,6 @@ async function disableCounterOfferDiscordButtons(channelId, messageId, note) {
 // to the store's offer (Accept) or come back with a new counter (Counter)
 // straight from Discord, exactly like the Portal allows. Everything works
 // on Discord too, safely (no Deny-on-an-already-denied). Best-effort.
-
-// NEW — stage 2: after the seller re-counters (via Portal or Discord),
-// transform their embed to the "you countered, waiting on the buyer"
-// state: Accept €X (still fall back to the buyer's offer) + Edit (adjust
-// the new counter). Deny gone. editTargetRoundId is the seller's just-
-// placed round; acceptTargetRoundId is what Accept falls back to; the
-// accept amount is the seller-payout the buyer offered. Best-effort.
-async function setCounterOfferDiscordToCounteredRevisable(channelId, messageId, acceptTargetRoundId, editTargetRoundId, acceptAmount, editButtonPrefix = "counter_offer_edit") {
-  await initKickzDealDiscord();
-
-  const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
-  if (!channel) return false;
-
-  const message = await channel.messages.fetch(messageId).catch(() => null);
-  if (!message) return false;
-
-  const acceptLabel = Number.isFinite(Number(acceptAmount)) && Number(acceptAmount) > 0
-    ? `Accept €${Number(acceptAmount)}`
-    : "Accept";
-
-  await message.edit({
-    content: "🔁 You countered on this order. You can still edit the counter. Waiting on the buyer.",
-    embeds: message.embeds,
-    components: [
-      {
-        type: 1,
-        components: [
-          {
-            type: 2,
-            style: 3,
-            label: acceptLabel,
-            custom_id: `counter_offer_accept:${acceptTargetRoundId}`
-          },
-          {
-            type: 2,
-            style: 1,
-            label: "Edit",
-            custom_id: `${editButtonPrefix}:${editTargetRoundId}`
-          }
-        ]
-      }
-    ]
-  }).catch((err) => console.error("Could not set counter embed to countered-revisable (non-blocking):", err.message));
-
-  return true;
-}
-
-async function setCounterOfferDiscordToDeniedRevisable(channelId, messageId, counterOfferRecordId, storeAmountForAcceptLabel) {
-  await initKickzDealDiscord();
-
-  const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
-  if (!channel) return false;
-
-  const message = await channel.messages.fetch(messageId).catch(() => null);
-  if (!message) return false;
-
-  const acceptLabel = Number.isFinite(Number(storeAmountForAcceptLabel)) && Number(storeAmountForAcceptLabel) > 0
-    ? `Accept €${Number(storeAmountForAcceptLabel)}`
-    : "Accept";
-
-  // Leave the counter embed itself fully intact (no red, no title
-  // change — turning it red wrongly implied the STORE denied). Only put
-  // a status line above it via the message content, and swap the
-  // buttons to Accept (fall back to the store's offer) + Counter
-  // (place a new counter).
-  await message.edit({
-    content: "❌ Counter offer denied",
-    embeds: message.embeds,
-    components: [
-      {
-        type: 1,
-        components: [
-          {
-            type: 2,
-            style: 3,
-            label: acceptLabel,
-            custom_id: `counter_offer_accept:${counterOfferRecordId}`
-          },
-          {
-            type: 2,
-            style: 1,
-            label: "Counter",
-            custom_id: `counter_offer_counter:${counterOfferRecordId}`
-          }
-        ]
-      }
-    ]
-  }).catch((err) => console.error("Could not set counter embed to denied-revisable (non-blocking):", err.message));
-
-  return true;
-}
 
 async function setCounterOfferDiscordToEditOnly(channelId, messageId, note, editTargetRoundId, editButtonPrefix = "counter_offer_edit") {
   await initKickzDealDiscord();
@@ -12200,6 +12154,21 @@ async function sendCounterOfferDiscordDM({
     })()
   });
 
+  // UNIVERSAL SUPERSEDING — this new embed replaces any older embed this
+  // seller has on this order/WTB. Disable all their OTHER round embeds.
+  try {
+    const thisRound = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId).catch(() => null);
+    const trf = thisRound?.fields || {};
+    await disableOtherSellerRoundEmbedsForOrder({
+      sellerRecordId: firstLinkedRecordId(trf["Seller ID"]),
+      orderRecordId: firstLinkedRecordId(trf["Order"]),
+      memberWtbRecordId: firstLinkedRecordId(trf["Member WTB"]),
+      keepMessageId: message.id
+    });
+  } catch (supersedeErr) {
+    console.error("Failed to supersede prior seller embeds (non-blocking):", supersedeErr.message);
+  }
+
   return {
     channelId: message.channelId,
     messageId: message.id,
@@ -12311,6 +12280,20 @@ async function sendMemberWtbCounterOfferDiscordDM({
       return [{ type: 1, components: row }];
     })()
   });
+
+  // UNIVERSAL SUPERSEDING — Member WTB seller side.
+  try {
+    const thisRound = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId).catch(() => null);
+    const trf = thisRound?.fields || {};
+    await disableOtherSellerRoundEmbedsForOrder({
+      sellerRecordId: firstLinkedRecordId(trf["Seller ID"]),
+      orderRecordId: firstLinkedRecordId(trf["Order"]),
+      memberWtbRecordId: firstLinkedRecordId(trf["Member WTB"]),
+      keepMessageId: message.id
+    });
+  } catch (supersedeErr) {
+    console.error("Failed to supersede prior MW seller embeds (non-blocking):", supersedeErr.message);
+  }
 
   return {
     channelId: message.channelId,
@@ -14834,17 +14817,18 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
         }).catch((err) => console.error("Failed to notify store of no-prior retry counter (non-blocking):", err));
       }
 
-      // Stage 2: flip the seller's Discord embed to "you countered,
-      // waiting on the buyer" — Accept €X (fall back to the buyer's
-      // offer) + Edit (adjust this new counter). Accept target stays the
-      // denied round (its Counter Payout is the buyer's position).
+      // The seller countered via the Portal — fully disable the Discord
+      // embed they acted on (universal rule: handled in the dashboard →
+      // Discord embed dead; manage it there). No new seller embed here.
       {
         const dmChannelId = asText(f["Discord Channel ID"]);
         const dmMessageId = asText(f["Discord Message ID"]);
-        const acceptAmount = numberValue(f["Counter Payout"]);
         if (dmChannelId && dmMessageId) {
-          setCounterOfferDiscordToCounteredRevisable(dmChannelId, dmMessageId, offerId, newRoundFresh.id, acceptAmount)
-            .catch((err) => console.error("Failed to set embed to countered-revisable (non-blocking):", err.message));
+          disableCounterOfferDiscordButtons(
+            dmChannelId,
+            dmMessageId,
+            "🔁 You countered in your dashboard. Manage or edit this there."
+          ).catch((err) => console.error("Failed to disable embed on retry-counter (non-blocking):", err.message));
         }
       }
 
@@ -15001,17 +14985,17 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
       }).catch((err) => console.error("Failed to notify store of retry counter (non-blocking):", err));
     }
 
-    // Stage 2: flip the seller's Discord embed to "you countered,
-    // waiting on the buyer" — Accept €X + Edit. Accept falls back to the
-    // denied round's buyer position (its Counter Payout); Edit adjusts
-    // the new round.
+    // The seller countered via the Portal — fully disable the Discord
+    // embed they acted on (universal rule). No new seller embed here.
     {
       const dmChannelId = asText(f["Discord Channel ID"]);
       const dmMessageId = asText(f["Discord Message ID"]);
-      const acceptAmount = numberValue(f["Counter Payout"]);
       if (dmChannelId && dmMessageId) {
-        setCounterOfferDiscordToCounteredRevisable(dmChannelId, dmMessageId, offerId, newRound.id, acceptAmount)
-          .catch((err) => console.error("Failed to set embed to countered-revisable (non-blocking):", err.message));
+        disableCounterOfferDiscordButtons(
+          dmChannelId,
+          dmMessageId,
+          "🔁 You countered in your dashboard. Manage or edit this there."
+        ).catch((err) => console.error("Failed to disable embed on retry-counter (non-blocking):", err.message));
       }
     }
 
@@ -15297,21 +15281,6 @@ for (const round of pendingSellerCounterRounds) {
       Number.isFinite(sellerLastOfferForNotify) ? sellerLastOfferForNotify : sellerOriginalPrice,
       recomputedPayout
     );
-
-    // #3 — disable this seller's PRIOR embed (the round being
-    // superseded) before sending the new one, so a new embed always
-    // supersedes the old and they can't act on a stale round.
-    {
-      const oldChannelId = asText(rf["Discord Channel ID"]);
-      const oldMessageId = asText(rf["Discord Message ID"]);
-      if (oldChannelId && oldMessageId) {
-        await disableCounterOfferDiscordButtons(
-          oldChannelId,
-          oldMessageId,
-          "❌ This offer was superseded by a newer one."
-        ).catch((err) => console.error("Failed to disable prior reengage embed (non-blocking):", err.message));
-      }
-    }
 
     if (sourceType === "Member WTB") {
       await sendMemberWtbCounterOfferDiscordDM({
@@ -16618,18 +16587,20 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
     });
 
     // NEW — the seller denied this store counter via the Portal. Leave
-    // the Discord counter embed intact, but put "Counter offer denied"
-    // above it and swap buttons to Accept €X (fall back to the store's
-    // offer) + Counter (place a new counter) — so the seller can still
-    // act from Discord. The Accept amount is the store's seller-payout
-    // (Counter Payout) on this round.
+    // The seller denied via the Portal — fully disable the Discord embed
+    // they acted on (his universal rule: once handled via the dashboard,
+    // the Discord embed is dead; manage/change it in the dashboard). The
+    // universal superseding handles any co-seller/new-round embeds; here
+    // there's no new embed, so disable explicitly.
     {
       const deniedEmbedChannelId = asText(deniedFields["Discord Channel ID"]);
       const deniedEmbedMessageId = asText(deniedFields["Discord Message ID"]);
-      const storeAcceptAmount = numberValue(deniedFields["Counter Payout"]);
       if (deniedEmbedChannelId && deniedEmbedMessageId) {
-        setCounterOfferDiscordToDeniedRevisable(deniedEmbedChannelId, deniedEmbedMessageId, counterOfferRecordId, storeAcceptAmount)
-          .catch((err) => console.error("Failed to transform denied counter embed (non-blocking):", err.message));
+        disableCounterOfferDiscordButtons(
+          deniedEmbedChannelId,
+          deniedEmbedMessageId,
+          "❌ You denied this in your dashboard. Manage or change this step there."
+        ).catch((err) => console.error("Failed to disable denied counter embed (non-blocking):", err.message));
       }
     }
 
