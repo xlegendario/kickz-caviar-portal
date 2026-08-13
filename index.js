@@ -871,50 +871,6 @@ async function disableOtherSellerRoundEmbedsForOrder({
 // straight from Discord, exactly like the Portal allows. Everything works
 // on Discord too, safely (no Deny-on-an-already-denied). Best-effort.
 
-async function setCounterOfferDiscordToEditOnly(channelId, messageId, note, editTargetRoundId, editButtonPrefix = "counter_offer_edit") {
-  await initKickzDealDiscord();
-
-  const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
-  if (!channel) return false;
-
-  const message = await channel.messages.fetch(messageId).catch(() => null);
-  if (!message) return false;
-
-  await message.edit({
-    content: note || message.content,
-    embeds: message.embeds,
-    components: [
-      {
-        type: 1,
-        components: [
-          {
-            type: 2,
-            style: 3,
-            label: "Accept",
-            custom_id: "counter_offer_accept_disabled",
-            disabled: true
-          },
-          {
-            type: 2,
-            style: 1,
-            label: "Edit",
-            custom_id: `${editButtonPrefix}:${editTargetRoundId}`
-          },
-          {
-            type: 2,
-            style: 4,
-            label: "Deny",
-            custom_id: "counter_offer_deny_disabled",
-            disabled: true
-          }
-        ]
-      }
-    ]
-  });
-
-  return true;
-}
-
 async function disableConsignmentDiscordButtons(channelId, messageId, note, preferredClient = null) {
   const clients = preferredClient
     ? [preferredClient]
@@ -8259,22 +8215,19 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
       }).catch((err) => console.error("Failed to notify store of seller counter (non-blocking):", err));
     }
 
-    // NEW — close the Deny-after-own-counter leak on the SELLER side
-    // for the Portal route. When the seller counters via Discord the
-    // button handler already transforms the buyer-counter embed to
-    // Edit-only; the Portal route left that DM embed fully clickable, so
-    // the seller could still click Deny on a position they'd now
-    // responded to. Transform it here too, wired to counter_offer_edit
-    // for the seller's just-placed round. Best-effort, non-blocking.
+    // The seller countered via the Portal — fully disable the Discord
+    // embed they acted on (universal rule: handled in the dashboard →
+    // Discord embed dead; manage/edit it there). This route sends no new
+    // seller embed, so the universal superseding won't fire here — disable
+    // explicitly. Best-effort, non-blocking.
     const sellerDmChannelId = asText(f["Discord Channel ID"]);
     const sellerDmMessageId = asText(f["Discord Message ID"]);
     if (sellerDmChannelId && sellerDmMessageId) {
-      await setCounterOfferDiscordToEditOnly(
+      await disableCounterOfferDiscordButtons(
         sellerDmChannelId,
         sellerDmMessageId,
-        `🔁 You countered with €${proposedPrice}. Waiting on the store.`,
-        newRound.id
-      ).catch((err) => console.error("Failed to set seller DM embed to Edit-only (non-blocking):", err.message));
+        "🔁 You countered in your dashboard. Manage or edit this there."
+      ).catch((err) => console.error("Failed to disable seller DM embed on Portal counter (non-blocking):", err.message));
     }
 
     res.json({ ok: true, band: validation.band, new_round_id: newRound.id });
@@ -25296,20 +25249,18 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
       }
     }
 
-    // NEW — close the Deny-after-own-counter leak on the Member WTB
-    // seller side (Portal route): transform the buyer-counter DM embed
-    // the seller just responded to into Edit-only, wired to
-    // member_wtb_edit for the seller's just-placed round. Non-blocking.
+    // The seller countered via the Portal (Member WTB) — fully disable
+    // the Discord embed they acted on (universal rule: handled in the
+    // dashboard → embed dead; manage/edit it there). No new seller embed
+    // here, so the universal superseding won't fire — disable explicitly.
     const mwSellerDmChannelId = asText(f["Discord Channel ID"]);
     const mwSellerDmMessageId = asText(f["Discord Message ID"]);
     if (mwSellerDmChannelId && mwSellerDmMessageId) {
-      await setCounterOfferDiscordToEditOnly(
+      await disableCounterOfferDiscordButtons(
         mwSellerDmChannelId,
         mwSellerDmMessageId,
-        `🔁 You countered with €${proposedPrice}. Waiting on the buyer.`,
-        newRound.id,
-        "member_wtb_edit"
-      ).catch((err) => console.error("Failed to set MW seller DM embed to Edit-only (non-blocking):", err.message));
+        "🔁 You countered in your dashboard. Manage or edit this there."
+      ).catch((err) => console.error("Failed to disable MW seller DM embed on Portal counter (non-blocking):", err.message));
     }
 
     res.json({ ok: true, counter_offer_record_id: newRound.id, dm_sent: dmSent });
@@ -25510,21 +25461,18 @@ app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) =>
       }
     }
 
-    // NEW — close the Deny-after-own-counter leak on the Member WTB
-    // buyer side (Portal route): f (previousRound) carries the DM embed
-    // the BUYER received when the seller countered; transform it to
-    // Edit-only now that the buyer has responded, wired to
-    // member_wtb_edit for the buyer's just-placed round. Non-blocking.
+    // The buyer countered via the Portal (Member WTB) — fully disable
+    // the Discord embed they acted on (universal rule: handled in the
+    // dashboard → embed dead; manage/edit it there). f carries the DM
+    // embed the buyer received when the seller countered.
     const mwBuyerDmChannelId = asText(f["Discord Channel ID"]);
     const mwBuyerDmMessageId = asText(f["Discord Message ID"]);
     if (mwBuyerDmChannelId && mwBuyerDmMessageId) {
-      await setCounterOfferDiscordToEditOnly(
+      await disableCounterOfferDiscordButtons(
         mwBuyerDmChannelId,
         mwBuyerDmMessageId,
-        `🔁 You countered with €${proposedPrice}. Waiting on the seller.`,
-        newRound.id,
-        "member_wtb_edit"
-      ).catch((err) => console.error("Failed to set MW buyer DM embed to Edit-only (non-blocking):", err.message));
+        "🔁 You countered in your dashboard. Manage or edit this there."
+      ).catch((err) => console.error("Failed to disable MW buyer DM embed on Portal counter (non-blocking):", err.message));
     }
 
     res.json({ ok: true, counter_offer_record_id: newRound.id, dm_sent: dmSent });
