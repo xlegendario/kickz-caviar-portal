@@ -2110,7 +2110,8 @@ async function appendMemberWtbOfferMessage(memberWtbRecordId, entry) {
 
 async function disableAllMemberWtbBuyerOfferMessages(
   memberWtbRecordId,
-  note = "❌ A newer offer is now active — see the latest message."
+  note = "❌ A newer offer is now active — see the latest message.",
+  skipMessageId = null
 ) {
   if (!memberWtbRecordId) return;
   const wtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId).catch(() => null);
@@ -2122,6 +2123,10 @@ async function disableAllMemberWtbBuyerOfferMessages(
 
   for (const ref of refs) {
     try {
+      // Skip a message the caller already edited (e.g. the interaction
+      // embed the buyer just clicked) — re-editing it makes the embed
+      // visibly flip an extra time.
+      if (skipMessageId && ref.messageId === skipMessageId) continue;
       const channel = await kickzDealDiscordClient.channels.fetch(ref.channelId).catch(() => null);
       if (!channel) continue;
       const message = await channel.messages.fetch(ref.messageId).catch(() => null);
@@ -4662,7 +4667,8 @@ function bindConsignmentDiscordButtons(client) {
 
       await disableAllMemberWtbBuyerOfferMessages(
         firstLinkedRecordId(deniedFields["Member WTB"]),
-        "❌ You denied this in your dashboard."
+        "❌ You denied this in your dashboard.",
+        interaction.message?.id
       ).catch((err) => console.error("Failed to disable buyer embeds after MW buyer-deny (non-blocking):", err.message));
 
       // FIXED — the MW buyer-deny used to REOPEN the denied round's prior
