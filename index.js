@@ -13436,8 +13436,26 @@ function getTimeToMax(startTime) {
   return `${hours}h ${minutes}m left`;
 }
 
-function normalizeDeal(record, dealType) {
+async function normalizeDeal(record, dealType) {
   const f = record.fields || {};
+
+  // FIXED — the product card's current lowest read stale Airtable rollup
+  // fields ("Current Lowest (Normalized)" / "(VAT0)") that don't update
+  // live with Seller Offers / Counter Offers, so it showed "No offer yet"
+  // even when a live offer existed. Now computes the true cross-seller
+  // lowest live (same source every other view uses). Margin/VAT21 view =
+  // the normalized (VAT21-scale) value incl.; VAT0 view = /1.21 excl.
+  let liveLowestNormalized = null;
+  try {
+    const r = await getCurrentGlobalLowestNormalized("Seller Offer", record.id, null);
+    if (r && Number.isFinite(r.normalized)) liveLowestNormalized = r.normalized;
+  } catch (_) {}
+  const currentOfferMargin = Number.isFinite(liveLowestNormalized)
+    ? moneyWholeValue(Math.floor(liveLowestNormalized))
+    : moneyWholeValue(Math.floor(numberValue(f["Current Lowest (Normalized)"])));
+  const currentOfferVat0 = Number.isFinite(liveLowestNormalized)
+    ? moneyWholeValue(Math.floor(liveLowestNormalized / 1.21))
+    : moneyWholeValue(Math.floor(numberValue(f["Current Lowest (VAT0)"])));
 
   return {
     id: record.id,
@@ -13472,14 +13490,34 @@ function normalizeDeal(record, dealType) {
     current_payout_vat0: moneyValue(f["Outsource Buying Price (VAT 0%)"]),
     max_payout_vat0: moneyValue(f["Final Outsource Buying Price (VAT 0%)"]),
 
-    current_offer_margin: moneyValue(Math.floor(numberValue(f["Current Lowest (Normalized)"]))),
-    current_offer_vat0: moneyValue(Math.floor(numberValue(f["Current Lowest (VAT0)"]))),
+    current_offer_margin: currentOfferMargin,
+    current_offer_vat0: currentOfferVat0,
     maximum_buying_price: numberValue(f["Maximum Buying Price"])
   };
 }
 
-function normalizeMemberWtbDeal(record) {
+async function normalizeMemberWtbDeal(record) {
   const f = record.fields || {};
+
+  // FIXED — same stale-rollup + broken-VAT0 issue as the product card's
+  // Store Orders path: it read "Current Lowest Normalized/Offer/Lowest
+  // Offer" rollups (stale, so "No offer yet"), and the VAT0 branch did
+  // numberValue(f["Lowest Offer VAT Type"]) === "VAT0" — numberValue of a
+  // text field is always 0, never "VAT0", so current_offer_vat0 was
+  // always 0 (empty in the VAT0 payout view). Now computes the true
+  // cross-seller lowest live. Margin/VAT21 view = normalized incl.; VAT0
+  // view = /1.21 excl. Whole numbers (moneyWholeValue).
+  let liveLowestNormalized = null;
+  try {
+    const r = await getCurrentGlobalLowestNormalized("Member WTB", record.id, null);
+    if (r && Number.isFinite(r.normalized)) liveLowestNormalized = r.normalized;
+  } catch (_) {}
+  const memberWtbOfferMargin = Number.isFinite(liveLowestNormalized)
+    ? moneyWholeValue(Math.floor(liveLowestNormalized))
+    : moneyWholeValue(Math.floor(numberValue(f["Current Lowest Normalized"]) || numberValue(f["Current Lowest Offer"]) || numberValue(f["Lowest Offer"])));
+  const memberWtbOfferVat0 = Number.isFinite(liveLowestNormalized)
+    ? moneyWholeValue(Math.floor(liveLowestNormalized / 1.21))
+    : "";
 
   return {
     id: record.id,
@@ -13511,21 +13549,9 @@ function normalizeMemberWtbDeal(record) {
     current_payout_vat0: "",
     max_payout_vat0: "",
 
-    current_offer_margin: moneyValue(
-      Math.floor(
-        numberValue(f["Current Lowest Normalized"]) ||
-        numberValue(f["Current Lowest Offer"]) ||
-        numberValue(f["Lowest Offer"])
-      )
-    ),
+    current_offer_margin: memberWtbOfferMargin,
 
-    current_offer_vat0: moneyValue(
-      Math.floor(
-        numberValue(f["Lowest Offer VAT Type"]) === "VAT0"
-          ? numberValue(f["Current Lowest Offer"])
-          : 0
-      )
-    ),
+    current_offer_vat0: memberWtbOfferVat0,
 
     maximum_buying_price: numberValue(f["Max Price"]),
     raw_date: f["Date"] || f["Created At"] || ""
@@ -23160,7 +23186,7 @@ app.get("/api/deals", async (req, res) => {
     }
     
     const records = airtableData.records || [];
-    let deals = records.map((record) => normalizeDeal(record, type));
+    let deals = await Promise.all(records.map((record) => normalizeDeal(record, type)));
     
     if (type === "wtb") {
       const memberWtbRecords = await airtable(MEMBER_WTBS_TABLE)
@@ -23193,7 +23219,7 @@ app.get("/api/deals", async (req, res) => {
         })
         .all();
     
-      const memberDeals = memberWtbRecords.map(normalizeMemberWtbDeal);
+      const memberDeals = await Promise.all(memberWtbRecords.map(normalizeMemberWtbDeal));
     
       deals = [
         ...deals,
