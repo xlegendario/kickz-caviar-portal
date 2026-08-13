@@ -2024,7 +2024,7 @@ function renderBuyingUnifiedOfferRows(items) {
     const myOffer = item._kind === "my_counter" ? item.my_offer : null;
     const myLastOffer = (item._kind === "seller_counter" || item._kind === "denied" || item._kind === "fresh") ? item.my_offer : null;
     const sellersOffer = item._kind === "fresh" ? item.offer : item.sellers_offer;
-    const dateValue = item._kind === "fresh" ? item.date : (item.denied_at || item.raw_date);
+    const dateValue = item._kind === "fresh" ? (item.raw_date || item.date) : (item.denied_at || item.raw_date);
 
     if (isDenied) {
       // NEW — additive only: his exact scenario — a genuinely fresh
