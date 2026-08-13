@@ -8939,7 +8939,6 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
     // to be computed further down, so a denial can't happen at all for
     // a store that doesn't own this order.
     const linkedOrderId = firstLinkedRecordId(f["Order"]);
-    console.error("DEBUG store-deny HIT:", { counterOfferRecordId, sellerDiscordId: asText(f["Seller Discord ID"]), sellerCounterPrice: numberValue(f["Seller Counter Price"]), linkedOrderId });
     const requestedStoreNameForDeny = asText(req.body?.store_name);
     if (requestedStoreNameForDeny) {
       const ownsIt = await verifyStoreOwnsOrderForRound(linkedOrderId, requestedStoreNameForDeny);
@@ -9013,7 +9012,6 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
         console.error("Failed to send denied seller their Denied embed (non-blocking):", err);
         return null;
       });
-      console.error("DEBUG denied-seller embed:", { sellerDiscordId, counterOfferRecordId, storeStandingPayout, sentOk: !!deniedDiscordResult, msgId: deniedDiscordResult?.messageId });
 
       if (deniedDiscordResult) {
         await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
