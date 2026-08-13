@@ -4497,14 +4497,40 @@ function bindConsignmentDiscordButtons(client) {
       // the counter is created successfully server-side regardless.
       await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/${counterOfferRecordId}/seller-counter`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
-        },
-        body: JSON.stringify({ price: counterPrice })
-      });
+      // A retry comes from a DENIED round (the seller is coming back on
+      // their Denied pill via the "Retry" button). The seller-counter
+      // endpoint requires Status=Open and would reject it ("no longer
+      // open"). Detect a non-Open round and route it to the MW-aware
+      // retry-counter endpoint instead, which handles a denied round.
+      let retryRoundStatus = null;
+      let retryRoundSellerId = null;
+      try {
+        const retryRoundRecord = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
+        retryRoundStatus = asText(retryRoundRecord.fields?.["Status"]);
+        retryRoundSellerId = firstLinkedRecordId(retryRoundRecord.fields?.["Seller ID"]);
+      } catch (err) {
+        // fall through — the seller-counter path will 404 cleanly
+      }
+
+      const isRetryFromDenied = retryRoundStatus && retryRoundStatus !== "Open";
+
+      const response = isRetryFromDenied
+        ? await fetch(`${APP_PUBLIC_BASE_URL}/api/dashboard/wtb-counter-offers/${counterOfferRecordId}/retry-counter`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+            },
+            body: JSON.stringify({ price: counterPrice, seller_record_id: retryRoundSellerId })
+          })
+        : await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/${counterOfferRecordId}/seller-counter`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+            },
+            body: JSON.stringify({ price: counterPrice })
+          });
 
       const data = await response.json().catch(() => ({}));
 
@@ -14842,6 +14868,140 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
     if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
       return res.status(403).json({ error: "Not allowed" });
     }
+
+    // ---- MEMBER WTB retry branch ---------------------------------------
+    // A Member WTB round links via "Member WTB", NOT "Order" — the
+    // Store-Orders code below reads f["Order"] and would crash on
+    // ORDERS_TABLE.find(undefined). Handle MW retries here and return.
+    // Mirrors the MW seller-counter endpoint, but starts from a DENIED
+    // round (the seller is coming back from their Denied pill).
+    const mwRecordId = firstLinkedRecordId(f["Member WTB"]);
+    if (mwRecordId) {
+      const mwSellerId = firstLinkedRecordId(f["Seller ID"]);
+      const mwSellerOriginalPrice = numberValue(f["Seller Original Price"]);
+      const mwSellerVatType = asText(f["Seller Original VAT Type"]);
+      const mwBuyerPriceOnRound = numberValue(f["Store Counter Price"]);
+
+      const mwWtb = await airtable(MEMBER_WTBS_TABLE).find(mwRecordId).catch(() => null);
+      if (!mwWtb) {
+        return res.status(404).json({ error: "This WTB is no longer available." });
+      }
+      const mwWtbFields = mwWtb.fields || {};
+
+      // The seller's own reference is the price they last actually placed
+      // (the denied round's own Seller Counter Price, or their original).
+      let mwSellerOwnReference = numberValue(f["Seller Counter Price"]);
+      if (!Number.isFinite(mwSellerOwnReference) || mwSellerOwnReference <= 0) {
+        mwSellerOwnReference = mwSellerOriginalPrice;
+      }
+
+      // The buyer's standing floor across this WTB, in seller terms — the
+      // retry must still sit under the current cross-seller lowest.
+      const mwBuyerFloor = await getBuyerHighestEverPosition("Member WTB", mwRecordId);
+      const mwBuyerReference = Number.isFinite(mwBuyerFloor) && mwBuyerFloor > 0
+        ? mwBuyerFloor
+        : mwBuyerPriceOnRound;
+      const mwBuyerInSellerTerms = calculateMemberWtbSellerPayout(mwBuyerReference, mwSellerVatType, mwWtbFields);
+
+      const mwGlobalLowest = (await getCurrentGlobalLowestNormalized("Member WTB", mwRecordId, mwSellerId)).normalized;
+      let mwCeilingRaw = null;
+      let mwReferenceRaw = null;
+      if (Number.isFinite(mwGlobalLowest)) {
+        const rawThreshold = mwSellerVatType === "VAT0" ? mwGlobalLowest / 1.21 : mwGlobalLowest;
+        mwCeilingRaw = Math.floor(rawThreshold - MIN_COUNTER_STEP);
+        mwReferenceRaw = rawThreshold;
+      }
+
+      const mwValidation = validateNextCounterPriceWithCrossSellerCeiling(
+        mwSellerOwnReference,
+        mwBuyerInSellerTerms,
+        proposedPrice,
+        mwCeilingRaw,
+        mwReferenceRaw
+      );
+      if (!mwValidation.ok) {
+        if (mwValidation.reason.startsWith("No room left") && Number.isFinite(mwCeilingRaw)) {
+          return res.status(400).json({
+            error: `Another seller already offers a better price for this WTB — at most €${mwCeilingRaw.toFixed(2)} (${mwSellerVatType}) to beat it — and the gap is too small for another step. Please accept or deny.`,
+            band: mwValidation.band
+          });
+        }
+        return res.status(400).json({ error: mwValidation.reason, band: mwValidation.band });
+      }
+
+      // Close the old denied round and create the fresh retry round.
+      await airtable(COUNTER_OFFERS_TABLE).update(offerId, {
+        "Status": "Closed",
+        "Closed At": new Date().toISOString()
+      });
+
+      const mwNewRound = await airtable(COUNTER_OFFERS_TABLE).create({
+        "Member WTB": [mwRecordId],
+        "Seller ID": mwSellerId ? [mwSellerId] : undefined,
+        "Seller Offer Record ID": asText(f["Seller Offer Record ID"]),
+        "Source Type": "Member WTB",
+        "Seller Original Price": mwSellerOriginalPrice,
+        "Seller Original VAT Type": mwSellerVatType,
+        "Seller Counter Price": proposedPrice,
+        "Counter Payout": proposedPrice,
+        "Counter Payout VAT Type": mwSellerVatType,
+        "Previous Record ID": offerId,
+        "Created At": new Date().toISOString(),
+        "Status": "Open"
+      });
+
+      // Notify the buyer with the retry, tracked in the JSON list.
+      const mwBuyerRecordId = firstLinkedRecordId(mwWtbFields["Buyer Seller ID"]);
+      const mwBuyerRecord = mwBuyerRecordId ? await airtable(SELLERS_TABLE).find(mwBuyerRecordId).catch(() => null) : null;
+      const mwBuyerDiscordId = asText(
+        mwBuyerRecord?.fields?.["Discord ID"] || mwBuyerRecord?.fields?.["Discord User ID"]
+      );
+
+      if (mwBuyerDiscordId) {
+        const mwSellerCounterInBuyerTerms = calculateMemberWtbBuyerEquivalent(proposedPrice, mwSellerVatType, mwWtbFields);
+        const mwNoRoom =
+          Number.isFinite(mwSellerCounterInBuyerTerms) &&
+          !hasRoomForNextStep(mwBuyerReference, mwSellerCounterInBuyerTerms);
+
+        await disableAllMemberWtbBuyerOfferMessages(mwRecordId).catch((err) =>
+          console.error("Failed to disable prior MW buyer embeds (non-blocking):", err.message)
+        );
+
+        const mwDiscordResult = await sendMemberWtbBuyerCounterOfferDiscordDM({
+          counterOfferRecordId: mwNewRound.id,
+          buyerDiscordId: mwBuyerDiscordId,
+          productName: asText(mwWtbFields["Product Name"]),
+          sku: asText(mwWtbFields["SKU"]),
+          size: asText(mwWtbFields["Size"]),
+          memberWtbId: asText(mwWtbFields["Member WTB ID"]) || mwRecordId,
+          newPrice: mwSellerCounterInBuyerTerms,
+          yourPreviousCounter: mwBuyerReference,
+          vatLabel: memberWtbBuyerFacingVatType(mwSellerVatType, mwWtbFields),
+          noRoomToCounter: mwNoRoom
+        }).catch((err) => { console.error("Failed to DM buyer of MW retry (non-blocking):", err); return null; });
+
+        if (mwDiscordResult?.channelId && mwDiscordResult?.messageId) {
+          await airtable(COUNTER_OFFERS_TABLE).update(mwNewRound.id, {
+            "Discord Channel ID": mwDiscordResult.channelId,
+            "Discord Message ID": mwDiscordResult.messageId,
+            "Discord Delivery Type": mwDiscordResult.deliveryType
+          }).catch(() => {});
+          await appendMemberWtbOfferMessage(mwRecordId, mwDiscordResult);
+        }
+      }
+
+      // Re-engage the other sellers with the buyer's floor, same as a
+      // normal MW counter, so the thread stays consistent.
+      await reengageDeniedSellers({
+        sourceType: "Member WTB",
+        recordId: mwRecordId,
+        newBuyerCounterPrice: mwBuyerReference,
+        excludeSellerId: mwSellerId
+      }).catch((err) => console.error("Failed to re-engage other sellers after MW retry (non-blocking):", err));
+
+      return res.json({ ok: true, counter_offer_record_id: mwNewRound.id });
+    }
+    // ---- end Member WTB retry branch -----------------------------------
 
     const priorRoundId = firstLinkedRecordId(f["Previous Record ID"]);
 
