@@ -20379,6 +20379,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
         };
       }));
 
+    console.error("DEBUG buying-offers items:", items.map((it) => ({ wtb: it.member_wtb_record_id, sellers_offer: it.sellers_offer, vat: it.vat_type })));
     res.json({
       count: items.length,
       items: sortDashboardItemsNewestFirst(items)
