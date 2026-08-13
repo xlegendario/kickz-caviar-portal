@@ -25723,7 +25723,7 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
       if (Number.isFinite(ownCurrentPositionForFirstRound) && ownCurrentPositionForFirstRound > 0
           && proposedPrice < ownCurrentPositionForFirstRound + MIN_COUNTER_STEP) {
         return res.status(400).json({
-          error: `Your edited counter must be at least €${MIN_COUNTER_STEP.toFixed(2)} higher than your current €${ownCurrentPositionForFirstRound.toFixed(2)} (so €${(ownCurrentPositionForFirstRound + MIN_COUNTER_STEP).toFixed(2)} or more).`
+          error: `Your edited counter must be higher than your current €${Math.round(ownCurrentPositionForFirstRound)} — Minimum €${Math.round(ownCurrentPositionForFirstRound + MIN_COUNTER_STEP)}`
         });
       }
 
