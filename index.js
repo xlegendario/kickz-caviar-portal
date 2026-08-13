@@ -15319,7 +15319,7 @@ for (const round of pendingSellerCounterRounds) {
     );
 
     if (sourceType === "Member WTB") {
-      await sendMemberWtbCounterOfferDiscordDM({
+      const reengageDiscordResult = await sendMemberWtbCounterOfferDiscordDM({
         counterOfferRecordId: newRound.id,
         sellerDiscordId,
         productName: asText(contextFields["Product Name"]),
@@ -15338,9 +15338,19 @@ for (const round of pendingSellerCounterRounds) {
         // currently-lowest offer, which is effectively a "no" to
         // everyone still in the game.
         deniedAmount: isDenyBroadcast ? recomputedPayout : undefined
-      }).catch((err) => console.error("Failed to supersede pending seller counter (non-blocking):", err));
+      }).catch((err) => { console.error("Failed to supersede pending seller counter (non-blocking):", err); return null; });
+      // Store the embed IDs back so this round's embed can be superseded
+      // later (co-sellers enter here, so without this their IDs stay blank
+      // and their embeds never get disabled).
+      if (reengageDiscordResult) {
+        await airtable(COUNTER_OFFERS_TABLE).update(newRound.id, {
+          "Discord Channel ID": reengageDiscordResult.channelId,
+          "Discord Message ID": reengageDiscordResult.messageId,
+          "Discord Delivery Type": reengageDiscordResult.deliveryType
+        }).catch(() => {});
+      }
     } else {
-      await sendCounterOfferDiscordDM({
+      const reengageDiscordResult = await sendCounterOfferDiscordDM({
         counterOfferRecordId: newRound.id,
         sellerDiscordId,
         productName: asText(contextFields["Product Name"]),
@@ -15354,7 +15364,14 @@ for (const round of pendingSellerCounterRounds) {
         sellerLastOfferPrice: sellerLastOfferForNotify,
         noRoomToCounter: pendingNoRoomToCounter,
         deniedAmount: isDenyBroadcast ? recomputedPayout : undefined
-      }).catch((err) => console.error("Failed to supersede pending seller counter (non-blocking):", err));
+      }).catch((err) => { console.error("Failed to supersede pending seller counter (non-blocking):", err); return null; });
+      if (reengageDiscordResult) {
+        await airtable(COUNTER_OFFERS_TABLE).update(newRound.id, {
+          "Discord Channel ID": reengageDiscordResult.channelId,
+          "Discord Message ID": reengageDiscordResult.messageId,
+          "Discord Delivery Type": reengageDiscordResult.deliveryType
+        }).catch(() => {});
+      }
     }
   }
 
@@ -15415,7 +15432,7 @@ for (const round of pendingSellerCounterRounds) {
     const freshNoRoomToCounter = !hasRoomForNextStep(sellerOriginalPrice, recomputedPayout);
 
     if (sourceType === "Member WTB") {
-      await sendMemberWtbCounterOfferDiscordDM({
+      const freshDiscordResult = await sendMemberWtbCounterOfferDiscordDM({
         counterOfferRecordId: newRound.id,
         sellerDiscordId,
         productName: asText(contextFields["Product Name"]),
@@ -15436,9 +15453,16 @@ for (const round of pendingSellerCounterRounds) {
         // good news below) sees this as a clear denial, not a neutral
         // "here's a new counter."
         deniedAmount: isDenyBroadcast ? recomputedPayout : undefined
-      }).catch((err) => console.error("Failed to notify fresh seller of buyer counter (non-blocking):", err));
+      }).catch((err) => { console.error("Failed to notify fresh seller of buyer counter (non-blocking):", err); return null; });
+      if (freshDiscordResult) {
+        await airtable(COUNTER_OFFERS_TABLE).update(newRound.id, {
+          "Discord Channel ID": freshDiscordResult.channelId,
+          "Discord Message ID": freshDiscordResult.messageId,
+          "Discord Delivery Type": freshDiscordResult.deliveryType
+        }).catch(() => {});
+      }
     } else {
-      await sendCounterOfferDiscordDM({
+      const freshDiscordResult = await sendCounterOfferDiscordDM({
         counterOfferRecordId: newRound.id,
         sellerDiscordId,
         productName: asText(contextFields["Product Name"]),
@@ -15451,7 +15475,14 @@ for (const round of pendingSellerCounterRounds) {
         sellerOriginalVatType: sellerVatType,
         noRoomToCounter: freshNoRoomToCounter,
         deniedAmount: isDenyBroadcast ? recomputedPayout : undefined
-      }).catch((err) => console.error("Failed to notify fresh seller of buyer counter (non-blocking):", err));
+      }).catch((err) => { console.error("Failed to notify fresh seller of buyer counter (non-blocking):", err); return null; });
+      if (freshDiscordResult) {
+        await airtable(COUNTER_OFFERS_TABLE).update(newRound.id, {
+          "Discord Channel ID": freshDiscordResult.channelId,
+          "Discord Message ID": freshDiscordResult.messageId,
+          "Discord Delivery Type": freshDiscordResult.deliveryType
+        }).catch(() => {});
+      }
     }
   }
 
@@ -15496,7 +15527,7 @@ for (const round of pendingSellerCounterRounds) {
     if (!sellerDiscordId) continue;
 
     if (sourceType === "Member WTB") {
-      await sendMemberWtbCounterOfferDiscordDM({
+      const reopenDiscordResult = await sendMemberWtbCounterOfferDiscordDM({
         counterOfferRecordId: reopenedRound.id,
         sellerDiscordId,
         productName: asText(contextFields["Product Name"]),
@@ -15508,9 +15539,16 @@ for (const round of pendingSellerCounterRounds) {
         sellerOriginalPrice,
         sellerOriginalVatType: sellerVatType,
         sellerLastOfferPrice: deniedBuyerPrice > 0 ? sellerOriginalPrice : null
-      }).catch((err) => console.error("Failed to re-engage previously denied seller (non-blocking):", err));
+      }).catch((err) => { console.error("Failed to re-engage previously denied seller (non-blocking):", err); return null; });
+      if (reopenDiscordResult) {
+        await airtable(COUNTER_OFFERS_TABLE).update(reopenedRound.id, {
+          "Discord Channel ID": reopenDiscordResult.channelId,
+          "Discord Message ID": reopenDiscordResult.messageId,
+          "Discord Delivery Type": reopenDiscordResult.deliveryType
+        }).catch(() => {});
+      }
     } else {
-      await sendCounterOfferDiscordDM({
+      const reopenDiscordResult = await sendCounterOfferDiscordDM({
         counterOfferRecordId: reopenedRound.id,
         sellerDiscordId,
         productName: asText(contextFields["Product Name"]),
@@ -15521,7 +15559,14 @@ for (const round of pendingSellerCounterRounds) {
         vatType: sellerVatType,
         sellerOriginalPrice,
         sellerOriginalVatType: sellerVatType
-      }).catch((err) => console.error("Failed to re-engage previously denied seller (non-blocking):", err));
+      }).catch((err) => { console.error("Failed to re-engage previously denied seller (non-blocking):", err); return null; });
+      if (reopenDiscordResult) {
+        await airtable(COUNTER_OFFERS_TABLE).update(reopenedRound.id, {
+          "Discord Channel ID": reopenDiscordResult.channelId,
+          "Discord Message ID": reopenDiscordResult.messageId,
+          "Discord Delivery Type": reopenDiscordResult.deliveryType
+        }).catch(() => {});
+      }
     }
   }
 }
