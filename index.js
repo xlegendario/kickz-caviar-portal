@@ -13441,23 +13441,14 @@ function getTimeToMax(startTime) {
 async function normalizeDeal(record, dealType) {
   const f = record.fields || {};
 
-  // FIXED — the product card's current lowest read stale Airtable rollup
-  // fields ("Current Lowest (Normalized)" / "(VAT0)") that don't update
-  // live with Seller Offers / Counter Offers, so it showed "No offer yet"
-  // even when a live offer existed. Now computes the true cross-seller
-  // lowest live (same source every other view uses). Margin/VAT21 view =
-  // the normalized (VAT21-scale) value incl.; VAT0 view = /1.21 excl.
-  let liveLowestNormalized = null;
-  try {
-    const r = await getCurrentGlobalLowestNormalized("Seller Offer", record.id, null);
-    if (r && Number.isFinite(r.normalized)) liveLowestNormalized = r.normalized;
-  } catch (_) {}
-  const currentOfferMargin = Number.isFinite(liveLowestNormalized)
-    ? moneyWholeValue(Math.floor(liveLowestNormalized))
-    : moneyWholeValue(Math.floor(numberValue(f["Current Lowest (Normalized)"])));
-  const currentOfferVat0 = Number.isFinite(liveLowestNormalized)
-    ? moneyWholeValue(Math.floor(liveLowestNormalized / 1.21))
-    : moneyWholeValue(Math.floor(numberValue(f["Current Lowest (VAT0)"])));
+  // Product card current lowest reads the Airtable rollup fields. NOTE:
+  // an earlier version computed this live per-deal via
+  // getCurrentGlobalLowestNormalized — but that fired 3 Airtable calls
+  // for EVERY deal on a page that loads up to 1000 deals, hanging the
+  // whole frontpage. Reverted to the rollups (slightly less live during
+  // an active negotiation, but the page actually loads). Whole numbers.
+  const currentOfferMargin = moneyWholeValue(Math.floor(numberValue(f["Current Lowest (Normalized)"])));
+  const currentOfferVat0 = moneyWholeValue(Math.floor(numberValue(f["Current Lowest (VAT0)"])));
 
   return {
     id: record.id,
@@ -13501,25 +13492,14 @@ async function normalizeDeal(record, dealType) {
 async function normalizeMemberWtbDeal(record) {
   const f = record.fields || {};
 
-  // FIXED — same stale-rollup + broken-VAT0 issue as the product card's
-  // Store Orders path: it read "Current Lowest Normalized/Offer/Lowest
-  // Offer" rollups (stale, so "No offer yet"), and the VAT0 branch did
-  // numberValue(f["Lowest Offer VAT Type"]) === "VAT0" — numberValue of a
-  // text field is always 0, never "VAT0", so current_offer_vat0 was
-  // always 0 (empty in the VAT0 payout view). Now computes the true
-  // cross-seller lowest live. Margin/VAT21 view = normalized incl.; VAT0
-  // view = /1.21 excl. Whole numbers (moneyWholeValue).
-  let liveLowestNormalized = null;
-  try {
-    const r = await getCurrentGlobalLowestNormalized("Member WTB", record.id, null);
-    if (r && Number.isFinite(r.normalized)) liveLowestNormalized = r.normalized;
-  } catch (_) {}
-  const memberWtbOfferMargin = Number.isFinite(liveLowestNormalized)
-    ? moneyWholeValue(Math.floor(liveLowestNormalized))
-    : moneyWholeValue(Math.floor(numberValue(f["Current Lowest Normalized"]) || numberValue(f["Current Lowest Offer"]) || numberValue(f["Lowest Offer"])));
-  const memberWtbOfferVat0 = Number.isFinite(liveLowestNormalized)
-    ? moneyWholeValue(Math.floor(liveLowestNormalized / 1.21))
-    : "";
+  // Product card current lowest reads the rollup fields (same perf revert
+  // as normalizeDeal — the live per-deal getCurrentGlobalLowestNormalized
+  // call hung the frontpage). VAT0 view = the normalized rollup / 1.21
+  // (the old branch was broken: numberValue of a text VAT field is always
+  // 0). Whole numbers.
+  const normalizedRollup = numberValue(f["Current Lowest Normalized"]) || numberValue(f["Current Lowest Offer"]) || numberValue(f["Lowest Offer"]);
+  const memberWtbOfferMargin = normalizedRollup > 0 ? moneyWholeValue(Math.floor(normalizedRollup)) : "";
+  const memberWtbOfferVat0 = normalizedRollup > 0 ? moneyWholeValue(Math.floor(normalizedRollup / 1.21)) : "";
 
   return {
     id: record.id,
