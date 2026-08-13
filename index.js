@@ -19405,6 +19405,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
           ? previousSellerCounterById.get(previousOfferId)
           : null,
         raw_date: asText(f["Created At"]),
+        date: formatDateEU(f["Created At"]),
         denied_at: asText(f["Denied At"] || f["Last Modified"]),
         // Kept only for the visibility filter right below — not part
         // of the response shape.
