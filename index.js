@@ -24989,6 +24989,18 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
       }
     }
 
+    // NEW — his live catch: the "🔥 New Offer Received" buyer embed
+    // (with its live Accept button) stayed active after the buyer
+    // countered, so the buyer could still Accept the original offer from
+    // a stale Discord message. Disable it now — the buyer has moved on to
+    // negotiating. Mirrors how Store Orders disables its offer messages.
+    // Non-blocking; the field pair (Buyer Offer Channel/Message ID) is
+    // already stored on the WTB.
+    await disableMemberWtbBuyerOfferMessage(
+      wtbFields,
+      "🔁 Handled in your dashboard. You can Accept, Counter or Edit your choice there."
+    ).catch((err) => console.error("Failed to disable buyer offer embed after buyer counter (non-blocking):", err));
+
     res.json({ ok: true, counter_offer_record_id: createdCounter.id, dm_errors: dmErrors });
   } catch (err) {
     console.error("Failed to create member WTB counter offers:", err);
@@ -25770,6 +25782,11 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
         newBuyerCounterPrice: proposedPrice,
         excludeSellerId: sellerIdForFirstRound
       }).catch((err) => console.error("Failed to re-engage other sellers after edit (non-blocking):", err));
+
+      await disableMemberWtbBuyerOfferMessage(
+        wtbFieldsForFirstRound,
+        "🔁 Handled in your dashboard. You can Accept, Counter or Edit your choice there."
+      ).catch((err) => console.error("Failed to disable buyer offer embed after buyer edit (non-blocking):", err));
 
       return res.json({ ok: true });
     }
