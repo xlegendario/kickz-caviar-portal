@@ -8277,7 +8277,7 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
       await disableCounterOfferDiscordButtons(
         sellerDmChannelId,
         sellerDmMessageId,
-        "🔁 You countered in your dashboard. Manage or edit this there."
+        "🔁 You countered in your dashboard. You can still Accept or Edit your choice there."
       ).catch((err) => console.error("Failed to disable seller DM embed on Portal counter (non-blocking):", err.message));
     }
 
@@ -14848,7 +14848,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
           disableCounterOfferDiscordButtons(
             dmChannelId,
             dmMessageId,
-            "🔁 You countered in your dashboard. Manage or edit this there."
+            "🔁 You countered in your dashboard. You can still Accept or Edit your choice there."
           ).catch((err) => console.error("Failed to disable embed on retry-counter (non-blocking):", err.message));
         }
       }
@@ -15024,7 +15024,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
         disableCounterOfferDiscordButtons(
           dmChannelId,
           dmMessageId,
-          "🔁 You countered in your dashboard. Manage or edit this there."
+          "🔁 You countered in your dashboard. You can still Accept or Edit your choice there."
         ).catch((err) => console.error("Failed to disable embed on retry-counter (non-blocking):", err.message));
       }
     }
@@ -15167,6 +15167,7 @@ async function findSellersTrueLastCounter(startRoundId, maxHops = 15) {
 }
 
 async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPrice, excludeSellerId, isDenyBroadcast = false }) {
+  console.error("DEBUG reengageDeniedSellers CALLED:", { sourceType, recordId, newBuyerCounterPrice, excludeSellerId, isDenyBroadcast });
   const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
 
   const deniedRounds = await airtable(COUNTER_OFFERS_TABLE)
@@ -15288,6 +15289,7 @@ for (const round of pendingSellerCounterRounds) {
     createFields[sourceType === "Member WTB" ? "Member WTB" : "Order"] = [recordId];
 
     const newRound = await airtable(COUNTER_OFFERS_TABLE).create(createFields);
+    console.error("DEBUG reengage PENDING-loop created round:", { forSeller: sellerId, excludeSellerId, isDenyBroadcast, status: createFields["Status"], payout: recomputedPayout, recordId, supersededRound: round.id });
 
     const sellerRecord = await airtable(SELLERS_TABLE).find(sellerId).catch(() => null);
     const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
@@ -15396,6 +15398,7 @@ for (const round of pendingSellerCounterRounds) {
     createFields[sourceType === "Member WTB" ? "Member WTB" : "Order"] = [recordId];
 
     const newRound = await airtable(COUNTER_OFFERS_TABLE).create(createFields);
+    console.error("DEBUG reengage FRESH-loop created round:", { forSeller: sellerId, excludeSellerId, isDenyBroadcast, payout: recomputedPayout, recordId });
 
     const sellerRecord = await airtable(SELLERS_TABLE).find(sellerId).catch(() => null);
     const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
@@ -16629,7 +16632,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
         disableCounterOfferDiscordButtons(
           deniedEmbedChannelId,
           deniedEmbedMessageId,
-          "❌ You denied this in your dashboard. Manage or change this step there."
+          "❌ You denied this in your dashboard. You can still come back and accept or counter there."
         ).catch((err) => console.error("Failed to disable denied counter embed (non-blocking):", err.message));
       }
     }
@@ -25326,7 +25329,7 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
       await disableCounterOfferDiscordButtons(
         mwSellerDmChannelId,
         mwSellerDmMessageId,
-        "🔁 You countered in your dashboard. Manage or edit this there."
+        "🔁 You countered in your dashboard. You can still Accept or Edit your choice there."
       ).catch((err) => console.error("Failed to disable MW seller DM embed on Portal counter (non-blocking):", err.message));
     }
 
@@ -25538,7 +25541,7 @@ app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) =>
       await disableCounterOfferDiscordButtons(
         mwBuyerDmChannelId,
         mwBuyerDmMessageId,
-        "🔁 You countered in your dashboard. Manage or edit this there."
+        "🔁 You countered in your dashboard. You can still Accept or Edit your choice there."
       ).catch((err) => console.error("Failed to disable MW buyer DM embed on Portal counter (non-blocking):", err.message));
     }
 
