@@ -20380,6 +20380,50 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
         };
       }));
 
+    res.json({
+      count: items.length,
+      items: sortDashboardItemsNewestFirst(items)
+    });
+  } catch (err) {
+    console.error("Failed to load buying offers:", err);
+    res.status(500).json({ error: "Failed to load buying offers", details: err.message });
+  }
+});
+
+app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
+  try {
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+    const acceptedCounterOfferRecordId = asText(req.body?.counter_offer_record_id);
+    const sellerOfferRecordId = asText(req.body?.seller_offer_record_id);
+    const overridePrice = req.body?.override_price;
+    const overrideVatType = asText(req.body?.override_vat_type);
+
+    if (!memberWtbRecordId) {
+      return res.status(400).json({ error: "Missing member_wtb_record_id" });
+    }
+
+    const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
+    if (!wtbBotBaseUrl) {
+      return res.status(500).json({ error: "KICKZ_WTB_BOT_BASE_URL is missing" });
+    }
+
+    const response = await fetch(`${wtbBotBaseUrl}/member-wtb/deal-channel`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-kc-secret": process.env.KC_PORTAL_SECRET
+      },
+      body: JSON.stringify({
+        member_wtb_record_id: memberWtbRecordId,
+        ...(sellerOfferRecordId ? { seller_offer_record_id: sellerOfferRecordId } : {}),
+        ...(acceptedCounterOfferRecordId ? { counter_offer_record_id: acceptedCounterOfferRecordId } : {}),
+        ...(overridePrice !== undefined && overridePrice !== null && overridePrice !== ""
+          ? { override_price: Number(overridePrice), override_vat_type: overrideVatType }
+          : {})
+      })
+    });
+
+    const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
       return res.status(response.status).json({
