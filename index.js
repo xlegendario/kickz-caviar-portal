@@ -14702,6 +14702,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
         crossSellerReferenceRaw = rawThreshold;
       }
 
+      console.error("DEBUG retry no-prior validation:", { sellerOriginalPrice, buyerOfferInSellerTerms, proposedPrice, crossSellerCeilingRaw, globalLowestForRetry, sellerVatType });
       const validationFresh = validateNextCounterPriceWithCrossSellerCeiling(
         sellerOriginalPrice,
         buyerOfferInSellerTerms,
@@ -14863,6 +14864,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
       crossSellerReferenceRawPrior = rawThresholdPrior;
     }
 
+    console.error("DEBUG retry has-prior validation:", { ownReferenceForRetry, storeLastPosition, proposedPrice, crossSellerCeilingRawPrior, globalLowestForRetryPrior, sellerVatType });
     const validation = validateNextCounterPriceWithCrossSellerCeiling(
       ownReferenceForRetry,
       storeLastPosition,
