@@ -2075,6 +2075,81 @@ async function disableMemberWtbBuyerOfferMessage(memberFields, note) {
   return true;
 }
 
+// ---------------------------------------------------------------------
+// MW BUYER-EMBED MESSAGE TRACKING — mirrors Store Orders' "Offer Discord
+// Messages" system, but on the Member WTBs table (he added the same
+// Long-text field there). The single Buyer Offer Channel/Message ID pair
+// only ever holds the LATEST buyer embed, so it can't disable the earlier
+// ones when a seller counters again — the buyer ends up with multiple
+// live embeds across sellers. This JSON list tracks EVERY buyer embed on
+// the WTB so a new one can sweep all the old ones, exactly like the store
+// side. Uses raw component objects (ButtonBuilder crashes this file).
+// ---------------------------------------------------------------------
+function parseMemberWtbOfferMessages(rawValue) {
+  const raw = asText(rawValue);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.error("Failed to parse MW Offer Discord Messages JSON:", err);
+    return [];
+  }
+}
+
+async function appendMemberWtbOfferMessage(memberWtbRecordId, entry) {
+  if (!memberWtbRecordId || !entry?.channelId || !entry?.messageId) return;
+  const wtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId).catch(() => null);
+  if (!wtb) return;
+  const existing = parseMemberWtbOfferMessages(wtb.fields?.["Offer Discord Messages"]);
+  existing.push({ channelId: entry.channelId, messageId: entry.messageId });
+  await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+    "Offer Discord Messages": JSON.stringify(existing, null, 2)
+  }).catch((err) => console.error("Failed to append MW Offer Discord Message (non-blocking):", err.message));
+}
+
+async function disableAllMemberWtbBuyerOfferMessages(
+  memberWtbRecordId,
+  note = "❌ A newer offer is now active — see the latest message."
+) {
+  if (!memberWtbRecordId) return;
+  const wtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId).catch(() => null);
+  if (!wtb) return;
+  const refs = parseMemberWtbOfferMessages(wtb.fields?.["Offer Discord Messages"]);
+  if (!refs.length) return;
+
+  await initKickzDealDiscord();
+
+  for (const ref of refs) {
+    try {
+      const channel = await kickzDealDiscordClient.channels.fetch(ref.channelId).catch(() => null);
+      if (!channel) continue;
+      const message = await channel.messages.fetch(ref.messageId).catch(() => null);
+      if (!message) continue;
+      await message.edit({
+        content: note,
+        embeds: message.embeds,
+        components: [
+          {
+            type: 1,
+            components: [
+              { type: 2, style: 2, label: "Expired", custom_id: "member_wtb_buyer_offer_expired", disabled: true }
+            ]
+          }
+        ]
+      });
+    } catch (err) {
+      console.error("Failed to disable MW buyer offer message:", ref.messageId, err.message);
+    }
+  }
+
+  // Clear the list — these embeds are now disabled; the new one gets
+  // tracked fresh by its own append.
+  await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+    "Offer Discord Messages": "[]"
+  }).catch((err) => console.error("Failed to clear MW Offer Discord Messages (non-blocking):", err.message));
+}
+
 async function sendMemberWtbPurchaseWebhook(memberWtbRecordId) {
   const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
   const f = memberWtb.fields || {};
@@ -4201,7 +4276,10 @@ function bindConsignmentDiscordButtons(client) {
                 (Number.isFinite(denyingSellerOwnNormalized) && otherSellerExists >= denyingSellerOwnNormalized);
 
               if (shouldNotifyBuyer) {
-                await sendMemberWtbBuyerCounterOfferDiscordDM({
+                await disableAllMemberWtbBuyerOfferMessages(memberWtbRecordId).catch((err) =>
+                  console.error("Failed to disable prior MW buyer embeds (non-blocking):", err.message)
+                );
+                const buyerDmResult = await sendMemberWtbBuyerCounterOfferDiscordDM({
                   counterOfferRecordId: priorRoundId,
                   buyerDiscordId,
                   productName: asText(wtbFields["Product Name"]),
@@ -4212,7 +4290,10 @@ function bindConsignmentDiscordButtons(client) {
                   yourPreviousCounter: deniedPrice,
                   deniedAmount: deniedPrice,
                   vatLabel: memberWtbBuyerFacingVatType(denyingSellerVatType, wtbFields)
-                }).catch((err) => console.error("Failed to re-notify buyer after seller-deny (non-blocking):", err));
+                }).catch((err) => { console.error("Failed to re-notify buyer after seller-deny (non-blocking):", err); return null; });
+                if (buyerDmResult?.channelId && buyerDmResult?.messageId) {
+                  await appendMemberWtbOfferMessage(memberWtbRecordId, buyerDmResult);
+                }
               }
             }
           }
@@ -4578,6 +4659,11 @@ function bindConsignmentDiscordButtons(client) {
         embeds: interaction.message.embeds,
         components: []
       }).catch(() => {});
+
+      await disableAllMemberWtbBuyerOfferMessages(
+        firstLinkedRecordId(deniedFields["Member WTB"]),
+        "❌ You denied this in your dashboard."
+      ).catch((err) => console.error("Failed to disable buyer embeds after MW buyer-deny (non-blocking):", err.message));
 
       // FIXED — the MW buyer-deny used to REOPEN the denied round's prior
       // round and resend a seller embed. That (a) showed the buyer "A
@@ -19744,7 +19830,11 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/buyer-deny", async (req,
       "Closed At": new Date().toISOString()
     });
 
-    // FIXED — was reopening the denied round's prior round (spook pattern,
+    await disableAllMemberWtbBuyerOfferMessages(
+      memberWtbRecordId,
+      "❌ You denied this in your dashboard."
+    ).catch((err) => console.error("Failed to disable buyer embeds after MW buyer-deny Portal (non-blocking):", err.message));
+
     // already removed for Store Orders) and re-notifying that one seller,
     // with the cross-seller broadcast trapped inside `if (priorRoundId)`.
     // Now: no reopen — just broadcast the buyer's floor to ALL other
@@ -24054,8 +24144,8 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
       return res.status(400).json({ error: "Buyer is missing Discord ID" });
     }
 
-    await disableMemberWtbBuyerOfferMessage(
-      f,
+    await disableAllMemberWtbBuyerOfferMessages(
+      memberWtbRecordId,
       "❌ A better or newer offer is now available."
     ).catch(() => null);
 
@@ -24117,6 +24207,13 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
       ...(imageUrl ? { image: { url: imageUrl } } : {})
     };
 
+    // Disable every prior buyer embed on this WTB before sending the new
+    // one — the buyer should only ever have one live embed (mirrors the
+    // Store Orders "Offer Discord Messages" sweep).
+    await disableAllMemberWtbBuyerOfferMessages(memberWtbRecordId).catch((err) =>
+      console.error("Failed to disable prior MW buyer embeds (non-blocking):", err.message)
+    );
+
     const message = await dm.send({
       embeds: [embed],
       components: [
@@ -24151,6 +24248,11 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
       "Buyer Offer Message ID": message.id,
       "Offer Sent?": true,
       "New Offer Available": false
+    });
+
+    await appendMemberWtbOfferMessage(memberWtbRecordId, {
+      channelId: message.channelId,
+      messageId: message.id
     });
 
     return res.json({
@@ -24403,8 +24505,8 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
     // negotiating. Mirrors how Store Orders disables its offer messages.
     // Non-blocking; the field pair (Buyer Offer Channel/Message ID) is
     // already stored on the WTB.
-    await disableMemberWtbBuyerOfferMessage(
-      wtbFields,
+    await disableAllMemberWtbBuyerOfferMessages(
+      memberWtbRecordId,
       "🔁 Handled in your dashboard. You can Accept, Counter or Edit your choice there."
     ).catch((err) => console.error("Failed to disable buyer offer embed after buyer counter (non-blocking):", err));
 
@@ -24809,6 +24911,10 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
         Number.isFinite(sellerCounterInBuyerTerms) &&
         !hasRoomForNextStep(buyerCounterPrice, sellerCounterInBuyerTerms);
 
+      await disableAllMemberWtbBuyerOfferMessages(memberWtbRecordId).catch((err) =>
+        console.error("Failed to disable prior MW buyer embeds (non-blocking):", err.message)
+      );
+
       const discordResult = await sendMemberWtbBuyerCounterOfferDiscordDM({
         counterOfferRecordId: newRound.id,
         buyerDiscordId,
@@ -24832,6 +24938,7 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
           "Discord Message ID": discordResult.messageId,
           "Discord Delivery Type": discordResult.deliveryType
         });
+        await appendMemberWtbOfferMessage(memberWtbRecordId, discordResult);
       }
     }
 
@@ -25191,8 +25298,8 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
         excludeSellerId: sellerIdForFirstRound
       }).catch((err) => console.error("Failed to re-engage other sellers after edit (non-blocking):", err));
 
-      await disableMemberWtbBuyerOfferMessage(
-        wtbFieldsForFirstRound,
+      await disableAllMemberWtbBuyerOfferMessages(
+        memberWtbRecordIdForFirstRound,
         "🔁 Handled in your dashboard. You can Accept, Counter or Edit your choice there."
       ).catch((err) => console.error("Failed to disable buyer offer embed after buyer edit (non-blocking):", err));
 
@@ -25288,7 +25395,11 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
       if (buyerDiscordId) {
         const sellerCounterInBuyerTerms = calculateMemberWtbBuyerEquivalent(proposedPrice, sellerVatType, wtbFields);
 
-        await sendMemberWtbBuyerCounterOfferDiscordDM({
+        await disableAllMemberWtbBuyerOfferMessages(memberWtbRecordId).catch((err) =>
+          console.error("Failed to disable prior MW buyer embeds (non-blocking):", err.message)
+        );
+
+        const buyerDmResult = await sendMemberWtbBuyerCounterOfferDiscordDM({
           counterOfferRecordId: recordId,
           buyerDiscordId,
           productName: asText(wtbFields["Product Name"]),
@@ -25298,7 +25409,11 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
           newPrice: sellerCounterInBuyerTerms,
           yourPreviousCounter: numberValue(previousFields["Store Counter Price"]),
           vatLabel: memberWtbBuyerFacingVatType(sellerVatType, wtbFields)
-        }).catch((err) => console.error("Failed to notify buyer of edited counter (non-blocking):", err));
+        }).catch((err) => { console.error("Failed to notify buyer of edited counter (non-blocking):", err); return null; });
+
+        if (buyerDmResult?.channelId && buyerDmResult?.messageId) {
+          await appendMemberWtbOfferMessage(memberWtbRecordId, buyerDmResult);
+        }
       }
     } else {
       // Buyer edited — notify the seller with the revised counter.
