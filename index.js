@@ -4280,18 +4280,6 @@ function bindConsignmentDiscordButtons(client) {
                 !Number.isFinite(otherSellerExists) ||
                 (Number.isFinite(denyingSellerOwnNormalized) && otherSellerExists >= denyingSellerOwnNormalized);
 
-              console.error("[MW-SELLER-DENY-DEBUG]", JSON.stringify({
-                priorRoundId,
-                priorSellerCounter,
-                priorSellerCounterInBuyerTerms,
-                deniedPrice,
-                otherSellerExists,
-                denyingSellerTruePosition,
-                denyingSellerOwnNormalized,
-                shouldNotifyBuyer,
-                buyerDiscordId: buyerDiscordId ? "present" : "MISSING"
-              }));
-
               if (shouldNotifyBuyer) {
                 await disableAllMemberWtbBuyerOfferMessages(memberWtbRecordId).catch((err) =>
                   console.error("Failed to disable prior MW buyer embeds (non-blocking):", err.message)
@@ -12490,15 +12478,30 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
     ? "You're now very close to each other's price — there's no room for another counter. Please accept or deny."
     : "Please accept, counter, or deny below.";
 
-  const deniedNote =
-    deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== ""
-      ? [`❌ Your counter of €${Number(deniedAmount).toFixed(2)} was denied.`, ""]
-      : [];
+  // isDeny: the seller DENIED the buyer's counter (didn't counter back).
+  // The buyer must get a clean Denied embed — accept the seller's standing
+  // position or deny, NO counter — not a "Seller Countered" embed with a
+  // deny line bolted on.
+  const isDeny =
+    deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "";
+
+  const deniedNote = isDeny
+    ? [`❌ Your counter of €${Number(deniedAmount).toFixed(2)} was denied by the seller.`, ""]
+    : [];
+
+  const positionLabel = isDeny ? "**Seller's Standing Position**" : "**New Counter**";
+  const embedTitle = isDeny ? "❌ Counter Offer Denied" : "🔁 Seller Countered";
+  const middleLine = isDeny
+    ? `The seller is holding their position — you can accept it or deny.`
+    : `The seller sent a counter offer.`;
+  const denyClosingLine = isDeny
+    ? "Accept the seller's position or deny below."
+    : closingLine;
 
   const message = await dm.send({
     embeds: [
       {
-        title: "🔁 Seller Countered",
+        title: embedTitle,
         description: [
           `**${productName || "—"}**`,
           `SKU: ${sku || "—"}`,
@@ -12507,23 +12510,23 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
           `Member WTB: ${memberWtbId || "—"}`,
           "",
           ...deniedNote,
-          `The seller sent a counter offer.`,
+          middleLine,
           "",
           `**Your Previous Counter**`,
           `€${Number(yourPreviousCounter).toFixed(2)}${vatLabel ? ` ${vatLabel}` : ""}`,
           "",
-          `**New Counter**`,
+          positionLabel,
           `€${Number(newPrice).toFixed(2)}${vatLabel ? ` ${vatLabel}` : ""}`,
           "",
-          closingLine
+          denyClosingLine
         ].join("\n"),
-        color: 0xf1c40f
+        color: isDeny ? 0xe74c3c : 0xf1c40f
       }
     ],
     components: [
       {
         type: 1,
-        components: noRoomToCounter
+        components: (noRoomToCounter || isDeny)
           ? [
               {
                 type: 2,
