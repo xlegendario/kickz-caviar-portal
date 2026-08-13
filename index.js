@@ -16138,9 +16138,23 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
       const previousOfferId = firstLinkedRecordId(f["Previous Record ID"]);
 
       const ownStoreCounter = numberValue(f["Store Counter Price"]);
-      const myLastOffer = ownStoreCounter > 0
+      let myLastOffer = ownStoreCounter > 0
         ? ownStoreCounter
         : (previousOfferId ? previousStoreCounterById.get(previousOfferId) : null);
+
+      // FIXED — the direct previous round doesn't always carry the store's
+      // position (e.g. after seller counter → deny → seller re-counter, the
+      // immediate predecessor is a seller-counter round with no Store
+      // Counter Price), leaving MY LAST OFFER blank even though the store
+      // DID counter earlier on this order. Fall back to the store's
+      // standing position across the WHOLE order (their highest-ever Store
+      // Counter Price), the same figure the seller's embed shows.
+      if (!(Number.isFinite(myLastOffer) && myLastOffer > 0) && orderId) {
+        const storeStanding = await getBuyerHighestEverPosition("Seller Offer", orderId);
+        if (Number.isFinite(storeStanding) && storeStanding > 0) {
+          myLastOffer = storeStanding;
+        }
+      }
 
       const sellerCounter = numberValue(f["Seller Counter Price"]);
       let sellersOffer;
