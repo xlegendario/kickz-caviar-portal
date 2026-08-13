@@ -18270,16 +18270,6 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
         const othersMin = othersResult.normalized;
         const ownNormalized = normalize(offerAmount, vatType);
 
-        // FIXED — this converted the winning NORMALIZED value back to
-        // seller-payout scale (dividing by 1.21 for non-VAT21), which
-        // is the wrong target entirely — this column is meant to show
-        // the current best price in BUYER-FACING terms (what the
-        // market is currently offering), matching what the Discord
-        // embed and the Buying portal both correctly show. Now
-        // identifies WHICH position actually wins (his own raw offer,
-        // or whichever other seller's raw price/VAT type
-        // getCurrentGlobalLowestNormalized already tracked) and runs
-        // THAT through the real buyer-facing conversion.
         // FIXED (his live catch): a MW seller's "Current Lowest" must show
         // the cross-seller lowest in SELLER terms (what other sellers bid),
         // de-normalized into this seller's own VAT scale — exactly like the
@@ -18288,6 +18278,7 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
         // incl. Lojiq's margin, e.g. 188.76), which is what the buyer pays,
         // not what a seller compares against. A seller competes with other
         // sellers, so: Seller A VAT21 sees 176.66, Seller B VAT0 sees 146.
+        const ownWins = Number.isFinite(ownNormalized) && (!Number.isFinite(othersMin) || ownNormalized <= othersMin);
         const winningSharedForMemberWtb = ownWins ? ownNormalized : othersMin;
         currentLowest = Number.isFinite(winningSharedForMemberWtb)
           ? (asText(vatType) === "VAT0" ? winningSharedForMemberWtb / 1.21 : winningSharedForMemberWtb)
