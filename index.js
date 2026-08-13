@@ -11982,6 +11982,18 @@ function memberWtbIsReverseCharge(memberWtbFields = {}) {
   return !!buyerVatId && buyerCountry !== "Netherlands" && buyerCountry !== "Nederland";
 }
 
+function memberWtbBuyerFacingVatType(sellerVatType, memberWtbFields = {}) {
+  const type = asText(sellerVatType);
+  // Margin is always shown as Margin (it passes through unchanged).
+  if (type === "Margin") return "Margin";
+  // A reverse-charge buyer (outside NL, has a VAT ID) keeps the seller's
+  // own type — e.g. a VAT0 seller shows VAT0 to them. Otherwise the buyer
+  // is domestic/NL and buys VAT21 from Lojiq, so the buyer-facing label is
+  // always VAT21 regardless of the seller's own VAT type. Mirrors
+  // storeFacingVatType for Store Orders.
+  return memberWtbIsReverseCharge(memberWtbFields) ? (type || "VAT0") : "VAT21";
+}
+
 function calculateMemberWtbBuyerEquivalent(sellerAskPrice, vatType, memberWtbFields = {}) {
   const price = Number(sellerAskPrice);
   if (!Number.isFinite(price) || price <= 0) return null;
@@ -14130,7 +14142,6 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         const currentLowest = Number.isFinite(effectiveLowestShared)
           ? (asText(vatType) === "VAT0" ? effectiveLowestShared / 1.21 : effectiveLowestShared)
           : null;
-        if (isMemberWtb) console.error("DEBUG MW current_lowest:", { seller: firstLinkedRecordId(f["Seller ID"]), vatType: asText(vatType), memberWtbCompetingMin, ownNormalizedForMemberWtb, memberWtbLowest, effectiveLowestShared, currentLowest, filter });
 
         const isLowest = isMemberWtb
           ? (Number.isFinite(ownNormalizedForMemberWtb) &&
@@ -18269,17 +18280,18 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
         // or whichever other seller's raw price/VAT type
         // getCurrentGlobalLowestNormalized already tracked) and runs
         // THAT through the real buyer-facing conversion.
-        const ownWins = Number.isFinite(ownNormalized) && (!Number.isFinite(othersMin) || ownNormalized <= othersMin);
-        const winningRaw = ownWins ? offerAmount : othersResult.raw;
-        const winningVatType = ownWins ? vatType : othersResult.vatType;
-
-        if (Number.isFinite(winningRaw)) {
-          const wtbRecordForBuyerPrice = await airtable(MEMBER_WTBS_TABLE).find(linkedMemberWtbId).catch(() => null);
-          const wtbFieldsForBuyerPrice = wtbRecordForBuyerPrice?.fields || {};
-          currentLowest = calculateMemberWtbBuyerEquivalent(winningRaw, winningVatType, wtbFieldsForBuyerPrice);
-        } else {
-          currentLowest = null;
-        }
+        // FIXED (his live catch): a MW seller's "Current Lowest" must show
+        // the cross-seller lowest in SELLER terms (what other sellers bid),
+        // de-normalized into this seller's own VAT scale — exactly like the
+        // Store Orders branch below. The old code ran the winning position
+        // through calculateMemberWtbBuyerEquivalent (the BUYER-facing price,
+        // incl. Lojiq's margin, e.g. 188.76), which is what the buyer pays,
+        // not what a seller compares against. A seller competes with other
+        // sellers, so: Seller A VAT21 sees 176.66, Seller B VAT0 sees 146.
+        const winningSharedForMemberWtb = ownWins ? ownNormalized : othersMin;
+        currentLowest = Number.isFinite(winningSharedForMemberWtb)
+          ? (asText(vatType) === "VAT0" ? winningSharedForMemberWtb / 1.21 : winningSharedForMemberWtb)
+          : null;
         isLowest = ownWins;
       } else {
         // FIXED — a real, confirmed bug found via his live testing:
@@ -19393,7 +19405,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         // €80. The raw seller-scale value IS the correct override_price
         // directly, no conversion needed.
         sellers_offer_payout: Number.isFinite(sellersOffer) ? sellersOffer : null,
-        vat_type: vatType,
+        vat_type: memberWtbBuyerFacingVatType(vatType, wtbFields),
         previous_record_id: previousOfferId,
         previous_seller_counter: previousOfferId && Number.isFinite(previousSellerCounterById.get(previousOfferId))
           ? moneySmartValue(previousSellerCounterById.get(previousOfferId))
@@ -19527,7 +19539,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
           max_price: Number.isFinite(numberValue(wtbFields["Max Price"])) ? moneyWholeValue(wtbFields["Max Price"]) : null,
           sellers_offer: Number.isFinite(sellersOfferInBuyerTerms) ? moneySmartValue(sellersOfferInBuyerTerms) : null,
           sellers_offer_payout: Number.isFinite(rawSellerAsk) ? rawSellerAsk : null,
-          vat_type: vatType,
+          vat_type: memberWtbBuyerFacingVatType(vatType, wtbFields),
           raw_date: asText(f["Denied At"]),
           denied_at: asText(f["Denied At"])
         };
@@ -20332,7 +20344,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
             ? moneySmartValue(myHighestEver)
             : null,
           no_room_to_counter: noRoomToCounter,
-          vat_type: winningSellerOffer?.vatType || null,
+          vat_type: winningSellerOffer?.vatType ? memberWtbBuyerFacingVatType(winningSellerOffer.vatType, f) : null,
           status: "Offer Received",
           date: formatDateEU(f["Date"]),
           raw_date: f["Date"]
@@ -24668,7 +24680,7 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
         `**SKU:** ${asText(f["SKU"]) || "—"}`,
         `**Size:** ${asText(f["Size"]) || "—"}`,
         "",
-        `**Current Offer:** €${offerToBuyer.toFixed(2)}${asText(f["Buyer VAT ID"]) ? ` ${asText(f["Lowest Offer VAT Type"]) || ""}` : ""}`,
+        `**Current Offer:** €${offerToBuyer.toFixed(2)}${asText(f["Buyer VAT ID"]) ? ` ${memberWtbBuyerFacingVatType(asText(f["Lowest Offer VAT Type"]), f) || ""}` : ""}`,
         "",
         "Accept this offer to continue with the order."
       ].join("\n"),
