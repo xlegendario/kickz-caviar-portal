@@ -4210,7 +4210,8 @@ function bindConsignmentDiscordButtons(client) {
                   memberWtbId: asText(wtbFields["Member WTB ID"]) || memberWtbRecordId,
                   newPrice: priorSellerCounterInBuyerTerms,
                   yourPreviousCounter: deniedPrice,
-                  deniedAmount: deniedPrice
+                  deniedAmount: deniedPrice,
+                  vatLabel: memberWtbBuyerFacingVatType(denyingSellerVatType, wtbFields)
                 }).catch((err) => console.error("Failed to re-notify buyer after seller-deny (non-blocking):", err));
               }
             }
@@ -12318,7 +12319,8 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
   newPrice,
   yourPreviousCounter,
   noRoomToCounter,
-  deniedAmount
+  deniedAmount,
+  vatLabel
 }) {
   await initKickzDealDiscord();
 
@@ -12353,10 +12355,10 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
           `The seller sent a counter offer.`,
           "",
           `**Your Previous Counter**`,
-          `€${Number(yourPreviousCounter).toFixed(2)}`,
+          `€${Number(yourPreviousCounter).toFixed(2)}${vatLabel ? ` ${vatLabel}` : ""}`,
           "",
           `**New Counter**`,
-          `€${Number(newPrice).toFixed(2)}`,
+          `€${Number(newPrice).toFixed(2)}${vatLabel ? ` ${vatLabel}` : ""}`,
           "",
           closingLine
         ].join("\n"),
@@ -19485,6 +19487,8 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
 
         if (ownNormalized == null) return item; // can't compare — don't hide
 
+        if (filter === "open") console.error("DEBUG buying open visibility:", { sellerId: item.__sellerId, sellers_offer: item.sellers_offer, sellers_offer_payout: item.sellers_offer_payout, vat_type: item.vat_type, ownNormalized, betterElsewhere, willHide: betterElsewhere < ownNormalized });
+
         return betterElsewhere < ownNormalized ? null : item;
       })
     ).then((results) => results.filter(Boolean));
@@ -24692,18 +24696,43 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
         ? f["Picture"][0].url
         : "";
 
+    // Buyer-facing VAT label for the offer (always shown now, not only
+    // when a Buyer VAT ID is present).
+    const offerVatLabel = memberWtbBuyerFacingVatType(asText(f["Lowest Offer VAT Type"]), f) || "";
+
+    // CONDITIONAL "Your Current Position": only meaningful if the buyer
+    // has already countered on this WTB (an Open buyer counter round with
+    // a Store Counter Price). If they haven't, we omit the line entirely.
+    let buyerCurrentPositionLine = null;
+    try {
+      const openBuyerRounds = await airtable(COUNTER_OFFERS_TABLE)
+        .select({
+          filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Member WTB', {Store Counter Price} > 0)`,
+          fields: ["Store Counter Price", "Member WTB"]
+        })
+        .all();
+      const buyerPos = openBuyerRounds
+        .filter((r) => firstLinkedRecordId(r.fields?.["Member WTB"]) === memberWtbRecordId)
+        .map((r) => numberValue(r.fields?.["Store Counter Price"]))
+        .filter((n) => Number.isFinite(n) && n > 0)
+        .sort((a, b) => b - a)[0];
+      if (Number.isFinite(buyerPos) && buyerPos > 0) {
+        buyerCurrentPositionLine = `**Your Current Position:** €${Math.round(buyerPos)}${offerVatLabel ? ` ${offerVatLabel}` : ""}`;
+      }
+    } catch (_) {}
+
     const embed = {
-      title: "🔥 New Offer Received",
+      title: `Offer Request - Order ${memberWtbId}`,
       description: [
-        `**Order Number:** ${memberWtbId}`,
+        "**Item Details**",
+        `${asText(f["Product Name"]) || "—"}`,
+        `SKU: ${asText(f["SKU"]) || "—"}`,
+        `Size: ${asText(f["Size"]) || "—"}`,
         "",
-        `**Product:** ${asText(f["Product Name"]) || "—"}`,
-        `**SKU:** ${asText(f["SKU"]) || "—"}`,
-        `**Size:** ${asText(f["Size"]) || "—"}`,
+        `**Offer:** €${offerToBuyer.toFixed(2)}${offerVatLabel ? ` ${offerVatLabel}` : ""}`,
+        ...(buyerCurrentPositionLine ? [buyerCurrentPositionLine] : []),
         "",
-        `**Current Offer:** €${offerToBuyer.toFixed(2)}${asText(f["Buyer VAT ID"]) ? ` ${memberWtbBuyerFacingVatType(asText(f["Lowest Offer VAT Type"]), f) || ""}` : ""}`,
-        "",
-        "Accept this offer to continue with the order."
+        "Accept, Counter or Deny on this offer below."
       ].join("\n"),
       color: 0xf1c40f,
       timestamp: new Date().toISOString(),
@@ -25411,6 +25440,7 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
         memberWtbId: asText(wtbFields["Member WTB ID"]) || memberWtbRecordId,
         newPrice: sellerCounterInBuyerTerms,
         yourPreviousCounter: buyerCounterPrice,
+        vatLabel: memberWtbBuyerFacingVatType(sellerVatType, wtbFields),
         noRoomToCounter
       }).catch((err) => {
         console.error("Failed to DM buyer of seller counter-back (non-blocking):", err);
@@ -25888,7 +25918,8 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
           size: asText(wtbFields["Size"]),
           memberWtbId: asText(wtbFields["Member WTB ID"]) || memberWtbRecordId,
           newPrice: sellerCounterInBuyerTerms,
-          yourPreviousCounter: numberValue(previousFields["Store Counter Price"])
+          yourPreviousCounter: numberValue(previousFields["Store Counter Price"]),
+          vatLabel: memberWtbBuyerFacingVatType(sellerVatType, wtbFields)
         }).catch((err) => console.error("Failed to notify buyer of edited counter (non-blocking):", err));
       }
     } else {
