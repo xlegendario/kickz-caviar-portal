@@ -25714,6 +25714,19 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
         });
       }
 
+      // NEW — his live catch: a round-1 edit was only checked against the
+      // seller's ask, never against the buyer's OWN current position on
+      // this round, so editing 150 → 150 (no change) passed. A buyer edit
+      // moves UP toward the seller, so it must be at least MIN_COUNTER_STEP
+      // above the buyer's own current Store Counter Price on this round.
+      const ownCurrentPositionForFirstRound = numberValue(f["Store Counter Price"]);
+      if (Number.isFinite(ownCurrentPositionForFirstRound) && ownCurrentPositionForFirstRound > 0
+          && proposedPrice < ownCurrentPositionForFirstRound + MIN_COUNTER_STEP) {
+        return res.status(400).json({
+          error: `Your edited counter must be at least €${MIN_COUNTER_STEP.toFixed(2)} higher than your current €${ownCurrentPositionForFirstRound.toFixed(2)} (so €${(ownCurrentPositionForFirstRound + MIN_COUNTER_STEP).toFixed(2)} or more).`
+        });
+      }
+
       const recomputedPayoutForFirstRound = calculateMemberWtbSellerPayout(proposedPrice, sellerVatTypeForFirstRound, wtbFieldsForFirstRound);
 
       await airtable(COUNTER_OFFERS_TABLE).update(recordId, {
