@@ -8974,12 +8974,6 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
     // lower counter against it — reusing the existing, already-tested
     // seller-counter mechanism rather than inventing a new one.
     if (sellerDiscordId && linkedOrderId) {
-      const priorRoundId = asText(f["Previous Record ID"]);
-      const deniedSellerCounter = numberValue(f["Seller Counter Price"]);
-      const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
-      const orderFields = orderRecord.fields || {};
-      const orderId = asText(orderFields["Order ID"]);
-
       // #3 — disable the seller's OLD counter embed (the round the store
       // just denied) so a new embed always supersedes the prior one and
       // the seller can never act on a stale round. Best-effort.
@@ -8995,62 +8989,26 @@ app.post("/api/counter-offers/:id/store-deny", async (req, res) => {
         }
       }
 
-      if (priorRoundId) {
-        const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
+      // OPTIE 1 (his decision): on a store deny, the seller's round simply
+      // lands in Denied — do NOT reopen the prior store round. The seller's
+      // Denied pill already gives them every option: counter again (under
+      // the current lowest), accept the store's previous position, or Delete
+      // to step out. Reopening the prior round only created a spook row in
+      // the Countered pill and duplicated what the Denied pill already does.
+      //
+      // Still broadcast the store's floor to OTHER sellers — denying the
+      // lowest is implicitly a "no" to everyone higher too. This no longer
+      // depends on a prior round existing.
+      const storeFloorForBroadcast = await getBuyerHighestEverPosition("Seller Offer", linkedOrderId);
 
-        if (priorRound) {
-          await airtable(COUNTER_OFFERS_TABLE).update(priorRoundId, {
-            "Status": "Open"
-          });
-
-          const priorFields = priorRound.fields || {};
-
-          const discordResult = await sendCounterOfferDiscordDM({
-            counterOfferRecordId: priorRoundId,
-            sellerDiscordId,
-            productName: asText(f["Product Name"]),
-            sku: asText(f["SKU"]),
-            size: asText(f["Size"]),
-            orderId,
-            payout: numberValue(priorFields["Counter Payout"]),
-            vatType: asText(priorFields["Seller Original VAT Type"] || f["Seller Original VAT Type"]),
-            sellerOriginalPrice: numberValue(f["Seller Original Price"]),
-            sellerOriginalVatType: asText(f["Seller Original VAT Type"]),
-            sellerLastOfferPrice: deniedSellerCounter,
-            deniedAmount: deniedSellerCounter
-          }).catch((err) => {
-            console.error("Failed to re-notify seller after store-deny (non-blocking):", err);
-            return null;
-          });
-
-          if (discordResult) {
-            await airtable(COUNTER_OFFERS_TABLE).update(priorRoundId, {
-              "Discord Channel ID": discordResult.channelId,
-              "Discord Message ID": discordResult.messageId,
-              "Discord Delivery Type": discordResult.deliveryType
-            });
-          }
-
-          // NEW — additive only: mirrors Member WTB's buyer-deny — denying
-          // the store's currently-lowest seller is effectively a "no" to
-          // everyone at their current positions too, since if the store
-          // won't accept the lowest, they won't accept anything higher
-          // either. Broadcasts the store's real floor (their highest-ever
-          // position on this order, not just this one denied round) to
-          // every OTHER seller still in the game, using the same
-          // reengageDeniedSellers mechanism already proven for Counter/Edit.
-          const storeFloorForBroadcast = await getBuyerHighestEverPosition("Seller Offer", linkedOrderId);
-
-          if (Number.isFinite(storeFloorForBroadcast) && storeFloorForBroadcast > 0) {
-            await reengageDeniedSellers({
-              sourceType: "Seller Offer",
-              recordId: linkedOrderId,
-              newBuyerCounterPrice: storeFloorForBroadcast,
-              excludeSellerId: sellerRecordId,
-              isDenyBroadcast: true
-            }).catch((err) => console.error("Failed to broadcast store floor to other sellers after store-deny (non-blocking):", err));
-          }
-        }
+      if (Number.isFinite(storeFloorForBroadcast) && storeFloorForBroadcast > 0) {
+        await reengageDeniedSellers({
+          sourceType: "Seller Offer",
+          recordId: linkedOrderId,
+          newBuyerCounterPrice: storeFloorForBroadcast,
+          excludeSellerId: sellerRecordId,
+          isDenyBroadcast: true
+        }).catch((err) => console.error("Failed to broadcast store floor to other sellers after store-deny (non-blocking):", err));
       }
     }
 
@@ -15167,7 +15125,6 @@ async function findSellersTrueLastCounter(startRoundId, maxHops = 15) {
 }
 
 async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPrice, excludeSellerId, isDenyBroadcast = false }) {
-  console.error("DEBUG reengageDeniedSellers CALLED:", { sourceType, recordId, newBuyerCounterPrice, excludeSellerId, isDenyBroadcast });
   const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
 
   const deniedRounds = await airtable(COUNTER_OFFERS_TABLE)
@@ -15289,7 +15246,6 @@ for (const round of pendingSellerCounterRounds) {
     createFields[sourceType === "Member WTB" ? "Member WTB" : "Order"] = [recordId];
 
     const newRound = await airtable(COUNTER_OFFERS_TABLE).create(createFields);
-    console.error("DEBUG reengage PENDING-loop created round:", { forSeller: sellerId, excludeSellerId, isDenyBroadcast, status: createFields["Status"], payout: recomputedPayout, recordId, supersededRound: round.id });
 
     const sellerRecord = await airtable(SELLERS_TABLE).find(sellerId).catch(() => null);
     const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
@@ -15398,7 +15354,6 @@ for (const round of pendingSellerCounterRounds) {
     createFields[sourceType === "Member WTB" ? "Member WTB" : "Order"] = [recordId];
 
     const newRound = await airtable(COUNTER_OFFERS_TABLE).create(createFields);
-    console.error("DEBUG reengage FRESH-loop created round:", { forSeller: sellerId, excludeSellerId, isDenyBroadcast, payout: recomputedPayout, recordId });
 
     const sellerRecord = await airtable(SELLERS_TABLE).find(sellerId).catch(() => null);
     const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
