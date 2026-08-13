@@ -4579,55 +4579,35 @@ function bindConsignmentDiscordButtons(client) {
         components: []
       }).catch(() => {});
 
-      // NEW — additive only: same reopen-prior-round pattern, other
-      // direction. The denied round (seller's counter-back) was itself
-      // responding to a BUYER round — reopen it and resend the
-      // standard seller-facing notification so the seller can accept
-      // the buyer's earlier counter or try again.
+      // FIXED — the MW buyer-deny used to REOPEN the denied round's prior
+      // round and resend a seller embed. That (a) showed the buyer "A
+      // newer round is now active" after they'd just denied (a message
+      // meant for the seller leaked back), and (b) is exactly the
+      // spook-round "deny-reopens-prior-round" pattern we already REMOVED
+      // for Store Orders. It also never denied the OTHER sellers, so
+      // Seller A stayed Open on Current Lowest after the buyer denied the
+      // (lower) Seller B. Now mirrors the fixed Store Orders deny: no
+      // reopen — instead broadcast the buyer's floor to ALL other sellers
+      // (denying the lowest is implicitly a "no" to everyone higher).
       try {
-        const priorRoundId = asText(deniedFields["Previous Record ID"]);
-        const deniedPrice = numberValue(deniedFields["Seller Counter Price"]);
-        const sellerVatType = asText(deniedFields["Seller Original VAT Type"]);
-        const sellerOriginalPrice = numberValue(deniedFields["Seller Original Price"]);
+        const memberWtbRecordId = firstLinkedRecordId(deniedFields["Member WTB"]);
+        const sellerRecordId = firstLinkedRecordId(deniedFields["Seller ID"]);
 
-        if (priorRoundId) {
-          const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
+        if (memberWtbRecordId) {
+          const buyerFloorForBroadcast = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
 
-          if (priorRound) {
-            await airtable(COUNTER_OFFERS_TABLE).update(priorRoundId, { "Status": "Open" });
-
-            const memberWtbRecordId = firstLinkedRecordId(deniedFields["Member WTB"]);
-            const sellerRecordId = firstLinkedRecordId(deniedFields["Seller ID"]);
-            const memberWtb = memberWtbRecordId ? await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId).catch(() => null) : null;
-            const wtbFields = memberWtb?.fields || {};
-            const priorFields = priorRound.fields || {};
-            const priorBuyerCounter = numberValue(priorFields["Store Counter Price"]);
-            const priorPayout = numberValue(priorFields["Counter Payout"]) ||
-              calculateMemberWtbSellerPayout(priorBuyerCounter, sellerVatType, wtbFields);
-
-            const sellerRecord = sellerRecordId ? await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null) : null;
-            const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
-
-            if (sellerDiscordId) {
-              await sendMemberWtbCounterOfferDiscordDM({
-                counterOfferRecordId: priorRoundId,
-                sellerDiscordId,
-                productName: asText(wtbFields["Product Name"]),
-                sku: asText(wtbFields["SKU"]),
-                size: asText(wtbFields["Size"]),
-                memberWtbId: asText(wtbFields["Member WTB ID"]) || memberWtbRecordId,
-                payout: priorPayout,
-                vatType: sellerVatType,
-                sellerOriginalPrice,
-                sellerOriginalVatType: sellerVatType,
-                sellerLastOfferPrice: deniedPrice,
-                deniedAmount: deniedPrice
-              }).catch((err) => console.error("Failed to re-notify seller after buyer-deny (non-blocking):", err));
-            }
+          if (Number.isFinite(buyerFloorForBroadcast) && buyerFloorForBroadcast > 0) {
+            await reengageDeniedSellers({
+              sourceType: "Member WTB",
+              recordId: memberWtbRecordId,
+              newBuyerCounterPrice: buyerFloorForBroadcast,
+              excludeSellerId: sellerRecordId,
+              isDenyBroadcast: true
+            }).catch((err) => console.error("Failed to broadcast buyer floor to other sellers after MW buyer-deny (non-blocking):", err));
           }
         }
-      } catch (reopenErr) {
-        console.error("Failed to reopen prior round after member WTB buyer-deny (non-blocking):", reopenErr);
+      } catch (broadcastErr) {
+        console.error("Failed to broadcast after member WTB buyer-deny (non-blocking):", broadcastErr);
       }
 
       return;
@@ -19719,57 +19699,23 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/buyer-deny", async (req,
       "Closed At": new Date().toISOString()
     });
 
-    const priorRoundId = asText(deniedFields["Previous Record ID"]);
+    // FIXED — was reopening the denied round's prior round (spook pattern,
+    // already removed for Store Orders) and re-notifying that one seller,
+    // with the cross-seller broadcast trapped inside `if (priorRoundId)`.
+    // Now: no reopen — just broadcast the buyer's floor to ALL other
+    // sellers (denying the lowest is a "no" to everyone), always, whether
+    // or not a prior round exists. Mirrors the Discord buyer-deny handler.
+    const sellerRecordId = firstLinkedRecordId(deniedFields["Seller ID"]);
+    const buyerFloorForBroadcast = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
 
-    if (priorRoundId) {
-      const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
-
-      if (priorRound) {
-        await airtable(COUNTER_OFFERS_TABLE).update(priorRoundId, { "Status": "Open" });
-
-        const priorFields = priorRound.fields || {};
-        const sellerRecordId = firstLinkedRecordId(priorFields["Seller ID"]);
-        const sellerRecord = sellerRecordId ? await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null) : null;
-        const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
-
-        if (sellerDiscordId && AIRTABLE_DISCORD_UPDATES_URL) {
-          await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              trigger_type: "member-wtb-counter-denied-reopened",
-              counter_offer_record_id: priorRoundId,
-              product_name: asText(deniedFields["Product Name"]),
-              sku: asText(deniedFields["SKU"]),
-              size: asText(deniedFields["Size"]),
-              denied_price: numberValue(deniedFields["Seller Counter Price"])
-            })
-          }).catch((err) => console.error("Failed to notify seller of reopened round (non-blocking):", err));
-        }
-
-        // FIXED — a real, confirmed gap found via his live testing: this
-        // only ever reopened THIS ONE seller's own prior round — every
-        // OTHER seller still in the game (e.g. a seller with their own
-        // pending counter still awaiting the buyer, or a fresh, never-
-        // engaged seller) heard nothing at all. His exact point: denying
-        // the CURRENTLY-LOWEST seller is effectively a "no" to everyone,
-        // since if the buyer won't accept the lowest, they won't accept
-        // anything higher either. Broadcasts to every OTHER seller too,
-        // using the buyer's real floor (not just this one denied price,
-        // in case they've offered higher elsewhere before) — same
-        // deny-styled notification as the fresh-offer deny flow.
-        const buyerFloorForBroadcast = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
-
-        if (Number.isFinite(buyerFloorForBroadcast) && buyerFloorForBroadcast > 0) {
-          await reengageDeniedSellers({
-            sourceType: "Member WTB",
-            recordId: memberWtbRecordId,
-            newBuyerCounterPrice: buyerFloorForBroadcast,
-            excludeSellerId: sellerRecordId,
-            isDenyBroadcast: true
-          }).catch((err) => console.error("Failed to broadcast buyer floor to other sellers after deny (non-blocking):", err));
-        }
-      }
+    if (Number.isFinite(buyerFloorForBroadcast) && buyerFloorForBroadcast > 0) {
+      await reengageDeniedSellers({
+        sourceType: "Member WTB",
+        recordId: memberWtbRecordId,
+        newBuyerCounterPrice: buyerFloorForBroadcast,
+        excludeSellerId: sellerRecordId,
+        isDenyBroadcast: true
+      }).catch((err) => console.error("Failed to broadcast buyer floor to other sellers after deny (non-blocking):", err));
     }
 
     res.json({ ok: true });
