@@ -2086,8 +2086,8 @@ function renderBuyingUnifiedOfferRows(items) {
     } else {
       // "my_counter" — buyer's own pending counter, awaiting seller.
       actionsCell = `
-        <button class="dashboard-counter-btn" type="button" data-buying-edit-counter-id="${escapeHtml(item.id || "")}">Edit</button>
         <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(item.id || "")}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
+        <button class="dashboard-counter-btn" type="button" data-buying-edit-counter-id="${escapeHtml(item.id || "")}">Edit</button>
         <button class="dashboard-deny-btn" type="button" data-buying-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
       `;
     }
