@@ -19317,6 +19317,8 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
       return memberWtbStatusMap.get(memberWtbId) === "Outsource";
     });
 
+    if (filter === "open") console.error("DEBUG preFiltered:", preFiltered.map((r) => ({ id: r.id, cto: asText(r.fields?.["Counter Offer ID"]), seller: firstLinkedRecordId(r.fields?.["Seller ID"]), status: asText(r.fields?.["Status"]), storeCounter: numberValue(r.fields?.["Store Counter Price"]), sellerCounter: numberValue(r.fields?.["Seller Counter Price"]) })));
+
     const previousIds = [...new Set(preFiltered.map((r) => firstLinkedRecordId(r.fields?.["Previous Record ID"])).filter(Boolean))];
 
     let previousSellerCounterById = new Map();
@@ -20296,6 +20298,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
       Array.from(winningSellerOfferByWtbId.entries()).map(async ([wtbId, winner]) => {
         const bestActiveCounter = (await getCurrentGlobalLowestNormalized("Member WTB", wtbId, null)).normalized;
         const freshNormalized = normalizeForCompare(winner.price, winner.vatType);
+        console.error("DEBUG fresh-winner:", { wtbId, winnerSellerPrice: winner.price, winnerVat: winner.vatType, freshNormalized, bestActiveCounter, activeCounterSellers: [...(sellerIdsWithActiveCounterByWtbId.get(wtbId) || [])], willDelete: Number.isFinite(bestActiveCounter) && Number.isFinite(freshNormalized) && bestActiveCounter < freshNormalized });
         if (Number.isFinite(bestActiveCounter) && Number.isFinite(freshNormalized) && bestActiveCounter < freshNormalized) {
           winningSellerOfferByWtbId.delete(wtbId);
         }
