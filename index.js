@@ -14990,15 +14990,6 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
         }
       }
 
-      // Re-engage the other sellers with the buyer's floor, same as a
-      // normal MW counter, so the thread stays consistent.
-      await reengageDeniedSellers({
-        sourceType: "Member WTB",
-        recordId: mwRecordId,
-        newBuyerCounterPrice: mwBuyerReference,
-        excludeSellerId: mwSellerId
-      }).catch((err) => console.error("Failed to re-engage other sellers after MW retry (non-blocking):", err));
-
       return res.json({ ok: true, counter_offer_record_id: mwNewRound.id });
     }
     // ---- end Member WTB retry branch -----------------------------------
