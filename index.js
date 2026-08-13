@@ -14702,7 +14702,6 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
         crossSellerReferenceRaw = rawThreshold;
       }
 
-      console.error("DEBUG retry no-prior validation:", { sellerOriginalPrice, buyerOfferInSellerTerms, proposedPrice, crossSellerCeilingRaw, globalLowestForRetry, sellerVatType });
       const validationFresh = validateNextCounterPriceWithCrossSellerCeiling(
         sellerOriginalPrice,
         buyerOfferInSellerTerms,
@@ -14823,15 +14822,19 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
     const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId);
     const priorFields = priorRound.fields || {};
 
-    // FIXED — the store's last position to THIS seller, IN SELLER-PAYOUT
-    // SCALE, is the denied round's "Counter Payout" (e.g. 75 — what the
-    // seller would receive), NOT "Store Counter Price" (85 — the buyer's
-    // all-in figure). The band compares against the seller's own ref
-    // (105 payout) and the seller's proposed price, both payout-scale;
-    // a buyer bid and a seller payout are different scales for Margin.
-    // Using Store Counter Price (85) wrongly forced the lower bound to
-    // 86 and rejected a valid seller counter of 85.
-    const storeLastPosition = numberValue(f["Counter Payout"]) || numberValue(priorFields["Counter Payout"]);
+    // FIXED (FIX F — regression from FIX A): the store's last position to
+    // THIS seller, in seller-payout scale. On an OUTRIGHT deny (no counter
+    // of the seller's own) the denied round's own "Counter Payout" holds
+    // the store's position, so use it. But on a seller-COUNTER denied round
+    // (Seller Counter Price set), "Counter Payout" now holds the SELLER's
+    // OWN bid (e.g. 130) — using it made ownReference and storeLastPosition
+    // both 130, collapsing the band to zero and rejecting every retry with
+    // a false "no room". For a seller-counter round the store's real last
+    // position is the PRIOR round's Counter Payout (e.g. 70).
+    const deniedRoundHasOwnCounter = numberValue(f["Seller Counter Price"]) > 0;
+    const storeLastPosition = deniedRoundHasOwnCounter
+      ? (numberValue(priorFields["Counter Payout"]) || numberValue(f["Counter Payout"]))
+      : (numberValue(f["Counter Payout"]) || numberValue(priorFields["Counter Payout"]));
 
     // FIXED — a seller who denied OUTRIGHT (no counter of their own on
     // the denied round) has Seller Counter Price = 0 here, and
@@ -14864,7 +14867,6 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
       crossSellerReferenceRawPrior = rawThresholdPrior;
     }
 
-    console.error("DEBUG retry has-prior validation:", { ownReferenceForRetry, storeLastPosition, proposedPrice, crossSellerCeilingRawPrior, globalLowestForRetryPrior, sellerVatType });
     const validation = validateNextCounterPriceWithCrossSellerCeiling(
       ownReferenceForRetry,
       storeLastPosition,
