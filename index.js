@@ -20046,7 +20046,44 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
 
       const deniedSellerOfferRecords = Array.from(bestDeniedByWtbId.values());
 
-      const freshDeniedItems = deniedSellerOfferRecords.map((record) => {
+      // NEW — additive only: his explicit rule — the buyer must NOT see a
+      // fresh-denied row when another seller already has a genuinely
+      // better LIVE position on the same WTB. The denied seller himself
+      // stays denied (he did nothing new), but from the BUYER's unified
+      // thread the deal is simply live in the Open pill via the better
+      // seller — same "hide when beaten elsewhere" collapse the Open pill
+      // and store side already enforce. We compare the denied offer
+      // (normalized) against the current global lowest EXCLUDING the
+      // denied seller himself; if some other seller is at least as good,
+      // drop the denied row.
+      const survivingDeniedRecords = [];
+      for (const record of deniedSellerOfferRecords) {
+        const wtbId = firstLinkedRecordId(record.fields?.["Member WTBs"]);
+        const deniedSellerId = firstLinkedRecordId(record.fields?.["Seller ID"]);
+        const rawAsk = numberValue(record.fields?.["Seller Offer"]);
+        const deniedVat = asText(record.fields?.["Offer VAT Type"]);
+        const deniedNorm = normalizeForCompare(rawAsk, deniedVat);
+
+        // Best LIVE position from any OTHER seller on this WTB.
+        const otherLowest = await getCurrentGlobalLowestNormalized(
+          "Member WTB",
+          wtbId,
+          deniedSellerId
+        ).catch(() => null);
+
+        const otherNorm =
+          otherLowest && Number.isFinite(otherLowest.normalized) && otherLowest.normalized > 0
+            ? otherLowest.normalized
+            : null;
+
+        // Another seller is genuinely at least as good → hide the denied row.
+        if (otherNorm !== null && Number.isFinite(deniedNorm) && otherNorm <= deniedNorm + 0.01) {
+          continue;
+        }
+        survivingDeniedRecords.push(record);
+      }
+
+      const freshDeniedItems = survivingDeniedRecords.map((record) => {
         const f = record.fields || {};
         const memberWtbId = firstLinkedRecordId(f["Member WTBs"]);
         const wtbFields = memberWtbFieldsById.get(memberWtbId) || {};
