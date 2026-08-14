@@ -15753,7 +15753,7 @@ for (const round of pendingSellerCounterRounds) {
   }
 
   const freshSellerOffers = await airtable(SELLER_OFFERS_TABLE)
-    .select({ fields: [sellerLinkField, "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer", "Withdrawn?"] })
+    .select({ fields: [sellerLinkField, "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer", "Withdrawn?", "Denied?"] })
     .all()
     .then((records) =>
       records.filter((r) => {
@@ -15812,6 +15812,16 @@ for (const round of pendingSellerCounterRounds) {
     // (if any) — re-engaged by the buyer's counter, so its Place-New-Offer
     // button must not stay live. Best-effort; harmless for Store Orders.
     if (so.id) disableSellerOfferDeniedEmbed(so.id);
+
+    // FIXED — a fresh-denied Seller Offer (Denied?=true, no counter round)
+    // being re-engaged here still had Denied?=true afterward, so it kept
+    // showing in the buyer's DENIED pill (which reads {Denied?}=TRUE)
+    // even though this new Open reengage round now exists — the seller
+    // appeared BOTH re-engaged and still denied. Clear it so the offer
+    // leaves the Denied pill, same as edit-after-denial does on placement.
+    if (so.id && sf["Denied?"]) {
+      await airtable(SELLER_OFFERS_TABLE).update(so.id, { "Denied?": false }).catch(() => {});
+    }
 
     const sellerRecord = await airtable(SELLERS_TABLE).find(sellerId).catch(() => null);
     const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
