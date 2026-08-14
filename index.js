@@ -4861,14 +4861,46 @@ function bindConsignmentDiscordButtons(client) {
       // equivalent above.
       await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/${counterOfferRecordId}/buyer-counter`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
-        },
-        body: JSON.stringify({ price: counterPrice })
-      });
+      // A Retry comes from a DENIED round (the buyer coming back on the
+      // "Counter Offer Denied" embed via the Retry button). The
+      // buyer-counter endpoint requires Status=Open and would reject a
+      // denied round ("no longer open"). Detect a non-Open round and
+      // route it to the buyer retry-counter endpoint instead, which
+      // handles a denied round (reversed band + cross-seller ceiling)
+      // and needs the buyer's own seller_record_id (WTB Buyer Seller ID).
+      let buyerRetryRoundStatus = null;
+      let buyerRetrySellerRecordId = null;
+      try {
+        const buyerRetryRound = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
+        buyerRetryRoundStatus = asText(buyerRetryRound.fields?.["Status"]);
+        const retryMwId = firstLinkedRecordId(buyerRetryRound.fields?.["Member WTB"]);
+        if (retryMwId) {
+          const retryMwRec = await airtable(MEMBER_WTBS_TABLE).find(retryMwId).catch(() => null);
+          buyerRetrySellerRecordId = firstLinkedRecordId(retryMwRec?.fields?.["Buyer Seller ID"]);
+        }
+      } catch (err) {
+        // fall through — buyer-counter path will reject cleanly
+      }
+
+      const isBuyerRetryFromDenied = buyerRetryRoundStatus && buyerRetryRoundStatus !== "Open";
+
+      const response = isBuyerRetryFromDenied
+        ? await fetch(`${APP_PUBLIC_BASE_URL}/api/dashboard/buying-counter-offers/${counterOfferRecordId}/retry-counter`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+            },
+            body: JSON.stringify({ price: counterPrice, seller_record_id: buyerRetrySellerRecordId })
+          })
+        : await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/${counterOfferRecordId}/buyer-counter`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+            },
+            body: JSON.stringify({ price: counterPrice })
+          });
 
       const data = await response.json().catch(() => ({}));
 
@@ -12555,10 +12587,10 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
   const positionLabel = isDeny ? "**Seller's Standing Position**" : "**New Counter**";
   const embedTitle = isDeny ? "❌ Counter Offer Denied" : "🔁 Seller Countered";
   const middleLine = isDeny
-    ? `The seller is holding their position — you can accept it or deny.`
+    ? `The seller is holding their position — you can accept it or send a higher counter.`
     : `The seller sent a counter offer.`;
   const denyClosingLine = isDeny
-    ? "Accept the seller's position or deny below."
+    ? "Accept the seller's position or send a higher counter below."
     : closingLine;
 
   const message = await dm.send({
@@ -12589,7 +12621,22 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
     components: [
       {
         type: 1,
-        components: (noRoomToCounter || isDeny)
+        components: isDeny
+          ? [
+              {
+                type: 2,
+                style: 3,
+                label: `Accept €${Number(newPrice)}`,
+                custom_id: `member_wtb_buyer_counter_accept:${counterOfferRecordId}`
+              },
+              {
+                type: 2,
+                style: 1,
+                label: "Retry",
+                custom_id: `member_wtb_buyer_counter_counter:${counterOfferRecordId}`
+              }
+            ]
+          : noRoomToCounter
           ? [
               {
                 type: 2,
@@ -19590,6 +19637,28 @@ app.get("/api/dashboard/quick-delivered", async (req, res) => {
     });
   }
 });
+
+// PLACEHOLDER endpoints — the buyer-side (Buying) fulfillment tabs
+// (Accepted → Payment Required → Confirmed → Label Requested → Ready
+// to Ship → Shipped → Delivered) are not built yet. The frontend
+// already calls them; without these routes Express 404s with an HTML
+// page and the frontend's response.json() throws "Unexpected token
+// '<'", breaking the whole Buying section. These return an empty,
+// well-formed payload so the tabs render "no items" cleanly. Replace
+// with the real fulfillment logic when that pipeline is built.
+for (const _buyingStubPath of [
+  "buying-accepted",
+  "buying-payment-required",
+  "buying-confirmed",
+  "buying-label-requested",
+  "buying-ready-to-ship",
+  "buying-shipped",
+  "buying-delivered"
+]) {
+  app.get(`/api/dashboard/${_buyingStubPath}`, async (req, res) => {
+    res.json({ count: 0, items: [] });
+  });
+}
 
 app.get("/api/dashboard/buying-open-wtbs", async (req, res) => {
   try {
