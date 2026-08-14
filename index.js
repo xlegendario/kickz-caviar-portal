@@ -3450,8 +3450,6 @@ function bindConsignmentDiscordButtons(client) {
 
     const customId = String(interaction.customId || "");
 
-    console.error("DEBUG-CLICK", customId);
-
     if (
       !customId.startsWith("confirm_offer:") &&
       !customId.startsWith("deny_offer:") &&
@@ -4648,16 +4646,6 @@ function bindConsignmentDiscordButtons(client) {
       const sellerCounterPrice = numberValue(f["Seller Counter Price"]);
       const acceptedPayout = sellerCounterPrice > 0 ? sellerCounterPrice : numberValue(f["Counter Payout"]);
       const acceptedVatType = asText(f["Counter Payout VAT Type"] || f["Seller Original VAT Type"]);
-
-      console.error("DEBUG-BUYER-ACCEPT", JSON.stringify({
-        roundId: counterOfferRecordId,
-        sellerCounterPrice,
-        counterPayout: numberValue(f["Counter Payout"]),
-        counterPayoutVatType: asText(f["Counter Payout VAT Type"]),
-        sellerOriginalVatType: asText(f["Seller Original VAT Type"]),
-        acceptedPayout,
-        acceptedVatType
-      }));
 
       if (!memberWtbRecordId || !sellerOfferRecordId) {
         await safeEditInteractionMessage(interaction, {
@@ -14843,7 +14831,23 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
     const pendingOffer = await airtable(COUNTER_OFFERS_TABLE).find(pendingOfferId);
     const pendingFields = pendingOffer.fields || {};
 
-    if (!linkedRecordIncludes(pendingFields["Seller ID"], sellerRecordId)) {
+    // NEW — this endpoint is shared by two callers: the SELLER accepting
+    // their own denied/standing round, and the BUYER accepting the
+    // seller's standing position from their Denied embed. Detect which,
+    // because the "own store position" logic below is INVERTED for the
+    // buyer: the buyer's own round carries their bid (Store Counter Price)
+    // but that is NOT what they want to accept — they want the seller's
+    // prior position. Determine caller by matching the WTB's Buyer Seller
+    // ID.
+    const pendingMemberWtbId = firstLinkedRecordId(pendingFields["Member WTB"]);
+    const pendingMemberWtb = pendingMemberWtbId
+      ? await airtable(MEMBER_WTBS_TABLE).find(pendingMemberWtbId).catch(() => null)
+      : null;
+    const callerIsBuyer = !!pendingMemberWtb &&
+      linkedRecordIncludes(pendingMemberWtb.fields?.["Buyer Seller ID"], sellerRecordId);
+    const callerIsRoundSeller = linkedRecordIncludes(pendingFields["Seller ID"], sellerRecordId);
+
+    if (!callerIsRoundSeller && !callerIsBuyer) {
       return res.status(403).json({ error: "Not allowed" });
     }
 
@@ -14859,7 +14863,11 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
     // lower price than the store's real last position. Only fall back to
     // the previous round when the pending round has no store position of
     // its own (a pure seller-counter round the store never answered).
-    const pendingHasOwnStorePosition = numberValue(pendingFields["Store Counter Price"]) > 0;
+    // CRITICAL — for the BUYER caller this is inverted: the buyer accepts
+    // the SELLER's standing position (the prior round), never their own
+    // round (which carries the buyer's VAT0 bid). So the buyer always
+    // targets the previous round.
+    const pendingHasOwnStorePosition = !callerIsBuyer && numberValue(pendingFields["Store Counter Price"]) > 0;
 
     // NEW — additive only: when the seller denied a buyer offer
     // OUTRIGHT (no prior round of their own), there's no "previous" to
@@ -14867,12 +14875,21 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
     // round. His confirmed want: the seller can still come back on
     // their own deny and Accept it. So accept THIS (denied) round
     // itself, and tolerate its Denied status (reviving it is the point).
-    const acceptSelfDeniedRound = pendingHasOwnStorePosition || !previousOfferId;
-    const acceptTargetId = pendingHasOwnStorePosition
-      ? pendingOfferId
-      : (previousOfferId || pendingOfferId);
+    const acceptSelfDeniedRound = pendingHasOwnStorePosition || (!callerIsBuyer && !previousOfferId);
+    const acceptTargetId = callerIsBuyer
+      ? (previousOfferId || pendingOfferId)
+      : (pendingHasOwnStorePosition
+          ? pendingOfferId
+          : (previousOfferId || pendingOfferId));
 
-    if (!pendingHasOwnStorePosition && !previousOfferId && asText(pendingFields["Status"]) !== "Denied") {
+    if (callerIsBuyer && !previousOfferId) {
+      // Buyer accepting but there's no prior seller position to accept —
+      // shouldn't happen from a Denied embed (which always has a prior),
+      // but guard rather than accept the buyer's own VAT0 round.
+      return res.status(409).json({ error: "There is no seller position to accept." });
+    }
+
+    if (!callerIsBuyer && !pendingHasOwnStorePosition && !previousOfferId && asText(pendingFields["Status"]) !== "Denied") {
       // No previous AND this round isn't a denied one to revive —
       // genuinely nothing to accept.
       return res.status(409).json({ error: "There is no previous offer to accept." });
@@ -14909,6 +14926,16 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
 
       const acceptedPayout = numberValue(f["Counter Payout"]);
       const acceptedVatType = asText(f["Counter Payout VAT Type"] || f["Seller Original VAT Type"]);
+
+      console.error("DEBUG-PORTAL-ACCEPT-PREV", JSON.stringify({
+        callerIsBuyer,
+        pendingOfferId,
+        acceptTargetId,
+        acceptedPayout,
+        acceptedVatType,
+        counterPayoutVatType: asText(f["Counter Payout VAT Type"]),
+        sellerOriginalVatType: asText(f["Seller Original VAT Type"])
+      }));
 
       await airtable(COUNTER_OFFERS_TABLE).update(acceptTargetId, {
         "Status": "Accepted",
