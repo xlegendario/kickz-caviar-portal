@@ -20648,6 +20648,18 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
       .filter((record) => linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId))
       .map((r) => r.id);
 
+    console.error("[BUYING-OFFERS-DEBUG]", JSON.stringify({
+      incoming_seller_record_id: sellerRecordId,
+      total_wtbs_passing_status_and_lowest: records.length,
+      matched_wtb_count: memberWtbIds.length,
+      sample_buyer_seller_ids: records.slice(0, 8).map((r) => ({
+        wtb: displayValue(r.fields?.["Member WTB ID"]),
+        buyer_seller_id_raw: r.fields?.["Buyer Seller ID"],
+        current_lowest: r.fields?.["Current Lowest Offer"],
+        fulfillment: r.fields?.["Fulfillment Status"]
+      }))
+    }));
+
     // FIXED — his explicit request: a genuinely better fresh offer
     // from ANOTHER seller should always reach the buyer, even while
     // they're already negotiating with someone else — "only ever good
