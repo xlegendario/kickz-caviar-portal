@@ -4616,9 +4616,13 @@ function bindConsignmentDiscordButtons(client) {
       const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
       const f = counterOffer.fields || {};
 
-      if (asText(f["Status"]) !== "Open") {
+      if (asText(f["Status"]) === "Accepted") {
+        // His rule: the seller's standing position stays grabbable from
+        // the buyer's Denied embed even though that round is Closed
+        // (superseded by later negotiation). Only an already-Accepted
+        // round is genuinely gone — the deal closed with someone.
         await safeEditInteractionMessage(interaction, {
-          content: "❌ This counter offer is no longer available.",
+          content: "❌ This offer is no longer available.",
           embeds: interaction.message.embeds,
           components: []
         }).catch(() => {});
@@ -4639,8 +4643,9 @@ function bindConsignmentDiscordButtons(client) {
       // an extra store-vs-seller scale conversion was needed — here the
       // seller's own counter number already means "what I want to
       // receive").
-      const acceptedPayout = numberValue(f["Seller Counter Price"]);
-      const acceptedVatType = asText(f["Seller Original VAT Type"]);
+      const sellerCounterPrice = numberValue(f["Seller Counter Price"]);
+      const acceptedPayout = sellerCounterPrice > 0 ? sellerCounterPrice : numberValue(f["Counter Payout"]);
+      const acceptedVatType = asText(f["Counter Payout VAT Type"] || f["Seller Original VAT Type"]);
 
       if (!memberWtbRecordId || !sellerOfferRecordId) {
         await safeEditInteractionMessage(interaction, {
