@@ -3952,18 +3952,44 @@ function bindConsignmentDiscordButtons(client) {
     
         if (customId.startsWith("decline_member_wtb_buyer_offer:")) {
           const memberWtbRecordId = customId.split(":")[1];
-    
-          await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
-            "Purchase Status": "Offers Sent",
-            "Offer Sent?": false
-          }).catch(() => null);
-    
+
+          await interaction.deferUpdate().catch(() => {});
+
+          // FIXED — this was a stub: it only flipped the WTB's Purchase
+          // Status and greyed the embed, but NEVER denied the seller's
+          // offer, sent the seller their Denied embed, or ran the
+          // cross-seller broadcast. So a buyer denying via DISCORD did
+          // nothing on the seller side (no Denied embed, offer didn't
+          // move to the seller's Denied pill) — while the PORTAL deny
+          // did all of it. Now routes through the SAME endpoint the
+          // Portal uses. Same Discord-vs-Portal split we keep hitting.
+          let currentSellerOfferId = "";
+          try {
+            const wtbForDecline = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+            currentSellerOfferId = firstLinkedRecordId(wtbForDecline.fields?.["Current Lowest Seller Offer"]);
+          } catch (e) {
+            currentSellerOfferId = "";
+          }
+
+          if (currentSellerOfferId) {
+            await fetch(`${APP_PUBLIC_BASE_URL}/api/dashboard/buying-offers/${memberWtbRecordId}/deny`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-kc-secret": process.env.KC_PORTAL_SECRET
+              },
+              body: JSON.stringify({
+                seller_offer_record_id: currentSellerOfferId
+              })
+            }).catch((err) => console.error("Discord buyer-decline → deny endpoint failed (non-blocking):", err.message));
+          }
+
           await safeEditInteractionMessage(interaction, {
             content: "❌ Offer declined.",
             embeds: interaction.message.embeds,
             components: []
           }).catch(() => {});
-    
+
           return;
         }
 
@@ -12730,7 +12756,7 @@ async function disableSellerOfferDeniedEmbed(sellerOfferRecordId) {
           description: [
             (oldEmbed?.description || "").split("\n").filter((l) => l && !l.startsWith("You can place a new offer")).join("\n"),
             "",
-            "This embed disabled — please check your dashboard for the current status of this offer."
+            "This offer has moved on to the next stage — please check your dashboard for the current status."
           ].join("\n"),
           color: 0x95a5a6
         }
