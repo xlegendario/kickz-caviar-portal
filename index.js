@@ -24756,7 +24756,16 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       ? overridePurchasePrice
       : Number(offerFields['Seller Offer'] || 0);
 
-    const vatType = overrideVatTypeForProcessing || asText(offerFields['Offer VAT Type']);
+    // FIXED (his live foreign-buyer test): the VAT TYPE that drives the
+    // seller-side ÷1.21 decision below MUST be the seller's own VAT type
+    // from the Seller Offer record — the authoritative source. A seller's
+    // VAT type never changes during negotiation (only the price does), so
+    // the Seller Offer's Offer VAT Type is the truth. A buyer-facing VAT0
+    // label (reverse-charge) leaking through override_vat_type previously
+    // made a Dutch VAT21 seller's 146 be treated as VAT0 → 146+10=156
+    // instead of 146/1.21+10=130.66. Prefer the record; fall back to the
+    // override only if the record's own type is somehow blank.
+    const vatType = asText(offerFields['Offer VAT Type']) || overrideVatTypeForProcessing;
 
     const isOpenWtbFlow = memberFields['Auto Accept Seller Offers?'] !== true;
 
