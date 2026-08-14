@@ -15636,6 +15636,11 @@ for (const round of pendingSellerCounterRounds) {
 
     const newRound = await airtable(COUNTER_OFFERS_TABLE).create(createFields);
 
+    // Disable this seller's stale "Offer Denied / Place New Offer" embed
+    // (if any) — re-engaged by the buyer's counter, so its Place-New-Offer
+    // button must not stay live. Best-effort; harmless for Store Orders.
+    if (sellerOfferRecordId) disableSellerOfferDeniedEmbed(sellerOfferRecordId);
+
     const sellerRecord = await airtable(SELLERS_TABLE).find(sellerId).catch(() => null);
     const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
     if (!sellerDiscordId) continue;
@@ -15772,6 +15777,11 @@ for (const round of pendingSellerCounterRounds) {
 
     const newRound = await airtable(COUNTER_OFFERS_TABLE).create(createFields);
 
+    // Disable this seller's stale "Offer Denied / Place New Offer" embed
+    // (if any) — re-engaged by the buyer's counter, so its Place-New-Offer
+    // button must not stay live. Best-effort; harmless for Store Orders.
+    if (so.id) disableSellerOfferDeniedEmbed(so.id);
+
     const sellerRecord = await airtable(SELLERS_TABLE).find(sellerId).catch(() => null);
     const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
     if (!sellerDiscordId) continue;
@@ -15876,6 +15886,11 @@ for (const round of pendingSellerCounterRounds) {
     createFields[sourceType === "Member WTB" ? "Member WTB" : "Order"] = [recordId];
 
     const reopenedRound = await airtable(COUNTER_OFFERS_TABLE).create(createFields);
+
+    // Disable this seller's stale "Offer Denied / Place New Offer" embed
+    // (if any) — re-engaged by the buyer's counter, so its Place-New-Offer
+    // button must not stay live. Best-effort; harmless for Store Orders.
+    if (sellerOfferRecordId) disableSellerOfferDeniedEmbed(sellerOfferRecordId);
 
     const sellerRecord = await airtable(SELLERS_TABLE).find(sellerId).catch(() => null);
     const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
