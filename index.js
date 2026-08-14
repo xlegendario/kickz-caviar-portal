@@ -12726,11 +12726,11 @@ async function disableSellerOfferDeniedEmbed(sellerOfferRecordId) {
     await message.edit({
       embeds: [
         {
-          title: "❌ Offer Denied (expired)",
+          title: "❌ Offer Denied",
           description: [
             (oldEmbed?.description || "").split("\n").filter((l) => l && !l.startsWith("You can place a new offer")).join("\n"),
             "",
-            "This offer has moved on — please respond from your Countered or Denied tab in the portal."
+            "This embed disabled — please check your dashboard for the current status of this offer."
           ].join("\n"),
           color: 0x95a5a6
         }
