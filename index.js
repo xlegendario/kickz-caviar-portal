@@ -20648,17 +20648,6 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
       .filter((record) => linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId))
       .map((r) => r.id);
 
-    console.error("[BUYING-OFFERS-DEBUG]", JSON.stringify({
-      incoming_seller_record_id: sellerRecordId,
-      total_wtbs_passing_status_and_lowest: records.length,
-      matched_wtb_count: memberWtbIds.length,
-      sample_buyer_seller_ids: records.slice(0, 8).map((r) => ({
-        wtb: displayValue(r.fields?.["Member WTB ID"]),
-        buyer_seller_id_raw: r.fields?.["Buyer Seller ID"],
-        current_lowest: r.fields?.["Current Lowest Offer"],
-        fulfillment: r.fields?.["Fulfillment Status"]
-      }))
-    }));
 
     // FIXED — his explicit request: a genuinely better fresh offer
     // from ANOTHER seller should always reach the buyer, even while
@@ -20723,6 +20712,12 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
           )
       : [];
 
+    const normalizeForCompare = (price, vt) => {
+      const p = Number(price);
+      if (!Number.isFinite(p)) return null;
+      return asText(vt) === "VAT0" ? p * 1.21 : p;
+    };
+
     const winningSellerOfferByWtbId = new Map();
     for (const so of allSellerOffersForTheseWtbs) {
       const wtbId = firstLinkedRecordId(so.fields?.["Member WTBs"]);
@@ -20735,12 +20730,24 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
       const price = numberValue(so.fields?.["Seller Offer"]);
       if (!Number.isFinite(price)) continue;
 
+      // FIXED — compare NORMALIZED, not raw. Picking the lowest RAW
+      // price chose 157 VAT0 over 186 VAT21, but 157 VAT0 = 189.97
+      // normalized is actually WORSE than 186 VAT21 = 186. The later
+      // cross-seller compare loop (which normalizes) then saw a
+      // genuinely better position than this raw-picked "winner" and
+      // deleted the whole WTB from Open — the buyer saw nothing. Now
+      // the winner is the true lowest on the comparable scale.
+      const vatType = asText(so.fields?.["Offer VAT Type"]);
+      const normalized = normalizeForCompare(price, vatType);
+      if (!Number.isFinite(normalized)) continue;
+
       const current = winningSellerOfferByWtbId.get(wtbId);
-      if (!current || price < current.price) {
+      if (!current || normalized < current.normalized) {
         winningSellerOfferByWtbId.set(wtbId, {
           price,
+          normalized,
           id: so.id,
-          vatType: asText(so.fields?.["Offer VAT Type"])
+          vatType
         });
       }
     }
@@ -20756,36 +20763,15 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
     // design, if an active counter beats the best fresh offer, this
     // WTB's true winner belongs in Countered instead — so it must be
     // excluded from Open entirely, not shown with a worse number.
-    const normalizeForCompare = (price, vt) => {
-      const p = Number(price);
-      if (!Number.isFinite(p)) return null;
-      return asText(vt) === "VAT0" ? p * 1.21 : p;
-    };
     await Promise.all(
       Array.from(winningSellerOfferByWtbId.entries()).map(async ([wtbId, winner]) => {
         const bestActiveCounter = (await getCurrentGlobalLowestNormalized("Member WTB", wtbId, null)).normalized;
-        const freshNormalized = normalizeForCompare(winner.price, winner.vatType);
+        const freshNormalized = winner.normalized;
         if (Number.isFinite(bestActiveCounter) && Number.isFinite(freshNormalized) && bestActiveCounter < freshNormalized) {
           winningSellerOfferByWtbId.delete(wtbId);
         }
       })
     );
-
-    console.error("[BUYING-OFFERS-DEBUG-2]", JSON.stringify({
-      matched_wtb_ids: memberWtbIds,
-      wtbs_with_winning_offer: Array.from(winningSellerOfferByWtbId.keys()),
-      winning_details: Array.from(winningSellerOfferByWtbId.entries()).map(([id, w]) => ({ id, price: w.price, vat: w.vatType })),
-      seller_ids_mid_negotiation: Array.from(sellerIdsWithActiveCounterByWtbId.entries()).map(([id, set]) => ({ id, sellers: Array.from(set) })),
-      total_seller_offers_after_filter: allSellerOffersForTheseWtbs.length,
-      raw_offer_links: allSellerOffersForTheseWtbs.slice(0, 6).map((r) => ({
-        offer_id: r.id,
-        member_wtbs_raw: r.fields?.["Member WTBs"],
-        first_linked: firstLinkedRecordId(r.fields?.["Member WTBs"]),
-        seller_offer: r.fields?.["Seller Offer"],
-        denied: r.fields?.["Denied?"],
-        deleted: r.fields?.["Delete Offer"]
-      }))
-    }));
 
     const items = await Promise.all(records
       .filter((record) =>
