@@ -22617,6 +22617,42 @@ app.post("/api/seller-offers/:offerId/edit-after-denial", async (req, res) => {
     // computeAndPushLowestOffer's watchFields listens for — so simply
     // updating this record is enough to naturally re-trigger a fresh
     // Offer Request to the store, same as any other new/changed offer.
+    //
+    // FIXED — a real, confirmed bug: that store re-trigger is
+    // Store-Orders-only (Airtable watchFields → store embed). A Member
+    // WTB BUYER is NOT notified that way — they get their embed via
+    // /api/member-wtb/send-current-offer-to-buyer, which was never
+    // called here. So a seller's "Place New Offer" on a MW updated the
+    // offer (it showed in the Portal) but the buyer got no Discord
+    // embed at all. For a MW-linked offer, mirror what the normal
+    // place-offer + Discord modal do: refresh the WTB's lowest-offer
+    // fields to this new offer, then call send-current-offer-to-buyer.
+    if (linkedMemberWtbId) {
+      try {
+        await airtable(MEMBER_WTBS_TABLE).update(linkedMemberWtbId, {
+          "Current Lowest Offer": offerAmount,
+          "Current Lowest Normalized": normalizedOffer,
+          "Current Lowest Seller Offer": [offerId],
+          "Lowest Offer": offerAmount,
+          "Lowest Offer Normalized": normalizedOffer,
+          "Lowest Offer VAT Type": vatType,
+          "Lowest Offer Seller ID": [sellerRecordId],
+          "New Offer Available": false,
+          "Offer Sent?": true
+        });
+
+        await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb/send-current-offer-to-buyer`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-kc-secret": process.env.KC_PORTAL_SECRET
+          },
+          body: JSON.stringify({ member_wtb_record_id: linkedMemberWtbId })
+        }).catch((err) => console.error("Failed to notify buyer after MW Place New Offer (non-blocking):", err.message));
+      } catch (mwNotifyErr) {
+        console.error("Failed MW Place-New-Offer buyer notify (non-blocking):", mwNotifyErr.message);
+      }
+    }
 
     return res.json({
       ok: true,
