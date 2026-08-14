@@ -14047,6 +14047,42 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         }
       }
 
+      // FIXED — a seller whose latest round is Denied/Closed (e.g. after
+      // they denied the buyer and are standing on a now-Closed counter)
+      // has NO Open round, so the Open-only map above missed them and
+      // their contribution fell back to their raw original listing
+      // instead of their true last countered position — making a
+      // different seller wrongly look "Lowest". Mirror
+      // getCurrentGlobalLowestNormalized: pick each seller's MOST RECENT
+      // round of ANY status as the chain-trace start point. Only fills
+      // sellers not already covered by an Open round above.
+      const allMwRoundsForCompeting = await airtable(COUNTER_OFFERS_TABLE)
+        .select({
+          filterByFormula: `{Source Type} = 'Member WTB'`,
+          fields: ["Member WTB", "Seller ID", "Created At"]
+        })
+        .all()
+        .then((records) =>
+          records.filter((r) => memberWtbIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Member WTB"])))
+        );
+      const latestAnyStatusRoundBySeller = new Map();
+      const latestAnyStatusCreatedBySeller = new Map();
+      for (const r of allMwRoundsForCompeting) {
+        const sellerId = firstLinkedRecordId(r.fields?.["Seller ID"]);
+        if (!sellerId) continue;
+        const createdAt = asText(r.fields?.["Created At"]);
+        const currentLatest = latestAnyStatusCreatedBySeller.get(sellerId);
+        if (!currentLatest || (createdAt && createdAt > currentLatest)) {
+          latestAnyStatusCreatedBySeller.set(sellerId, createdAt);
+          latestAnyStatusRoundBySeller.set(sellerId, r.id);
+        }
+      }
+      for (const [sellerId, roundId] of latestAnyStatusRoundBySeller.entries()) {
+        if (!activeRoundIdBySeller.has(sellerId)) {
+          activeRoundIdBySeller.set(sellerId, roundId);
+        }
+      }
+
       for (const so of competingSellerOffers) {
         const sellerId = firstLinkedRecordId(so.fields?.["Seller ID"]);
         if (sellerId && sellerIdsWithGenuineCounterForWtb.has(sellerId)) continue; // superseded by their genuine counter below
