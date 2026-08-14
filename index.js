@@ -21242,11 +21242,37 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
     const acceptedCounterOfferRecordId = asText(req.body?.counter_offer_record_id);
     const sellerOfferRecordId = asText(req.body?.seller_offer_record_id);
     const overridePrice = req.body?.override_price;
-    const overrideVatType = asText(req.body?.override_vat_type);
+    const buyerFacingVatType = asText(req.body?.override_vat_type);
 
     if (!memberWtbRecordId) {
       return res.status(400).json({ error: "Missing member_wtb_record_id" });
     }
+
+    // FIXED (his firm rule, live foreign-buyer test): the frontend sends
+    // override_vat_type as the BUYER-FACING label (VAT0 for a
+    // reverse-charge buyer). That must NEVER drive the seller-side
+    // deal-channel/inventory VAT. Resolve the ACCEPTED SELLER's own VAT
+    // type from the Seller Offer record — the authoritative source that
+    // never changes during negotiation — and send THAT. The price
+    // override stays (it's legitimately negotiated).
+    let sellerVatType = "";
+    if (sellerOfferRecordId) {
+      const sellerOffer = await airtable(SELLER_OFFERS_TABLE).find(sellerOfferRecordId).catch(() => null);
+      sellerVatType = asText(sellerOffer?.fields?.["Offer VAT Type"]);
+    }
+    // Fall back to the buyer-facing value only if the Seller Offer's own
+    // type is somehow unreadable (shouldn't happen).
+    const overrideVatType = sellerVatType || buyerFacingVatType;
+
+    console.error("DEBUG-BUYING-ACCEPT-OFFER", JSON.stringify({
+      memberWtbRecordId,
+      acceptedCounterOfferRecordId,
+      sellerOfferRecordId,
+      overridePrice,
+      buyerFacingVatType,
+      sellerVatType,
+      overrideVatType
+    }));
 
     const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
     if (!wtbBotBaseUrl) {
