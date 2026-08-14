@@ -3985,7 +3985,7 @@ function bindConsignmentDiscordButtons(client) {
           }
 
           await safeEditInteractionMessage(interaction, {
-            content: "❌ Offer declined.",
+            content: "❌ Offer denied.",
             embeds: interaction.message.embeds,
             components: []
           }).catch(() => {});
@@ -4457,7 +4457,7 @@ function bindConsignmentDiscordButtons(client) {
                       {
                         type: 2,
                         style: 4,
-                        label: "Decline",
+                        label: "Deny",
                         custom_id: `decline_member_wtb_buyer_offer:${memberWtbRecordIdForFallback}`
                       }
                     ]
@@ -12756,7 +12756,7 @@ async function disableSellerOfferDeniedEmbed(sellerOfferRecordId) {
           description: [
             (oldEmbed?.description || "").split("\n").filter((l) => l && !l.startsWith("You can place a new offer")).join("\n"),
             "",
-            "This offer has moved on to the next stage — please check your dashboard for the current status."
+            "This embed disabled — please check your dashboard for the current status of this offer."
           ].join("\n"),
           color: 0x95a5a6
         }
@@ -24702,7 +24702,7 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
             {
               type: 2,
               style: 4,
-              label: "Decline",
+              label: "Deny",
               custom_id: `decline_member_wtb_buyer_offer:${memberWtbRecordId}`
             }
           ]
