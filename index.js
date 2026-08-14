@@ -20713,6 +20713,15 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/retry-counter", async (r
     const sellerOriginalPrice = numberValue(f["Seller Original Price"]);
     const sellerVatType = asText(f["Seller Original VAT Type"]);
 
+    // FIXED (his live test, CTO-000477): the round must carry the
+    // seller-facing Counter Payout + VAT Type, or the seller's pill
+    // shows "COUNTER OFFER EMPTY". Compute it the same way the normal
+    // buyer-counter does.
+    const recomputedPayout = calculateMemberWtbSellerPayout(proposedPrice, sellerVatType, memberWtb.fields || {});
+    if (!Number.isFinite(recomputedPayout) || recomputedPayout <= 0) {
+      return res.status(400).json({ error: "Could not compute a valid payout for this retry." });
+    }
+
     const newRound = await airtable(COUNTER_OFFERS_TABLE).create({
       "Member WTB": [memberWtbRecordId],
       "Seller ID": sellerRecordId ? [sellerRecordId] : undefined,
@@ -20721,30 +20730,67 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/retry-counter", async (r
       "Seller Original Price": sellerOriginalPrice,
       "Seller Original VAT Type": sellerVatType,
       "Store Counter Price": proposedPrice,
+      "Counter Payout": recomputedPayout,
+      "Counter Payout VAT Type": sellerVatType,
       "Previous Record ID": priorRoundId,
       "Created At": new Date().toISOString(),
       "Status": "Open"
     });
 
-    if (AIRTABLE_DISCORD_UPDATES_URL) {
-      const recomputedPayout = calculateMemberWtbSellerPayout(proposedPrice, sellerVatType, memberWtb.fields || {});
+    // FIXED (his live test): send the SELLER their MW counter embed
+    // in-process (like the normal buyer-counter), NOT via the
+    // store-facing webhook — and write the returned Discord IDs back
+    // onto the round so the embed can later be superseded/disabled.
+    let dmSent = false;
+    const sellerRecord = sellerRecordId ? await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null) : null;
+    const sellerDiscordId = asText(sellerRecord?.fields?.["Discord ID"]);
+    if (sellerDiscordId) {
+      const noRoomToCounter =
+        Number.isFinite(sellerLastPositionInBuyerTerms) &&
+        !hasRoomForNextStep(proposedPrice, sellerLastPositionInBuyerTerms);
 
-      await fetch(AIRTABLE_DISCORD_UPDATES_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          trigger_type: "member-wtb-buyer-retried",
-          counter_offer_record_id: newRound.id,
-          product_name: asText(f["Product Name"]),
-          sku: asText(f["SKU"]),
-          size: asText(f["Size"]),
-          your_previous_counter: sellerLastPosition,
-          buyer_counter_payout: recomputedPayout
-        })
-      }).catch((err) => console.error("Failed to notify seller of retry counter (non-blocking):", err));
+      const discordResult = await sendMemberWtbCounterOfferDiscordDM({
+        counterOfferRecordId: newRound.id,
+        sellerDiscordId,
+        productName: asText(f["Product Name"]) || asText(memberWtb.fields?.["Product Name"]),
+        sku: asText(memberWtb.fields?.["SKU"]) || asText(f["SKU"]),
+        size: asText(memberWtb.fields?.["Size"]) || asText(f["Size"]),
+        memberWtbId: asText(memberWtb.fields?.["Member WTB ID"]) || memberWtbRecordId,
+        payout: recomputedPayout,
+        vatType: sellerVatType,
+        sellerOriginalPrice,
+        sellerOriginalVatType: sellerVatType,
+        sellerLastOfferPrice: sellerLastPosition,
+        noRoomToCounter
+      }).catch((err) => {
+        console.error("Failed to DM seller of buyer retry (non-blocking):", err);
+        return null;
+      });
+
+      if (discordResult) {
+        dmSent = true;
+        await airtable(COUNTER_OFFERS_TABLE).update(newRound.id, {
+          "Discord Channel ID": discordResult.channelId,
+          "Discord Message ID": discordResult.messageId,
+          "Discord Delivery Type": discordResult.deliveryType
+        }).catch(() => {});
+      }
     }
 
-    res.json({ ok: true, band: validation.band, new_round_id: newRound.id });
+    // FIXED (his live test): disable the buyer's own Denied embed they
+    // acted on (the Accept/Retry embed) — universal rule: acted-on in
+    // the dashboard → embed dead.
+    const buyerDmChannelId = asText(f["Discord Channel ID"]);
+    const buyerDmMessageId = asText(f["Discord Message ID"]);
+    if (buyerDmChannelId && buyerDmMessageId) {
+      await disableCounterOfferDiscordButtons(
+        buyerDmChannelId,
+        buyerDmMessageId,
+        "🔁 You retried in your dashboard. You can still Accept or Edit your choice there."
+      ).catch((err) => console.error("Failed to disable MW buyer Denied embed on retry (non-blocking):", err.message));
+    }
+
+    res.json({ ok: true, band: validation.band, new_round_id: newRound.id, dm_sent: dmSent });
   } catch (err) {
     console.error("Failed to retry buying counter offer:", err);
 
