@@ -20771,6 +20771,13 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
       })
     );
 
+    console.error("[BUYING-OFFERS-DEBUG-2]", JSON.stringify({
+      matched_wtb_ids: memberWtbIds,
+      wtbs_with_winning_offer: Array.from(winningSellerOfferByWtbId.keys()),
+      winning_details: Array.from(winningSellerOfferByWtbId.entries()).map(([id, w]) => ({ id, price: w.price, vat: w.vatType })),
+      seller_ids_mid_negotiation: Array.from(sellerIdsWithActiveCounterByWtbId.entries()).map(([id, set]) => ({ id, sellers: Array.from(set) }))
+    }));
+
     const items = await Promise.all(records
       .filter((record) =>
         linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId) &&
