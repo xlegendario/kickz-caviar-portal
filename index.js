@@ -20062,7 +20062,11 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         const deniedSellerId = firstLinkedRecordId(record.fields?.["Seller ID"]);
         const rawAsk = numberValue(record.fields?.["Seller Offer"]);
         const deniedVat = asText(record.fields?.["Offer VAT Type"]);
-        const deniedNorm = normalizeForCompare(rawAsk, deniedVat);
+        // Same VAT0->compare-scale normalization used across the codebase:
+        // VAT0 is exclusive so ×1.21 to compare against VAT21/Margin.
+        const deniedNorm = Number.isFinite(rawAsk)
+          ? (deniedVat === "VAT0" ? rawAsk * 1.21 : rawAsk)
+          : null;
 
         // Best LIVE position from any OTHER seller on this WTB.
         const otherLowest = await getCurrentGlobalLowestNormalized(
