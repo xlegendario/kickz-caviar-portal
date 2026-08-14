@@ -2121,7 +2121,6 @@ function renderBuyingUnifiedOfferRows(items) {
 }
 
 function renderWtbUnifiedOfferRows(items) {
-  console.log("DEBUG-FE-RENDER renderWtbUnifiedOfferRows called with:", (items || []).length, "items, filter:", activeOfferStatusFilter, "trace:", new Error().stack.split("\n")[2]);
   setMobileTableMode(false);
 
   const isDenied = activeOfferStatusFilter === "denied";
@@ -2941,11 +2940,20 @@ function startCsvImportStatusPolling() {
 async function loadDashboardData() {
   if (!dashboardSeller) return;
 
-  // Race guard — each load gets a token; a slow fetch that finishes
-  // after a newer load started (or after the user switched pills) must
-  // NOT render its now-stale result over the current view. Checked
-  // right before every async render below.
+  // Race guard — each load captures a token AND the pill it was started
+  // for (section/tab/offer-filter). A slow fetch that finishes after the
+  // user switched pills — or after a newer load started — must NOT render
+  // its now-stale result over the current view. Checked right before
+  // every async render below via loadStillCurrent().
   const __loadToken = (window.__dashboardLoadToken = (window.__dashboardLoadToken || 0) + 1);
+  const __loadSection = activeSection;
+  const __loadTab = activeTab;
+  const __loadOfferFilter = activeOfferStatusFilter;
+  const loadStillCurrent = () =>
+    __loadToken === window.__dashboardLoadToken &&
+    __loadSection === activeSection &&
+    __loadTab === activeTab &&
+    __loadOfferFilter === activeOfferStatusFilter;
 
   document.getElementById("consignmentInventoryActions")?.remove();
 
@@ -3654,7 +3662,7 @@ async function loadDashboardData() {
         ...(ownCounterData.items || []).map((item) => ({ ...item, _kind: "own_counter" }))
       ];
 
-      if (__loadToken !== window.__dashboardLoadToken) return;
+      if (!loadStillCurrent()) return;
       renderWtbUnifiedOfferRows(merged);
 
       const count = merged.length;
@@ -3679,15 +3687,13 @@ async function loadDashboardData() {
     const response = await fetch(`/api/dashboard/wtb-counter-offers?${params.toString()}`);
     const data = await response.json();
 
-    console.log("DEBUG-FE-DENIED filter:", activeOfferStatusFilter, "items:", (data.items || []).length, "count:", data.count, "token:", __loadToken, "current:", window.__dashboardLoadToken, "match:", __loadToken === window.__dashboardLoadToken, "rawItems:", JSON.stringify(data.items || []));
-
     if (!response.ok) {
       throw new Error(data.details || data.error || "Failed to load offers");
     }
 
-    // Race guard — a newer load started (or the pill changed) while this
+    // Race guard — a newer load started or the pill changed while this
     // slow fetch was in flight; discard this now-stale result.
-    if (__loadToken !== window.__dashboardLoadToken) return;
+    if (!loadStillCurrent()) return;
 
     renderWtbUnifiedOfferRows(
       // FIXED — this unconditionally forced _kind to "denied"/"counter",
