@@ -13825,6 +13825,33 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       return res.status(400).json({ error: "Missing seller_record_id" });
     }
 
+    // PERF — request-scoped memoization for getCurrentGlobalLowestNormalized.
+    // The per-row denied build calls it up to twice per row, each call doing
+    // several full-table scans + chain-traces; many rows share the same
+    // (sourceType, recordId, excludeSellerId), so cache within this request.
+    // Caches the PROMISE (not just the result) so parallel rows under
+    // Promise.all that hit the same key reuse one in-flight computation.
+    const __glnCache = new Map();
+    const gln = (sourceType, recordId, excludeSellerId) => {
+      const key = `${sourceType}|${recordId}|${excludeSellerId || ""}`;
+      if (!__glnCache.has(key)) {
+        __glnCache.set(key, getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSellerId));
+      }
+      return __glnCache.get(key);
+    };
+
+    // PERF — same idea for findSellersTrueLastCounter, which walks up to 15
+    // sequential Airtable finds per call and is invoked across several loops
+    // over overlapping round IDs.
+    const __ftlcCache = new Map();
+    const ftlc = (startRoundId) => {
+      const key = String(startRoundId);
+      if (!__ftlcCache.has(key)) {
+        __ftlcCache.set(key, findSellersTrueLastCounter(startRoundId));
+      }
+      return __ftlcCache.get(key);
+    };
+
     const statusFormula = filter === "denied" ? `{Status} = 'Denied'` : `{Status} = 'Open'`;
 
     const records = await airtable(COUNTER_OFFERS_TABLE)
@@ -14089,7 +14116,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
 
         const wtbId = firstLinkedRecordId(so.fields?.["Member WTBs"]);
         const activeRoundId = sellerId ? activeRoundIdBySeller.get(sellerId) : null;
-        const chainTraced = activeRoundId ? await findSellersTrueLastCounter(activeRoundId) : null;
+        const chainTraced = activeRoundId ? await ftlc(activeRoundId) : null;
         const effectivePrice = chainTraced ?? numberValue(so.fields?.["Seller Offer"]);
         const normalized = normalize(effectivePrice, so.fields?.["Offer VAT Type"]);
         if (normalized == null) continue;
@@ -14175,7 +14202,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
 
         const orderId = firstLinkedRecordId(so.fields?.["Linked Orders"]);
         const activeRoundId = sellerId ? activeRoundIdBySellerForOrders.get(sellerId) : null;
-        const chainTraced = activeRoundId ? await findSellersTrueLastCounter(activeRoundId) : null;
+        const chainTraced = activeRoundId ? await ftlc(activeRoundId) : null;
         const effectivePrice = chainTraced ?? numberValue(so.fields?.["Seller Offer"]);
         const normalized = normalizeForOrders(effectivePrice, so.fields?.["Offer VAT Type"]);
         if (normalized == null) continue;
@@ -14382,7 +14409,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         if (filter === "open" || (filter === "denied" && ownSellerCounter > 0)) {
           sellerLastOffer = ownSellerCounter > 0 ? ownSellerCounter : numberValue(f["Seller Original Price"]);
         } else {
-          const trueLastCounter = await findSellersTrueLastCounter(record.id);
+          const trueLastCounter = await ftlc(record.id);
           sellerLastOffer = trueLastCounter ?? numberValue(f["Seller Original Price"]);
         }
 
@@ -14440,13 +14467,13 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           const deniedLinkId = isMemberWtb ? memberWtbId : orderId;
           const deniedSrcType = isMemberWtb ? "Member WTB" : "Seller Offer";
           if (deniedLinkId) {
-            const globalLowest = (await getCurrentGlobalLowestNormalized(deniedSrcType, deniedLinkId, null)).normalized;
+            const globalLowest = (await gln(deniedSrcType, deniedLinkId, null)).normalized;
             if (Number.isFinite(globalLowest)) {
               const ownNorm = isMemberWtb ? ownNormalizedForMemberWtb : ownNormalizedForOrder;
               effectiveLowestShared = Number.isFinite(ownNorm) ? Math.min(globalLowest, ownNorm) : globalLowest;
               // competing min = the lowest EXCLUDING this seller's own, for
               // the Lowest/Beaten dot; recompute with this seller excluded.
-              effectiveCompetingMin = (await getCurrentGlobalLowestNormalized(deniedSrcType, deniedLinkId, firstLinkedRecordId(f["Seller ID"]))).normalized;
+              effectiveCompetingMin = (await gln(deniedSrcType, deniedLinkId, firstLinkedRecordId(f["Seller ID"]))).normalized;
             }
           }
         }
@@ -14535,7 +14562,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
           let currentLowestForDenied = null;
           let statusForDenied = null;
           if (deniedLinkId) {
-            const lowestNorm = (await getCurrentGlobalLowestNormalized(deniedSourceType, deniedLinkId, null)).normalized;
+            const lowestNorm = (await gln(deniedSourceType, deniedLinkId, null)).normalized;
             if (Number.isFinite(lowestNorm)) {
               const deNorm = asText(deniedVatType) === "VAT0" ? lowestNorm / 1.21 : lowestNorm;
               currentLowestForDenied = moneySmartValue(deNorm);
