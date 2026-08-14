@@ -4221,6 +4221,15 @@ function bindConsignmentDiscordButtons(client) {
         const priorRoundId = asText(deniedFields["Previous Record ID"]);
         const deniedPrice = numberValue(deniedFields["Store Counter Price"]);
 
+        console.error("[MW-SELLER-DENY-TRACE]", JSON.stringify({
+          deniedRoundId: counterOfferRecordId,
+          priorRoundId: priorRoundId || "EMPTY",
+          deniedPrice,
+          branch: priorRoundId ? "reopen" : "fallback",
+          deniedSellerCounterPrice: numberValue(deniedFields["Seller Counter Price"]),
+          deniedSellerId: firstLinkedRecordId(deniedFields["Seller ID"])
+        }));
+
         if (priorRoundId) {
           const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
 
@@ -4279,6 +4288,16 @@ function bindConsignmentDiscordButtons(client) {
               const shouldNotifyBuyer =
                 !Number.isFinite(otherSellerExists) ||
                 (Number.isFinite(denyingSellerOwnNormalized) && otherSellerExists >= denyingSellerOwnNormalized);
+
+              console.error("[MW-SELLER-DENY-GATE]", JSON.stringify({
+                buyerDiscordId: buyerDiscordId ? "present" : "MISSING",
+                priorSellerCounter,
+                priorSellerCounterInBuyerTerms,
+                otherSellerExists,
+                denyingSellerTruePosition,
+                denyingSellerOwnNormalized,
+                shouldNotifyBuyer
+              }));
 
               if (shouldNotifyBuyer) {
                 await disableAllMemberWtbBuyerOfferMessages(memberWtbRecordId).catch((err) =>
