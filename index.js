@@ -14006,7 +14006,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     // — and takes the minimum. A seller is "Lowest" if their own
     // current price, normalized the same way, is at or below that.
     let memberWtbMinNormalizedPrice = new Map();
-    if (memberWtbIdsForStatusCheck.length) {
+    if (filter !== "denied" && memberWtbIdsForStatusCheck.length) {
       const normalize = (price, vatType) => {
         const p = Number(price);
         if (!Number.isFinite(p)) return null;
@@ -14157,7 +14157,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     // set), chain-traces through supersessions, takes the true minimum
     // per order across every seller.
     let orderMinNormalizedPrice = new Map();
-    if (orderIdsForStatusCheck.length) {
+    if (filter !== "denied" && orderIdsForStatusCheck.length) {
       const normalizeForOrders = (price, vatType) => {
         const p = Number(price);
         if (!Number.isFinite(p)) return null;
