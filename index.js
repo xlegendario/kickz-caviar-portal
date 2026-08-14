@@ -15556,13 +15556,23 @@ async function reengageDeniedSellers({ sourceType, recordId, newBuyerCounterPric
       });
     });
 
+  // Shared across all three reengage categories below (pending / denied
+  // / fresh): a seller must get AT MOST ONE new round per buyer counter.
+  // Without this, a seller matching two categories (e.g. has a Denied
+  // round AND a stale Open round, or was denied AND still has a fresh
+  // Seller Offer) got two rounds created — his live-confirmed
+  // double-record bug.
+  const reengagedSellerIds = new Set();
+
 for (const round of pendingSellerCounterRounds) {
     const rf = round.fields || {};
     const sellerId = firstLinkedRecordId(rf["Seller ID"]);
+    if (sellerId && reengagedSellerIds.has(sellerId)) continue;
     const sellerOriginalPrice = numberValue(rf["Seller Original Price"]);
     const sellerVatType = asText(rf["Seller Original VAT Type"]);
     const sellerOfferRecordId = asText(rf["Seller Offer Record ID"]);
     if (!sellerVatType) continue;
+    if (sellerId) reengagedSellerIds.add(sellerId);
 
     const recomputedPayout =
       sourceType === "Member WTB"
@@ -15689,16 +15699,27 @@ for (const round of pendingSellerCounterRounds) {
         if (!sellerId || sellerId === excludeSellerId) return false;
         // Already actively engaged (their own live round exists) —
         // not "fresh," they're handled by the normal negotiation flow.
-        return !activeCounterSellerIdsForRecord.has(sellerId);
+        if (activeCounterSellerIdsForRecord.has(sellerId)) return false;
+        // FIXED — a seller with a DENIED round is handled by the
+        // denied-rounds loop above (which creates their reengage round
+        // with a proper Previous Record ID). Without this exclusion they
+        // ALSO matched here as "fresh" and got a SECOND, Previous-less
+        // round created for the same buyer counter — his live-confirmed
+        // double-record bug (two Open rounds for one seller on one
+        // counter). Skip anyone already covered by the denied loop.
+        if (latestDeniedBySeller.has(sellerId)) return false;
+        return true;
       })
     );
 
   for (const so of freshSellerOffers) {
     const sf = so.fields || {};
     const sellerId = firstLinkedRecordId(sf["Seller ID"]);
+    if (sellerId && reengagedSellerIds.has(sellerId)) continue;
     const sellerOriginalPrice = numberValue(sf["Seller Offer"]);
     const sellerVatType = asText(sf["Offer VAT Type"]);
     if (!sellerOriginalPrice || !sellerVatType) continue;
+    if (sellerId) reengagedSellerIds.add(sellerId);
 
     const recomputedPayout =
       sourceType === "Member WTB"
@@ -15790,12 +15811,15 @@ for (const round of pendingSellerCounterRounds) {
   }
 
   for (const [sellerId, deniedRound] of latestDeniedBySeller.entries()) {
+    if (sellerId && reengagedSellerIds.has(sellerId)) continue;
     const df = deniedRound.fields || {};
     const deniedBuyerPrice = numberValue(df["Store Counter Price"]);
 
     // Only re-engage on genuine improvement — strictly higher than
     // what this specific seller was denied at.
     if (!(newBuyerCounterPrice > deniedBuyerPrice)) continue;
+
+    if (sellerId) reengagedSellerIds.add(sellerId);
 
     const sellerOriginalPrice = numberValue(df["Seller Original Price"]);
     const sellerVatType = asText(df["Seller Original VAT Type"]);
@@ -15830,6 +15854,15 @@ for (const round of pendingSellerCounterRounds) {
     if (!sellerDiscordId) continue;
 
     if (sourceType === "Member WTB") {
+      // FIXED — "YOUR LAST OFFER" was showing sellerOriginalPrice (the
+      // seller's ORIGINAL ask, e.g. 180) instead of their TRUE last
+      // position (their most recent Seller Counter Price, e.g. 160).
+      // Chain-trace the real last counter off the denied round; fall
+      // back to the original ask only if they never actually countered.
+      const sellerTrueLast = await findSellersTrueLastCounter(deniedRound.id);
+      const sellerLastForNotify = Number.isFinite(sellerTrueLast) && sellerTrueLast > 0
+        ? sellerTrueLast
+        : sellerOriginalPrice;
       const reopenDiscordResult = await sendMemberWtbCounterOfferDiscordDM({
         counterOfferRecordId: reopenedRound.id,
         sellerDiscordId,
@@ -15841,7 +15874,7 @@ for (const round of pendingSellerCounterRounds) {
         vatType: sellerVatType,
         sellerOriginalPrice,
         sellerOriginalVatType: sellerVatType,
-        sellerLastOfferPrice: deniedBuyerPrice > 0 ? sellerOriginalPrice : null
+        sellerLastOfferPrice: deniedBuyerPrice > 0 ? sellerLastForNotify : null
       }).catch((err) => { console.error("Failed to re-engage previously denied seller (non-blocking):", err); return null; });
       if (reopenDiscordResult) {
         await airtable(COUNTER_OFFERS_TABLE).update(reopenedRound.id, {
