@@ -13843,6 +13843,10 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
     );
 
+    if (filter === "denied") {
+      console.error("DEBUG-DENIED-1 seller:", sellerRecordId, "statusQuery returned:", records.length, "afterSellerFilter:", filteredRecords.length, "ids:", filteredRecords.map((r) => r.id + ":" + asText(r.fields?.["Status"])).join(","));
+    }
+
     const preFilteredByStatusRaw = filteredRecords.filter((record) => {
       if (filter === "denied") return true;
 
@@ -13924,6 +13928,10 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
 
         return !hasLaterSibling;
       });
+    }
+
+    if (filter === "denied") {
+      console.error("DEBUG-DENIED-3 afterSupersession:", preFilteredByStatus.length, "ids:", preFilteredByStatus.map((r) => r.id + " prev:" + firstLinkedRecordId(r.fields?.["Previous Record ID"]) + " mwtb:" + firstLinkedRecordId(r.fields?.["Member WTB"])).join(" | "));
     }
 
     // NEW — additive only: confirmed business rule — an offer should
@@ -14210,6 +14218,10 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       const orderStatus = asText(statusCheckOrderMap.get(orderId)?.["Fulfillment Status"]);
       return orderStatus === "Outsource";
     });
+
+    if (filter === "denied") {
+      console.error("DEBUG-DENIED-4 afterOutsource:", preFiltered.length, "mwStatusMap:", JSON.stringify([...memberWtbStatusMap.entries()]), "survivingIds:", preFiltered.map((r) => r.id).join(","));
+    }
 
     // NEW — additive only: for "open" (the seller's own pending
     // counter), also compute the same lowest-offer dot/comparison used
