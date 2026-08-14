@@ -4256,8 +4256,12 @@ function bindConsignmentDiscordButtons(client) {
           const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
 
           if (priorRound) {
-            await airtable(COUNTER_OFFERS_TABLE).update(priorRoundId, { "Status": "Open" });
-
+            // NOTE — no reopen to "Open" (see the Portal seller-deny
+            // branch): a denial puts the item in the Denied pill for
+            // BOTH parties; the denied round (Status=Denied) is the
+            // carrier and both pills chain-trace via Previous Record ID
+            // to the seller's standing position. We read priorRound only
+            // to price the buyer's "Counter Offer Denied" embed.
             const priorFields = priorRound.fields || {};
             const memberWtbRecordId = firstLinkedRecordId(deniedFields["Member WTB"]);
             const sellerVatType = asText(priorFields["Seller Original VAT Type"] || deniedFields["Seller Original VAT Type"]);
@@ -17142,8 +17146,17 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
         if (priorRoundId) {
           const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
           if (priorRound) {
-            await airtable(COUNTER_OFFERS_TABLE).update(priorRoundId, { "Status": "Open" });
-
+            // NOTE — we deliberately do NOT reopen the prior round to
+            // "Open" here. His rule: a denial puts the item in the
+            // Denied pill for BOTH parties (the denied buyer can accept
+            // the seller's standing position or deny; the denying seller
+            // can come back to accept/counter). Reopening the seller's
+            // own prior counter as a live Open round made it show up as
+            // a fresh live position for the buyer. The denied round
+            // (Status=Denied) is the carrier; both Denied pills
+            // chain-trace via Previous Record ID to this standing
+            // position, so no reopen is needed. We still read priorRound
+            // purely to price the buyer's "Counter Offer Denied" embed.
             const priorFields = priorRound.fields || {};
             const sellerVatType = asText(priorFields["Seller Original VAT Type"] || deniedFields["Seller Original VAT Type"]);
             const priorSellerCounter = numberValue(priorFields["Seller Counter Price"]);
