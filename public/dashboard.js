@@ -2121,6 +2121,7 @@ function renderBuyingUnifiedOfferRows(items) {
 }
 
 function renderWtbUnifiedOfferRows(items) {
+  console.log("DEBUG-FE-RENDER renderWtbUnifiedOfferRows called with:", (items || []).length, "items, filter:", activeOfferStatusFilter, "trace:", new Error().stack.split("\n")[2]);
   setMobileTableMode(false);
 
   const isDenied = activeOfferStatusFilter === "denied";
@@ -3677,6 +3678,8 @@ async function loadDashboardData() {
 
     const response = await fetch(`/api/dashboard/wtb-counter-offers?${params.toString()}`);
     const data = await response.json();
+
+    console.log("DEBUG-FE-DENIED filter:", activeOfferStatusFilter, "items:", (data.items || []).length, "count:", data.count, "token:", __loadToken, "current:", window.__dashboardLoadToken, "match:", __loadToken === window.__dashboardLoadToken, "rawItems:", JSON.stringify(data.items || []));
 
     if (!response.ok) {
       throw new Error(data.details || data.error || "Failed to load offers");
