@@ -16166,11 +16166,32 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
     airtable(COUNTER_OFFERS_TABLE)
       .select({
         filterByFormula: `{Source Type} = '${escapeFormulaValue(sourceType)}'`,
-        fields: [counterLinkField, "Seller ID", "Created At"]
+        fields: [counterLinkField, "Seller ID", "Created At", "Seller Counter Price", "Previous Record ID"]
       })
       .all()
       .then((records) => records.filter((r) => firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId))
   ]);
+
+  // PERF — in-memory chain-trace over allRoundsAnyStatus (already fetched
+  // above), replacing the per-hop Airtable .find() walk of
+  // findSellersTrueLastCounter. Same logic: from a start round, hop back
+  // via Previous Record ID until a round with a real Seller Counter Price
+  // is found. Zero extra API calls. Falls back to null if a hop's round
+  // isn't in the in-memory set (chain leaves this WTB — shouldn't happen,
+  // but stays safe).
+  const __roundsById = new Map(allRoundsAnyStatus.map((r) => [r.id, r]));
+  const chainTraceInMemory = (startRoundId, maxHops = 15) => {
+    let currentId = startRoundId;
+    for (let hop = 0; hop < maxHops && currentId; hop++) {
+      const round = __roundsById.get(currentId);
+      if (!round) return null;
+      const f2 = round.fields || {};
+      const sc = numberValue(f2["Seller Counter Price"]);
+      if (sc > 0) return sc;
+      currentId = asText(f2["Previous Record ID"]) || null;
+    }
+    return null;
+  };
 
   // FIXED — a real, confirmed related bug: this excluded a seller's
   // RAW offer from consideration the moment they had ANY active round
@@ -16262,7 +16283,7 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
     if (sellerIdsWithAcceptedDeal.has(sellerId)) continue; // their deal is done, permanently — never a competing position
 
     const activeRoundId = activeRoundIdBySellerForGlobalLowest.get(sellerId);
-    const chainTraced = activeRoundId ? await findSellersTrueLastCounter(activeRoundId) : null;
+    const chainTraced = activeRoundId ? chainTraceInMemory(activeRoundId) : null;
     const rawPrice = chainTraced ?? numberValue(so.fields?.["Seller Offer"]);
     const rawVatType = so.fields?.["Offer VAT Type"];
     const normalized = normalize(rawPrice, rawVatType);
