@@ -20737,6 +20737,19 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/retry-counter", async (r
       "Status": "Open"
     });
 
+    // FIXED (his live test + firm rule): a buyer's retry is a buyer
+    // action that raises their bid — every OTHER seller must see the new,
+    // better buyer position too, exactly like a normal buyer-counter
+    // (which reengages). Without this, Seller B stayed stuck on the old
+    // buyer position while Seller A saw the retry. Excludes the retry's
+    // own target seller (they get the direct embed below).
+    await reengageDeniedSellers({
+      sourceType: "Member WTB",
+      recordId: memberWtbRecordId,
+      newBuyerCounterPrice: proposedPrice,
+      excludeSellerId: sellerRecordId
+    }).catch((err) => console.error("Failed to re-engage other sellers on buyer retry (non-blocking):", err));
+
     // FIXED (his live test): send the SELLER their MW counter embed
     // in-process (like the normal buyer-counter), NOT via the
     // store-facing webhook — and write the returned Discord IDs back
@@ -20777,18 +20790,16 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/retry-counter", async (r
       }
     }
 
-    // FIXED (his live test): disable the buyer's own Denied embed they
-    // acted on (the Accept/Retry embed) — universal rule: acted-on in
-    // the dashboard → embed dead.
-    const buyerDmChannelId = asText(f["Discord Channel ID"]);
-    const buyerDmMessageId = asText(f["Discord Message ID"]);
-    if (buyerDmChannelId && buyerDmMessageId) {
-      await disableCounterOfferDiscordButtons(
-        buyerDmChannelId,
-        buyerDmMessageId,
-        "🔁 You retried in your dashboard. You can still Accept or Edit your choice there."
-      ).catch((err) => console.error("Failed to disable MW buyer Denied embed on retry (non-blocking):", err.message));
-    }
+    // FIXED (his live test): the buyer's Denied embed (the Accept/Retry
+    // embed they acted on) is stored in the WTB's "Offer Discord
+    // Messages" JSON (appendMemberWtbOfferMessage on seller-deny), NOT on
+    // this round's Discord Channel/Message ID (those are the SELLER's
+    // embed). Disable it via the buyer-embed helper — same as the normal
+    // buyer-counter. The retry's new embed goes to the SELLER, so nothing
+    // to skip here.
+    await disableAllMemberWtbBuyerOfferMessages(memberWtbRecordId).catch((err) =>
+      console.error("Failed to disable MW buyer Denied embed on retry (non-blocking):", err.message)
+    );
 
     res.json({ ok: true, band: validation.band, new_round_id: newRound.id, dm_sent: dmSent });
   } catch (err) {
