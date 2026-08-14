@@ -2940,6 +2940,12 @@ function startCsvImportStatusPolling() {
 async function loadDashboardData() {
   if (!dashboardSeller) return;
 
+  // Race guard — each load gets a token; a slow fetch that finishes
+  // after a newer load started (or after the user switched pills) must
+  // NOT render its now-stale result over the current view. Checked
+  // right before every async render below.
+  const __loadToken = (window.__dashboardLoadToken = (window.__dashboardLoadToken || 0) + 1);
+
   document.getElementById("consignmentInventoryActions")?.remove();
 
   if (activeSection === "buying" && activeTab === "open_wtbs") {
@@ -3647,6 +3653,7 @@ async function loadDashboardData() {
         ...(ownCounterData.items || []).map((item) => ({ ...item, _kind: "own_counter" }))
       ];
 
+      if (__loadToken !== window.__dashboardLoadToken) return;
       renderWtbUnifiedOfferRows(merged);
 
       const count = merged.length;
@@ -3674,6 +3681,10 @@ async function loadDashboardData() {
     if (!response.ok) {
       throw new Error(data.details || data.error || "Failed to load offers");
     }
+
+    // Race guard — a newer load started (or the pill changed) while this
+    // slow fetch was in flight; discard this now-stale result.
+    if (__loadToken !== window.__dashboardLoadToken) return;
 
     renderWtbUnifiedOfferRows(
       // FIXED — this unconditionally forced _kind to "denied"/"counter",
