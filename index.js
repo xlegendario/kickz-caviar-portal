@@ -4221,15 +4221,6 @@ function bindConsignmentDiscordButtons(client) {
         const priorRoundId = asText(deniedFields["Previous Record ID"]);
         const deniedPrice = numberValue(deniedFields["Store Counter Price"]);
 
-        console.error("[MW-SELLER-DENY-TRACE]", JSON.stringify({
-          deniedRoundId: counterOfferRecordId,
-          priorRoundId: priorRoundId || "EMPTY",
-          deniedPrice,
-          branch: priorRoundId ? "reopen" : "fallback",
-          deniedSellerCounterPrice: numberValue(deniedFields["Seller Counter Price"]),
-          deniedSellerId: firstLinkedRecordId(deniedFields["Seller ID"])
-        }));
-
         if (priorRoundId) {
           const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
 
@@ -4288,16 +4279,6 @@ function bindConsignmentDiscordButtons(client) {
               const shouldNotifyBuyer =
                 !Number.isFinite(otherSellerExists) ||
                 (Number.isFinite(denyingSellerOwnNormalized) && otherSellerExists >= denyingSellerOwnNormalized);
-
-              console.error("[MW-SELLER-DENY-GATE]", JSON.stringify({
-                buyerDiscordId: buyerDiscordId ? "present" : "MISSING",
-                priorSellerCounter,
-                priorSellerCounterInBuyerTerms,
-                otherSellerExists,
-                denyingSellerTruePosition,
-                denyingSellerOwnNormalized,
-                shouldNotifyBuyer
-              }));
 
               if (shouldNotifyBuyer) {
                 await disableAllMemberWtbBuyerOfferMessages(memberWtbRecordId).catch((err) =>
@@ -17057,6 +17038,97 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
     const deniedOrderId = firstLinkedRecordId(deniedFields["Order"]);
     const deniedPrice = numberValue(deniedFields["Store Counter Price"]);
     const priorRoundId = asText(deniedFields["Previous Record ID"]);
+
+    // ---------------------------------------------------------------
+    // MW-AWARE BRANCH (additive; returns before the Store-Orders code)
+    // A real, confirmed bug: this whole endpoint was Store-Orders-only.
+    // It reads deniedFields["Order"] — blank on a Member WTB round
+    // (those link via "Member WTB") — so deniedOrderId was empty and
+    // the entire buyer-notification block below was skipped. A seller
+    // denying a MW buyer counter via the Portal therefore sent the
+    // buyer NOTHING (and logged nothing, since the Discord handler that
+    // has the MW logic was never reached). Mirrors the Discord
+    // member_wtb_counter_deny handler: reopen the seller's prior round
+    // and send the buyer a clean Denied embed (deniedAmount → the
+    // isDeny styling), gated so only the genuinely-best denier
+    // notifies. Returns before the Store-Orders "Order" code.
+    const mwRecordIdForDeny = firstLinkedRecordId(deniedFields["Member WTB"]);
+    if (mwRecordIdForDeny) {
+      try {
+        if (priorRoundId) {
+          const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
+          if (priorRound) {
+            await airtable(COUNTER_OFFERS_TABLE).update(priorRoundId, { "Status": "Open" });
+
+            const priorFields = priorRound.fields || {};
+            const sellerVatType = asText(priorFields["Seller Original VAT Type"] || deniedFields["Seller Original VAT Type"]);
+            const priorSellerCounter = numberValue(priorFields["Seller Counter Price"]);
+
+            const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(mwRecordIdForDeny).catch(() => null);
+            const wtbFields = memberWtb?.fields || {};
+            const buyerRecordId = firstLinkedRecordId(wtbFields["Buyer Seller ID"]);
+            const buyerRecord = buyerRecordId ? await airtable(SELLERS_TABLE).find(buyerRecordId).catch(() => null) : null;
+            const buyerDiscordId = asText(
+              buyerRecord?.fields?.["Discord ID"] || buyerRecord?.fields?.["Discord User ID"]
+            );
+
+            if (buyerDiscordId) {
+              const priorSellerCounterInBuyerTerms = calculateMemberWtbBuyerEquivalent(
+                priorSellerCounter,
+                sellerVatType,
+                wtbFields
+              );
+
+              // Only notify when the denying seller was GENUINELY the
+              // best — otherwise the buyer's view already moved on.
+              const denyingSellerId = firstLinkedRecordId(deniedFields["Seller ID"]);
+              const otherSellerExists = (await getCurrentGlobalLowestNormalized(
+                "Member WTB",
+                mwRecordIdForDeny,
+                denyingSellerId
+              )).normalized;
+
+              const denyingSellerTruePosition = await findSellersTrueLastCounter(counterOfferRecordId);
+              const denyingSellerVatType = asText(deniedFields["Seller Original VAT Type"]);
+              const denyingSellerPositionRaw = Number.isFinite(denyingSellerTruePosition)
+                ? denyingSellerTruePosition
+                : numberValue(deniedFields["Seller Original Price"]);
+              const denyingSellerOwnNormalized = (Number.isFinite(denyingSellerPositionRaw) && denyingSellerPositionRaw > 0)
+                ? (denyingSellerVatType === "VAT0" ? denyingSellerPositionRaw * 1.21 : denyingSellerPositionRaw)
+                : null;
+
+              const shouldNotifyBuyer =
+                !Number.isFinite(otherSellerExists) ||
+                (Number.isFinite(denyingSellerOwnNormalized) && otherSellerExists >= denyingSellerOwnNormalized);
+
+              if (shouldNotifyBuyer) {
+                await disableAllMemberWtbBuyerOfferMessages(mwRecordIdForDeny).catch((err) =>
+                  console.error("Failed to disable prior MW buyer embeds (non-blocking):", err.message)
+                );
+                const buyerDmResult = await sendMemberWtbBuyerCounterOfferDiscordDM({
+                  counterOfferRecordId: priorRoundId,
+                  buyerDiscordId,
+                  productName: asText(wtbFields["Product Name"]),
+                  sku: asText(wtbFields["SKU"]),
+                  size: asText(wtbFields["Size"]),
+                  memberWtbId: asText(wtbFields["Member WTB ID"]) || mwRecordIdForDeny,
+                  newPrice: priorSellerCounterInBuyerTerms,
+                  yourPreviousCounter: deniedPrice,
+                  deniedAmount: deniedPrice,
+                  vatLabel: memberWtbBuyerFacingVatType(denyingSellerVatType, wtbFields)
+                }).catch((err) => { console.error("Failed to re-notify buyer after MW Portal seller-deny (non-blocking):", err); return null; });
+                if (buyerDmResult?.channelId && buyerDmResult?.messageId) {
+                  await appendMemberWtbOfferMessage(mwRecordIdForDeny, buyerDmResult);
+                }
+              }
+            }
+          }
+        }
+      } catch (mwDenyErr) {
+        console.error("Failed MW Portal seller-deny buyer notify (non-blocking):", mwDenyErr);
+      }
+      return res.json({ ok: true, source: "member_wtb" });
+    }
 
     if (deniedOrderId && AIRTABLE_DISCORD_UPDATES_URL) {
       const orderRecord = await airtable(ORDERS_TABLE).find(deniedOrderId);
