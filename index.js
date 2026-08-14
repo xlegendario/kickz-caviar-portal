@@ -14580,6 +14580,10 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       mergedItems = [...items, ...deniedFreshItems];
     }
 
+    if (filter === "denied") {
+      console.error("DEBUG-DENIED-5 finalMergedItems:", mergedItems.length, "ids:", mergedItems.map((i) => (i.id || i.seller_offer_record_id) + ":" + i._kind).join(","));
+    }
+
     res.json({
       count: mergedItems.length,
       items: sortDashboardItemsNewestFirst(mergedItems)
