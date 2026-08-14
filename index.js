@@ -14927,16 +14927,6 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
       const acceptedPayout = numberValue(f["Counter Payout"]);
       const acceptedVatType = asText(f["Counter Payout VAT Type"] || f["Seller Original VAT Type"]);
 
-      console.error("DEBUG-PORTAL-ACCEPT-PREV", JSON.stringify({
-        callerIsBuyer,
-        pendingOfferId,
-        acceptTargetId,
-        acceptedPayout,
-        acceptedVatType,
-        counterPayoutVatType: asText(f["Counter Payout VAT Type"]),
-        sellerOriginalVatType: asText(f["Seller Original VAT Type"])
-      }));
-
       await airtable(COUNTER_OFFERS_TABLE).update(acceptTargetId, {
         "Status": "Accepted",
         "Accepted At": new Date().toISOString(),
@@ -21263,16 +21253,6 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
     // Fall back to the buyer-facing value only if the Seller Offer's own
     // type is somehow unreadable (shouldn't happen).
     const overrideVatType = sellerVatType || buyerFacingVatType;
-
-    console.error("DEBUG-BUYING-ACCEPT-OFFER", JSON.stringify({
-      memberWtbRecordId,
-      acceptedCounterOfferRecordId,
-      sellerOfferRecordId,
-      overridePrice,
-      buyerFacingVatType,
-      sellerVatType,
-      overrideVatType
-    }));
 
     const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
     if (!wtbBotBaseUrl) {
