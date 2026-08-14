@@ -3826,10 +3826,17 @@ function bindConsignmentDiscordButtons(client) {
       const rawAmount = interaction.fields.getTextInputValue("new_offer_amount");
       const offerAmount = Number(String(rawAmount).replace(/[^\d.,-]/g, "").replace(",", "."));
 
+      // Defer IMMEDIATELY — the edit-after-denial fetch below (Airtable
+      // update + buyer notify) can exceed Discord's 3-second interaction
+      // window, which expired the token before the final reply ran and
+      // surfaced "something went wrong" to the seller even though the
+      // offer was placed. Deferring first claims the token; editReply
+      // finishes it. (flags:64 = ephemeral, without the deprecation warning.)
+      await interaction.deferReply({ flags: 64 }).catch(() => {});
+
       if (!Number.isFinite(offerAmount) || offerAmount <= 0) {
-        await interaction.reply({
-          content: "⚠️ Please enter a valid offer amount.",
-          ephemeral: true
+        await interaction.editReply({
+          content: "⚠️ Please enter a valid offer amount."
         }).catch(() => {});
         return;
       }
@@ -3855,16 +3862,14 @@ function bindConsignmentDiscordButtons(client) {
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        await interaction.reply({
-          content: `❌ ${data.error || "Failed to submit new offer."}`,
-          ephemeral: true
+        await interaction.editReply({
+          content: `❌ ${data.error || "Failed to submit new offer."}`
         }).catch(() => {});
         return;
       }
 
-      await interaction.reply({
-        content: `✅ New offer sent: €${offerAmount.toFixed(2)} · ${vatType || "—"}`,
-        ephemeral: true
+      await interaction.editReply({
+        content: `✅ New offer sent: €${offerAmount.toFixed(2)} · ${vatType || "—"}`
       }).catch(() => {});
 
       return;
@@ -22626,6 +22631,12 @@ app.post("/api/seller-offers/:offerId/edit-after-denial", async (req, res) => {
       // same fix already applied to fresh-offer placement.
       "Denied?": false
     });
+
+    // Disable the seller's own "Offer Denied / Place New Offer" embed —
+    // they just placed a new offer through it, so the button must not
+    // stay live (the offer moved from Denied back to Open). Best-effort,
+    // non-blocking; covers both Store Orders and Member WTB.
+    disableSellerOfferDeniedEmbed(offerId);
 
     // Editing "Seller Offer" changes the rollup fields on Unfulfilled
     // Orders Log (Lowest Seller Offer etc.), which is exactly what
