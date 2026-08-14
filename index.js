@@ -3450,6 +3450,8 @@ function bindConsignmentDiscordButtons(client) {
 
     const customId = String(interaction.customId || "");
 
+    console.error("DEBUG-CLICK", customId);
+
     if (
       !customId.startsWith("confirm_offer:") &&
       !customId.startsWith("deny_offer:") &&
