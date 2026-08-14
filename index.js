@@ -12120,6 +12120,33 @@ function getMemberWtbMargin() {
 // 2 decimals (cents), not a €2.50 step. Both directions below mirror
 // that exact branching so a buyer counter and its seller-payout
 // equivalent always match what "Offer To Buyer" would show.
+// Validates a seller's chosen VAT type against their Sellers Database
+// profile (VAT ID + Country). Returns null when the choice is allowed,
+// or the exact block message to show when it isn't. Rules:
+//   - No VAT ID (private seller) → only Margin allowed.
+//   - Has VAT ID + Country = Netherlands → cannot sell VAT0.
+//   - Has VAT ID + Country != Netherlands → cannot sell VAT21.
+// Margin is always allowed for everyone.
+function validateSellerVatEligibility(sellerVatId, sellerCountry, chosenVatType) {
+  const vat = asText(chosenVatType);
+  if (vat === "Margin") return null; // always allowed
+
+  const hasVatId = !!asText(sellerVatId);
+  const country = asText(sellerCountry).trim().toLowerCase();
+  const isNl = country === "netherlands" || country === "nederland" || country === "nl";
+
+  if (!hasVatId) {
+    return "You're not a registered company according to your profile. Please select Margin VAT Type or contact support.";
+  }
+  if (isNl && vat === "VAT0") {
+    return "As a Dutch company, you can't sell VAT0 to Kickz Caviar B.V.. Please select VAT21 or Margin VAT Type or contact support.";
+  }
+  if (!isNl && vat === "VAT21") {
+    return "As a Non-Dutch company, you can't sell VAT21 to Kickz Caviar B.V.. Please select VAT0 or Margin VAT Type or contact support.";
+  }
+  return null;
+}
+
 function memberWtbIsReverseCharge(memberWtbFields = {}) {
   const buyerVatId = asText(memberWtbFields["Buyer VAT ID"]);
   const buyerCountry = asText(memberWtbFields["Buyer Country"]);
@@ -12130,12 +12157,13 @@ function memberWtbBuyerFacingVatType(sellerVatType, memberWtbFields = {}) {
   const type = asText(sellerVatType);
   // Margin is always shown as Margin (it passes through unchanged).
   if (type === "Margin") return "Margin";
-  // A reverse-charge buyer (outside NL, has a VAT ID) keeps the seller's
-  // own type — e.g. a VAT0 seller shows VAT0 to them. Otherwise the buyer
-  // is domestic/NL and buys VAT21 from Lojiq, so the buyer-facing label is
-  // always VAT21 regardless of the seller's own VAT type. Mirrors
-  // storeFacingVatType for Store Orders.
-  return memberWtbIsReverseCharge(memberWtbFields) ? (type || "VAT0") : "VAT21";
+  // A reverse-charge buyer (outside NL, has a VAT ID) always buys VAT0
+  // from Kickz Caviar B.V. — an intracommunautaire levering, so the
+  // buyer-facing label is VAT0 regardless of the underlying seller's own
+  // VAT type (a VAT21 seller still shows VAT0 to a foreign buyer; only
+  // the amount conversion differs, handled in calculateMemberWtbBuyerEquivalent).
+  // A domestic/NL buyer buys VAT21 from Lojiq. Margin passed through above.
+  return memberWtbIsReverseCharge(memberWtbFields) ? "VAT0" : "VAT21";
 }
 
 function calculateMemberWtbBuyerEquivalent(sellerAskPrice, vatType, memberWtbFields = {}) {
@@ -18799,6 +18827,21 @@ app.post("/api/member-wtb/place-offer", async (req, res) => {
       });
     }
 
+    // Block based on the seller's own registration profile (VAT ID +
+    // Country): private seller (no VAT ID) → Margin only; Dutch company
+    // → no VAT0; non-Dutch company → no VAT21.
+    const placeOfferSeller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+    if (placeOfferSeller) {
+      const sellerVatEligibilityError = validateSellerVatEligibility(
+        placeOfferSeller.get("VAT ID"),
+        placeOfferSeller.get("Country"),
+        vatType
+      );
+      if (sellerVatEligibilityError) {
+        return res.status(400).json({ error: sellerVatEligibilityError });
+      }
+    }
+
     const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
     const f = memberWtb.fields || {};
 
@@ -18866,6 +18909,19 @@ app.post("/api/dashboard/wtb-open-offers/:offerId/edit", async (req, res) => {
 
     if (!["Margin", "VAT0", "VAT21"].includes(vatType)) {
       return res.status(400).json({ error: "Invalid VAT type" });
+    }
+
+    // Block based on the seller's registration profile (VAT ID + Country).
+    const editOfferSeller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+    if (editOfferSeller) {
+      const sellerVatEligibilityError = validateSellerVatEligibility(
+        editOfferSeller.get("VAT ID"),
+        editOfferSeller.get("Country"),
+        vatType
+      );
+      if (sellerVatEligibilityError) {
+        return res.status(400).json({ error: sellerVatEligibilityError });
+      }
     }
 
     const offerRecord = await airtable(SELLER_OFFERS_TABLE).find(offerId);
@@ -22428,6 +22484,19 @@ app.post("/api/seller-offers/:offerId/edit-after-denial", async (req, res) => {
 
     if (!["Margin", "VAT0", "VAT21"].includes(vatType)) {
       return res.status(400).json({ error: "Invalid VAT type" });
+    }
+
+    // Block based on the seller's registration profile (VAT ID + Country).
+    const denialEditSeller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+    if (denialEditSeller) {
+      const sellerVatEligibilityError = validateSellerVatEligibility(
+        denialEditSeller.get("VAT ID"),
+        denialEditSeller.get("Country"),
+        vatType
+      );
+      if (sellerVatEligibilityError) {
+        return res.status(400).json({ error: sellerVatEligibilityError });
+      }
     }
 
     const offerRecord = await airtable(SELLER_OFFERS_TABLE).find(offerId);
