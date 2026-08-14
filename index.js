@@ -4077,7 +4077,7 @@ function bindConsignmentDiscordButtons(client) {
       }).catch(() => {});
 
       await safeEditInteractionMessage(interaction, {
-        content: `🔁 You countered with €${counterPrice}. Waiting on the seller(s).`,
+        content: `🔁 You countered with €${counterPrice}. Waiting on the seller(s). You can still edit your counter through your dashboard.`,
         embeds: interaction.message.embeds,
         components: []
       }).catch(() => {});
