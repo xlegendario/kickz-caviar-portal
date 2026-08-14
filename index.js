@@ -13931,11 +13931,19 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         .all();
 
       const siblingsByPrevId = new Map();
+      // NEW — also track which round IDs are referenced as SOMEONE's
+      // Previous Record ID. A denied round with a child (a later round
+      // descending from it) means negotiation moved on past it — it's
+      // superseded and must not linger in the Denied pill, exactly like
+      // one with a later sibling. His firm rule: every old round is
+      // superseded once the negotiation continued from it.
+      const referencedAsPrevId = new Set();
       for (const r of allRoundsForSeller) {
         if (!linkedRecordIncludes(r.fields?.["Seller ID"], sellerRecordId)) continue;
 
         const prevId = firstLinkedRecordId(r.fields?.["Previous Record ID"]);
         if (!prevId) continue;
+        referencedAsPrevId.add(prevId);
         if (!siblingsByPrevId.has(prevId)) siblingsByPrevId.set(prevId, []);
         siblingsByPrevId.get(prevId).push({
           id: r.id,
@@ -13947,6 +13955,10 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         const f = record.fields || {};
         const ownPrevId = firstLinkedRecordId(f["Previous Record ID"]);
         const ownCreatedAt = displayValue(f["Created At"]);
+
+        // Superseded if a later round descends from THIS one (a child
+        // exists) — negotiation continued past it.
+        if (referencedAsPrevId.has(record.id)) return false;
 
         if (!ownPrevId) return true;
 
