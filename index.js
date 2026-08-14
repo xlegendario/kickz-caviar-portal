@@ -13825,8 +13825,6 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       return res.status(400).json({ error: "Missing seller_record_id" });
     }
 
-    const __t0 = Date.now();
-    const __T = (label) => { if (filter === "denied") console.error(`DEBUG-TIMING ${label}: ${Date.now() - __t0}ms`); };
 
     // PERF — request-scoped memoization for getCurrentGlobalLowestNormalized.
     // The per-row denied build calls it up to twice per row, each call doing
@@ -13868,8 +13866,6 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         )`
       })
       .all();
-
-    __T("after main scan");
 
     const filteredRecords = records.filter((record) =>
       linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
@@ -14230,7 +14226,6 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       }
     }
 
-    __T("before per-row map");
 
     const preFiltered = preFilteredByStatus.filter((record) => {
       const f = record.fields || {};
@@ -14602,7 +14597,6 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       mergedItems = [...items, ...deniedFreshItems];
     }
 
-    __T("done, before res.json");
 
     res.json({
       count: mergedItems.length,
