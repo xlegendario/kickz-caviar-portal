@@ -4647,6 +4647,16 @@ function bindConsignmentDiscordButtons(client) {
       const acceptedPayout = sellerCounterPrice > 0 ? sellerCounterPrice : numberValue(f["Counter Payout"]);
       const acceptedVatType = asText(f["Counter Payout VAT Type"] || f["Seller Original VAT Type"]);
 
+      console.error("DEBUG-BUYER-ACCEPT", JSON.stringify({
+        roundId: counterOfferRecordId,
+        sellerCounterPrice,
+        counterPayout: numberValue(f["Counter Payout"]),
+        counterPayoutVatType: asText(f["Counter Payout VAT Type"]),
+        sellerOriginalVatType: asText(f["Seller Original VAT Type"]),
+        acceptedPayout,
+        acceptedVatType
+      }));
+
       if (!memberWtbRecordId || !sellerOfferRecordId) {
         await safeEditInteractionMessage(interaction, {
           content: "❌ Missing linked Member WTB or Seller Offer.",
