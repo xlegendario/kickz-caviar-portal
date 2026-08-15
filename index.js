@@ -15,6 +15,29 @@ import {
   PermissionFlagsBits
 } from "discord.js";
 
+import {
+  asText,
+  calculateCounterPayoutForVatType,
+  calculateMemberWtbBuyerEquivalent,
+  calculateMemberWtbSellerPayout,
+  calculateStoreCounterEquivalent,
+  computeSellerCounterForStoreDisplay,
+  computeStoreExclVatForOrder,
+  customOfferValueForAccept,
+  getCounterEquivalentPriceForVatType,
+  getMemberWtbMargin,
+  getMemberWtbNetSalePrice,
+  isDutchClientCountry,
+  memberWtbBuyerFacingVatType,
+  memberWtbIsReverseCharge,
+  numberValue,
+  roundDownToStep,
+  roundToNearestStep,
+  storeDisplayDivisor,
+  storeFacingVatType,
+  storeInputMultiplier
+} from "./lib/pricing.js";
+
 dotenv.config();
 
 const app = express();
@@ -432,44 +455,6 @@ if (!RESET_EMAIL_FROM) {
 }
 
 sgMail.setApiKey(SENDGRID_API_KEY);
-
-function asText(value) {
-  if (value === null || value === undefined) return "";
-
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => {
-        if (item === null || item === undefined) return "";
-        if (typeof item === "object") {
-          return item.name || item.text || item.value || "";
-        }
-        return String(item);
-      })
-      .filter(Boolean)
-      .join(", ")
-      .trim();
-  }
-
-  return String(value).trim();
-}
-
-function getMemberWtbNetSalePrice(price, vatType, inventoryFilter) {
-  const amount = Number(price || 0);
-  const type = asText(vatType);
-  const filter = asText(inventoryFilter).toLowerCase();
-
-  if (!Number.isFinite(amount) || amount <= 0) return 0;
-
-  if (type === "VAT0" || type === "VAT21") {
-    if (filter.includes("b2b")) {
-      return amount;
-    }
-
-    return Math.round((amount / 1.21) * 100) / 100;
-  }
-
-  return amount;
-}
 
 function getSellerOfferChannelId(sellerRow, isConfirmation) {
   if (!sellerRow) return null;
@@ -2742,7 +2727,8 @@ async function confirmConsignmentOffer(offerId) {
     const finalBuyingPrice = getMemberWtbNetSalePrice(
       maxPrice,
       vatType,
-      memberFields["Buying Inventory Filter"]
+      memberFields["Buying Inventory Filter"],
+      memberFields
     );
 
     const memberWtbId =
@@ -5146,7 +5132,8 @@ function bindConsignmentDiscordButtons(client) {
       const finalBuyingPrice = getMemberWtbNetSalePrice(
         maxPrice,
         vatType,
-        f["Buying Inventory Filter"]
+        f["Buying Inventory Filter"],
+        f
       );
       const inventoryStatus = asText(inventoryUnit.fields?.["Availability Status"]);
     
@@ -5290,9 +5277,10 @@ function bindConsignmentDiscordButtons(client) {
       const finalBuyingPrice = getMemberWtbNetSalePrice(
         maxPrice,
         vatType,
-        f["Buying Inventory Filter"]
+        f["Buying Inventory Filter"],
+        f
       );
-    
+
       await airtable(INVENTORY_UNITS_TABLE).update(inventoryUnit.id, {
         "Availability Status": "Reserved",
         "Selling Method": "Kickz Caviar",
@@ -11595,12 +11583,6 @@ function displayValue(value) {
   return asText(value);
 }
 
-function numberValue(value) {
-  const raw = Array.isArray(value) ? value[0] : value;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : 0;
-}
-
 // NEW — additive only: shared narrowing-band validator for the
 // counter-offer ping-pong. Given the two most recent prices in a
 // negotiation thread, checks whether a proposed new price is strictly
@@ -11897,288 +11879,6 @@ function getStockCounterKey(sku, size) {
   return `${asText(sku).toUpperCase()}-${asText(size).toUpperCase()}`;
 }
 
-function roundDownToStep(value, step = 2.5) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
-  return Math.floor(n / step) * step;
-}
-
-function getCounterEquivalentPriceForVatType(storeCounterAllInPrice, vatType, orderFields = {}) {
-  const price = Number(storeCounterAllInPrice);
-  const type = asText(vatType);
-
-  if (!Number.isFinite(price) || price <= 0) return null;
-
-  if (type === "VAT0") {
-    return price / 1.21;
-  }
-
-  return price;
-}
-
-function calculateCounterPayoutForVatType(storeCounterAllInPrice, vatType, orderFields = {}) {
-  const converted = getCounterEquivalentPriceForVatType(storeCounterAllInPrice, vatType);
-
-  if (!Number.isFinite(converted) || converted <= 0) return null;
-
-  const margin = numberValue(orderFields["Offer Margin"]);
-  const percentage = numberValue(orderFields["Offer Percentage"]);
-  const method = asText(orderFields["Offer Method"]);
-
-  let payout;
-
-  if (method === "Firm Range" && Number.isFinite(margin) && margin > 0) {
-    payout = converted - margin;
-  } else if (Number.isFinite(percentage) && percentage > 0) {
-    // FIXED — must invert MAX(base+10, base*(1+pct)+5), same fix as
-    // calculateStoreCounterEquivalent's forward direction, mirrored
-    // using the same proven threshold-based approach already used in
-    // calculateConsignmentBaseFromStoreOffer below (a naive
-    // min(converted-10, converted/(1+percentage)) was both missing the
-    // "-5" and less explicit about which branch actually applies).
-    const threshold = 5 / percentage;
-    const candidateFromFloor = converted - 10;
-    const candidateFromPercentage = (converted - 5) / (1 + percentage);
-    payout = candidateFromFloor <= threshold ? candidateFromFloor : candidateFromPercentage;
-  } else if (Number.isFinite(margin) && margin > 0) {
-    payout = converted - margin;
-  } else {
-    return null;
-  }
-
-  return roundDownToStep(payout, 2.5);
-}
-
-function roundToNearestStep(value, step = 2.5) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
-  return Math.round(n / step) * step;
-}
-
-// NEW — additive only: the FORWARD direction of the margin conversion
-// above — given a seller's ask, what would the store need to pay so the
-// seller still receives (approximately) that ask after margin. This is
-// the exact inverse logic of the "Offer To Store" Airtable formula
-// (Firm Range: add the margin; Percentage: apply the percentage with a
-// minimum +€10 floor), rounded to the nearest €2.50 step rather than
-// floored, matching that formula's ROUND(...) behavior. Needed so the
-// ping-pong can compare the seller's and store's numbers on the SAME
-// scale — without this, a seller's raw ask and a store's raw counter
-// price look like two unrelated numbers even when the margin between
-// them is the only real difference.
-function calculateStoreCounterEquivalent(sellerAskPrice, vatType, orderFields = {}, preAdjustmentMultiplier = 1) {
-  let converted = getCounterEquivalentPriceForVatType(sellerAskPrice, vatType);
-
-  if (!Number.isFinite(converted) || converted <= 0) return null;
-
-  // NEW — additive only: his exact catch — applying a non-Dutch
-  // display adjustment AFTER this function's own internal rounding
-  // (roundToNearestStep below) loses precision (e.g. €192.50 becoming
-  // €193.60). Applying it here, before the margin math and before the
-  // single rounding step at the end, gives the exact same figure the
-  // store originally saw on the fresh-offer embed.
-  converted = converted * preAdjustmentMultiplier;
-
-  const margin = numberValue(orderFields["Offer Margin"]);
-  const percentage = numberValue(orderFields["Offer Percentage"]);
-  const method = asText(orderFields["Offer Method"]);
-
-  let storePrice;
-
-  if (method === "Firm Range" && Number.isFinite(margin) && margin > 0) {
-    storePrice = converted + margin;
-  } else if (Number.isFinite(percentage) && percentage > 0) {
-    // FIXED — his confirmed, deliberate design: the Airtable "Offer To
-    // Store" formula's Percentage branch is
-    // MAX(base+10, base*(1+pct)+5) — the "+5" was missing here,
-    // producing a store price up to €5 lower than the formula would
-    // give the exact same raw seller price for. Mirrors the already-
-    // correct calculateStoreCustomOfferFromConsignmentBase below.
-    storePrice = Math.max(
-      converted + 10,
-      converted * (1 + percentage) + 5
-    );
-  } else if (Number.isFinite(margin) && margin > 0) {
-    storePrice = converted + margin;
-  } else {
-    return null;
-  }
-
-  return roundToNearestStep(storePrice, 2.5);
-}
-
-// NEW — additive only: the store types/sees/pays in the VAT-scale of
-// the offer embed they're responding to. For a non-Dutch store
-// responding to a VAT-source (VAT21/VAT0) position, that scale is
-// excl.-VAT vs the internal all-in scale; for a Dutch store, or a
-// Margin-source position, it's the plain all-in scale (÷1). This
-// divisor converts an internal all-in figure back to what the store
-// should SEE in a store-facing embed / the Portal.
-// FIXED — the excl. divisor now uses the client's REAL VAT rate (e.g.
-// 22% for Italy → ÷1.22) so the store's displayed "Your Previous
-// Counter" matches the invoice's "Store Counter Price Excl VAT" (which
-// also uses the real rate) instead of drifting by the 1.21-vs-1.22 gap
-// (e.g. 220 all-in showed €181.82 but the invoice said €180.33). Falls
-// back to 1.21 only if the rate field is missing. This is display-only
-// — it does not touch any payout, band, or accept math.
-function storeDisplayDivisor(storeVatContext, orderFields = {}) {
-  const isDutch = isDutchClientCountry(orderFields["Client Country"]);
-  const isVatSource = storeVatContext === "VAT21" || storeVatContext === "VAT0";
-  if (isDutch || !isVatSource) return 1;
-  const rate = numberValue(orderFields["Client VAT Rate"]);
-  return (Number.isFinite(rate) && rate > 0) ? (1 + rate) : 1.21;
-}
-
-// NEW — additive only: the multiplier that converts a store's typed
-// VAT0/VAT21 counter (in the store's own excl. scale) UP to the
-// internal all-in scale for storage. Uses the client's REAL VAT rate
-// (e.g. 22% Italy → ×1.22) so that "Store Counter Price Excl VAT"
-// (which divides by that same real rate) comes back to EXACTLY what the
-// store typed — e.g. store types €185 → stored 225.70 → excl €185, not
-// the old ×1.21 → 223.85 → excl €183.48 mismatch. This is the exact
-// inverse of storeDisplayDivisor, so input and display round-trip
-// perfectly. Falls back to 1.21 if the rate field is missing. Does NOT
-// affect the seller payout (that stays ÷1.21 — VAT21 is a real Dutch
-// 21% and VAT0 payouts were already correct).
-function storeInputMultiplier(orderFields = {}) {
-  const rate = numberValue(orderFields["Client VAT Rate"]);
-  return (Number.isFinite(rate) && rate > 0) ? (1 + rate) : 1.21;
-}
-
-// NEW — additive only: computes the "Seller's New Counter" figure a
-// store-facing embed should show, in the STORE's own scale. The
-// seller's counter is already in the same VAT context the store is
-// negotiating in (VAT0→VAT0 for a non-Dutch store on a VAT-source
-// position — no ÷1.21 — or all-in for a Dutch store / Margin), so we
-// apply the store's margin markup directly via the Margin path (no
-// VAT deling), then the store-display divisor stays 1 in that case.
-// For a Dutch store the internal all-in figure IS what they see, so
-// the divisor is 1 there too. This mirrors his confirmed rule:
-// "Seller's New Counter is the margin formula on the seller's
-// counter, without ×1.21 for VAT0→VAT0, but ×1.21 if the store is
-// Dutch."
-// NEW — additive only: the VAT type a store SEES for a seller's
-// position. Mirrors the outputVatType relabel rule in
-// computeAndPushLowestOffer: a Dutch client never sees VAT0 (Lojiq is
-// the middleman, buys VAT0 abroad and sells VAT21 to the NL store), so
-// VAT0 becomes VAT21; VAT21 stays VAT21; Margin stays Margin. Non-Dutch
-// clients keep the seller's own type unchanged (VAT0 stays VAT0).
-function storeFacingVatType(sellerVatType, orderFields = {}) {
-  const type = asText(sellerVatType);
-  if (type === "Margin") return "Margin";
-  if (isDutchClientCountry(orderFields["Client Country"])) return "VAT21";
-  return type;
-}
-
-function computeSellerCounterForStoreDisplay(sellerCounterPrice, storeVatContext, orderFields = {}) {
-  const isDutch = isDutchClientCountry(orderFields["Client Country"]);
-  const isVatSource = storeVatContext === "VAT21" || storeVatContext === "VAT0";
-
-  if (!isDutch && isVatSource) {
-    // VAT0→VAT0 (or VAT21 excl.): seller's counter is already in the
-    // store's excl. scale — apply margin markup with NO VAT deling by
-    // routing through the Margin path.
-    return calculateStoreCounterEquivalent(sellerCounterPrice, "Margin", orderFields);
-  }
-
-  // NEW — additive only: Dutch client + VAT0 seller. Lojiq is the
-  // middleman — buys VAT0 abroad, sells VAT21 to the NL store — so a NL
-  // store NEVER sees VAT0. Mirror the "Offer To Store" formula exactly:
-  // "Lowest Offer" holds the seller's VAT0 price already grossed up
-  // ×1.21 to the VAT21 sale base (the "Lowest Seller Offer (Normalized)"
-  // field in computeAndPushLowestOffer), THEN the margin formula runs.
-  // So gross up ×1.21 here, then route through the Margin path (margin
-  // + 2.5-grid rounding, no further VAT division). e.g. 80 VAT0 →
-  // 96.80 → MAX(106.80, 106.64) → 107.50 VAT21.
-  if (isDutch && storeVatContext === "VAT0") {
-    return calculateStoreCounterEquivalent(sellerCounterPrice * 1.21, "Margin", orderFields);
-  }
-
-  // Dutch store (VAT21 or Margin source), or Margin source generally:
-  // the store sees the plain all-in figure, computed with the seller's
-  // real VAT type (which applies ÷1.21 internally for VAT0 — not hit
-  // here anymore for a Dutch store — giving the incl. all-in expected).
-  return calculateStoreCounterEquivalent(sellerCounterPrice, storeVatContext, orderFields);
-}
-
-// NEW — additive only: replicates the EXACT VAT-exclusion rule used
-// downstream in calculateLinkedUnitPrice.js (the Airtable automation
-// that sets the order's Final Buying Price): only divide by 1.21 when
-// the client is Dutch AND the seller's VAT type is VAT21 — otherwise
-// leave the number as-is. Used to compute a correct
-// store_counter_price_excl_vat for the accept webhook when the
-// Airtable formula field it would normally read is empty (seller-
-// placed rounds never populate "Store Counter Price", so the formula
-// derived from it comes back empty too).
-function computeStoreExclVatForOrder(storeAllInPrice, vatType, orderFields = {}) {
-  const price = Number(storeAllInPrice);
-  if (!Number.isFinite(price)) return null;
-
-  const clientCountry = asText(orderFields["Client Country"]).toLowerCase();
-  const type = asText(vatType).toUpperCase().replace(/\s+/g, "");
-
-  if (clientCountry.includes("netherland") && type === "VAT21") {
-    return Math.round((price / 1.21) * 100) / 100;
-  }
-
-  return Math.round(price * 100) / 100;
-}
-
-// NEW — additive only: the value to write into "Custom Offer" when a
-// deal is accepted. calculateLinkedUnitPrice.js takes Custom Offer
-// essentially 1:1 (it only divides by 1.21 for a NL + VAT21 order, to
-// force the VAT-exclusive Final Buying Price a Dutch VAT product
-// requires). So Custom Offer must ALREADY be on the right scale per
-// VAT type:
-//   - VAT21 (only ever a NL store): store was offered/accepted an
-//     ALL-IN figure → write the all-in Store Counter Price; the
-//     downstream script divides it by 1.21 itself.
-//   - VAT0 (only ever a non-NL store): we invoice that store VAT-
-//     EXCLUSIVE, and the downstream script does NOT divide for VAT0 →
-//     so Custom Offer must already be the excl. figure. Use the
-//     Airtable-computed "Store Counter Price Excl VAT" (which uses the
-//     client's real VAT rate, e.g. 22% for Italy — more correct than a
-//     hardcoded 1.21), falling back to the store all-in price if that
-//     field is somehow empty.
-//   - Margin: no VAT at all → the full Store Counter Price.
-// This is the fix for "accepted a VAT0 deal but the store got invoiced
-// the full incl. price": Custom Offer was the all-in figure with VAT
-// type VAT0, and the downstream script took it as-is (no VAT0 branch
-// there), so the store was billed the gross amount instead of the net.
-function customOfferValueForAccept(vatType, storeAllInPrice, storeExclVatPrice) {
-  const type = asText(vatType).toUpperCase().replace(/\s+/g, "");
-  const allIn = Number(storeAllInPrice);
-
-  if (type === "VAT0") {
-    const excl = Number(storeExclVatPrice);
-    if (Number.isFinite(excl) && excl > 0) return excl;
-    // Fallback only if the Excl VAT formula field is unexpectedly empty.
-    return Number.isFinite(allIn) ? allIn : null;
-  }
-
-  // VAT21 and Margin: write the all-in Store Counter Price unchanged.
-  return Number.isFinite(allIn) ? allIn : null;
-}
-
-
-// NEW — Member WTB margin conversion. Much simpler than Store Orders:
-// always a flat €10 between seller and buyer, no per-seller or
-// percentage variability (confirmed — not feasible to set individual
-// margins per member buyer). MEMBER_WTB_MARGIN reads "Offer Margin" on
-// the Member WTB record itself if set, falling back to €10 — mirrors
-// the exact same fallback already used in discord-wtb-bot-main
-// (`parseNumeric(record.get('Offer Margin')) ?? 10`), so this can never
-// drift from that established behavior.
-// FIXED — corrected per explicit instruction: this is NOT a fallback
-// that only applies when a field is empty. Member WTB margin is always
-// a flat €10, full stop, no per-record override, no per-seller
-// variability. Kept as its own named function (rather than inlining
-// "10" everywhere) purely so the one place this rule lives is easy to
-// find and change later if that policy ever changes — not because
-// there's any conditional logic here.
-function getMemberWtbMargin() {
-  return 10;
-}
 
 // FIXED — this pair originally reused the Store Orders VAT/rounding
 // logic (getCounterEquivalentPriceForVatType + roundToNearestStep at a
@@ -12217,70 +11917,6 @@ function validateSellerVatEligibility(sellerVatId, sellerCountry, chosenVatType)
     return "As a Non-Dutch company, you can't sell VAT21 to Kickz Caviar B.V.. Please select VAT0 or Margin VAT Type or contact support.";
   }
   return null;
-}
-
-function memberWtbIsReverseCharge(memberWtbFields = {}) {
-  const buyerVatId = asText(memberWtbFields["Buyer VAT ID"]);
-  const buyerCountry = asText(memberWtbFields["Buyer Country"]);
-  return !!buyerVatId && buyerCountry !== "Netherlands" && buyerCountry !== "Nederland";
-}
-
-function memberWtbBuyerFacingVatType(sellerVatType, memberWtbFields = {}) {
-  const type = asText(sellerVatType);
-  // Margin is always shown as Margin (it passes through unchanged).
-  if (type === "Margin") return "Margin";
-  // A reverse-charge buyer (outside NL, has a VAT ID) always buys VAT0
-  // from Kickz Caviar B.V. — an intracommunautaire levering, so the
-  // buyer-facing label is VAT0 regardless of the underlying seller's own
-  // VAT type (a VAT21 seller still shows VAT0 to a foreign buyer; only
-  // the amount conversion differs, handled in calculateMemberWtbBuyerEquivalent).
-  // A domestic/NL buyer buys VAT21 from Lojiq. Margin passed through above.
-  return memberWtbIsReverseCharge(memberWtbFields) ? "VAT0" : "VAT21";
-}
-
-function calculateMemberWtbBuyerEquivalent(sellerAskPrice, vatType, memberWtbFields = {}) {
-  const price = Number(sellerAskPrice);
-  if (!Number.isFinite(price) || price <= 0) return null;
-
-  const margin = getMemberWtbMargin();
-  const type = asText(vatType);
-
-  if (type === "Margin") {
-    return Math.round((price + margin) * 100) / 100;
-  }
-
-  const reverseCharge = memberWtbIsReverseCharge(memberWtbFields);
-
-  if (reverseCharge) {
-    const result = type === "VAT21" ? (price / 1.21) + margin : price + margin;
-    return Math.round(result * 100) / 100;
-  }
-
-  const result = type === "VAT21" ? ((price / 1.21) + margin) * 1.21 : (price + margin) * 1.21;
-  return Math.round(result * 100) / 100;
-}
-
-function calculateMemberWtbSellerPayout(buyerPrice, vatType, memberWtbFields = {}) {
-  const price = Number(buyerPrice);
-  if (!Number.isFinite(price) || price <= 0) return null;
-
-  const margin = getMemberWtbMargin();
-  const type = asText(vatType);
-
-  if (type === "Margin") {
-    return Math.round((price - margin) * 100) / 100;
-  }
-
-  const reverseCharge = memberWtbIsReverseCharge(memberWtbFields);
-
-  if (reverseCharge) {
-    const result = type === "VAT21" ? (price - margin) * 1.21 : price - margin;
-    return Math.round(result * 100) / 100;
-  }
-
-  const grossless = price / 1.21;
-  const result = type === "VAT21" ? (grossless - margin) * 1.21 : grossless - margin;
-  return Math.round(result * 100) / 100;
 }
 
 async function sendCounterOfferDiscordDM({
@@ -12822,17 +12458,6 @@ async function disableSellerOfferDeniedEmbed(sellerOfferRecordId) {
   } catch (err) {
     console.error("disableSellerOfferDeniedEmbed failed (non-blocking):", err.message);
   }
-}
-
-function isDutchClientCountry(country) {
-  const value = asText(country).toLowerCase();
-
-  return [
-    "nl",
-    "nederland",
-    "netherlands",
-    "the netherlands"
-  ].includes(value);
 }
 
 function getStoreOfferVatTypeFromConsignmentVat(consignorVatType, clientCountry) {
@@ -17778,217 +17403,6 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
   }
 });
 
-app.post("/api/dashboard/wtb-counter-offers/:id/deny", async (req, res) => {
-  try {
-    const counterOfferId = asText(req.params.id);
-    const sellerRecordId = asText(req.body?.seller_record_id);
-
-    const record = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferId);
-    const f = record.fields || {};
-
-    if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
-      return res.status(403).json({ error: "Not allowed" });
-    }
-
-    if (displayValue(f["Status"]) !== "Open") {
-      return res.status(409).json({ error: "Counter offer is no longer open" });
-    }
-
-    await airtable(COUNTER_OFFERS_TABLE).update(counterOfferId, {
-      "Status": "Denied",
-      "Denied At": new Date().toISOString(),
-      "Closed At": new Date().toISOString()
-    });
-
-    const channelId = displayValue(f["Discord Channel ID"]);
-    const messageId = displayValue(f["Discord Message ID"]);
-
-    if (channelId && messageId) {
-      await disableCounterOfferDiscordButtons(
-        channelId,
-        messageId,
-        "❌ Counter offer denied."
-      ).catch(() => {});
-    }
-
-    res.json({ ok: true });
-  } catch (err) {
-    console.error("Failed to deny counter offer:", err);
-
-    res.status(500).json({
-      error: "Failed to deny counter offer",
-      details: err.message
-    });
-  }
-});
-
-app.post("/api/dashboard/wtb-counter-offers/:id/accept", async (req, res) => {
-  try {
-    const counterOfferId = asText(req.params.id);
-    const sellerRecordId = asText(req.body?.seller_record_id);
-
-    const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferId);
-    const f = counterOffer.fields || {};
-
-    if (!linkedRecordIncludes(f["Seller ID"], sellerRecordId)) {
-      return res.status(403).json({ error: "Not allowed" });
-    }
-
-    if (displayValue(f["Status"]) !== "Open") {
-      return res.status(409).json({ error: "Counter offer is no longer open" });
-    }
-
-    const linkedOrderId = firstLinkedRecordId(f["Order"]);
-
-    if (!linkedOrderId) {
-      return res.status(400).json({ error: "Counter offer missing linked order" });
-    }
-
-    const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
-    const orderStatus = displayValue(orderRecord.fields?.["Fulfillment Status"]);
-
-    if (orderStatus !== "Outsource") {
-      await airtable(COUNTER_OFFERS_TABLE).update(counterOfferId, {
-        "Status": "Closed",
-        "Closed At": new Date().toISOString()
-      });
-
-      return res.status(409).json({
-        error: "This order is already no longer available"
-      });
-    }
-
-    await airtable(COUNTER_OFFERS_TABLE).update(counterOfferId, {
-      "Status": "Accepted",
-      "Accepted At": new Date().toISOString(),
-      "Closed At": new Date().toISOString()
-    });
-
-    // FIXED — a real, confirmed bug: this endpoint (a seller accepting
-    // the STORE's counter on a Store Order) never wrote "Custom Offer"/
-    // "Offer VAT Type" back onto the Order — it only fired the webhook.
-    // So the accepted price/VAT was never frozen on the order the way
-    // store-accept does it, and whatever stale value another automation
-    // last wrote (e.g. a raw Margin figure from a different round) stuck
-    // — his exact symptom: accepting Seller B (VAT0) left Custom Offer
-    // at 210 with VAT Type Margin. Mirrors store-accept's proven logic:
-    // this is a store-placed round (the seller is accepting the store's
-    // counter), so the accepted store price is "Store Counter Price"
-    // directly, and the VAT type follows the seller's own type / the
-    // client-country rule. sellerVatTypeForAccept / orderFieldsForAccept
-    // computed here for the write below.
-    const orderFieldsForAccept = orderRecord.fields || {};
-    const sellerVatTypeForAccept = asText(f["Seller Original VAT Type"]);
-    const acceptedStorePrice = numberValue(f["Store Counter Price"]);
-    const offerVatTypeForAcceptWrite =
-      sellerVatTypeForAccept === "Margin"
-        ? "Margin"
-        : (isDutchClientCountry(orderFieldsForAccept?.["Client Country"]) ? "VAT21" : "VAT0");
-
-
-    try {
-      if (Number.isFinite(acceptedStorePrice) && acceptedStorePrice > 0) {
-        await airtable(ORDERS_TABLE).update(linkedOrderId, {
-          "Custom Offer": acceptedStorePrice,
-          "Offer VAT Type": offerVatTypeForAcceptWrite,
-          "Offer Accepted?": true,
-          "Offer Sent?": false
-        });
-      } else {
-        console.error("Could not compute a valid accepted store price to write back for order:", linkedOrderId);
-      }
-    } catch (writeErr) {
-      console.error("Failed to write Custom Offer on seller-accept (non-blocking):", writeErr);
-    }
-
-    if (!COUNTER_OFFER_ACCEPT_WEBHOOK_URL) {
-      throw new Error("Missing COUNTER_OFFER_ACCEPT_WEBHOOK_URL");
-    }
-
-    await fetch(COUNTER_OFFER_ACCEPT_WEBHOOK_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        trigger_type: "counter-offer-accepted",
-
-        counter_offer_record_id: counterOfferId,
-        order_record_id: linkedOrderId,
-
-        seller_record_id: firstLinkedRecordId(f["Seller ID"]),
-        seller_offer_record_id: displayValue(f["Seller Offer Record ID"]),
-
-        source_type: displayValue(f["Source Type"]),
-
-        store_counter_price: numberValue(f["Store Counter Price"]),
-        store_counter_price_excl_vat: numberValue(f["Store Counter Price Excl VAT"]),
-
-        counter_payout: numberValue(f["Counter Payout"]),
-        counter_payout_vat_type: displayValue(f["Counter Payout VAT Type"]),
-
-        seller_original_price: numberValue(f["Seller Original Price"]),
-        seller_original_vat_type: displayValue(f["Seller Original VAT Type"]),
-
-        accepted_at_iso: new Date().toISOString()
-      })
-    });
-
-    const channelId = displayValue(f["Discord Channel ID"]);
-    const messageId = displayValue(f["Discord Message ID"]);
-
-    if (channelId && messageId) {
-      await disableCounterOfferDiscordButtons(
-        channelId,
-        messageId,
-        "✅ Counter offer accepted."
-      ).catch(() => {});
-    }
-
-    const competingCounters = await airtable(COUNTER_OFFERS_TABLE)
-      .select({
-        filterByFormula: `AND(
-          {Status} = 'Open',
-          {Source Type} = 'Seller Offer'
-        )`
-      })
-      .all();
-
-    for (const competing of competingCounters) {
-      if (competing.id === counterOfferId) continue;
-
-      const cf = competing.fields || {};
-
-      if (!linkedRecordIncludes(cf["Order"], linkedOrderId)) continue;
-
-      await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
-        "Status": "Closed",
-        "Closed At": new Date().toISOString()
-      });
-
-      const competingChannelId = displayValue(cf["Discord Channel ID"]);
-      const competingMessageId = displayValue(cf["Discord Message ID"]);
-
-      if (competingChannelId && competingMessageId) {
-        await disableCounterOfferDiscordButtons(
-          competingChannelId,
-          competingMessageId,
-          "❌ Counter offer closed — another seller accepted."
-        ).catch(() => {});
-      }
-    }
-
-    res.json({ ok: true });
-  } catch (err) {
-    console.error("Failed to accept counter offer:", err);
-
-    res.status(500).json({
-      error: "Failed to accept counter offer",
-      details: err.message
-    });
-  }
-});
-
 app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
@@ -20411,11 +19825,33 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/buyer-accept", async (re
     }
 
     const sellerOfferRecordId = asText(f["Seller Offer Record ID"]);
-    const acceptedPayout = numberValue(f["Seller Counter Price"]);
+    // FIXED — this read "Seller Counter Price" with no fallback, unlike
+    // its Discord counterpart (member_wtb_buyer_counter_accept:), which
+    // falls back to "Counter Payout". On a round without a Seller
+    // Counter Price (e.g. a buyer-placed round created by
+    // reengageDeniedSellers, which can surface in the buying pill) this
+    // produced 0. /member-wtb/deal-channel treats 0 as "no override"
+    // and silently falls back to the Seller Offer record's ORIGINAL,
+    // un-negotiated price — no error, wrong money. Same fallback order
+    // as the Discord handler, so the two accept paths now agree.
+    const sellerCounterPrice = numberValue(f["Seller Counter Price"]);
+    const acceptedPayout = sellerCounterPrice > 0
+      ? sellerCounterPrice
+      : numberValue(f["Counter Payout"]);
     const acceptedVatType = asText(f["Seller Original VAT Type"]);
 
     if (!sellerOfferRecordId) {
       return res.status(500).json({ error: "Missing linked Seller Offer" });
+    }
+
+    // NEW — additive only: with both fields empty the override would be
+    // 0, which deal-channel silently reads as "use the original price".
+    // Fail loudly instead of quietly accepting a different amount than
+    // the buyer was shown.
+    if (!(acceptedPayout > 0)) {
+      return res.status(409).json({
+        error: "This offer has no valid negotiated price — please refresh and try again."
+      });
     }
 
     await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
@@ -24817,7 +24253,15 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
     let finalBuyingPrice;
 
     if (isOpenWtbFlow) {
-      const offerMargin = Number(memberFields['Offer Margin'] || 10);
+      // FIXED — was Number(memberFields['Offer Margin'] || 10), which
+      // read the right field but with two problems: an empty lookup
+      // array is truthy in JS, so Number([]) silently produced a margin
+      // of 0; and a configured 0 was taken literally where Airtable's
+      // IF({Offer Margin}, {Offer Margin}, 10) falls back to 10. Now
+      // goes through the one shared helper the negotiation side uses,
+      // so this number can never drift from the counter prices the
+      // buyer and seller were actually shown.
+      const offerMargin = getMemberWtbMargin(memberFields);
       const offerToBuyer = Number(memberFields['Offer To Buyer'] || 0);
 
       if (vatType === 'VAT0') {
@@ -24835,7 +24279,8 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       finalBuyingPrice = getMemberWtbNetSalePrice(
         maxPrice,
         vatType,
-        memberFields["Buying Inventory Filter"]
+        memberFields["Buying Inventory Filter"],
+        memberFields
       );
     }
 
