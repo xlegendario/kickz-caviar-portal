@@ -1807,18 +1807,6 @@ const wtbOpenOfferColumns = [
   "Action"
 ];
 
-const wtbCounterOfferColumns = [
-  "Order ID",
-  "Product",
-  "SKU",
-  "Size",
-  "Brand",
-  "Original Offer",
-  "Counter Payout",
-  "VAT Type",
-  "Action"
-];
-
 function renderWtbOpenOffersRows(offers) {
   dashboardTableBody
     .closest(".dashboard-table")
@@ -2265,59 +2253,6 @@ function renderWtbUnifiedOfferRows(items) {
       </tr>
     `;
   }).join("");
-}
-
-function renderWtbCounterOfferRows(items) {
-  dashboardTableHead.innerHTML = wtbCounterOfferColumns
-    .map((column) => `<th>${column}</th>`)
-    .join("");
-
-  if (!items.length) {
-    dashboardTableBody.innerHTML = `
-      <tr>
-        <td colspan="${wtbCounterOfferColumns.length}">
-          <div class="dashboard-empty-state">
-            <div class="dashboard-empty-icon">◇</div>
-            <strong>No counter offers yet</strong>
-            <span>Counter offers from stores will appear here.</span>
-          </div>
-        </td>
-      </tr>
-    `;
-    return;
-  }
-
-  dashboardTableBody.innerHTML = items.map((item) => `
-    <tr>
-      <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.product || "-")}</td>
-      <td>${escapeHtml(item.sku || "-")}</td>
-      <td>${escapeHtml(item.size || "-")}</td>
-      <td>${escapeHtml(item.brand || "-")}</td>
-      <td>${escapeHtml(item.original_offer || "-")}</td>
-      <td>${escapeHtml(item.counter_payout || "-")}</td>
-      <td>${escapeHtml(item.vat_type || "-")}</td>
-      <td>
-        <div class="dashboard-table-actions">
-          <button
-            class="dashboard-action-btn accept"
-            type="button"
-            data-counter-offer-accept-id="${escapeHtml(item.id)}"
-          >
-            Accept
-          </button>
-
-          <button
-            class="dashboard-action-btn danger"
-            type="button"
-            data-counter-offer-deny-id="${escapeHtml(item.id)}"
-          >
-            Deny
-          </button>
-        </div>
-      </td>
-    </tr>
-  `).join("");
 }
 
 function renderReadyToShipRows(items) {
@@ -3721,51 +3656,6 @@ async function loadDashboardData() {
     return;
   }
 
-  if (activeSection === "wtb" && activeTab === "counter_offers") {
-    dashboardTableBody.innerHTML = `
-      <tr>
-        <td colspan="${wtbCounterOfferColumns.length}">
-          <div class="dashboard-empty-state">
-            <strong>Loading counter offers...</strong>
-          </div>
-        </td>
-      </tr>
-    `;
-  
-    const params = new URLSearchParams({
-      seller_record_id: dashboardSeller.id
-    });
-  
-    const response = await fetch(
-      `/api/dashboard/wtb-counter-offers?${params.toString()}`
-    );
-  
-    const data = await response.json();
-  
-    if (!response.ok) {
-      throw new Error(
-        data.details ||
-        data.error ||
-        "Failed to load counter offers"
-      );
-    }
-  
-    renderWtbCounterOfferRows(data.items || []);
-  
-    const countEl = document.querySelector(
-      '[data-count-key="wtb:counter_offers"]'
-    );
-  
-    if (countEl) {
-      countEl.textContent = data.count || 0;
-    }
-  
-    dashboardCountsCache.wtb.counter_offers = data.count || 0;
-    renderStats();
-  
-    return;
-  }
-
   if (activeSection === "wtb" && activeTab === "accepted") {
     dashboardTableBody.innerHTML = `
       <tr>
@@ -4787,78 +4677,6 @@ dashboardContent.addEventListener("click", (event) => {
 });
 
 dashboardTableBody.addEventListener("click", async (event) => {
-    const counterAcceptButton = event.target.closest("[data-counter-offer-accept-id]");
-
-    if (counterAcceptButton) {
-      const counterOfferId = counterAcceptButton.dataset.counterOfferAcceptId;
-    
-      counterAcceptButton.disabled = true;
-      counterAcceptButton.textContent = "Accepting...";
-    
-      try {
-        const response = await fetch(`/api/dashboard/wtb-counter-offers/${counterOfferId}/accept`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            seller_record_id: dashboardSeller.id
-          })
-        });
-    
-        const data = await response.json();
-    
-        if (!response.ok) {
-          throw new Error(data.details || data.error || "Failed to accept counter offer");
-        }
-    
-        await loadDashboardData();
-        await loadDashboardCounts();
-      } catch (err) {
-        alert(err.message);
-      } finally {
-        counterAcceptButton.disabled = false;
-        counterAcceptButton.textContent = "Accept";
-      }
-    
-      return;
-    }
-    
-    const counterDenyButton = event.target.closest("[data-counter-offer-deny-id]");
-    
-    if (counterDenyButton) {
-      const counterOfferId = counterDenyButton.dataset.counterOfferDenyId;
-    
-      counterDenyButton.disabled = true;
-    
-      try {
-        const response = await fetch(`/api/dashboard/wtb-counter-offers/${counterOfferId}/deny`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            seller_record_id: dashboardSeller.id
-          })
-        });
-    
-        const data = await response.json();
-    
-        if (!response.ok) {
-          throw new Error(data.details || data.error || "Failed to deny counter offer");
-        }
-    
-        await loadDashboardData();
-        await loadDashboardCounts();
-      } catch (err) {
-        alert(err.message);
-      } finally {
-        counterDenyButton.disabled = false;
-      }
-    
-      return;
-    }
-
     const consignmentCounterOfferButton = event.target.closest("[data-consignment-counter-offer-id]");
 
     if (consignmentCounterOfferButton) {
