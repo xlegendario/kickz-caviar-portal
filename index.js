@@ -17366,23 +17366,36 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
     // already because by then an Inventory Unit exists to read
     // "Final Purchase Price" from — in this tab there is none yet.
     const acceptedPayoutByOrder = new Map();
+    // Same problem, same cure on the Member WTB side — those rounds link
+    // through "Member WTB" instead of "Order", so they need their own
+    // map. One difference that matters: a Member WTB deal can be
+    // accepted straight off a fresh offer (accept_member_wtb_buyer_offer)
+    // without any Counter Offer ever existing. There is then nothing to
+    // look up, and falling back to "Seller Offer" is exactly right — with
+    // no negotiation the ask IS the payout.
+    const acceptedPayoutByMemberWtb = new Map();
 
-    if (linkedOrderIds.length) {
+    const linkedMemberWtbIds = [
+      ...new Set(
+        filteredOffers
+          .map((record) => firstLinkedRecordId(record.fields?.["Member WTBs"]))
+          .filter(Boolean)
+      )
+    ];
+
+    if (linkedOrderIds.length || linkedMemberWtbIds.length) {
       const linkedOrderIdSet = new Set(linkedOrderIds);
+      const linkedMemberWtbIdSet = new Set(linkedMemberWtbIds);
 
       const acceptedRounds = await airtable(COUNTER_OFFERS_TABLE)
         .select({
           filterByFormula: `{Status} = 'Accepted'`,
-          fields: ["Order", "Seller ID", "Counter Payout", "Seller Counter Price"]
+          fields: ["Order", "Member WTB", "Seller ID", "Counter Payout", "Seller Counter Price"]
         })
         .all();
 
       for (const round of acceptedRounds) {
-        const roundOrderId = firstLinkedRecordId(round.fields?.["Order"]);
-        if (!roundOrderId || !linkedOrderIdSet.has(roundOrderId)) continue;
         if (!linkedRecordIncludes(round.fields?.["Seller ID"], sellerRecordId)) continue;
-
-        ordersWonBySeller.add(roundOrderId);
 
         // "Counter Payout" is set on every round type — store-placed,
         // seller-placed, and the synthetic round create-fresh-round
@@ -17391,7 +17404,20 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
         const payout = numberValue(round.fields?.["Counter Payout"])
           || numberValue(round.fields?.["Seller Counter Price"]);
 
-        if (payout > 0) acceptedPayoutByOrder.set(roundOrderId, payout);
+        const roundOrderId = firstLinkedRecordId(round.fields?.["Order"]);
+        if (roundOrderId && linkedOrderIdSet.has(roundOrderId)) {
+          ordersWonBySeller.add(roundOrderId);
+          if (payout > 0) acceptedPayoutByOrder.set(roundOrderId, payout);
+          continue;
+        }
+
+        // Member WTB side: payout only. The row's visibility keeps
+        // keying on "WTB Created Channel ID (MWTB)" as before — that
+        // branch is deliberately left alone.
+        const roundMemberWtbId = firstLinkedRecordId(round.fields?.["Member WTB"]);
+        if (roundMemberWtbId && linkedMemberWtbIdSet.has(roundMemberWtbId) && payout > 0) {
+          acceptedPayoutByMemberWtb.set(roundMemberWtbId, payout);
+        }
       }
     }
 
@@ -17432,13 +17458,16 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
       const orderFields = orderMap.get(linkedOrderId) || {};
 
       // FIXED — the "Payout" column showed "Seller Offer", the seller's
-      // ORIGINAL ask, which negotiation never rewrites. For a store
-      // order the agreed payout comes from the accepted round; the ask
-      // stays as a fallback for anything that somehow has no round.
-      // (Member WTB rows keep reading the Seller Offer for now — see
-      // the note in the audit report; same issue, not yet changed.)
-      const offerAmount = !isMemberWtb && acceptedPayoutByOrder.has(linkedOrderId)
-        ? acceptedPayoutByOrder.get(linkedOrderId)
+      // ORIGINAL ask, which negotiation never rewrites. The agreed
+      // payout comes from the accepted round, for both sources. The ask
+      // remains the fallback, which is the correct answer for a deal
+      // that was accepted without any negotiation.
+      const negotiatedPayout = isMemberWtb
+        ? acceptedPayoutByMemberWtb.get(linkedMemberWtbId)
+        : acceptedPayoutByOrder.get(linkedOrderId);
+
+      const offerAmount = negotiatedPayout > 0
+        ? negotiatedPayout
         : numberValue(f["Seller Offer"]);
 
       const channelId = isMemberWtb
