@@ -17357,6 +17357,15 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
     // and closes the competitors. Matching on raw record IDs in JS,
     // never FIND(id, ARRAYJOIN(...)), which does not match record IDs.
     const ordersWonBySeller = new Set();
+    // The agreed payout per order, taken from the accepted round. The
+    // Seller Offers record cannot supply this: its "Seller Offer" field
+    // is the seller's original ask and is deliberately never rewritten
+    // during negotiation, so reading it showed the pre-counter number in
+    // a column labelled "Payout" (seller asks 175, store counters to a
+    // 165 payout, tab showed 175). The Confirmed tab gets this right
+    // already because by then an Inventory Unit exists to read
+    // "Final Purchase Price" from — in this tab there is none yet.
+    const acceptedPayoutByOrder = new Map();
 
     if (linkedOrderIds.length) {
       const linkedOrderIdSet = new Set(linkedOrderIds);
@@ -17364,16 +17373,25 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
       const acceptedRounds = await airtable(COUNTER_OFFERS_TABLE)
         .select({
           filterByFormula: `{Status} = 'Accepted'`,
-          fields: ["Order", "Seller ID"]
+          fields: ["Order", "Seller ID", "Counter Payout", "Seller Counter Price"]
         })
         .all();
 
       for (const round of acceptedRounds) {
         const roundOrderId = firstLinkedRecordId(round.fields?.["Order"]);
         if (!roundOrderId || !linkedOrderIdSet.has(roundOrderId)) continue;
-        if (linkedRecordIncludes(round.fields?.["Seller ID"], sellerRecordId)) {
-          ordersWonBySeller.add(roundOrderId);
-        }
+        if (!linkedRecordIncludes(round.fields?.["Seller ID"], sellerRecordId)) continue;
+
+        ordersWonBySeller.add(roundOrderId);
+
+        // "Counter Payout" is set on every round type — store-placed,
+        // seller-placed, and the synthetic round create-fresh-round
+        // makes for an accept without any negotiation. Seller Counter
+        // Price is only a defensive fallback.
+        const payout = numberValue(round.fields?.["Counter Payout"])
+          || numberValue(round.fields?.["Seller Counter Price"]);
+
+        if (payout > 0) acceptedPayoutByOrder.set(roundOrderId, payout);
       }
     }
 
@@ -17413,7 +17431,15 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
       
       const orderFields = orderMap.get(linkedOrderId) || {};
 
-      const offerAmount = numberValue(f["Seller Offer"]);
+      // FIXED — the "Payout" column showed "Seller Offer", the seller's
+      // ORIGINAL ask, which negotiation never rewrites. For a store
+      // order the agreed payout comes from the accepted round; the ask
+      // stays as a fallback for anything that somehow has no round.
+      // (Member WTB rows keep reading the Seller Offer for now — see
+      // the note in the audit report; same issue, not yet changed.)
+      const offerAmount = !isMemberWtb && acceptedPayoutByOrder.has(linkedOrderId)
+        ? acceptedPayoutByOrder.get(linkedOrderId)
+        : numberValue(f["Seller Offer"]);
 
       const channelId = isMemberWtb
         ? displayValue(f["WTB Created Channel ID (MWTB)"])
