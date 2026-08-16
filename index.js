@@ -17297,6 +17297,22 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
           "Size (MWTB)",
           "Brand (MWTB)"
         ],
+        // Store side: an accepted order sits at 'Confirmed' (Make sets
+        // it on accept and creates the deal channel via /payout-channel);
+        // it only leaves for 'Allocated' once the seller presses Process
+        // Deal. So 'Confirmed' IS the "accepted, still to process" state
+        // and this tab owns it exclusively — Confirmed block B used to
+        // claim it too and was removed for store orders.
+        //
+        // Deliberately NOT gated on "Channel Created?": if channel
+        // creation fails the deal must still be visible here, with a
+        // dead Discord button, rather than vanishing from every tab.
+        //
+        // The two halves of this OR are independent lookups and stay
+        // that way: {Fulfillment Status} resolves via {Linked Orders}
+        // (blank on a Member WTB offer) and {Fulfillment Status (MWTB)}
+        // via {Member WTBs} (blank on a store offer). Changing one
+        // cannot affect the other, so the Member WTB side is untouched.
         filterByFormula: `OR(
           {Fulfillment Status} = 'Confirmed',
           {Fulfillment Status (MWTB)} = 'Confirmed'
@@ -17318,26 +17334,75 @@ app.get("/api/dashboard/wtb-accepted", async (req, res) => {
 
     const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
+    // NEW — which orders did THIS seller actually win?
+    //
+    // This used to be answered with "Partner or Seller" = Seller plus
+    // {Lowest Offer Seller ID} = sellerCode. That field is a lookup
+    // filtered on "Raw If Lowest", which compares a Seller Offer's
+    // "Offer Cost (Normalized)" against the order's lowest — and that
+    // number is only ever written when an offer is PLACED or EDITED
+    // (see member-wtb/place-offer, wtb-open-offers/:id/edit,
+    // seller-offers/:id/edit-after-denial and the two writers in the
+    // WTB bot). Negotiation lives entirely in the Counter Offers table
+    // and never writes back, on purpose. So the flag freezes on whoever
+    // was cheapest BEFORE any countering: if seller A opened lowest but
+    // seller B won the negotiation, the deal was shown to A and B never
+    // saw it. A tie on the normalized amount also put two seller IDs in
+    // the lookup, which the exact string compare then failed for both.
+    //
+    // The accepted round answers it directly and at the right moment:
+    // every store-order accept — including a "fresh" one, which goes
+    // through create-fresh-round and therefore also produces a Counter
+    // Offer carrying the seller — sets exactly one round to Accepted
+    // and closes the competitors. Matching on raw record IDs in JS,
+    // never FIND(id, ARRAYJOIN(...)), which does not match record IDs.
+    const ordersWonBySeller = new Set();
+
+    if (linkedOrderIds.length) {
+      const linkedOrderIdSet = new Set(linkedOrderIds);
+
+      const acceptedRounds = await airtable(COUNTER_OFFERS_TABLE)
+        .select({
+          filterByFormula: `{Status} = 'Accepted'`,
+          fields: ["Order", "Seller ID"]
+        })
+        .all();
+
+      for (const round of acceptedRounds) {
+        const roundOrderId = firstLinkedRecordId(round.fields?.["Order"]);
+        if (!roundOrderId || !linkedOrderIdSet.has(roundOrderId)) continue;
+        if (linkedRecordIncludes(round.fields?.["Seller ID"], sellerRecordId)) {
+          ordersWonBySeller.add(roundOrderId);
+        }
+      }
+    }
+
     const acceptedOffers = filteredOffers.filter((record) => {
       const f = record.fields || {};
 
       const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
       const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
       const isMemberWtb = !!linkedMemberWtbId;
-      
-      const orderFields = orderMap.get(linkedOrderId) || {};
-      
+
       if (isMemberWtb) {
         return !!displayValue(f["WTB Created Channel ID (MWTB)"]);
       }
-      
-      const channelCreated = orderFields["Channel Created?"] === true;
-      
-      return (
-        displayValue(orderFields["Partner or Seller"]) === "Seller" &&
-        displayValue(orderFields["Lowest Offer Seller ID"]) === sellerCode &&
-        !channelCreated
-      );
+
+      // FIXED — the "Channel Created? !== true" condition is gone. It
+      // was there to hand the row over to the Confirmed tab once the
+      // deal channel existed, but the channel is exactly what the
+      // seller needs here: this tab IS the "still has to press Process
+      // Deal" stage, and its discord_url points at that channel. With
+      // the condition in place the row vanished the moment the channel
+      // it links to came into existence.
+      //
+      // The hand-over to Confirmed now happens on status instead: after
+      // Process Deal the order becomes Allocated and it shows up there
+      // through block A (the Inventory Units query).
+      //
+      // "Partner or Seller" is gone too: an accepted Counter Offer only
+      // ever exists for a seller deal, so the check was redundant.
+      return ordersWonBySeller.has(linkedOrderId);
     });
 
     const items = acceptedOffers.map((record) => {
@@ -17511,93 +17576,20 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
       };
     });
 
-    const offerRecords = await airtable(SELLER_OFFERS_TABLE)
-      .select({
-        fields: [
-          "Seller ID",
-          "Linked Orders",
-          "Member WTBs",
-          "Member WTB ID",
-          "WTB Created Channel ID (MWTB)",
-          "Seller Offer",
-          "Offer VAT Type",
-          "Offer Date",
-          "Fulfillment Status",
-          "Product Name",
-          "SKU",
-          "Size",
-          "Brand"
-        ],
-        filterByFormula: `{Fulfillment Status} = 'Confirmed'`
-      })
-      .all();
+    // REMOVED — "block B": Seller Offers whose order sat at Confirmed
+    // with "Channel Created?" ticked. That is the accepted-but-not-yet-
+    // processed state, and /api/dashboard/wtb-accepted now owns it, so
+    // keeping it here showed the same order in two tabs at once. It also
+    // never matched the Confirmed badge, which has always counted only
+    // the Inventory Units query below.
+    //
+    // Nothing is lost: after Process Deal the order moves to Allocated,
+    // which block B could never match anyway (it required Confirmed) —
+    // block A picks it up there via the linked Inventory Unit.
+    // Member WTB rows were already excluded from block B explicitly.
     
-    const filteredOffers = offerRecords.filter((record) =>
-      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
-    );
-    
-    const offerLinkedOrderIds = [
-      ...new Set(
-        filteredOffers
-          .map((record) => firstLinkedRecordId(record.fields?.["Linked Orders"]))
-          .filter(Boolean)
-      )
-    ];
-    
-    const offerOrderMap = await loadOrderFieldsMap(offerLinkedOrderIds);
-    
-    const channelCreatedOffers = filteredOffers
-      .filter((record) => {
-        const f = record.fields || {};
-    
-        const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
-        const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
-    
-        if (linkedMemberWtbId) {
-          return false;
-        }
-        
-        const orderFields = offerOrderMap.get(linkedOrderId) || {};
-        return orderFields["Channel Created?"] === true;
-      })
-      .map((record) => {
-        const f = record.fields || {};
-    
-        const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
-        const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
-        const isMemberWtb = !!linkedMemberWtbId;
-    
-        const orderFields = offerOrderMap.get(linkedOrderId) || {};
-    
-        const channelId = isMemberWtb
-          ? displayValue(f["WTB Created Channel ID (MWTB)"])
-          : displayValue(orderFields["WTB Created Channel ID"]);
-    
-        return {
-          id: record.id,
-          order_id: isMemberWtb
-            ? displayValue(f["Member WTB ID"])
-            : displayValue(orderFields["Order ID"]),
-          order_record_id: linkedOrderId,
-          product: displayValue(f["Product Name"] || orderFields["Product Name"]),
-          sku: displayValue(f["SKU"] || orderFields["SKU"]),
-          size: displayValue(f["Size"] || orderFields["Size"]),
-          brand: displayValue(f["Brand"] || orderFields["Brand"]),
-          payout: moneyWholeValue(f["Seller Offer"]),
-          vat_type: displayValue(f["Offer VAT Type"]),
-          date: formatDateEU(f["Offer Date"]),
-          raw_date: f["Offer Date"],
-          discord_url: channelId
-            ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
-            : ""
-        };
-      });
-    
-    const sortedItems = sortDashboardItemsNewestFirst([
-      ...items,
-      ...channelCreatedOffers
-    ]);
-    
+    const sortedItems = sortDashboardItemsNewestFirst(items);
+
     res.json({
       count: sortedItems.length,
       items: sortedItems
@@ -21185,6 +21177,8 @@ app.get("/api/dashboard/counts", async (req, res) => {
             "Fulfillment Status (MWTB)",
             "WTB Created Channel ID (MWTB)"
           ],
+          // Must stay identical to the query in /api/dashboard/wtb-accepted,
+          // or the badge count and the tab contents disagree.
           filterByFormula: `OR(
             {Fulfillment Status} = 'Confirmed',
             {Fulfillment Status (MWTB)} = 'Confirmed'
@@ -21336,25 +21330,43 @@ app.get("/api/dashboard/counts", async (req, res) => {
       )
     ];
     
-    const wtbAcceptedOrderMap = await loadOrderFieldsMap(wtbAcceptedOrderIds);
-    
+    // Mirrors the winner lookup in /api/dashboard/wtb-accepted — see the
+    // long comment there for why "Lowest Offer Seller ID" cannot be used
+    // once a deal has been negotiated. Kept in lockstep deliberately: if
+    // one of the two changes, the badge stops matching the tab.
+    const wtbAcceptedOrdersWonBySeller = new Set();
+
+    if (wtbAcceptedOrderIds.length) {
+      const wtbAcceptedOrderIdSet = new Set(wtbAcceptedOrderIds);
+
+      const wtbAcceptedRounds = await airtable(COUNTER_OFFERS_TABLE)
+        .select({
+          filterByFormula: `{Status} = 'Accepted'`,
+          fields: ["Order", "Seller ID"]
+        })
+        .all();
+
+      for (const round of wtbAcceptedRounds) {
+        const roundOrderId = firstLinkedRecordId(round.fields?.["Order"]);
+        if (!roundOrderId || !wtbAcceptedOrderIdSet.has(roundOrderId)) continue;
+        if (linkedRecordIncludes(round.fields?.["Seller ID"], sellerRecordId)) {
+          wtbAcceptedOrdersWonBySeller.add(roundOrderId);
+        }
+      }
+    }
+
     const wtbAccepted = wtbAcceptedBase.filter((record) => {
       const f = record.fields || {};
-    
+
       const linkedOrderId = firstLinkedRecordId(f["Linked Orders"]);
       const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
       const isMemberWtb = !!linkedMemberWtbId;
-    
-      const orderFields = wtbAcceptedOrderMap.get(linkedOrderId) || {};
-    
+
       if (isMemberWtb) {
         return displayValue(f["Fulfillment Status (MWTB)"]) === "Confirmed";
       }
-    
-      return (
-        displayValue(orderFields["Partner or Seller"]) === "Seller" &&
-        displayValue(orderFields["Lowest Offer Seller ID"]) === sellerCode
-      );
+
+      return wtbAcceptedOrdersWonBySeller.has(linkedOrderId);
     }).length;
     
     function isVisibleMemberWtbInventory(record) {
