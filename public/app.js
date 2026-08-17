@@ -322,30 +322,30 @@ function getBuyingInventoryTypeLabel() {
 // the member cannot see the VAT type of the item behind an offer. On
 // "All Inventory" the backend reads the amount as ALL-IN and divides the
 // 21% out for VAT0/VAT21 units (getMemberWtbNetSalePrice); on "B2B Only"
-// it takes the amount as already excl. VAT and divides nothing. Spelling
-// that out at the input is the cheapest way to stop a member typing a
-// VAT0 figure where an all-in one is expected.
+// it is already excl. VAT and nothing is divided. The hint only appears
+// where the amount can still be recalculated — on B2B and Margin it
+// cannot, so there is nothing to warn about.
 function getBuyingOfferInputCopy() {
   if (buyingInventoryType === "b2b") {
     return {
-      label: "Your price (excl. VAT)",
-      placeholder: "Enter your price excl. VAT",
-      hint: "B2B Only — enter the amount excluding VAT. VAT is added on the invoice where applicable."
+      label: "Your offer:",
+      placeholder: "Enter your price (excl. VAT)",
+      hint: ""
     };
   }
 
   if (buyingInventoryType === "private") {
     return {
-      label: "Your all-in price",
-      placeholder: "Enter your all-in price",
-      hint: "Margin Only — margin goods carry no reclaimable VAT, so the amount you enter is the amount that counts."
+      label: "Your offer:",
+      placeholder: "Enter your price (incl. VAT)",
+      hint: ""
     };
   }
 
   return {
-    label: "Your all-in price (incl. VAT)",
-    placeholder: "Enter your all-in price",
-    hint: "All Inventory — enter the total amount including VAT. For VAT0/VAT21 items the VAT is taken out of this amount; for margin items it is used as-is."
+    label: "Your offer:",
+    placeholder: "Enter your price (incl. VAT)",
+    hint: "If your offer matches a B2B seller, the invoice amount will be recalculated as VAT0 price."
   };
 }
 function openBuyingActionFlow(action, productKey, sizeValue) {
@@ -427,9 +427,11 @@ function openBuyingActionFlow(action, productKey, sizeValue) {
             <input id="buyingOfferAmountInput" class="offer-input" type="text" inputmode="numeric" placeholder="${escapeHtml(offerInputCopy.placeholder)}" />
           </label>
 
-          <p class="buying-offer-scale-hint">
-            ${escapeHtml(offerInputCopy.hint)}
-          </p>
+          ${
+            offerInputCopy.hint
+              ? `<p class="buying-offer-scale-hint">${escapeHtml(offerInputCopy.hint)}</p>`
+              : ""
+          }
         `
         : `
           <p class="buying-action-note">
