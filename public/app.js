@@ -317,6 +317,37 @@ function getBuyingInventoryTypeLabel() {
   if (buyingInventoryType === "private") return "Margin Only";
   return "All Inventory";
 }
+
+// NEW — the same typed number means something different per filter, and
+// the member cannot see the VAT type of the item behind an offer. On
+// "All Inventory" the backend reads the amount as ALL-IN and divides the
+// 21% out for VAT0/VAT21 units (getMemberWtbNetSalePrice); on "B2B Only"
+// it takes the amount as already excl. VAT and divides nothing. Spelling
+// that out at the input is the cheapest way to stop a member typing a
+// VAT0 figure where an all-in one is expected.
+function getBuyingOfferInputCopy() {
+  if (buyingInventoryType === "b2b") {
+    return {
+      label: "Your price (excl. VAT)",
+      placeholder: "Enter your price excl. VAT",
+      hint: "B2B Only — enter the amount excluding VAT. VAT is added on the invoice where applicable."
+    };
+  }
+
+  if (buyingInventoryType === "private") {
+    return {
+      label: "Your all-in price",
+      placeholder: "Enter your all-in price",
+      hint: "Margin Only — margin goods carry no reclaimable VAT, so the amount you enter is the amount that counts."
+    };
+  }
+
+  return {
+    label: "Your all-in price (incl. VAT)",
+    placeholder: "Enter your all-in price",
+    hint: "All Inventory — enter the total amount including VAT. For VAT0/VAT21 items the VAT is taken out of this amount; for margin items it is used as-is."
+  };
+}
 function openBuyingActionFlow(action, productKey, sizeValue) {
   if (!currentSeller) {
     pendingBuyingProductKey = productKey;
@@ -351,6 +382,11 @@ function openBuyingActionFlow(action, productKey, sizeValue) {
     sourceCount > 1
       ? "Offer sent to all matching sources."
       : "Offer sent to matching source.";
+
+  // Read at render time, so the copy always matches the filter that is
+  // active right now. The modal is rebuilt on every open, so switching
+  // filters and reopening picks up the new wording by itself.
+  const offerInputCopy = getBuyingOfferInputCopy();
   
   buyingActionContent.innerHTML = `
     <div class="buying-action-summary">
@@ -387,9 +423,13 @@ function openBuyingActionFlow(action, productKey, sizeValue) {
           </p>
     
           <label class="buying-offer-label">
-            Your Offer
-            <input id="buyingOfferAmountInput" class="offer-input" type="text" inputmode="numeric" placeholder="Enter your offer" />
+            ${escapeHtml(offerInputCopy.label)}
+            <input id="buyingOfferAmountInput" class="offer-input" type="text" inputmode="numeric" placeholder="${escapeHtml(offerInputCopy.placeholder)}" />
           </label>
+
+          <p class="buying-offer-scale-hint">
+            ${escapeHtml(offerInputCopy.hint)}
+          </p>
         `
         : `
           <p class="buying-action-note">
@@ -415,6 +455,11 @@ dealsGrid.addEventListener("click", (event) => {
   if (inventoryTypeButton) {
     buyingInventoryType = inventoryTypeButton.dataset.buyingInventoryType || "all";
     localStorage.setItem("kc_buying_inventory_type", buyingInventoryType);
+    // NEW — close an open offer modal on a filter switch. Its labels are
+    // rendered for the filter that was active when it opened, so leaving
+    // it up would show "incl. VAT" while the member has just moved to
+    // B2B Only. Cheaper and safer than re-rendering it in place.
+    closeBuyingActionFlow();
     loadBuyingProducts({ force: true });
     return;
   }
