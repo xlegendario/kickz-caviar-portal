@@ -2025,6 +2025,18 @@ body {
   font-weight: 900;
 }
 
+/* Explains which VAT scale the amount above is read in — the wording
+   changes with the inventory filter (see getBuyingOfferInputCopy).
+   Deliberately quieter than .buying-action-note: it is a clarification,
+   not a warning. */
+.buying-offer-scale-hint {
+  margin: 8px 0 0;
+  color: rgba(255,255,255,0.5);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
 .buying-action-buttons {
   display: grid;
   grid-template-columns: 1fr 1fr;
