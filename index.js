@@ -24008,10 +24008,37 @@ function getAllowedBuyingVatTypesFromLabel(label) {
   return ["Margin", "VAT0", "VAT21"];
 }
 
+// What we offer a consignor on a Member WTB, in the CONSIGNOR's own VAT
+// scale. "currentLowestSourcePrice" is our budget — the buyer's price
+// with our margin already taken off — so this converts that budget into
+// the scale the consignor quotes in.
+//
+// FIXED — this never looked at what the consignor actually asks, so
+// whenever our budget was higher than his price we offered him the full
+// budget instead of his own number. Real case: he asked €163, we offered
+// €190, and confirmConsignmentOffer pays out "offer_price" — €27 too
+// much on one pair. The Store Orders equivalent in
+// /api/consignment/offers/create has always had this cap ("does his ask
+// fit the budget? then offer his own price"); only this Member WTB
+// variant was missing it.
+//
+// The cap is a plain Math.min because both numbers are already in the
+// consignor's scale: the branches below convert the budget INTO that
+// scale, and selling_price_suggested is quoted in it. Checked for every
+// branch — All Inventory x {VAT0, VAT21, Margin} and B2B x {VAT0, VAT21,
+// Margin}. The Store Orders variant converts the ask UP to all-in
+// instead; same result, one conversion more.
+//
+// It can only ever lower the offer, so our margin can only go up. With a
+// €200 buyer price the budget is €190 and the margin is exactly €10
+// today; capping at a €163 ask makes it €37. When the consignor asks
+// more than the budget the cap does not bite and the margin stays at the
+// intended €10.
 function calculateMemberWtbConsignorOfferPrice({
   currentLowestSourcePrice,
   buyingInventoryFilter,
-  consignorVatType
+  consignorVatType,
+  sellerPrice
 }) {
   const basePrice = Number(currentLowestSourcePrice || 0);
   const filter = asText(buyingInventoryFilter);
@@ -24021,23 +24048,30 @@ function calculateMemberWtbConsignorOfferPrice({
     return 0;
   }
 
+  let offer;
+
   if (filter === "All Inventory") {
-    if (vatType === "VAT0") {
-      return Math.round(basePrice / 1.21);
-    }
-
-    return Math.round(basePrice);
+    offer = vatType === "VAT0"
+      ? Math.round(basePrice / 1.21)
+      : Math.round(basePrice);
+  } else if (filter === "B2B Only") {
+    offer = vatType === "VAT21"
+      ? Math.round(basePrice * 1.21)
+      : Math.round(basePrice);
+  } else {
+    offer = Math.round(basePrice);
   }
 
-  if (filter === "B2B Only") {
-    if (vatType === "VAT21") {
-      return Math.round(basePrice * 1.21);
-    }
+  // Never offer more than the consignor asks. Guarded so an unusable
+  // sellerPrice (missing, zero, non-numeric) leaves the old behaviour
+  // untouched rather than collapsing the offer to 0.
+  const ask = Number(sellerPrice);
 
-    return Math.round(basePrice);
+  if (Number.isFinite(ask) && ask > 0) {
+    return Math.min(offer, Math.round(ask));
   }
 
-  return Math.round(basePrice);
+  return offer;
 }
 
 async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
@@ -24094,7 +24128,8 @@ async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
     const rowOfferPrice = calculateMemberWtbConsignorOfferPrice({
       currentLowestSourcePrice,
       buyingInventoryFilter,
-      consignorVatType: row.vat_type
+      consignorVatType: row.vat_type,
+      sellerPrice
     });
 
     if (!Number.isFinite(sellerPrice) || sellerPrice <= 0) {
@@ -25826,7 +25861,16 @@ app.post("/api/buying/offers", async (req, res) => {
         return vatType === "Margin";
       }
 
-      return ["kc", "consignment"].includes(sourceType);
+      // FIXED — this said ["kc", "consignment"], but no source is ever
+      // typed "kc": getBuyingInventoryProduct emits "kc_owned" (the
+      // other values in this codebase are "consignment", "member_wtb"
+      // and "order"). So on the default "All Inventory" filter every KC
+      // unit was dropped here, and hasMatchingKcOwnedSource below — a
+      // .some() that would have matched, since "kc_owned".includes("kc")
+      // is true — never saw one. Net effect: no KC Accept/Deny embed was
+      // ever sent from this endpoint on All Inventory, while the B2B and
+      // Margin branches above filter on VAT type and did work.
+      return ["kc_owned", "consignment"].includes(sourceType);
     });
 
     const product =
@@ -25839,9 +25883,19 @@ app.post("/api/buying/offers", async (req, res) => {
 
     const imageUrl = asText(product.image_url);
 
+    // FIXED — was a hardcoded "- 10". The Member WTB does not exist yet
+    // at this point (it is created a few lines down with this very
+    // value), so there is no "Offer Margin" field to read: the margin
+    // has to be DECIDED here. Per the F2 decision — margin comes from
+    // Offer Margin, default 10, snapshotted per deal at creation — the
+    // default now comes from the one helper that owns it, and the same
+    // number is written onto the new record below so the snapshot and
+    // the subtraction can never drift apart.
+    const marginForNewWtb = getMemberWtbMargin();
+
     const currentLowestSourcePrice = Math.max(
       0,
-      Math.round(offerPrice - 10)
+      Math.round(offerPrice - marginForNewWtb)
     );
 
     const internalNotes = [
@@ -25861,6 +25915,11 @@ app.post("/api/buying/offers", async (req, res) => {
       "Date": new Date().toISOString(),
 
       "Max Price": offerPrice,
+      // NEW — this block never wrote "Offer Margin", so the field stayed
+      // blank and every reader silently fell back to 10. Writing the
+      // same value the budget above was derived from makes the snapshot
+      // explicit and matches what the other creation block already does.
+      "Offer Margin": marginForNewWtb,
       "Current Lowest Source Price": currentLowestSourcePrice,
       "Fulfillment Status": "Outsource",
       "Purchase Status": "Offers Sent",
