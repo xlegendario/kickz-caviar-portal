@@ -17,6 +17,7 @@ import {
 
 import {
   asText,
+  memberWtbBuyerInvoiceAmount,
   calculateCounterPayoutForVatType,
   calculateMemberWtbBuyerEquivalent,
   calculateMemberWtbSellerPayout,
@@ -2727,7 +2728,8 @@ async function confirmConsignmentOffer(offerId) {
     const finalBuyingPrice = getMemberWtbNetSalePrice(
       maxPrice,
       vatType,
-      memberFields["Buying Inventory Filter"]
+      memberFields["Buying Inventory Filter"],
+      memberFields["Buyer VAT Rate"]
     );
 
     const memberWtbId =
@@ -5131,7 +5133,8 @@ function bindConsignmentDiscordButtons(client) {
       const finalBuyingPrice = getMemberWtbNetSalePrice(
         maxPrice,
         vatType,
-        f["Buying Inventory Filter"]
+        f["Buying Inventory Filter"],
+        f["Buyer VAT Rate"]
       );
       const inventoryStatus = asText(inventoryUnit.fields?.["Availability Status"]);
     
@@ -5248,19 +5251,11 @@ function bindConsignmentDiscordButtons(client) {
       const size = asText(f["Size"]);
       const maxPrice = Number(f["Max Price"] || 0);
     
-      const availableInventoryUnits = await airtable(INVENTORY_UNITS_TABLE)
-        .select({
-          filterByFormula: `AND(
-            {SKU} = "${sku}",
-            {Size} = "${size}",
-            {Availability Status} = "Available"
-          )`,
-          maxRecords: 1
-        })
-        .firstPage();
-    
-      const inventoryUnit = availableInventoryUnits[0];
-    
+      // Shared with the offer embed — see findAvailableKcUnitForMemberWtb,
+      // so the unit priced in the embed and the unit booked here are
+      // chosen by the same rule.
+      const inventoryUnit = await findAvailableKcUnitForMemberWtb(sku, size);
+
       if (!inventoryUnit) {
         await safeEditInteractionMessage(interaction, {
           content: "❌ No available KC stock found for this SKU / size.",
@@ -5275,7 +5270,8 @@ function bindConsignmentDiscordButtons(client) {
       const finalBuyingPrice = getMemberWtbNetSalePrice(
         maxPrice,
         vatType,
-        f["Buying Inventory Filter"]
+        f["Buying Inventory Filter"],
+        f["Buyer VAT Rate"]
       );
 
       await airtable(INVENTORY_UNITS_TABLE).update(inventoryUnit.id, {
@@ -23889,6 +23885,35 @@ async function sendBuyingKcConfirmationRequest({ memberWtbRecordId, fields }) {
   };
 }
 
+// NEW — the one place that decides WHICH KC unit a Member WTB is priced
+// against. The offer embed and the Accept handler both call this, so the
+// amount shown and the amount booked come from the same unit under the
+// same rule instead of two look-ups that could drift apart.
+//
+// Takes the first available unit for the SKU/size, which is what the
+// Accept handler already did. No sort: if several units match, Airtable's
+// order decides — worth knowing when one SKU/size has units with
+// different VAT types.
+async function findAvailableKcUnitForMemberWtb(sku, size) {
+  const cleanSku = asText(sku);
+  const cleanSize = asText(size);
+
+  if (!cleanSku || !cleanSize) return null;
+
+  const rows = await airtable(INVENTORY_UNITS_TABLE)
+    .select({
+      filterByFormula: `AND(
+        {SKU} = "${cleanSku}",
+        {Size} = "${cleanSize}",
+        {Availability Status} = "Available"
+      )`,
+      maxRecords: 1
+    })
+    .firstPage();
+
+  return rows[0] || null;
+}
+
 async function sendBuyingKcOfferRequest({ memberWtbRecordId, fields }) {
   if (!BUYING_KC_OFFER_REQUESTS_CHANNEL_ID) {
     console.warn("Skipping KC offer request: missing BUYING_KC_OFFER_REQUESTS_CHANNEL_ID");
@@ -23903,6 +23928,52 @@ async function sendBuyingKcOfferRequest({ memberWtbRecordId, fields }) {
 
   const maxPrice = Number(fields["Max Price"] || 0);
 
+  // NEW — the raw "Buyer Offer" alone is misleading: what we actually
+  // receive depends on the buyer. A reverse-charge buyer is billed
+  // VAT-free, a Dutch buyer pays the same net amount plus 21%. Both are
+  // derived from the SAME functions the Accept handler uses — the unit
+  // via findAvailableKcUnitForMemberWtb, the net price via
+  // getMemberWtbNetSalePrice, the label via memberWtbBuyerFacingVatType —
+  // so the embed can never quote a figure the accept then contradicts.
+  const pricedUnit = await findAvailableKcUnitForMemberWtb(
+    fields["SKU"],
+    fields["Size"]
+  );
+
+  const pricedVatType = asText(pricedUnit?.fields?.["VAT Type"]);
+
+  // "Buyer VAT Rate" is a LOOKUP through Buyer Seller ID, so it only
+  // exists on a fetched record — the caller passes the object it handed
+  // to .create(), which has none of the computed fields. Re-read here,
+  // and fall back to the passed object so a caller that already supplies
+  // a fetched record keeps working.
+  const liveRecord = await airtable(MEMBER_WTBS_TABLE)
+    .find(memberWtbRecordId)
+    .catch(() => null);
+
+  const liveFields = liveRecord?.fields || fields;
+
+  const netToUs = pricedVatType
+    ? getMemberWtbNetSalePrice(
+        maxPrice,
+        pricedVatType,
+        fields["Buying Inventory Filter"],
+        liveFields["Buyer VAT Rate"]
+      )
+    : 0;
+
+  const buyerPays = netToUs
+    ? memberWtbBuyerInvoiceAmount(netToUs, pricedVatType, liveFields)
+    : 0;
+
+  const buyerVatLabel = pricedVatType
+    ? memberWtbBuyerFacingVatType(pricedVatType, liveFields)
+    : "";
+
+  const weReceiveLine = buyerPays
+    ? `**We receive:** €${buyerPays.toFixed(2)} (${buyerVatLabel})`
+    : `**We receive:** — (no available KC unit found)`;
+
   const message = await channel.send({
     embeds: [{
       title: "🟡 KC Buying Offer Received",
@@ -23913,6 +23984,7 @@ async function sendBuyingKcOfferRequest({ memberWtbRecordId, fields }) {
         `**Size:** ${asText(fields["Size"]) || "—"}`,
         `**Brand:** ${asText(fields["Brand"]) || "—"}`,
         `**Buyer Offer:** €${maxPrice.toFixed(2)}`,
+        weReceiveLine,
         `**Inventory Filter:** ${asText(fields["Buying Inventory Filter"]) || "—"}`,
         "",
         "Accept only if KC wants to fulfill this Member WTB at this price."
@@ -24378,7 +24450,8 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       finalBuyingPrice = getMemberWtbNetSalePrice(
         maxPrice,
         vatType,
-        memberFields["Buying Inventory Filter"]
+        memberFields["Buying Inventory Filter"],
+        memberFields["Buyer VAT Rate"]
       );
     }
 
