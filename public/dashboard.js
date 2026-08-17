@@ -819,6 +819,7 @@ const buyingOpenWtbColumns = [
   "SKU",
   "Size",
   "Brand",
+  "Filter",
   "Max Price",
   "Current Lowest",
   "VAT Type",
@@ -1338,6 +1339,7 @@ function renderBuyingOpenWtbRows(items) {
       <td>${escapeHtml(item.sku || "-")}</td>
       <td>${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.inventory_filter || "-")}</td>
       <td>${escapeHtml(item.max_price || "-")}</td>
       <td>${escapeHtml(item.current_lowest || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
