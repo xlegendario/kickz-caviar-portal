@@ -2727,8 +2727,7 @@ async function confirmConsignmentOffer(offerId) {
     const finalBuyingPrice = getMemberWtbNetSalePrice(
       maxPrice,
       vatType,
-      memberFields["Buying Inventory Filter"],
-      memberFields
+      memberFields["Buying Inventory Filter"]
     );
 
     const memberWtbId =
@@ -5132,8 +5131,7 @@ function bindConsignmentDiscordButtons(client) {
       const finalBuyingPrice = getMemberWtbNetSalePrice(
         maxPrice,
         vatType,
-        f["Buying Inventory Filter"],
-        f
+        f["Buying Inventory Filter"]
       );
       const inventoryStatus = asText(inventoryUnit.fields?.["Availability Status"]);
     
@@ -5277,8 +5275,7 @@ function bindConsignmentDiscordButtons(client) {
       const finalBuyingPrice = getMemberWtbNetSalePrice(
         maxPrice,
         vatType,
-        f["Buying Inventory Filter"],
-        f
+        f["Buying Inventory Filter"]
       );
 
       await airtable(INVENTORY_UNITS_TABLE).update(inventoryUnit.id, {
@@ -24381,8 +24378,7 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       finalBuyingPrice = getMemberWtbNetSalePrice(
         maxPrice,
         vatType,
-        memberFields["Buying Inventory Filter"],
-        memberFields
+        memberFields["Buying Inventory Filter"]
       );
     }
 
