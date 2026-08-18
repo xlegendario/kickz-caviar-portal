@@ -21970,8 +21970,16 @@ app.get("/api/dashboard/counts", async (req, res) => {
         // NEW — one warning counter per tab, not just Delivered. A trusted
         // buyer keeps moving through every status while unpaid, so the
         // signal has to sit on whichever tab the deal is actually in.
+        //
+        // Accepted is deliberately excluded: at that point the deal is only
+        // waiting for the seller to press Process Deal, and no payment has
+        // been requested yet (handleMemberWtbPaymentGate runs inside
+        // process-seller-offer). Flagging it there would warn about money
+        // nobody has asked for.
         ...Object.fromEntries(
-          Object.keys(BUYING_TAB_FILTERS).map((tabKey) => [
+          Object.keys(BUYING_TAB_FILTERS)
+            .filter((tabKey) => tabKey !== "buying-accepted")
+            .map((tabKey) => [
             `${tabKey.replace("buying-", "").replace(/-/g, "_")}_payment_warning`,
             myBuyingRecords.filter(
               (record) =>
