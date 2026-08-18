@@ -3242,6 +3242,16 @@
   border: 1px solid transparent;
 }
 
+/* Outstanding-payment marker, shown in every Buying fulfilment tab. A
+   trusted buyer keeps shipping while unpaid, so this has to stay
+   visible in later statuses too, not just in Payment Required. */
+.dashboard-payment-warning {
+  margin-right: 6px;
+  font-size: 13px;
+  line-height: 1;
+  vertical-align: middle;
+}
+
 .dashboard-status-pill.dashboard-status-not-paid {
   background: rgba(231, 76, 60, 0.14);
   color: #ff7b7b;
