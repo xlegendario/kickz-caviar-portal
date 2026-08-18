@@ -868,7 +868,8 @@ const buyingAcceptedColumns = [
   "SKU",
   "Size",
   "Brand",
-  "Offer",
+  "Amount",
+  "VAT Type",
   "Status",
   "Payment",
   "Date",
@@ -882,6 +883,7 @@ const buyingPaymentRequiredColumns = [
   "Size",
   "Brand",
   "Amount",
+  "VAT Type",
   "Status",
   "Payment",
   "Date",
@@ -907,6 +909,7 @@ const buyingConfirmedColumns = [
   "Size",
   "Brand",
   "Amount",
+  "VAT Type",
   "Payment",
   "Status",
   "Date",
@@ -920,6 +923,7 @@ const buyingLabelRequestedColumns = [
   "Size",
   "Brand",
   "Amount",
+  "VAT Type",
   "Status",
   "Payment",
   "Date",
@@ -933,6 +937,7 @@ const buyingReadyToShipColumns = [
   "Size",
   "Brand",
   "Amount",
+  "VAT Type",
   "Tracking",
   "Status",
   "Payment",
@@ -947,6 +952,7 @@ const buyingShippedColumns = [
   "Size",
   "Brand",
   "Amount",
+  "VAT Type",
   "Status",
   "Payment",
   "Date",
@@ -960,6 +966,7 @@ const buyingDeliveredColumns = [
   "Size",
   "Brand",
   "Amount",
+  "VAT Type",
   "Status",
   "Payment",
   "Date",
@@ -1330,6 +1337,7 @@ function renderBuyingAcceptedRows(items) {
       <td>${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.offer || "-")}</td>
+      <td>${escapeHtml(item.vat_type || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-offer">Waiting for seller</span></td>
       ${renderBuyingPaymentCell(item)}
       <td>${escapeHtml(item.date || "-")}</td>
@@ -1478,6 +1486,7 @@ function renderBuyingPaymentRequiredRows(items) {
       <td>${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>
         ${
           item.waiting_for_mollie
@@ -1534,6 +1543,7 @@ function renderBuyingConfirmedRows(items) {
       <td>${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${escapeHtml(item.vat_type || "-")}</td>
       ${renderBuyingPaymentCell(item)}
       <td><span class="dashboard-status-pill dashboard-status-open">Confirmed</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
@@ -1576,6 +1586,7 @@ function renderBuyingLabelRequestedRows(items) {
       <td>${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${escapeHtml(item.vat_type || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-payment">Waiting for Label</span></td>
       ${renderBuyingPaymentCell(item)}
       <td>${escapeHtml(item.date || "-")}</td>
@@ -1629,6 +1640,7 @@ function renderBuyingReadyToShipRows(items) {
       <td>${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.tracking_number || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Ready to Ship</span></td>
       ${renderBuyingPaymentCell(item)}
@@ -1672,6 +1684,7 @@ function renderBuyingShippedRows(items) {
       <td>${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${escapeHtml(item.vat_type || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Shipped</span></td>
       ${renderBuyingPaymentCell(item)}
       <td>${escapeHtml(item.date || "-")}</td>
@@ -1729,6 +1742,7 @@ function renderBuyingDeliveredRows(items) {
       <td>${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>
         ${
           item.waiting_for_mollie
