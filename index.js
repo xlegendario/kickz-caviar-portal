@@ -9105,12 +9105,13 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
     // FIXED — same formula bug as elsewhere: FIND(recordId,
     // ARRAYJOIN({Order})) never matches a raw record ID, only display
     // text. Matching the Order link by raw ID in JavaScript instead.
+    // FIXED — same widening as closeCompetingCountersForOrder: rounds that
+    // were already closed earlier in the negotiation kept a live embed,
+    // because this only selected Open ones. Status is still only written
+    // for those genuinely still Open.
     const openCountersForStoreAcceptMatch = await airtable(COUNTER_OFFERS_TABLE)
       .select({
-        filterByFormula: `AND(
-          {Status} = 'Open',
-          RECORD_ID() != '${counterOfferRecordId}'
-        )`
+        filterByFormula: `RECORD_ID() != '${counterOfferRecordId}'`
       })
       .all();
 
@@ -9119,10 +9120,12 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
     );
 
     for (const competing of competingCounters) {
-      await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
-        "Status": "Closed",
-        "Closed At": new Date().toISOString()
-      });
+      if (asText(competing.fields?.["Status"]) === "Open") {
+        await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
+          "Status": "Closed",
+          "Closed At": new Date().toISOString()
+        });
+      }
 
       const cf = competing.fields || {};
       const channelId = asText(cf["Discord Channel ID"]);
@@ -16743,12 +16746,21 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
 });
 // ---------------------------------------------------------------------
 async function closeCompetingCountersForOrder(orderRecordId, acceptedCounterOfferRecordId) {
+  // FIXED — this only ever looked at rounds still Open, so a round that
+  // had already been closed earlier in the negotiation — typically by the
+  // seller's OWN later counter — never had its embed touched. It kept
+  // showing "You countered… waiting on the buyer" with working buttons
+  // long after the order had gone to a different seller. Confirmed live on
+  // ORD-019780: CTO-000535 closed at 16:11 by Gerard's own counter, the
+  // sweep ran at 16:12, and that DM stayed active.
+  //
+  // Now every other round on the order is swept. The Status write stays
+  // limited to rounds that are genuinely still Open, so no "Closed At"
+  // gets restamped. Clicking a stale button was already refused by the
+  // order-status guard — this is about not showing it at all.
   const openCountersForOrderMatch = await airtable(COUNTER_OFFERS_TABLE)
     .select({
-      filterByFormula: `AND(
-        {Status} = 'Open',
-        RECORD_ID() != '${acceptedCounterOfferRecordId}'
-      )`
+      filterByFormula: `RECORD_ID() != '${acceptedCounterOfferRecordId}'`
     })
     .all();
 
@@ -16757,10 +16769,12 @@ async function closeCompetingCountersForOrder(orderRecordId, acceptedCounterOffe
   );
 
   for (const competing of competingCounters) {
-    await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
-      "Status": "Closed",
-      "Closed At": new Date().toISOString()
-    });
+    if (asText(competing.fields?.["Status"]) === "Open") {
+      await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
+        "Status": "Closed",
+        "Closed At": new Date().toISOString()
+      });
+    }
 
     const cf = competing.fields || {};
     const channelId = asText(cf["Discord Channel ID"]);
