@@ -813,6 +813,27 @@ function bindConsignmentInputCleaning() {
   });
 }
 
+// A trusted buyer's deal proceeds without payment on purpose, so "not
+// settled yet" has to stay visible in EVERY fulfilment tab — otherwise the
+// only signal is a Discord DM that scrolls away. The Mollie link lives on
+// the Member WTB record, so the Pay action is available from any status.
+function renderBuyingPaymentCell(item) {
+  if (!item.requires_payment) {
+    return `<td><span class="dashboard-status-pill dashboard-status-open">Paid</span></td>`;
+  }
+
+  // No Pay button here on purpose: renderBuyingPaymentAction already renders
+  // one in the Action column of every tab, and two buttons for the same
+  // Mollie link is how they drift apart. This cell is purely the signal
+  // that something is still owed.
+  const label = item.waiting_for_mollie ? "Waiting for Mollie" : "Not Paid";
+
+  return `<td>
+    <span class="dashboard-payment-warning" title="Payment outstanding">⚠️</span>
+    <span class="dashboard-status-pill dashboard-status-not-paid">${label}</span>
+  </td>`;
+}
+
 const buyingOpenWtbColumns = [
   "WTB ID",
   "Product",
@@ -849,7 +870,9 @@ const buyingAcceptedColumns = [
   "Brand",
   "Offer",
   "Status",
-  "Date"
+  "Payment",
+  "Date",
+  "Action"
 ];
 
 const buyingPaymentRequiredColumns = [
@@ -860,6 +883,7 @@ const buyingPaymentRequiredColumns = [
   "Brand",
   "Amount",
   "Status",
+  "Payment",
   "Date",
   "Action"
 ];
@@ -897,6 +921,7 @@ const buyingLabelRequestedColumns = [
   "Brand",
   "Amount",
   "Status",
+  "Payment",
   "Date",
   "Action"
 ];
@@ -910,6 +935,7 @@ const buyingReadyToShipColumns = [
   "Amount",
   "Tracking",
   "Status",
+  "Payment",
   "Date",
   "Action"
 ];
@@ -922,6 +948,7 @@ const buyingShippedColumns = [
   "Brand",
   "Amount",
   "Status",
+  "Payment",
   "Date",
   "Action"
 ];
@@ -934,6 +961,7 @@ const buyingDeliveredColumns = [
   "Brand",
   "Amount",
   "Status",
+  "Payment",
   "Date",
   "Action"
 ];
@@ -1303,7 +1331,11 @@ function renderBuyingAcceptedRows(items) {
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.offer || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-offer">Waiting for seller</span></td>
+      ${renderBuyingPaymentCell(item)}
       <td>${escapeHtml(item.date || "-")}</td>
+      <td>
+        ${renderBuyingPaymentAction(item) || "-"}
+      </td>
     </tr>
   `).join("");
 }
@@ -1461,6 +1493,7 @@ function renderBuyingPaymentRequiredRows(items) {
             `
         }
       </td>
+      ${renderBuyingPaymentCell(item)}
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
         ${renderBuyingPaymentAction(item) || "-"}
@@ -1501,7 +1534,7 @@ function renderBuyingConfirmedRows(items) {
       <td>${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
-      <td>${escapeHtml(item.payment_status || "-")}</td>
+      ${renderBuyingPaymentCell(item)}
       <td><span class="dashboard-status-pill dashboard-status-open">Confirmed</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
@@ -1544,6 +1577,7 @@ function renderBuyingLabelRequestedRows(items) {
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-payment">Waiting for Label</span></td>
+      ${renderBuyingPaymentCell(item)}
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
         <div class="dashboard-action-row">
@@ -1597,6 +1631,7 @@ function renderBuyingReadyToShipRows(items) {
       <td>${escapeHtml(item.amount || "-")}</td>
       <td>${escapeHtml(item.tracking_number || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Ready to Ship</span></td>
+      ${renderBuyingPaymentCell(item)}
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
         ${renderBuyingPaymentAction(item) || "-"}
@@ -1638,6 +1673,7 @@ function renderBuyingShippedRows(items) {
       <td>${escapeHtml(item.brand || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Shipped</span></td>
+      ${renderBuyingPaymentCell(item)}
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
         <div class="dashboard-action-row">
@@ -1708,6 +1744,7 @@ function renderBuyingDeliveredRows(items) {
                 </span>`
         }
       </td>
+      ${renderBuyingPaymentCell(item)}
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
         <div class="dashboard-action-row">
