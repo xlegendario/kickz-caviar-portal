@@ -220,10 +220,11 @@ function renderSubnav() {
     wrap.innerHTML = config.tabs.map((tab) => {
       const count = Number(dashboardCountsCache?.[section]?.[tab.key] || 0);
 
+      // Warning on ANY buying tab holding an unpaid deal, not just
+      // Delivered — a trusted buyer proceeds unpaid through every status.
       const showWarning =
         section === "buying" &&
-        tab.key === "delivered" &&
-        Number(dashboardCountsCache?.buying?.delivered_payment_warning || 0) > 0;
+        Number(dashboardCountsCache?.buying?.[`${tab.key}_payment_warning`] || 0) > 0;
 
       return `
         <button class="dashboard-subnav-btn" type="button" data-section="${section}" data-tab="${tab.key}">
@@ -458,7 +459,10 @@ async function loadDashboardCounts() {
 
   Object.entries(dashboardCountsCache).forEach(([section, counts]) => {
     const total = Object.entries(counts || {})
-      .filter(([key]) => key !== "delivered_payment_warning")
+      // Every buying tab now carries its own "<tab>_payment_warning"
+      // counter, and none of them are rows — they would inflate the
+      // section total if summed.
+      .filter(([key]) => !key.endsWith("_payment_warning"))
       .reduce((sum, [, value]) => sum + Number(value || 0), 0);
 
     document.querySelectorAll(`[data-count-group="${section}"]`)
@@ -828,10 +832,9 @@ function renderBuyingPaymentCell(item) {
   // that something is still owed.
   const label = item.waiting_for_mollie ? "Waiting for Mollie" : "Not Paid";
 
-  return `<td>
-    <span class="dashboard-payment-warning" title="Payment outstanding">⚠️</span>
-    <span class="dashboard-status-pill dashboard-status-not-paid">${label}</span>
-  </td>`;
+  // The warning triangle lives on the tab badge (see renderSubnav), so this
+  // cell only carries the status itself.
+  return `<td><span class="dashboard-status-pill dashboard-status-not-paid">${label}</span></td>`;
 }
 
 const buyingOpenWtbColumns = [
