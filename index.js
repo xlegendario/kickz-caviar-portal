@@ -19322,25 +19322,178 @@ app.get("/api/dashboard/quick-delivered", async (req, res) => {
   }
 });
 
-// PLACEHOLDER endpoints — the buyer-side (Buying) fulfillment tabs
-// (Accepted → Payment Required → Confirmed → Label Requested → Ready
-// to Ship → Shipped → Delivered) are not built yet. The frontend
-// already calls them; without these routes Express 404s with an HTML
-// page and the frontend's response.json() throws "Unexpected token
-// '<'", breaking the whole Buying section. These return an empty,
-// well-formed payload so the tabs render "no items" cleanly. Replace
-// with the real fulfillment logic when that pipeline is built.
-for (const _buyingStubPath of [
-  "buying-accepted",
-  "buying-payment-required",
-  "buying-confirmed",
-  "buying-label-requested",
-  "buying-ready-to-ship",
-  "buying-shipped",
-  "buying-delivered"
-]) {
-  app.get(`/api/dashboard/${_buyingStubPath}`, async (req, res) => {
-    res.json({ count: 0, items: [] });
+// The buyer-side (Buying) fulfillment tabs. These were placeholder
+// endpoints returning { count: 0, items: [] } — the frontend called them
+// and the badge counts in /api/dashboard/counts were already implemented,
+// so every tab showed a number above an empty list. From the moment a
+// buyer accepted an offer the deal vanished from their portal entirely.
+//
+// ONE definition of what each tab means, used by BOTH the list endpoints
+// below and /api/dashboard/counts. Four copies of a supersede sweep
+// drifting apart is exactly the bug class this audit is about, so the
+// predicates live here and nowhere else.
+//
+// On "trusted": the flag is NOT the unused `Payment Status` = 'Trusted'
+// option but the `Trusted Buyer?` checkbox on the buyer's Sellers
+// Database record (see handleMemberWtbPaymentGate). A Mollie request is
+// always created, but for a trusted buyer payment confirmation does not
+// block the deal — so their Payment Status legitimately stays on
+// "Awaiting Payment" while fulfilment moves on. Without the trusted test
+// below they would sit in Payment Required forever.
+const BUYING_TAB_FILTERS = {
+  "buying-accepted": ({ fulfillment }) => fulfillment === "Confirmed",
+
+  "buying-payment-required": ({ fulfillment, payment, trusted }) =>
+    fulfillment === "Allocated" &&
+    !trusted &&
+    (payment === "Awaiting Payment" || payment === "Pending Payment"),
+
+  "buying-confirmed": ({ fulfillment, payment, trusted }) =>
+    fulfillment === "Allocated" &&
+    (payment === "Paid" || payment === "Trusted" || trusted),
+
+  "buying-label-requested": ({ fulfillment }) => fulfillment === "Requested Label",
+
+  "buying-ready-to-ship": ({ fulfillment }) => fulfillment === "Ready to Ship",
+
+  "buying-shipped": ({ shipping }) => shipping === "Shipped",
+
+  "buying-delivered": ({ shipping }) => shipping === "Delivered"
+};
+
+function buyingTabStateFor(fields, trusted) {
+  return {
+    fulfillment: asText(fields["Fulfillment Status"]),
+    payment: asText(fields["Payment Status"]),
+    shipping: asText(fields["Shipping Status"]),
+    trusted
+  };
+}
+
+// A trusted buyer's deal proceeds unpaid, which is intended — but they
+// still owe the money, and without a marker nothing on screen says so.
+// Anything not settled counts as outstanding, in every tab.
+function buyingPaymentOutstanding(fields) {
+  const payment = asText(fields["Payment Status"]);
+  return payment !== "Paid" && payment !== "Trusted";
+}
+
+async function isTrustedBuyer(sellerRecordId) {
+  const buyer = await airtable(SELLERS_TABLE)
+    .find(sellerRecordId)
+    .catch(() => null);
+
+  return buyer?.fields?.["Trusted Buyer?"] === true;
+}
+
+const BUYING_TAB_FIELDS = [
+  "Buyer Seller ID",
+  "Member WTB ID",
+  "Product Name",
+  "SKU",
+  "Size",
+  "Brand",
+  "Buying Inventory Filter",
+  "Date",
+  "Fulfillment Status",
+  "Payment Status",
+  "Shipping Status",
+  "Final Buying Price",
+  "Invoice Price",
+  "VAT Type",
+  "Payment Link",
+  "Tracking Number",
+  "Tracking URL",
+  "Label Requested At",
+  "Current Lowest Seller ID"
+];
+
+async function loadBuyingTabItems(tabKey, sellerRecordId) {
+  const matches = BUYING_TAB_FILTERS[tabKey];
+  if (!matches) return [];
+
+  const [trusted, records] = await Promise.all([
+    isTrustedBuyer(sellerRecordId),
+    airtable(MEMBER_WTBS_TABLE).select({ fields: BUYING_TAB_FIELDS }).all()
+  ]);
+
+  return records
+    .filter((record) =>
+      linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
+    )
+    .filter((record) => matches(buyingTabStateFor(record.fields || {}, trusted)))
+    .map((record) => {
+      const f = record.fields || {};
+
+      return {
+        id: record.id,
+        member_wtb_record_id: record.id,
+        order_id: displayValue(f["Member WTB ID"]),
+        product: displayValue(f["Product Name"]),
+        sku: displayValue(f["SKU"]),
+        size: displayValue(f["Size"]),
+        brand: displayValue(f["Brand"]),
+        inventory_filter: displayValue(f["Buying Inventory Filter"]),
+
+        // The renderers in public/dashboard.js were written long before
+        // these endpoints existed and already expect this exact shape
+        // (offer / amount / label_url / requires_payment /
+        // waiting_for_mollie), so the names below match them rather than
+        // making seven renderers change.
+        //
+        // Both money columns show the INVOICE amount — what the buyer
+        // actually pays, including VAT where it applies. "Final Buying
+        // Price" is the bare figure and would understate it by 21% for a
+        // non-reverse-charge buyer.
+        offer: moneySmartValue(numberValue(f["Invoice Price"])),
+        amount: moneySmartValue(numberValue(f["Invoice Price"])),
+        final_buying_price: moneySmartValue(numberValue(f["Final Buying Price"])),
+        vat_type: displayValue(f["VAT Type"]) || "-",
+        seller: displayValue(f["Current Lowest Seller ID"]) || "-",
+
+        payment_status: displayValue(f["Payment Status"]) || "-",
+        requires_payment: buyingPaymentOutstanding(f),
+        waiting_for_mollie: asText(f["Payment Status"]) === "Pending Payment",
+        payment_link: asText(f["Payment Link"]) || "",
+        trusted_buyer: trusted,
+
+        // Built the same way sendMemberWtbLabelRequestToBuyer builds it, so
+        // the buyer can upload from the Portal instead of only from the DM.
+        label_url: `${APP_PUBLIC_BASE_URL}/member-wtb-label-request.html?member_wtb_id=${encodeURIComponent(record.id)}`,
+        label_requested_at: formatDateEU(f["Label Requested At"]),
+
+        tracking_number: asText(f["Tracking Number"]) || "",
+        tracking_url: asText(f["Tracking URL"]) || "",
+
+        date: formatDateEU(f["Date"]),
+        raw_date: f["Date"]
+      };
+    });
+}
+
+for (const _buyingTabPath of Object.keys(BUYING_TAB_FILTERS)) {
+  app.get(`/api/dashboard/${_buyingTabPath}`, async (req, res) => {
+    try {
+      const sellerRecordId = asText(req.query.seller_record_id);
+
+      if (!sellerRecordId) {
+        return res.status(400).json({ error: "Missing seller_record_id" });
+      }
+
+      const items = await loadBuyingTabItems(_buyingTabPath, sellerRecordId);
+
+      res.json({
+        count: items.length,
+        items: sortDashboardItemsNewestFirst(items)
+      });
+    } catch (err) {
+      console.error(`Failed to load ${_buyingTabPath}:`, err);
+
+      res.status(500).json({
+        error: `Failed to load ${_buyingTabPath}`,
+        details: err.message
+      });
+    }
   });
 }
 
@@ -21663,39 +21816,33 @@ app.get("/api/dashboard/counts", async (req, res) => {
       );
     }).length;
     
-    const buyingAcceptedCount = myBuyingRecords.filter((record) =>
-      asText(record.fields?.["Fulfillment Status"]) === "Confirmed"
-    ).length;
-    
-    const buyingPaymentRequiredCount = myBuyingRecords.filter((record) =>
-      asText(record.fields?.["Payment Status"]) === "Requested"
-    ).length;
-    
-    const buyingConfirmedCount = myBuyingRecords.filter((record) => {
-      const paymentStatus = asText(record.fields?.["Payment Status"]);
-      const fulfillmentStatus = asText(record.fields?.["Fulfillment Status"]);
-    
-      return (
-        (paymentStatus === "Paid" || paymentStatus === "Trusted") &&
-        fulfillmentStatus === "Allocated"
-      );
-    }).length;
-    
-    const buyingLabelRequestedCount = myBuyingRecords.filter((record) =>
-      asText(record.fields?.["Fulfillment Status"]) === "Requested Label"
-    ).length;
-    
-    const buyingReadyToShipCount = myBuyingRecords.filter((record) =>
-      asText(record.fields?.["Fulfillment Status"]) === "Ready to Ship"
-    ).length;
-    
-    const buyingShippedCount = myBuyingRecords.filter((record) =>
-      asText(record.fields?.["Shipping Status"]) === "Shipped"
-    ).length;
-    
-    const buyingDeliveredCount = myBuyingRecords.filter((record) =>
-      asText(record.fields?.["Shipping Status"]) === "Delivered"
-    ).length;
+    // FIXED — these seven counts each carried their own copy of the tab
+    // criteria while the list endpoints were placeholders, so nothing kept
+    // them honest. Two had already drifted from what the code actually
+    // writes: Payment Required tested `Payment Status = 'Requested'`, a
+    // value no service ever writes (the gate writes "Awaiting Payment"),
+    // so that badge could only ever read 0. And neither knew about the
+    // `Trusted Buyer?` flag, which lets a deal proceed unpaid — a trusted
+    // buyer would have counted as Payment Required forever.
+    //
+    // They now read the single definition in BUYING_TAB_FILTERS that the
+    // list endpoints use, so a badge cannot disagree with the list under it.
+    const buyingTrustedBuyer = await isTrustedBuyer(sellerRecordId);
+
+    const buyingTabCount = (tabKey) =>
+      myBuyingRecords.filter((record) =>
+        BUYING_TAB_FILTERS[tabKey](
+          buyingTabStateFor(record.fields || {}, buyingTrustedBuyer)
+        )
+      ).length;
+
+    const buyingAcceptedCount = buyingTabCount("buying-accepted");
+    const buyingPaymentRequiredCount = buyingTabCount("buying-payment-required");
+    const buyingConfirmedCount = buyingTabCount("buying-confirmed");
+    const buyingLabelRequestedCount = buyingTabCount("buying-label-requested");
+    const buyingReadyToShipCount = buyingTabCount("buying-ready-to-ship");
+    const buyingShippedCount = buyingTabCount("buying-shipped");
+    const buyingDeliveredCount = buyingTabCount("buying-delivered");
     
     const buyingDeliveredPaymentWarningCount = myBuyingRecords.filter((record) =>
       asText(record.fields?.["Shipping Status"]) === "Delivered" &&
