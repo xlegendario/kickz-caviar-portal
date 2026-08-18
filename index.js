@@ -19408,7 +19408,11 @@ const BUYING_TAB_FIELDS = [
   "Current Lowest Seller ID",
   "Offer Margin",
   "Buyer VAT ID",
-  "Buyer Country"
+  "Buyer Country",
+  "Current Lowest Offer",
+  "Current Lowest VAT Type",
+  "Lowest Offer",
+  "Lowest Offer VAT Type"
 ];
 
 async function loadBuyingTabItems(tabKey, sellerRecordId) {
@@ -19469,11 +19473,24 @@ async function loadBuyingTabItems(tabKey, sellerRecordId) {
     .map((record) => {
       const f = record.fields || {};
 
+      // Three sources, in order of authority. A buyer can accept a fresh
+      // offer without ever countering, and then there is no Counter Offer
+      // round at all — which is why the winning position on the WTB itself
+      // is the last resort rather than an afterthought.
       const accepted = acceptedAmountByWtb.get(record.id);
+
+      const sellerSide = accepted
+        || (numberValue(f["Current Lowest Offer"]) > 0
+              ? { payout: numberValue(f["Current Lowest Offer"]), vatType: displayValue(f["Current Lowest VAT Type"]) }
+              : null)
+        || (numberValue(f["Lowest Offer"]) > 0
+              ? { payout: numberValue(f["Lowest Offer"]), vatType: asText(f["Lowest Offer VAT Type"]) }
+              : null);
+
       const buyerAmount = numberValue(f["Invoice Price"]) > 0
         ? numberValue(f["Invoice Price"])
-        : (accepted
-            ? calculateMemberWtbBuyerEquivalent(accepted.payout, accepted.vatType, f)
+        : (sellerSide
+            ? calculateMemberWtbBuyerEquivalent(sellerSide.payout, sellerSide.vatType, f)
             : 0);
 
       return {
@@ -19505,7 +19522,7 @@ async function loadBuyingTabItems(tabKey, sellerRecordId) {
         // VAT21 otherwise — so it is derived the same way the Open WTBs
         // tab derives it, from whichever seller-side type is known.
         vat_type: (() => {
-          const sellerVat = accepted?.vatType || displayValue(f["VAT Type"]);
+          const sellerVat = sellerSide?.vatType || displayValue(f["VAT Type"]);
           return sellerVat ? memberWtbBuyerFacingVatType(sellerVat, f) : "-";
         })(),
         seller: displayValue(f["Current Lowest Seller ID"]) || "-",
@@ -21948,7 +21965,22 @@ app.get("/api/dashboard/counts", async (req, res) => {
         ready_to_ship: buyingReadyToShipCount,
         shipped: buyingShippedCount,
         delivered: buyingDeliveredCount,
-        delivered_payment_warning: buyingDeliveredPaymentWarningCount
+        delivered_payment_warning: buyingDeliveredPaymentWarningCount,
+
+        // NEW — one warning counter per tab, not just Delivered. A trusted
+        // buyer keeps moving through every status while unpaid, so the
+        // signal has to sit on whichever tab the deal is actually in.
+        ...Object.fromEntries(
+          Object.keys(BUYING_TAB_FILTERS).map((tabKey) => [
+            `${tabKey.replace("buying-", "").replace(/-/g, "_")}_payment_warning`,
+            myBuyingRecords.filter(
+              (record) =>
+                BUYING_TAB_FILTERS[tabKey](
+                  buyingTabStateFor(record.fields || {}, buyingTrustedBuyer)
+                ) && buyingPaymentOutstanding(record.fields || {})
+            ).length
+          ])
+        )
       },
       
       history: {
