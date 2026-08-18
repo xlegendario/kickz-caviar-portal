@@ -9336,15 +9336,44 @@ app.post("/api/counter-offers/:id/store-retry-counter", async (req, res) => {
     const deniedSellerCounter = numberValue(f["Seller Counter Price"]);
     const priorRoundId = firstLinkedRecordId(f["Previous Record ID"]);
 
-    if (!priorRoundId) {
+    // NEW — additive only: this endpoint was written for the MIRRORED
+    // round shape — the seller counters, the store denies that counter —
+    // so it assumed both a "Seller Counter Price" and a parent round to
+    // measure the band against. The far more common case has neither: the
+    // STORE counters first and the SELLER denies it. Such a round carries
+    // "Store Counter Price" and has no parent, so an ordinary first-round
+    // deny dead-ended on "There's no prior position to retry against." —
+    // the Retry button was rendered in the Denied pill but could never
+    // work, leaving the store no way to come back with a better number.
+    //
+    // Identical band semantics, just read off THIS round instead of a
+    // parent: lower end = the store's own counter (which lives on this
+    // round), upper end = the seller's standing ask. Note the > 0 tests
+    // rather than Number.isFinite: numberValue returns 0 for a blank
+    // field, so an isFinite check can never catch a missing value.
+    const ownStoreCounter = numberValue(f["Store Counter Price"]);
+    const sellerOriginalForBand = numberValue(f["Seller Original Price"]);
+    const isFirstRoundRetry = !priorRoundId;
+
+    if (isFirstRoundRetry && !(ownStoreCounter > 0 && sellerOriginalForBand > 0)) {
       return res.status(409).json({ error: "There's no prior position to retry against." });
     }
 
-    const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId);
-    const priorFields = priorRound.fields || {};
-    const storeLastPosition = numberValue(priorFields["Store Counter Price"]);
+    let storeLastPosition;
+    if (isFirstRoundRetry) {
+      storeLastPosition = ownStoreCounter;
+    } else {
+      const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId);
+      const priorFields = priorRound.fields || {};
+      storeLastPosition = numberValue(priorFields["Store Counter Price"]);
+    }
 
-    if (!Number.isFinite(storeLastPosition) || !Number.isFinite(deniedSellerCounter)) {
+    // The seller's last real position: their denied counter when they made
+    // one, otherwise the ask they are still standing on.
+    const sellerPositionForBand =
+      deniedSellerCounter > 0 ? deniedSellerCounter : sellerOriginalForBand;
+
+    if (!(storeLastPosition > 0) || !(sellerPositionForBand > 0)) {
       return res.status(500).json({ error: "Missing price data to validate against." });
     }
 
@@ -9357,7 +9386,7 @@ app.post("/api/counter-offers/:id/store-retry-counter", async (req, res) => {
     const storeScaleDivisor = (!isDutchBuyer && respondingToVatSource) ? storeInputMultiplier(orderFields) : 1;
 
     const priorStorePriceInStoreScale = storeLastPosition / storeScaleDivisor;
-    const sellerCounterAsStoreSees = computeSellerCounterForStoreDisplay(deniedSellerCounter, sellerVatType, orderFields);
+    const sellerCounterAsStoreSees = computeSellerCounterForStoreDisplay(sellerPositionForBand, sellerVatType, orderFields);
 
     if (!Number.isFinite(sellerCounterAsStoreSees)) {
       return res.status(500).json({ error: "Could not compute margin conversion for this order." });
@@ -9392,7 +9421,9 @@ app.post("/api/counter-offers/:id/store-retry-counter", async (req, res) => {
       "Store Counter Price": proposedPrice,
       "Counter Payout": storeCounterPayout,
       "Counter Payout VAT Type": sellerVatType,
-      "Previous Record ID": priorRoundId,
+      // On a first-round retry there is no parent, so this new round
+      // descends from the denied round itself.
+      "Previous Record ID": priorRoundId || deniedRoundId,
       "Created At": new Date().toISOString(),
       "Status": "Open"
     });
@@ -9401,7 +9432,7 @@ app.post("/api/counter-offers/:id/store-retry-counter", async (req, res) => {
     // same DM path the main store-counter endpoint uses.
     const sellerDiscordId = asText(f["Seller Discord ID"]);
     if (sellerDiscordId) {
-      const sellerOwnPosition = deniedSellerCounter;
+      const sellerOwnPosition = sellerPositionForBand;
       const noRoomToCounter =
         Number.isFinite(sellerOwnPosition) &&
         Number.isFinite(storeCounterPayout) &&
