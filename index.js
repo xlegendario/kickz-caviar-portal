@@ -5887,7 +5887,6 @@ function bindConsignmentDiscordButtons(client) {
       const openCountersForOrderMatch = await airtable(COUNTER_OFFERS_TABLE)
         .select({
           filterByFormula: `AND(
-            {Status} = 'Open',
             RECORD_ID() != '${counterOfferRecordId}'
           )`
         })
@@ -5898,10 +5897,12 @@ function bindConsignmentDiscordButtons(client) {
       );
       
       for (const competing of competingCounters) {
-        await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
-          "Status": "Closed",
-          "Closed At": new Date().toISOString()
-        });
+        if (asText(competing.fields?.["Status"]) === "Open") {
+          await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
+            "Status": "Closed",
+            "Closed At": new Date().toISOString()
+          });
+        }
       
         const cf = competing.fields || {};
         const channelId = asText(cf["Discord Channel ID"]);
@@ -19917,7 +19918,6 @@ async function closeCompetingCountersForMemberWtb(memberWtbRecordId, acceptedCou
   const openCounters = await airtable(COUNTER_OFFERS_TABLE)
     .select({
       filterByFormula: `AND(
-        {Status} = 'Open',
         {Source Type} = 'Member WTB',
         RECORD_ID() != '${acceptedCounterOfferRecordId}'
       )`
@@ -19929,10 +19929,12 @@ async function closeCompetingCountersForMemberWtb(memberWtbRecordId, acceptedCou
   );
 
   for (const competing of competingCounters) {
-    await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
-      "Status": "Closed",
-      "Closed At": new Date().toISOString()
-    });
+    if (asText(competing.fields?.["Status"]) === "Open") {
+      await airtable(COUNTER_OFFERS_TABLE).update(competing.id, {
+        "Status": "Closed",
+        "Closed At": new Date().toISOString()
+      });
+    }
 
     const cf = competing.fields || {};
     const channelId = asText(cf["Discord Channel ID"]);
