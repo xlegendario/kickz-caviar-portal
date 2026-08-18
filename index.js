@@ -19405,7 +19405,10 @@ const BUYING_TAB_FIELDS = [
   "Tracking Number",
   "Tracking URL",
   "Label Requested At",
-  "Current Lowest Seller ID"
+  "Current Lowest Seller ID",
+  "Offer Margin",
+  "Buyer VAT ID",
+  "Buyer Country"
 ];
 
 async function loadBuyingTabItems(tabKey, sellerRecordId) {
@@ -19417,13 +19420,61 @@ async function loadBuyingTabItems(tabKey, sellerRecordId) {
     airtable(MEMBER_WTBS_TABLE).select({ fields: BUYING_TAB_FIELDS }).all()
   ]);
 
-  return records
+  const rows = records
     .filter((record) =>
       linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
     )
-    .filter((record) => matches(buyingTabStateFor(record.fields || {}, trusted)))
+    .filter((record) => matches(buyingTabStateFor(record.fields || {}, trusted)));
+
+  // "Final Buying Price" (and the "Invoice Price" formula over it) is only
+  // written by process-seller-offer, i.e. when Process Deal is pressed. In
+  // the Accepted tab that has by definition not happened yet, so both are
+  // blank and the amount column would read "-" on every row.
+  //
+  // The agreed figure does exist though: on the accepted Counter Offer
+  // round. Same source the seller-side tab reads, converted to what the
+  // BUYER pays rather than what the seller receives.
+  const acceptedAmountByWtb = new Map();
+  const needsAcceptedAmount = rows.some(
+    (record) => !(numberValue(record.fields?.["Invoice Price"]) > 0)
+  );
+
+  if (needsAcceptedAmount && rows.length) {
+    const wtbIds = new Set(rows.map((r) => r.id));
+
+    const acceptedRounds = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `{Status} = 'Accepted'`,
+        fields: ["Member WTB", "Counter Payout", "Counter Payout VAT Type", "Seller Counter Price"]
+      })
+      .all();
+
+    for (const round of acceptedRounds) {
+      const wtbId = firstLinkedRecordId(round.fields?.["Member WTB"]);
+      if (!wtbId || !wtbIds.has(wtbId)) continue;
+
+      const payout = numberValue(round.fields?.["Counter Payout"])
+        || numberValue(round.fields?.["Seller Counter Price"]);
+
+      if (payout > 0) {
+        acceptedAmountByWtb.set(wtbId, {
+          payout,
+          vatType: asText(round.fields?.["Counter Payout VAT Type"])
+        });
+      }
+    }
+  }
+
+  return rows
     .map((record) => {
       const f = record.fields || {};
+
+      const accepted = acceptedAmountByWtb.get(record.id);
+      const buyerAmount = numberValue(f["Invoice Price"]) > 0
+        ? numberValue(f["Invoice Price"])
+        : (accepted
+            ? calculateMemberWtbBuyerEquivalent(accepted.payout, accepted.vatType, f)
+            : 0);
 
       return {
         id: record.id,
@@ -19445,10 +19496,18 @@ async function loadBuyingTabItems(tabKey, sellerRecordId) {
         // actually pays, including VAT where it applies. "Final Buying
         // Price" is the bare figure and would understate it by 21% for a
         // non-reverse-charge buyer.
-        offer: moneySmartValue(numberValue(f["Invoice Price"])),
-        amount: moneySmartValue(numberValue(f["Invoice Price"])),
+        offer: buyerAmount > 0 ? moneySmartValue(buyerAmount) : "-",
+        amount: buyerAmount > 0 ? moneySmartValue(buyerAmount) : "-",
         final_buying_price: moneySmartValue(numberValue(f["Final Buying Price"])),
-        vat_type: displayValue(f["VAT Type"]) || "-",
+        // The unit's own VAT Type is the SELLER's and only exists once
+        // Process Deal has created the unit. What belongs on a buyer's
+        // screen is the buyer-facing label — VAT0 under reverse charge,
+        // VAT21 otherwise — so it is derived the same way the Open WTBs
+        // tab derives it, from whichever seller-side type is known.
+        vat_type: (() => {
+          const sellerVat = accepted?.vatType || displayValue(f["VAT Type"]);
+          return sellerVat ? memberWtbBuyerFacingVatType(sellerVat, f) : "-";
+        })(),
         seller: displayValue(f["Current Lowest Seller ID"]) || "-",
 
         payment_status: displayValue(f["Payment Status"]) || "-",
