@@ -16393,11 +16393,13 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
         })
         .all();
 
+      const referencedAsPrevId = new Set();
       const siblingsByPrevId = new Map();
       for (const r of allSellerRounds) {
         if (!myOrderIds.has(firstLinkedRecordId(r.fields?.["Order"]))) continue;
         const prevId = firstLinkedRecordId(r.fields?.["Previous Record ID"]);
         if (!prevId) continue;
+        referencedAsPrevId.add(prevId);
         if (!siblingsByPrevId.has(prevId)) siblingsByPrevId.set(prevId, []);
         siblingsByPrevId.get(prevId).push({
           id: r.id,
@@ -16409,6 +16411,17 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
         const f = record.fields || {};
         const ownPrevId = firstLinkedRecordId(f["Previous Record ID"]);
         const ownCreatedAt = displayValue(f["Created At"]);
+        // FIXED — the seller pill has excluded a denied round that has a
+        // CHILD (a round whose "Previous Record ID" points at it) since
+        // index.js:13579, but this pill only ever did the later-sibling
+        // check. His rule is that every old round is superseded once the
+        // negotiation continued from it — and continuing from a round
+        // makes a child, not a sibling. A denied round that the
+        // negotiation simply moved on past therefore lingered here
+        // forever, while the very same round was correctly hidden on the
+        // seller's screen. Same set, same test, same place in the filter.
+        if (referencedAsPrevId.has(record.id)) return false;
+
         if (!ownPrevId) return true;
         const siblings = siblingsByPrevId.get(ownPrevId) || [];
         const hasLaterSibling = siblings.some(
@@ -19472,10 +19485,12 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
           records.filter((r) => myMemberWtbIds.has(firstLinkedRecordId(r.fields?.["Member WTB"])))
         );
 
+      const referencedAsPrevId = new Set();
       const siblingsByPrevId = new Map();
       for (const r of allRoundsForMyWtbs) {
         const prevId = firstLinkedRecordId(r.fields?.["Previous Record ID"]);
         if (!prevId) continue;
+        referencedAsPrevId.add(prevId);
         if (!siblingsByPrevId.has(prevId)) siblingsByPrevId.set(prevId, []);
         siblingsByPrevId.get(prevId).push({
           id: r.id,
@@ -19487,6 +19502,17 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         const f = record.fields || {};
         const ownPrevId = firstLinkedRecordId(f["Previous Record ID"]);
         const ownCreatedAt = displayValue(f["Created At"]);
+
+        // FIXED — the seller pill has excluded a denied round that has a
+        // CHILD (a round whose "Previous Record ID" points at it) since
+        // index.js:13579, but this pill only ever did the later-sibling
+        // check. His rule is that every old round is superseded once the
+        // negotiation continued from it — and continuing from a round
+        // makes a child, not a sibling. A denied round that the
+        // negotiation simply moved on past therefore lingered here
+        // forever, while the very same round was correctly hidden on the
+        // seller's screen. Same set, same test, same place in the filter.
+        if (referencedAsPrevId.has(record.id)) return false;
 
         if (!ownPrevId) return true;
 
