@@ -767,15 +767,51 @@ async function sendConsignmentCounterOfferDiscordMessage({
 }
 
 async function disableCounterOfferDiscordButtons(channelId, messageId, note) {
+  // NEW — additive only: Discord only lets an application edit its OWN
+  // messages. Counter embeds posted into a STORE channel come from
+  // airtable-discord-updates (DISCORD_TOKEN); this service runs a different
+  // bot (KICKZ_DEAL_DISCORD_BOT_TOKEN), so message.edit() on those fails
+  // with 50005. Every caller wraps this in .catch(() => {}), so the failure
+  // was completely silent: the round went to Closed while its embed kept
+  // working buttons.
+  //
+  // Confirmed live on ORD-019780 — the portal-authored DMs were disabled
+  // correctly, the one posted into the store channel was not. Portal-owned
+  // messages still take the fast path below unchanged; only when this bot
+  // cannot reach or edit the message do we ask the owning service.
+  const delegateToOwner = async (reason) => {
+    try {
+      const res = await fetch(`${AIRTABLE_DISCORD_UPDATES_URL}/counter-offer/disable`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel_id: channelId, message_id: messageId, note })
+      });
+      if (!res.ok) {
+        console.error(
+          `Failed to disable counter-offer embed via updates service (${reason}): HTTP ${res.status}`
+        );
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error(
+        `Could not reach updates service to disable counter-offer embed (${reason}):`,
+        err.message
+      );
+      return false;
+    }
+  };
+
   await initKickzDealDiscord();
 
   const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
-  if (!channel) return false;
+  if (!channel) return delegateToOwner("channel not visible to this bot");
 
   const message = await channel.messages.fetch(messageId).catch(() => null);
-  if (!message) return false;
+  if (!message) return delegateToOwner("message not found");
 
-  await message.edit({
+  const edited = await message
+    .edit({
     content: note || message.content,
     embeds: message.embeds,
     components: [
@@ -799,9 +835,11 @@ async function disableCounterOfferDiscordButtons(channelId, messageId, note) {
         ]
       }
     ]
-  });
+  })
+    .then(() => true)
+    .catch((err) => delegateToOwner(`edit failed: ${err.message}`));
 
-  return true;
+  return edited;
 }
 
 // NEW — UNIVERSAL EMBED SUPERSEDING (his decisive simplification). Every
