@@ -3552,7 +3552,12 @@ async function loadDashboardData() {
     return;
   }
   
-  if (activeSection === "consignment") {
+  // FIXED — this catch-all sits BEFORE the unified Offers branch further
+  // down, so without excluding "offers" it swallowed that tab: an empty
+  // shell rendered, no fetch, and switching pills appeared to do nothing.
+  // The old consignment Offers branch used to sit above this line; moving
+  // the logic below it is what exposed this.
+  if (activeSection === "consignment" && activeTab !== "offers") {
     renderTableShell();
     return;
   }
