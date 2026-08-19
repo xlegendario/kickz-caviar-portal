@@ -563,6 +563,13 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
     seller: {
       seller_id: inventoryRow.seller_id,
       discord_id: asText(consignorRecord?.fields?.["Discord ID"]),
+      // Without this the deal update silently does nothing: the non-DM
+      // branch of sendConsignmentDealUpdateDiscordMessage reads exactly
+      // this field, logs "Skipping deal update" and returns null — so the
+      // consignor never gets his "Time To Ship Your Item!" embed with the
+      // Request Label button.
+      deal_updates_channel_id: asText(consignorRecord?.fields?.["Deal Updates Channel ID"]),
+      labels_channel_id: asText(consignorRecord?.fields?.["Labels Channel ID"]),
       consignment_offer_channel_id: asText(consignorRecord?.fields?.["Consignment Offer Channel ID"]),
       consignment_confirmation_channel_id: asText(consignorRecord?.fields?.["Consignment Confirmation Channel ID"])
     },
