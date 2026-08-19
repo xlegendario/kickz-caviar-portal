@@ -18684,6 +18684,116 @@ app.get("/api/dashboard/wtb-confirmed", async (req, res) => {
   }
 });
 
+// NEW — courier routing for the label-request embed.
+//
+// MIRRORS lojiq-wms-main's getSellerCountryCodeFromOrderFields /
+// getPreferredCourierForCountryCode, field for field including the
+// warehouse-seller list. A seller requesting a label from Discord goes
+// through the WMS and gets these values; requesting it from THIS portal
+// went through a second implementation that passed empty strings, so the
+// embed showed "—" for everyone using the portal route.
+//
+// Copied rather than shared because the two live in separate services.
+// Merging them into one is tracked in CONSIGNMENT-FLOW.md ("Na de
+// omschakeling", punt 5) — until then, a change to one belongs in both.
+const LABEL_REQUEST_ROUTING_TABLE =
+  process.env.AIRTABLE_LABEL_REQUEST_ROUTING_TABLE || "Label Request Routing";
+
+// These four ship from our own warehouse, so their label always routes as
+// if they were Dutch regardless of the country on their record.
+const WAREHOUSE_SELLER_CODES = ["SE-00309", "SE-00537", "SE-00781", "SE-00455"];
+
+function looksLikeAirtableRecordId(value) {
+  return /^rec[A-Za-z0-9]{14}$/.test(asText(value));
+}
+
+async function findSellerRecordBySellerCode(sellerCode) {
+  const code = asText(sellerCode).trim();
+
+  if (!code) return null;
+
+  const records = await airtable(SELLERS_TABLE)
+    .select({
+      fields: ["Seller ID", "Country Code"],
+      filterByFormula: `TRIM({Seller ID} & '') = '${escapeFormulaValue(code)}'`,
+      maxRecords: 1
+    })
+    .firstPage()
+    .catch(() => []);
+
+  return records.length ? records[0] : null;
+}
+
+async function getSellerCountryCodeForOrder(orderFields) {
+  // "Linked Seller ID" is a lookup that can hold either a record id or a
+  // seller code like SE-00001, so both shapes are handled.
+  const linkedSellerValues = Array.isArray(orderFields["Linked Seller ID"])
+    ? orderFields["Linked Seller ID"].map((value) => asText(value)).filter(Boolean)
+    : [];
+
+  if (linkedSellerValues.length) {
+    const linkedValue = asText(linkedSellerValues[0]).trim().toUpperCase();
+
+    if (WAREHOUSE_SELLER_CODES.includes(linkedValue)) return "NL";
+
+    const sellerRecord = looksLikeAirtableRecordId(linkedSellerValues[0])
+      ? await airtable(SELLERS_TABLE).find(linkedSellerValues[0]).catch(() => null)
+      : await findSellerRecordBySellerCode(linkedSellerValues[0]);
+
+    if (sellerRecord) {
+      const sellerCode = asText(sellerRecord.fields["Seller ID"]).trim().toUpperCase();
+
+      if (WAREHOUSE_SELLER_CODES.includes(sellerCode)) return "NL";
+
+      return asText(sellerRecord.fields["Country Code"]);
+    }
+  }
+
+  const claimedSellerRecordIds = Array.isArray(orderFields["Claimed Seller ID"])
+    ? orderFields["Claimed Seller ID"].map((value) => asText(value)).filter(Boolean)
+    : [];
+
+  if (!claimedSellerRecordIds.length) return "";
+
+  const claimedSeller = await airtable(SELLERS_TABLE)
+    .find(claimedSellerRecordIds[0])
+    .catch(() => null);
+
+  if (!claimedSeller) return "";
+
+  const claimedCode = asText(claimedSeller.fields["Seller ID"]).trim().toUpperCase();
+
+  if (WAREHOUSE_SELLER_CODES.includes(claimedCode)) return "NL";
+
+  return asText(claimedSeller.fields["Country Code"]);
+}
+
+async function getPreferredCourierForCountryCode(countryCode) {
+  const empty = { preferredCourier: "", instructionText: "" };
+  const safeCountryCode = escapeFormulaValue(countryCode);
+
+  if (!safeCountryCode) return empty;
+
+  const records = await airtable(LABEL_REQUEST_ROUTING_TABLE)
+    .select({
+      fields: ["Country Code", "Preferred Courier", "Instruction Text"],
+      filterByFormula: `TRIM({Country Code} & '') = '${safeCountryCode}'`,
+      maxRecords: 1
+    })
+    .firstPage()
+    .catch((err) => {
+      console.error("Failed to look up label request routing:", err);
+      return [];
+    });
+
+  if (!records.length) return empty;
+
+  return {
+    preferredCourier: asText(records[0].fields["Preferred Courier"]),
+    instructionText: asText(records[0].fields["Instruction Text"])
+  };
+}
+
 app.post("/api/dashboard/request-label", async (req, res) => {
   try {
     const orderRecordId = asText(req.body?.order_record_id);
@@ -18721,6 +18831,18 @@ app.post("/api/dashboard/request-label", async (req, res) => {
     const labelRequestUrl =
       `${LOJIQ_WMS_BASE_URL.replace(/\/$/, "")}/label-request.html?record_id=${encodeURIComponent(orderRecord.id)}`;
 
+    // Same three values the WMS resolves for a Discord-initiated request,
+    // including its fallback sentence when the routing row has a courier
+    // but no instruction text.
+    const sellerCountryCode = await getSellerCountryCodeForOrder(f);
+
+    const { preferredCourier, instructionText } =
+      await getPreferredCourierForCountryCode(sellerCountryCode);
+
+    const courierInstruction =
+      instructionText ||
+      (preferredCourier ? `Please provide a ${preferredCourier} label.` : "");
+
 
     const response = await fetch(
       `${DISCORD_BOT_BASE_URL.replace(/\/$/, "")}/post-label-request`,
@@ -18739,9 +18861,9 @@ app.post("/api/dashboard/request-label", async (req, res) => {
           size: displayValue(f["Size"]),
           store_name: displayValue(f["Store Name"]) || displayValue(mf["Store Name"]),
           label_request_url: labelRequestUrl,
-          seller_country_code: "",
-          preferred_courier: "",
-          courier_instruction: ""
+          seller_country_code: sellerCountryCode,
+          preferred_courier: preferredCourier,
+          courier_instruction: courierInstruction
         })
       }
     );
