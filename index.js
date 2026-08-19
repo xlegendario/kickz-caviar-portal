@@ -354,6 +354,271 @@ async function initKickzDealDiscord() {
   }
 }
 
+// NEW — remembers exactly WHICH message asked the consignor to confirm.
+// A consignor with private channels collects a lot of embeds, so the
+// portal links straight to this message instead of to the channel. The
+// same two IDs are what a later sweep needs to disable this embed if the
+// order goes to a regular seller instead.
+async function rememberConsignmentConfirmMessage(sellerOfferRecordId, discordResult) {
+  if (!discordResult?.messageId) return;
+
+  await airtable(SELLER_OFFERS_TABLE).update(sellerOfferRecordId, {
+    "Consignment Confirm Channel ID": asText(discordResult.channelId),
+    "Consignment Confirm Message ID": asText(discordResult.messageId)
+  }).catch((err) =>
+    console.error(
+      `Failed to store consignment confirm message IDs for ${sellerOfferRecordId} (non-blocking):`,
+      err
+    )
+  );
+}
+
+// NEW — the Route A guard returns before store-accept finalises, so the
+// round it was called on stays Open. Whichever way the consignor answers,
+// it has to be closed, or the order keeps showing a live counter round
+// that nobody can act on.
+async function closeConsignmentRoundsForSellerOffer(sellerOfferRecordId, status) {
+  const rounds = await airtable(COUNTER_OFFERS_TABLE)
+    .select({
+      filterByFormula: `AND(
+        {Seller Offer Record ID} = '${escapeFormulaValue(sellerOfferRecordId)}',
+        {Status} = 'Open'
+      )`,
+      fields: ["Status"]
+    })
+    .all()
+    .catch(() => []);
+
+  const nowIso = new Date().toISOString();
+
+  for (const round of rounds) {
+    await airtable(COUNTER_OFFERS_TABLE).update(round.id, {
+      "Status": status,
+      "Closed At": nowIso,
+      ...(status === "Accepted" ? { "Accepted At": nowIso } : {})
+    }).catch((err) =>
+      console.error(`Failed to close Counter Offer round ${round.id} (non-blocking):`, err)
+    );
+  }
+
+  return rounds.length;
+}
+
+// NEW — additive only: the Route B confirmation, keyed on a Seller Offer
+// instead of a consignment_offers row.
+//
+// Only reached when the consignor's own price already fitted under the
+// store's ceiling, so there was never a counter round to hang buttons on.
+// Every other shape of this conversation is a Counter Offers round and
+// runs through the existing seller machinery.
+//
+// The unit work below is deliberately identical to
+// confirmConsignmentOffer: same fields, same order writes, same stock
+// decrement. Only the source of the data changed.
+// `agreed` is set when the deal was NEGOTIATED: the price is then not his
+// original listing price but what the accepted round settled on, and the
+// store price is the one store-accept already computed. Passing them in
+// rather than recomputing keeps one number per deal — recomputing is how a
+// €157.10 once became €160 in one place and €155 in another.
+async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null) {
+  const offerRecord = await airtable(SELLER_OFFERS_TABLE)
+    .find(sellerOfferRecordId)
+    .catch(() => null);
+
+  if (!offerRecord) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  const f = offerRecord.fields || {};
+  const inventoryId = asText(f["Consignment Inventory ID"]);
+
+  if (!inventoryId) {
+    return { ok: false, reason: "not_consignment" };
+  }
+
+  // Idempotency guard — a double click, or a retried interaction, must
+  // not produce a second Inventory Unit or decrement the stock twice.
+  if (firstLinkedRecordId(f["Linked Inventory Unit"])) {
+    return { ok: false, reason: "already_confirmed" };
+  }
+
+  const orderRecordId = firstLinkedRecordId(f["Linked Orders"]);
+
+  if (!orderRecordId) {
+    return { ok: false, reason: "no_linked_order" };
+  }
+
+  const { data: inventoryRow, error: inventoryError } = await supabase
+    .from("consignment_inventory")
+    .select("*")
+    .eq("id", inventoryId)
+    .maybeSingle();
+
+  if (inventoryError) throw inventoryError;
+
+  if (!inventoryRow || Number(inventoryRow.quantity || 0) <= 0) {
+    return { ok: false, reason: "out_of_stock" };
+  }
+
+  const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
+  const orderFields = orderRecord.fields || {};
+  const clientCountry = asText(orderFields["Client Country"]);
+
+  const sellerPrice = agreed && Number.isFinite(Number(agreed.payout))
+    ? Number(agreed.payout)
+    : numberValue(f["Seller Offer"]);
+
+  const vatType = asText(agreed?.vatType)
+    || asText(f["Offer VAT Type"])
+    || asText(inventoryRow.vat_type);
+
+  // Same two conversions the pre-offer used, so the store is charged the
+  // number it was always going to be charged.
+  const storeBasePrice = convertConsignorPriceToStoreBasePrice(
+    sellerPrice,
+    vatType,
+    clientCountry
+  );
+
+  // A negotiated deal already has an agreed store price; only an
+  // un-negotiated one is derived from his listing price.
+  const customOffer = agreed && Number.isFinite(Number(agreed.storePrice))
+    ? Number(agreed.storePrice)
+    : calculateStoreCustomOfferFromConsignmentBase(storeBasePrice, orderFields);
+
+  const offerVatType = asText(agreed?.storeVatType)
+    || getStoreOfferVatTypeFromConsignmentVat(vatType, clientCountry);
+
+  if (Number.isFinite(customOffer) && customOffer > 0) {
+    await airtable(ORDERS_TABLE).update(orderRecordId, {
+      "Custom Offer": customOffer,
+      "Offer VAT Type": offerVatType,
+      "Offer Accepted?": true,
+      "Offer Sent?": false
+    });
+  }
+
+  // Shaped like the consignment_offers row the unit builder expects, so
+  // that function stays untouched and keeps producing Type=Consignment /
+  // Verification Status=Consigned / Payment Status=To Pay units.
+  const offerLike = {
+    id: sellerOfferRecordId,
+    order_record_id: orderRecordId,
+    order_id: asText(orderFields["Order ID"]),
+    source_type: "order",
+
+    inventory_id: inventoryRow.id,
+    seller_record_id: inventoryRow.seller_record_id,
+    seller_id: inventoryRow.seller_id,
+
+    product_name: inventoryRow.product_name,
+    sku: inventoryRow.sku,
+    size: inventoryRow.size,
+    brand: inventoryRow.brand,
+
+    vat_type: vatType,
+    seller_price: sellerPrice,
+    offer_price: sellerPrice,
+
+    selling_price: numberValue(orderFields["Selling Price"]),
+    selling_method: asText(orderFields["Selling Method"])
+  };
+
+  const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer(offerLike);
+
+  // Record the result on the Seller Offer itself — this is what the
+  // idempotency guard above reads on a second click.
+  await airtable(SELLER_OFFERS_TABLE).update(sellerOfferRecordId, {
+    "Linked Inventory Unit": [inventoryUnitRecord.id]
+  });
+
+  const newQuantity = Math.max(0, Number(inventoryRow.quantity || 0) - 1);
+
+  const { error: stockError } = await supabase
+    .from("consignment_inventory")
+    .update({
+      quantity: newQuantity,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", inventoryRow.id);
+
+  if (stockError) throw stockError;
+
+  await refreshConsignmentStockLevel(inventoryRow.sku, inventoryRow.size);
+
+  await closeConsignmentRoundsForSellerOffer(sellerOfferRecordId, "Accepted");
+
+  // Without this the consignor never gets his Request Label button and
+  // the deal stalls silently — so it is sent, but non-blocking: the unit
+  // and the stock decrement above are the deal and must stand either way.
+  const consignorRecord = await airtable(SELLERS_TABLE)
+    .find(inventoryRow.seller_record_id)
+    .catch(() => null);
+
+  const hasOwnChannel = !!asText(
+    consignorRecord?.fields?.["Consignment Confirmation Channel ID"]
+  );
+
+  await sendConsignmentDealUpdateDiscordMessage({
+    seller: {
+      seller_id: inventoryRow.seller_id,
+      discord_id: asText(consignorRecord?.fields?.["Discord ID"]),
+      consignment_offer_channel_id: asText(consignorRecord?.fields?.["Consignment Offer Channel ID"]),
+      consignment_confirmation_channel_id: asText(consignorRecord?.fields?.["Consignment Confirmation Channel ID"])
+    },
+    offer: {
+      ...offerLike,
+      discord_delivery_type: hasOwnChannel ? "channel" : "dm"
+    },
+    inventoryUnitRecordId: inventoryUnitRecord.id
+  }).catch((err) =>
+    console.error(
+      `❌ Failed to send consignment deal update for ${sellerOfferRecordId} (non-blocking):`,
+      err
+    )
+  );
+
+  // "Hold From Store?" stays ON. The deal is closed through this path, so
+  // nothing should re-enter the rollups: lifting it here would change
+  // "Lowest Seller Offer", wake computeAndPushLowestOffer, and push the
+  // order to Confirmed while the unit already exists.
+  return {
+    ok: true,
+    seller_offer_record_id: sellerOfferRecordId,
+    inventory_unit_record_id: inventoryUnitRecord.id,
+    seller_id: inventoryRow.seller_id,
+    offer: offerLike
+  };
+}
+
+// Deny: the consignor no longer has it. Soft-delete so the undercut check
+// stops treating it as a live position, and leave the order on Outsource
+// so regular sellers can still take it — same as the current deny.
+async function denyConsignmentSellerOffer(sellerOfferRecordId) {
+  const offerRecord = await airtable(SELLER_OFFERS_TABLE)
+    .find(sellerOfferRecordId)
+    .catch(() => null);
+
+  if (!offerRecord) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  if (firstLinkedRecordId(offerRecord.fields?.["Linked Inventory Unit"])) {
+    return { ok: false, reason: "already_confirmed" };
+  }
+
+  await airtable(SELLER_OFFERS_TABLE).update(sellerOfferRecordId, {
+    "Withdrawn?": true
+  });
+
+  // Closes the round the store accept was waiting on. The order itself is
+  // deliberately left alone: nothing was finalised, so it is still on
+  // "Outsource" and regular sellers can take it.
+  await closeConsignmentRoundsForSellerOffer(sellerOfferRecordId, "Denied");
+
+  return { ok: true, seller_offer_record_id: sellerOfferRecordId };
+}
+
 async function createConsignmentInventoryUnitFromOffer(offer) {
   const purchasePrice = Number(offer.offer_price);
 
@@ -508,9 +773,26 @@ function buildCompactConsignmentDealUpdateEmbed({ offer }) {
 async function sendConsignmentOfferDiscordMessage({
   seller,
   offer,
-  calculatedOfferPrice
+  calculatedOfferPrice,
+  sellerOfferRecordId = null
 }) {
   await initDiscord();
+
+  // NEW — additive only: when this offer lives as a Seller Offer record
+  // rather than a consignment_offers row, the buttons must route to the
+  // handlers that understand that. Callers passing nothing keep the
+  // original custom_ids, so the existing flow is untouched.
+  //
+  // Deliberately reusing this whole function instead of building a second
+  // confirmation embed: two copies of one embed is exactly the drift this
+  // rewrite exists to remove.
+  const confirmCustomId = sellerOfferRecordId
+    ? `confirm_consignment_seller_offer:${sellerOfferRecordId}`
+    : `confirm_offer:${offer.id}`;
+
+  const denyCustomId = sellerOfferRecordId
+    ? `deny_consignment_seller_offer:${sellerOfferRecordId}`
+    : `deny_offer:${offer.id}`;
 
   const isMemberWtbOffer = asText(offer.source_type) === "member_wtb";
 
@@ -619,7 +901,7 @@ async function sendConsignmentOfferDiscordMessage({
             type: 2,
             style: 3,
             label: isConfirmation ? "Confirm" : "Accept",
-            custom_id: `confirm_offer:${offer.id}`
+            custom_id: confirmCustomId
           },
           ...(!isConfirmation && asText(offer.source_type) !== "member_wtb"
             ? [
@@ -635,7 +917,7 @@ async function sendConsignmentOfferDiscordMessage({
             type: 2,
             style: 4,
             label: "Deny",
-            custom_id: `deny_offer:${offer.id}`
+            custom_id: denyCustomId
           }
         ]
       }
@@ -3478,6 +3760,8 @@ function bindConsignmentDiscordButtons(client) {
     if (
       !customId.startsWith("confirm_offer:") &&
       !customId.startsWith("deny_offer:") &&
+      !customId.startsWith("confirm_consignment_seller_offer:") &&
+      !customId.startsWith("deny_consignment_seller_offer:") &&
       !customId.startsWith("request_consignment_label:") &&
       !customId.startsWith("counter_offer_accept:") &&
       !customId.startsWith("counter_offer_deny:") &&
@@ -5950,6 +6234,75 @@ function bindConsignmentDiscordButtons(client) {
         return;
       }
       
+      if (action === "confirm_consignment_seller_offer") {
+        await safeEditInteractionMessage(interaction, {
+          content: "⏳ Processing confirmation...",
+          embeds: interaction.message.embeds,
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 2,
+                  label: "Processing...",
+                  custom_id: "consignment_processing_disabled",
+                  disabled: true
+                }
+              ]
+            }
+          ]
+        }, client).catch((err) => {
+          console.error("Failed to set consignment confirmation to processing:", err);
+        });
+
+        const result = await confirmConsignmentSellerOffer(offerId);
+
+        if (!result.ok) {
+          const message =
+            result.reason === "already_confirmed"
+              ? "✅ This match was already confirmed."
+              : result.reason === "out_of_stock"
+                ? "❌ This stock is no longer available."
+                : "❌ This match is no longer available.";
+
+          await safeEditInteractionMessage(interaction, {
+            content: message,
+            embeds: interaction.message.embeds,
+            components: []
+          }, client).catch((err) => {
+            console.error("Failed to mark consignment confirmation unavailable:", err);
+          });
+
+          return;
+        }
+
+        await safeEditInteractionMessage(interaction, {
+          content: `✅ Confirmed by ${result.seller_id}. Deal update has been sent.`,
+          embeds: interaction.message.embeds,
+          components: []
+        }, client).catch((err) => {
+          console.error("Failed to mark consignment confirmation confirmed:", err);
+        });
+
+        return;
+      }
+
+      if (action === "deny_consignment_seller_offer") {
+        const result = await denyConsignmentSellerOffer(offerId);
+
+        await disableConsignmentDiscordButtons(
+          interaction.channelId,
+          interaction.message.id,
+          result.ok
+            ? "❌ Denied — this pair stays out of the running."
+            : "❌ This match is no longer available.",
+          client
+        );
+
+        return;
+      }
+
       if (action === "deny_offer") {
         const result = await denyConsignmentOffer(offerId);
 
@@ -7665,6 +8018,369 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
   }
 });
 
+// NEW — additive only: the consignment auto-offer.
+//
+// Replaces the pre-offer branch's "write consignment fields onto the
+// order" with "create a real Seller Offer", so a consignor's standing
+// price competes through the exact same machinery as every other
+// seller — the undercut rule, the counter rounds, the sweeps, the deal
+// channel and the accept then all become existing code instead of a
+// parallel implementation in Supabase.
+//
+// The Seller Offer deliberately carries the consignor's OWN price in
+// his OWN VAT scale, NOT the store-facing conversion. "Offer To Store"
+// applies the margin and computeAndPushLowestOffer applies the
+// country/VAT relabeling from the rollups — exactly as for a regular
+// seller. Verified branch by branch against
+// convertConsignorPriceToStoreBasePrice: all five VAT/country
+// combinations yield the same amount the store sees today.
+//
+// The old /api/consignment/pre-offer/calculate stays untouched until
+// the cleanup step, so there is a way back.
+app.post("/api/consignment/auto-offer/create", async (req, res) => {
+  try {
+    const orderRecordId = asText(req.body?.order_record_id);
+    const sku = asText(req.body?.sku).toUpperCase();
+    const size = asText(req.body?.size);
+
+    if (!orderRecordId) {
+      return res.status(400).json({ error: "Missing order_record_id" });
+    }
+
+    if (!sku) {
+      return res.status(400).json({ error: "Missing SKU" });
+    }
+
+    if (!size) {
+      return res.status(400).json({ error: "Missing size" });
+    }
+
+    const { data: inventoryRows, error: inventoryError } = await supabase
+      .from("consignment_inventory")
+      .select(`
+        id,
+        product_name,
+        sku,
+        size,
+        brand,
+        vat_type,
+        selling_price_suggested,
+        quantity,
+        seller_id,
+        seller_record_id
+      `)
+      .eq("sku", sku)
+      .eq("size", size)
+      .gt("quantity", 0);
+
+    if (inventoryError) throw inventoryError;
+
+    // Same winner the pre-offer flow picked: lowest normalized price.
+    // getConsignmentComparePrice is the identical normalization the
+    // Seller Offers side stores in "Offer Cost (Normalized)", so the
+    // same consignment row wins as before.
+    const best = (inventoryRows || [])
+      .map((row) => {
+        const sellerPrice = Number(row.selling_price_suggested);
+
+        return {
+          row,
+          sellerPrice,
+          sellerComparePrice: getConsignmentComparePrice(
+            sellerPrice,
+            row.vat_type
+          )
+        };
+      })
+      .filter(
+        (item) =>
+          Number.isFinite(item.sellerPrice) &&
+          item.sellerPrice > 0 &&
+          Number.isFinite(item.sellerComparePrice)
+      )
+      .sort((a, b) => a.sellerComparePrice - b.sellerComparePrice)[0];
+
+    if (!best) {
+      return res.status(404).json({
+        error: "No valid consignment stock found"
+      });
+    }
+
+    if (!asText(best.row.seller_record_id)) {
+      return res.status(422).json({
+        error: "Consignment stock has no linked seller record",
+        inventory_id: best.row.id
+      });
+    }
+
+    // Duplicate guard — autoAllocateBestUnit CAN run more than once for
+    // the same order while it sits on Outsource; the pre-offer endpoint
+    // carries the same guard for the same reason. Without it a re-run
+    // puts a second Seller Offer on the order for the same stock.
+    //
+    // Filtered on the plain text field, never on the link:
+    // FIND(recordId, ARRAYJOIN({Linked Orders})) does not match in this
+    // base, so the order is matched in JS instead.
+    const sameStockOffers = await airtable(SELLER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `AND(
+          {Consignment Inventory ID} = '${escapeFormulaValue(best.row.id)}',
+          NOT({Withdrawn?}),
+          NOT({Denied?})
+        )`,
+        fields: ["Consignment Inventory ID", "Linked Orders"]
+      })
+      .all();
+
+    const alreadyOffered = sameStockOffers.find((record) =>
+      (record.fields?.["Linked Orders"] || []).includes(orderRecordId)
+    );
+
+    if (alreadyOffered) {
+      console.log(
+        `ℹ️ Consignment auto-offer for ${orderRecordId}: inventory ${best.row.id} already has Seller Offer ${alreadyOffered.id} — skipping.`
+      );
+
+      return res.json({
+        ok: true,
+        skipped: "already_offered",
+        order_record_id: orderRecordId,
+        seller_offer_record_id: alreadyOffered.id,
+        inventory_id: best.row.id
+      });
+    }
+
+    // "Hold From Store?" is Route B only. It keeps this offer out of the
+    // three Lowest Seller Offer rollups, so the store neither sees it nor
+    // can auto-accept it while we are still waiting for the consignor to
+    // say "yes, I still have it". The Discord bot's undercut check reads
+    // the Seller Offer records directly rather than the rollup, so a held
+    // offer still forces the next seller to come in lower — which is the
+    // whole reason for creating it up front instead of on his reply.
+    const holdFromStore = req.body?.hold === true;
+
+    const createdOffer = await airtable(SELLER_OFFERS_TABLE).create({
+      "Seller ID": [best.row.seller_record_id],
+      "Linked Orders": [orderRecordId],
+      "Seller Offer": best.sellerPrice,
+      "Offer VAT Type": best.row.vat_type,
+      "Offer Cost (Normalized)": best.sellerComparePrice,
+      "Offer Date": new Date().toISOString(),
+      "Consignment Inventory ID": best.row.id,
+      ...(holdFromStore ? { "Hold From Store?": true } : {})
+    });
+
+    console.log(
+      `✅ Consignment auto-offer for ${orderRecordId}: €${best.sellerPrice} ${best.row.vat_type} ` +
+        `from ${best.row.seller_id} (inventory ${best.row.id}) → Seller Offer ${createdOffer.id}` +
+        (holdFromStore ? " [held from store]" : "")
+    );
+
+    const baseResponse = {
+      ok: true,
+      order_record_id: orderRecordId,
+      seller_offer_record_id: createdOffer.id,
+      held: holdFromStore,
+      inventory_id: best.row.id,
+      seller_record_id: best.row.seller_record_id,
+      seller_id: best.row.seller_id,
+      product_name: best.row.product_name,
+      brand: best.row.brand,
+      sku: best.row.sku,
+      size: best.row.size,
+      seller_price: best.sellerPrice,
+      vat_type: best.row.vat_type,
+      offer_cost_normalized: best.sellerComparePrice
+    };
+
+    // Route A stops here: the offer is live, computeAndPushLowestOffer
+    // picks it up from the rollup and the store is asked as usual.
+    if (!holdFromStore) {
+      return res.json(baseResponse);
+    }
+
+    // ---- Route B: the consignor is asked first -------------------------
+    //
+    // The store already declared a ceiling via "Maximum Buying Price", so
+    // it does not get pinged here. Two shapes, exactly as today:
+    //
+    //   consignor's price fits under the ceiling  →  Confirmation request
+    //   his price is too high                     →  our offer at the
+    //                                                ceiling minus margin,
+    //                                                as Counter Offers
+    //                                                round 1
+    //
+    // Round 1 is a real Counter Offers row rather than a Supabase row, so
+    // everything after it — his counter, our counter, the sweeps, the
+    // accept — is the machinery every other seller already runs through.
+    const maximumBuyingPrice = Number(req.body?.maximum_buying_price);
+
+    const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
+    const orderFields = orderRecord.fields || {};
+
+    const calculatedOfferPrice = calculateConsignmentOfferPrice(
+      maximumBuyingPrice,
+      orderFields
+    );
+
+    if (calculatedOfferPrice === null) {
+      return res.status(400).json({
+        error: "Invalid Maximum Buying Price",
+        seller_offer_record_id: createdOffer.id
+      });
+    }
+
+    // Same test the current embed builder uses: both sides on the
+    // normalized compare scale.
+    const isConfirmation = best.sellerComparePrice <= calculatedOfferPrice;
+
+    let counterRoundId = null;
+    let counterPayout = null;
+
+    const consignorRecord = await airtable(SELLERS_TABLE)
+      .find(best.row.seller_record_id)
+      .catch(() => null);
+
+    if (isConfirmation) {
+      // His price already fits under the ceiling, so there is nothing to
+      // negotiate — just the one question this whole route exists for:
+      // do you still have it?
+      const consignorFields = consignorRecord?.fields || {};
+
+      const confirmDiscordResult = await sendConsignmentOfferDiscordMessage({
+        seller: {
+          seller_id: best.row.seller_id,
+          discord_id: asText(consignorFields["Discord ID"]),
+          consignment_offer_channel_id: asText(consignorFields["Consignment Offer Channel ID"]),
+          consignment_confirmation_channel_id: asText(consignorFields["Consignment Confirmation Channel ID"])
+        },
+        offer: {
+          id: createdOffer.id,
+          order_record_id: orderRecordId,
+          order_id: asText(orderFields["Order ID"]),
+          source_type: "order",
+          seller_record_id: best.row.seller_record_id,
+          seller_id: best.row.seller_id,
+          product_name: best.row.product_name,
+          sku: best.row.sku,
+          size: best.row.size,
+          brand: best.row.brand,
+          vat_type: best.row.vat_type,
+          seller_price: best.sellerPrice,
+          offer_price: best.sellerPrice
+        },
+        calculatedOfferPrice,
+        sellerOfferRecordId: createdOffer.id
+      }).catch((err) => {
+        console.error(
+          `❌ Failed to send consignment confirmation request for ${orderRecordId} (non-blocking):`,
+          err
+        );
+        return null;
+      });
+
+      await rememberConsignmentConfirmMessage(createdOffer.id, confirmDiscordResult);
+    }
+
+    if (!isConfirmation) {
+      // Back to the consignor's OWN VAT scale — what he actually gets
+      // paid, and the number his embed shows.
+      counterPayout = getConsignmentSellerOfferPrice(
+        calculatedOfferPrice,
+        best.row.vat_type
+      );
+
+      const createdRound = await airtable(COUNTER_OFFERS_TABLE).create({
+        "Order": [orderRecordId],
+        "Seller ID": [best.row.seller_record_id],
+        "Source Type": "Seller Offer",
+        "Seller Offer Record ID": createdOffer.id,
+
+        "Seller Original Price": best.sellerPrice,
+        "Seller Original VAT Type": best.row.vat_type,
+
+        "Store Counter Price": maximumBuyingPrice,
+
+        "Counter Payout": counterPayout,
+        "Counter Payout VAT Type": best.row.vat_type,
+
+        "Status": "Open",
+        "Created At": new Date().toISOString()
+      });
+
+      counterRoundId = createdRound.id;
+
+      console.log(
+        `✅ Consignment round 1 for ${orderRecordId}: store ceiling €${maximumBuyingPrice} → ` +
+          `payout €${counterPayout} ${best.row.vat_type} (Counter Offer ${createdRound.id})`
+      );
+
+      // The consignor gets the SAME embed a regular seller gets when the
+      // store counters him — counter_offer_accept / _counter / _deny /
+      // _edit, all already wired to Counter Offers rounds. Nothing new to
+      // build for the negotiation from here on; that is the entire point
+      // of moving these rounds out of Supabase.
+      const consignorDiscordId = asText(consignorRecord?.fields?.["Discord ID"]);
+
+      // isConfirmation = false here, so this resolves to the consignor's
+      // OFFER channel and not his confirmation channel — this is an offer.
+      const consignorOfferChannelId = getSellerOfferChannelId(
+        {
+          consignment_offer_channel_id: asText(consignorRecord?.fields?.["Consignment Offer Channel ID"]),
+          consignment_confirmation_channel_id: asText(consignorRecord?.fields?.["Consignment Confirmation Channel ID"])
+        },
+        false
+      );
+
+      if (consignorDiscordId || consignorOfferChannelId) {
+        // Non-blocking on purpose: the records above are the deal, a
+        // Discord hiccup must not undo them. Logged loudly instead,
+        // because a silent miss here means a consignor who is never
+        // asked — and that looks exactly like a quiet week.
+        await sendCounterOfferDiscordDM({
+          counterOfferRecordId: createdRound.id,
+          sellerDiscordId: consignorDiscordId,
+          productName: best.row.product_name,
+          sku: best.row.sku,
+          size: best.row.size,
+          orderId: asText(orderFields["Order ID"]),
+          payout: counterPayout,
+          vatType: best.row.vat_type,
+          sellerOriginalPrice: best.sellerPrice,
+          sellerOriginalVatType: best.row.vat_type,
+          sellerLastOfferPrice: best.sellerPrice,
+          channelId: consignorOfferChannelId || null
+        }).catch((err) =>
+          console.error(
+            `❌ Failed to notify consignor ${best.row.seller_id} about consignment round 1 (non-blocking):`,
+            err
+          )
+        );
+      } else {
+        console.error(
+          `❌ Consignment round 1 for ${orderRecordId}: consignor ${best.row.seller_id} has neither an offer channel nor a Discord ID — nobody was asked.`
+        );
+      }
+    }
+
+    res.json({
+      ...baseResponse,
+      is_confirmation: isConfirmation,
+      maximum_buying_price: Number.isFinite(maximumBuyingPrice) ? maximumBuyingPrice : null,
+      calculated_offer_price: calculatedOfferPrice,
+      counter_offer_record_id: counterRoundId,
+      counter_payout: counterPayout
+    });
+  } catch (err) {
+    console.error("Failed to create consignment auto-offer:", err);
+
+    res.status(500).json({
+      error: "Failed to create consignment auto-offer",
+      details: err.message
+    });
+  }
+});
+
 app.post("/api/counter-offers/create", async (req, res) => {
   try {
     const secret = asText(req.headers["x-kc-secret"]);
@@ -8983,6 +9699,119 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
       return res.status(409).json({ error: "This order is already no longer available." });
     }
 
+    // NEW — the consignment confirmation guard (Route A).
+    //
+    // A consignor never bid on this order; his standing listing price did.
+    // So before a store accept becomes final he gets exactly one question:
+    // do you still have it? Only when he has NOT engaged — a consignor who
+    // countered has already shown he is there, and asking twice is noise.
+    //
+    // Placed BEFORE any write below on purpose. Nothing is finalised yet,
+    // so a Deny needs no rollback at all: the order simply stays on
+    // "Outsource" and regular sellers can still take it. The store's embed
+    // says "Offer accepted", which is fine — a store already knows a deal
+    // is only real once the Allocation message arrives from
+    // calculateLinkedUnitPrice.
+    let consignmentInventoryIdForAccept = null;
+
+    const sellerOfferRecordIdForGuard = asText(f["Seller Offer Record ID"]);
+
+    if (sellerOfferRecordIdForGuard) {
+      const sellerOfferForGuard = await airtable(SELLER_OFFERS_TABLE)
+        .find(sellerOfferRecordIdForGuard)
+        .catch(() => null);
+
+      const consignmentInventoryId = asText(
+        sellerOfferForGuard?.fields?.["Consignment Inventory ID"]
+      );
+
+      consignmentInventoryIdForAccept = consignmentInventoryId;
+
+      if (consignmentInventoryId) {
+        // The round being accepted was created by create-fresh-round at
+        // accept time, so it is not evidence of engagement — only rounds
+        // that already existed before it count.
+        const roundsForOffer = await airtable(COUNTER_OFFERS_TABLE)
+          .select({
+            filterByFormula: `{Seller Offer Record ID} = '${escapeFormulaValue(sellerOfferRecordIdForGuard)}'`,
+            fields: ["Seller Offer Record ID"]
+          })
+          .all();
+
+        const consignorEngaged = roundsForOffer.some(
+          (record) => record.id !== counterOfferRecordId
+        );
+
+        if (!consignorEngaged) {
+          const { data: inventoryRowForGuard } = await supabase
+            .from("consignment_inventory")
+            .select("*")
+            .eq("id", consignmentInventoryId)
+            .maybeSingle();
+
+          if (inventoryRowForGuard) {
+            const consignorForGuard = await airtable(SELLERS_TABLE)
+              .find(inventoryRowForGuard.seller_record_id)
+              .catch(() => null);
+
+            const consignorGuardFields = consignorForGuard?.fields || {};
+            const sellerPriceForGuard = numberValue(sellerOfferForGuard.fields?.["Seller Offer"]);
+
+            const guardDiscordResult = await sendConsignmentOfferDiscordMessage({
+              seller: {
+                seller_id: inventoryRowForGuard.seller_id,
+                discord_id: asText(consignorGuardFields["Discord ID"]),
+                consignment_offer_channel_id: asText(consignorGuardFields["Consignment Offer Channel ID"]),
+                consignment_confirmation_channel_id: asText(consignorGuardFields["Consignment Confirmation Channel ID"])
+              },
+              offer: {
+                id: sellerOfferRecordIdForGuard,
+                order_record_id: linkedOrderId,
+                order_id: asText(orderRecord.fields?.["Order ID"]),
+                source_type: "order",
+                seller_record_id: inventoryRowForGuard.seller_record_id,
+                seller_id: inventoryRowForGuard.seller_id,
+                product_name: inventoryRowForGuard.product_name,
+                sku: inventoryRowForGuard.sku,
+                size: inventoryRowForGuard.size,
+                brand: inventoryRowForGuard.brand,
+                vat_type: asText(sellerOfferForGuard.fields?.["Offer VAT Type"]),
+                seller_price: sellerPriceForGuard,
+                offer_price: sellerPriceForGuard
+              },
+              // Equal values force isConfirmation, which is what this is:
+              // the store already took his price, we only need his yes.
+              calculatedOfferPrice: getConsignmentComparePrice(
+                sellerPriceForGuard,
+                asText(sellerOfferForGuard.fields?.["Offer VAT Type"])
+              ),
+              sellerOfferRecordId: sellerOfferRecordIdForGuard
+            });
+
+            await rememberConsignmentConfirmMessage(
+              sellerOfferRecordIdForGuard,
+              guardDiscordResult
+            );
+
+            console.log(
+              `\u23f8\ufe0f Store accept on ${linkedOrderId} held for consignor confirmation ` +
+                `(Seller Offer ${sellerOfferRecordIdForGuard}, inventory ${consignmentInventoryId}).`
+            );
+
+            return res.json({
+              ok: true,
+              awaiting_consignor_confirmation: true,
+              seller_offer_record_id: sellerOfferRecordIdForGuard
+            });
+          }
+
+          console.error(
+            `\u274c Consignment guard on ${linkedOrderId}: inventory ${consignmentInventoryId} not found \u2014 accepting normally.`
+          );
+        }
+      }
+    }
+
     await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
       "Status": "Accepted",
       "Accepted At": new Date().toISOString(),
@@ -9023,6 +9852,51 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
     const acceptedSellerPayout = isSellerPlacedRound
       ? sellerCounterPriceForAccept
       : numberValue(f["Counter Payout"]);
+
+    // A consignment deal that DID get negotiated lands here: the guard
+    // above let it through because the consignor is demonstrably present.
+    // It still has to finish AS a consignment deal — Type=Consignment,
+    // stock decremented, Phase 9.1 triggered — and must not fall through to
+    // the regular seller route below, which knows nothing about consignment
+    // and would produce an ordinary Inventory Unit with the stock left
+    // standing.
+    //
+    // Placed here deliberately: after the accepted amounts are computed, so
+    // both sides use the same numbers, and before the webhook fires, so the
+    // regular finalisation never starts.
+    if (consignmentInventoryIdForAccept) {
+      const consignmentResult = await confirmConsignmentSellerOffer(
+        sellerOfferRecordIdForGuard,
+        {
+          payout: acceptedSellerPayout,
+          vatType: sellerVatTypeForAccept,
+          storePrice: acceptedStorePrice,
+          storeVatType:
+            sellerVatTypeForAccept === "Margin"
+              ? "Margin"
+              : (isDutchClientCountry(orderFieldsForAccept?.["Client Country"]) ? "VAT21" : "VAT0")
+        }
+      );
+
+      if (!consignmentResult.ok) {
+        return res.status(409).json({
+          error: "Could not finalise this consignment deal.",
+          reason: consignmentResult.reason
+        });
+      }
+
+      console.log(
+        `✅ Negotiated consignment deal on ${linkedOrderId} finalised in the portal ` +
+          `(payout €${acceptedSellerPayout} ${sellerVatTypeForAccept}, store €${acceptedStorePrice}).`
+      );
+
+      return res.json({
+        ok: true,
+        consignment: true,
+        seller_offer_record_id: sellerOfferRecordIdForGuard,
+        inventory_unit_record_id: consignmentResult.inventory_unit_record_id
+      });
+    }
 
     if (COUNTER_OFFER_ACCEPT_WEBHOOK_URL) {
       await fetch(COUNTER_OFFER_ACCEPT_WEBHOOK_URL, {
@@ -11998,16 +12872,30 @@ async function sendCounterOfferDiscordDM({
   sellerOriginalVatType,
   sellerLastOfferPrice,
   noRoomToCounter,
-  deniedAmount
+  deniedAmount,
+  channelId = null
 }) {
-  await initKickzDealDiscord();
+  // NEW — additive only: a consignor with his own offer channel gets this
+  // there instead of in a DM, matching how every other consignment
+  // message is routed. Regular sellers pass no channelId and keep the DM
+  // behaviour exactly as it was, including the missing-ID throw.
+  let target = null;
 
-  if (!sellerDiscordId) {
-    throw new Error("Missing seller Discord ID");
+  if (channelId) {
+    await initDiscord();
+    target = await discordClient.channels.fetch(channelId).catch(() => null);
   }
 
-  const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
-  const dm = await user.createDM();
+  if (!target) {
+    await initKickzDealDiscord();
+
+    if (!sellerDiscordId) {
+      throw new Error("Missing seller Discord ID");
+    }
+
+    const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
+    target = await user.createDM();
+  }
 
   // FIXED — his call: primary reference should be the seller's LAST
   // position, not their original ask — that's the only thing that
@@ -12054,7 +12942,7 @@ async function sendCounterOfferDiscordDM({
       ? ["❌ Your offer was denied.", ""]
       : [];
 
-  const message = await dm.send({
+  const message = await target.send({
     embeds: [
       {
         // FIXED — when this notification is specifically a re-send
@@ -13504,6 +14392,38 @@ async function normalizeMemberWtbDeal(record) {
   };
 }
 
+// NEW — ONE definition of "is this a consignment offer", used with both
+// signs: the Want To Buys tabs exclude these, the Consignment tab shows
+// only these. Two copies of that predicate drifting apart is precisely
+// the bug class this rewrite exists to remove, so it lives here and
+// nowhere else.
+//
+// Returns the Seller Offer record IDs that carry a Consignment Inventory
+// ID. Counter Offers rounds only store that id as text, so membership is
+// tested against this set rather than resolved per round — one query
+// instead of one per row.
+async function getConsignmentSellerOfferIds() {
+  const records = await airtable(SELLER_OFFERS_TABLE)
+    .select({
+      fields: ["Consignment Inventory ID"],
+      filterByFormula: `{Consignment Inventory ID} != ''`
+    })
+    .all()
+    .catch((err) => {
+      console.error("Failed to load consignment Seller Offer ids:", err);
+      return [];
+    });
+
+  return new Set(records.map((record) => record.id));
+}
+
+// "consignment" shows only consignment offers, anything else excludes
+// them. Default is exclusion, so every existing caller keeps its current
+// behaviour without passing anything.
+function matchesOfferScope(isConsignment, scope) {
+  return scope === "consignment" ? isConsignment : !isConsignment;
+}
+
 app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
@@ -13563,8 +14483,16 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       })
       .all();
 
-    const filteredRecords = records.filter((record) =>
-      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+    const scope = asText(req.query.scope);
+    const consignmentOfferIds = await getConsignmentSellerOfferIds();
+
+    const filteredRecords = records.filter(
+      (record) =>
+        linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId) &&
+        matchesOfferScope(
+          consignmentOfferIds.has(asText(record.fields?.["Seller Offer Record ID"])),
+          scope
+        )
     );
 
     const preFilteredByStatusRaw = filteredRecords.filter((record) => {
@@ -18372,6 +19300,9 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
       .select({
         fields: [
           "Seller ID",
+          "Consignment Inventory ID",
+          "Consignment Confirm Message ID",
+          "Linked Inventory Unit",
           "Linked Orders",
           "Member WTBs",
           "Member WTB ID",
@@ -18402,7 +19333,19 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
       .all();
 
     const filteredOffers = offerRecords.filter((record) =>
-      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId) &&
+      matchesOfferScope(
+        !!asText(record.fields?.["Consignment Inventory ID"]),
+        asText(req.query.scope)
+      ) &&
+      // A consignment offer whose confirmation question is out belongs in
+      // the Accepted tab, not here — otherwise it sits in two tabs at once
+      // and counts twice in the badges. Once confirmed it has a linked
+      // unit and leaves both.
+      !(
+        asText(record.fields?.["Consignment Confirm Message ID"]) &&
+        !firstLinkedRecordId(record.fields?.["Linked Inventory Unit"])
+      )
     );
 
     // FIXED — a Seller Offer's own "Fulfillment Status" stays
@@ -22167,6 +23110,187 @@ async function normalizeConsignmentDashboardItems(records, sellerRecordId) {
 
   return sortDashboardItemsNewestFirst(items);
 }
+
+// NEW — the Consignment "Accepted" tab.
+//
+// Deliberately NOT a copy of the Want To Buys Accepted tab, which filters
+// on {Fulfillment Status} = 'Confirmed'. A consignment deal never passes
+// through that state: the Confirm creates the Inventory Unit in one step,
+// so such a tab would sit empty forever.
+//
+// What this shows is the state the confirmation guard newly created: the
+// question went out and the consignor has not answered. Without a tab
+// that window is invisible in the portal — only one Discord embed —
+// and an unanswered one looks exactly like a quiet week.
+app.get("/api/dashboard/consignment-accepted", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.query.seller_record_id);
+
+    if (!sellerRecordId) {
+      return res.status(400).json({ error: "Missing seller_record_id" });
+    }
+
+    const offerRecords = await airtable(SELLER_OFFERS_TABLE)
+      .select({
+        fields: [
+          "Seller ID",
+          "Linked Orders",
+          "Order ID",
+          "Store Name",
+          "Seller Offer",
+          "Offer VAT Type",
+          "Offer Date",
+          "Product Name",
+          "SKU",
+          "Size",
+          "Brand",
+          "Consignment Inventory ID",
+          "Consignment Confirm Channel ID",
+          "Consignment Confirm Message ID",
+          "Linked Inventory Unit",
+          "Withdrawn?",
+          "Denied?"
+        ],
+        filterByFormula: `AND(
+          {Consignment Inventory ID} != '',
+          {Consignment Confirm Message ID} != '',
+          NOT({Withdrawn?}),
+          NOT({Denied?})
+        )`
+      })
+      .all();
+
+    // Link filtering in JS, never in the formula — a
+    // FIND(recordId, ARRAYJOIN({Seller ID})) never matches in this base.
+    const ownOffers = offerRecords.filter(
+      (record) =>
+        linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId) &&
+        !firstLinkedRecordId(record.fields?.["Linked Inventory Unit"])
+    );
+
+    // Needed to tell a private channel from a DM: a guild message links as
+    // /channels/<server>/<channel>/<message>, a DM as /channels/@me/...
+    const sellerRecord = await airtable(SELLERS_TABLE)
+      .find(sellerRecordId)
+      .catch(() => null);
+
+    const ownChannelIds = new Set(
+      [
+        asText(sellerRecord?.fields?.["Consignment Offer Channel ID"]),
+        asText(sellerRecord?.fields?.["Consignment Confirmation Channel ID"])
+      ].filter(Boolean)
+    );
+
+    const items = ownOffers.map((record) => {
+      const f = record.fields || {};
+
+      const channelId = asText(f["Consignment Confirm Channel ID"]);
+      const messageId = asText(f["Consignment Confirm Message ID"]);
+
+      const scope = ownChannelIds.has(channelId) ? DISCORD_SERVER_ID : "@me";
+
+      // Same field names and formatting as the Confirmed tab, so both use
+      // the shared skeletonColumns layout and nothing has to be special-cased.
+      return {
+        seller_offer_record_id: record.id,
+        order_id: displayValue(f["Order ID"]),
+        product: displayValue(f["Product Name"]),
+        sku: displayValue(f["SKU"]),
+        size: displayValue(f["Size"]),
+        brand: displayValue(f["Brand"]),
+        payout: moneyWholeValue(f["Seller Offer"]),
+        vat_type: displayValue(f["Offer VAT Type"]),
+        date: formatDateEU(f["Offer Date"]),
+        // Straight to the exact embed, not the channel — a consignor with
+        // private channels would otherwise have to hunt for it.
+        discord_url:
+          channelId && messageId
+            ? `https://discord.com/channels/${scope}/${channelId}/${messageId}`
+            : null
+      };
+    });
+
+    res.json({ count: items.length, items });
+  } catch (err) {
+    console.error("Failed to load consignment accepted:", err);
+
+    res.status(500).json({
+      error: "Failed to load consignment accepted",
+      details: err.message
+    });
+  }
+});
+
+// NEW — confirming from the portal instead of from Discord, so a
+// consignor never has to leave the portal. Same function the Discord
+// button calls; only the entry point differs.
+app.post("/api/dashboard/consignment-confirm", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const sellerOfferRecordId = asText(req.body?.seller_offer_record_id);
+
+    if (!sellerRecordId || !sellerOfferRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id or seller_offer_record_id"
+      });
+    }
+
+    // Ownership check — without it any logged-in consignor could confirm
+    // somebody else's offer by guessing a record id.
+    const offerRecord = await airtable(SELLER_OFFERS_TABLE)
+      .find(sellerOfferRecordId)
+      .catch(() => null);
+
+    if (!offerRecord) {
+      return res.status(404).json({ error: "Offer not found" });
+    }
+
+    if (!linkedRecordIncludes(offerRecord.fields?.["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed for this seller." });
+    }
+
+    const result = await confirmConsignmentSellerOffer(sellerOfferRecordId);
+
+    if (!result.ok) {
+      const message =
+        result.reason === "already_confirmed"
+          ? "This match was already confirmed."
+          : result.reason === "out_of_stock"
+            ? "This stock is no longer available."
+            : "This match is no longer available.";
+
+      return res.status(409).json({ error: message, reason: result.reason });
+    }
+
+    // The Discord embed still shows a live Confirm button, so close it —
+    // otherwise the consignor sees a button for something already done.
+    const channelId = asText(offerRecord.fields?.["Consignment Confirm Channel ID"]);
+    const messageId = asText(offerRecord.fields?.["Consignment Confirm Message ID"]);
+
+    if (channelId && messageId) {
+      await disableConsignmentDiscordButtons(
+        channelId,
+        messageId,
+        "✅ Confirmed via the portal."
+      ).catch((err) =>
+        console.error("Failed to disable consignment confirm embed (non-blocking):", err)
+      );
+    }
+
+    res.json({
+      ok: true,
+      seller_offer_record_id: sellerOfferRecordId,
+      inventory_unit_record_id: result.inventory_unit_record_id
+    });
+  } catch (err) {
+    console.error("Failed to confirm consignment offer from portal:", err);
+
+    res.status(500).json({
+      error: "Failed to confirm",
+      details: err.message
+    });
+  }
+});
 
 app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
   try {
