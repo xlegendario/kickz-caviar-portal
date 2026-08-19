@@ -1394,13 +1394,24 @@ function renderConsignmentAcceptedRows(items) {
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
         <button
-          class="dashboard-action-btn"
+          class="dashboard-confirm-btn"
           type="button"
           data-consignment-confirm="${escapeHtml(item.seller_offer_record_id)}"
-        >Confirm</button>
+        >
+          Confirm
+        </button>
         ${
           item.discord_url
-            ? `<a class="dashboard-action-btn" href="${escapeHtml(item.discord_url)}" target="_blank" rel="noopener">Discord</a>`
+            ? `
+              <a
+                class="dashboard-discord-btn"
+                href="${escapeHtml(item.discord_url)}"
+                target="_blank"
+                rel="noopener"
+              >
+                Discord
+              </a>
+            `
             : ""
         }
       </td>
