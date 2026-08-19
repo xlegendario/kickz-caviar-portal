@@ -29,6 +29,7 @@ const dashboardConfig = {
     tabs: [
       { key: "inventory", label: "Inventory" },
       { key: "offers", label: "Offers", statusFilters: ["open", "counter", "denied"] },
+      { key: "accepted", label: "Accepted" },
       { key: "confirmed", label: "Confirmed" },
       { key: "label_requested", label: "Label Requested" },
       { key: "ready_to_ship", label: "Ready To Ship" },
@@ -1349,6 +1350,96 @@ function renderBuyingAcceptedRows(items) {
       </td>
     </tr>
   `).join("");
+}
+
+// NEW — the consignment Accepted tab: a confirmation went out and the
+// consignor has not answered yet. Two ways to act on it, so nobody has to
+// leave the portal: a link straight to the exact Discord embed, and a
+// Confirm button that runs the same code the Discord button does.
+function renderConsignmentAcceptedRows(items) {
+  dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
+
+  // Same layout as the Confirmed tab on purpose — one column set for the
+  // whole consignment section rather than a private one per tab.
+  dashboardTableHead.innerHTML = skeletonColumns
+    .map((column) => `<th>${column}</th>`)
+    .join("");
+
+  if (!items.length) {
+    dashboardTableBody.innerHTML = `
+      <tr>
+        <td colspan="${skeletonColumns.length}">
+          <div class="dashboard-empty-state">
+            <div class="dashboard-empty-icon">◇</div>
+            <strong>Nothing waiting for you</strong>
+            <span>Matches waiting for your confirmation will appear here.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  setMobileTableMode(false);
+
+  dashboardTableBody.innerHTML = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${escapeHtml(item.product || "-")}</td>
+      <td>${escapeHtml(item.sku || "-")}</td>
+      <td>${escapeHtml(item.size || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${escapeHtml(item.payout || "-")}</td>
+      <td>${escapeHtml(item.vat_type || "-")}</td>
+      <td>${escapeHtml(item.date || "-")}</td>
+      <td>
+        <button
+          class="dashboard-action-btn"
+          type="button"
+          data-consignment-confirm="${escapeHtml(item.seller_offer_record_id)}"
+        >Confirm</button>
+        ${
+          item.discord_url
+            ? `<a class="dashboard-action-btn" href="${escapeHtml(item.discord_url)}" target="_blank" rel="noopener">Discord</a>`
+            : ""
+        }
+      </td>
+    </tr>
+  `).join("");
+
+  dashboardTableBody
+    .querySelectorAll("[data-consignment-confirm]")
+    .forEach((button) => {
+      button.addEventListener("click", async () => {
+        const sellerOfferRecordId = button.getAttribute("data-consignment-confirm");
+
+        button.disabled = true;
+        button.textContent = "Confirming...";
+
+        try {
+          const response = await fetch("/api/dashboard/consignment-confirm", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              seller_record_id: dashboardSeller.id,
+              seller_offer_record_id: sellerOfferRecordId
+            })
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || "Could not confirm. Please try again.");
+          }
+
+          await loadDashboardData();
+        } catch (err) {
+          button.disabled = false;
+          button.textContent = "Confirm";
+          alert(err.message);
+        }
+      });
+    });
 }
 
 function renderBuyingOpenWtbRows(items) {
@@ -3362,63 +3453,6 @@ async function loadDashboardData() {
     return;
   }
 
-  if (activeSection === "consignment" && activeTab === "offers") {
-    dashboardTableBody.innerHTML = `
-      <tr>
-        <td colspan="${consignmentOfferColumns.length}">
-          <div class="dashboard-empty-state">
-            <strong>Loading consignment offers...</strong>
-          </div>
-        </td>
-      </tr>
-    `;
-  
-    const params = new URLSearchParams({
-      seller_record_id: dashboardSeller.id,
-      filter: activeOfferStatusFilter
-    });
-  
-    const response = await fetch(
-      `/api/consignment/offers?${params.toString()}`
-    );
-  
-    const data = await response.json();
-  
-    if (!response.ok) {
-      throw new Error(
-        data.details ||
-        data.error ||
-        "Failed to load consignment offers"
-      );
-    }
-  
-    renderConsignmentOfferRows(data.items || []);
-  
-    // FIXED — must NOT write into dashboardCountsCache.consignment
-    // directly: that object gets summed for the sidebar's total badge
-    // (see setConsignmentCount), so adding offers_counter/offers_denied
-    // keys there would inflate that total. Pill counts live in their
-    // own cache instead; the legacy "offers" key (sidebar total, via
-    // setConsignmentCount) only updates from the Open count, same as
-    // before this pill row existed.
-    dashboardPillCountsCache["consignment:offers"] = {
-      ...(dashboardPillCountsCache["consignment:offers"] || {}),
-      [activeOfferStatusFilter]: data.count || 0
-    };
-
-    if (activeOfferStatusFilter === "open") {
-      setConsignmentCount("offers", data.count || 0);
-    }
-
-    document
-      .querySelectorAll(`[data-pill-count-key="consignment:offers:${activeOfferStatusFilter}"]`)
-      .forEach((el) => {
-        el.textContent = data.count || 0;
-      });
-  
-    return;
-  }
-
   if (activeSection === "consignment" && activeTab === "confirmed") {
     dashboardTableBody.innerHTML = `
       <tr>
@@ -3456,6 +3490,7 @@ async function loadDashboardData() {
   }
 
   const consignmentStatusEndpointMap = {
+    accepted: "consignment-accepted",
     label_requested: "consignment-label-requested",
     ready_to_ship: "consignment-ready-to-ship",
     shipped: "consignment-shipped",
@@ -3499,7 +3534,9 @@ async function loadDashboardData() {
       );
     }
   
-    if (activeTab === "ready_to_ship") {
+    if (activeTab === "accepted") {
+      renderConsignmentAcceptedRows(data.items || []);
+    } else if (activeTab === "ready_to_ship") {
       renderReadyToShipRows(data.items || []);
     } else if (
       activeTab === "shipped" ||
@@ -3612,7 +3649,16 @@ async function loadDashboardData() {
     return;
   }
 
-  if (activeSection === "wtb" && activeTab === "offers") {
+  // NEW — one branch serves both Offers tabs. Consignment offers ARE
+  // Seller Offers now, so the Consignment tab reuses this exact fetch,
+  // renderer and action buttons; only the scope differs. A second copy of
+  // this logic for consignment is precisely the drift this rewrite removes.
+  if (
+    (activeSection === "wtb" || activeSection === "consignment") &&
+    activeTab === "offers"
+  ) {
+    const offerScope = activeSection === "consignment" ? "consignment" : "";
+    const pillCacheKey = `${activeSection}:offers`;
     dashboardTableBody.innerHTML = `
       <tr>
         <td colspan="7">
@@ -3631,11 +3677,13 @@ async function loadDashboardData() {
       const [freshRes, ownCounterRes] = await Promise.all([
         fetch(`/api/dashboard/wtb-open-offers?${new URLSearchParams({
           seller_record_id: dashboardSeller.id,
-          seller_id: dashboardSeller.seller_id
+          seller_id: dashboardSeller.seller_id,
+          ...(offerScope ? { scope: offerScope } : {})
         }).toString()}`),
         fetch(`/api/dashboard/wtb-counter-offers?${new URLSearchParams({
           seller_record_id: dashboardSeller.id,
-          filter: "open"
+          filter: "open",
+          ...(offerScope ? { scope: offerScope } : {})
         }).toString()}`)
       ]);
 
@@ -3657,12 +3705,19 @@ async function loadDashboardData() {
       renderWtbUnifiedOfferRows(merged);
 
       const count = merged.length;
-      dashboardPillCountsCache["wtb:offers"] = {
-        ...(dashboardPillCountsCache["wtb:offers"] || {}),
+      dashboardPillCountsCache[pillCacheKey] = {
+        ...(dashboardPillCountsCache[pillCacheKey] || {}),
         open: count
       };
+
+      // Sidebar total for consignment comes from the Open pill only —
+      // summing all three would double-count the same negotiation.
+      if (activeSection === "consignment") {
+        setConsignmentCount("offers", count);
+      }
+
       document
-        .querySelectorAll('[data-pill-count-key="wtb:offers:open"]')
+        .querySelectorAll(`[data-pill-count-key="${pillCacheKey}:open"]`)
         .forEach((el) => { el.textContent = count; });
 
       return;
@@ -3672,7 +3727,8 @@ async function loadDashboardData() {
     // the same Counter Offers query, just filtered differently.
     const params = new URLSearchParams({
       seller_record_id: dashboardSeller.id,
-      filter: activeOfferStatusFilter === "denied" ? "denied" : "countered"
+      filter: activeOfferStatusFilter === "denied" ? "denied" : "countered",
+      ...(offerScope ? { scope: offerScope } : {})
     });
 
     const response = await fetch(`/api/dashboard/wtb-counter-offers?${params.toString()}`);
@@ -3701,12 +3757,12 @@ async function loadDashboardData() {
     );
 
     const count = data.count || 0;
-    dashboardPillCountsCache["wtb:offers"] = {
-      ...(dashboardPillCountsCache["wtb:offers"] || {}),
+    dashboardPillCountsCache[pillCacheKey] = {
+      ...(dashboardPillCountsCache[pillCacheKey] || {}),
       [activeOfferStatusFilter]: count
     };
     document
-      .querySelectorAll(`[data-pill-count-key="wtb:offers:${activeOfferStatusFilter}"]`)
+      .querySelectorAll(`[data-pill-count-key="${pillCacheKey}:${activeOfferStatusFilter}"]`)
       .forEach((el) => { el.textContent = count; });
 
     return;
