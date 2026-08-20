@@ -613,6 +613,53 @@ function dashboardProductCell(item) {
   `;
 }
 
+// NEW — elke kopcel komt hier langs. De klasse bepaalt welke kolom blijft
+// staan tijdens het scrollen. Eén plek, zodat er geen tabel kan
+// achterblijven met een kop zonder klasse terwijl zijn cellen hem wel
+// hebben — dan schuift de kop weg en blijft de inhoud staan.
+function dashboardHeadCell(label) {
+  const klasse =
+    label === "Product"
+      ? "dashboard-product-col"
+      : label === "Action" || label === "Actions"
+        ? "dashboard-action-col"
+        : "";
+
+  return `<th${klasse ? ` class="${klasse}"` : ""}>${label}</th>`;
+}
+
+// NEW — de cellen worden per tabel met de hand uitgeschreven en weten dus
+// niet bij welke kolom ze horen. Deze functie leest de kop en zet het op de
+// cellen: de klasse voor het vastzetten, en de kolomnaam als data-label.
+function syncDashboardCellColumns() {
+  if (!dashboardTableHead || !dashboardTableBody) return;
+
+  const koppen = Array.from(dashboardTableHead.querySelectorAll("th")).map((th) => ({
+    naam: th.textContent.trim(),
+    product: th.classList.contains("dashboard-product-col"),
+    actie: th.classList.contains("dashboard-action-col")
+  }));
+
+  dashboardTableBody.querySelectorAll("tr").forEach((rij) => {
+    // De lege staat is één cel met colspan; die hoort bij geen kolom.
+    if (rij.children.length === 1 && rij.children[0].hasAttribute("colspan")) return;
+
+    Array.from(rij.children).forEach((cel, i) => {
+      const kop = koppen[i];
+      if (!kop) return;
+
+      if (kop.naam) cel.setAttribute("data-label", kop.naam);
+      if (kop.product) cel.classList.add("dashboard-product-col");
+      if (kop.actie) cel.classList.add("dashboard-action-col");
+    });
+  });
+}
+
+if (dashboardTableBody) {
+  new MutationObserver(syncDashboardCellColumns)
+    .observe(dashboardTableBody, { childList: true });
+}
+
 function cleanSkuInput(value) {
   return String(value || "")
     .toUpperCase()
@@ -963,7 +1010,7 @@ function renderConsignmentInventoryRows(items) {
     ?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = consignmentInventoryColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -1080,7 +1127,7 @@ function renderConsignmentOfferRows(items) {
   if (activeOfferStatusFilter === "denied") {
     const deniedColumns = ["Product", "Order ID", "Your Offer", "Denied", "Actions"];
 
-    dashboardTableHead.innerHTML = deniedColumns.map((c) => `<th${c === "Product" ? ' class="dashboard-product-col"' : ""}>${c}</th>`).join("");
+    dashboardTableHead.innerHTML = deniedColumns.map((c) => dashboardHeadCell(c)).join("");
 
     if (!items.length) {
       dashboardTableBody.innerHTML = `
@@ -1125,7 +1172,7 @@ function renderConsignmentOfferRows(items) {
   if (activeOfferStatusFilter === "counter") {
     const counterColumns = ["Product", "Order ID", "Your Offer", "Buyer's Last Offer", "Date", "Actions"];
 
-    dashboardTableHead.innerHTML = counterColumns.map((c) => `<th${c === "Product" ? ' class="dashboard-product-col"' : ""}>${c}</th>`).join("");
+    dashboardTableHead.innerHTML = counterColumns.map((c) => dashboardHeadCell(c)).join("");
 
     if (!items.length) {
       dashboardTableBody.innerHTML = `
@@ -1172,7 +1219,7 @@ function renderConsignmentOfferRows(items) {
   // (unless it's a Member Buy/Offer item, which never supports
   // countering — matches the Discord behavior exactly), or deny.
   dashboardTableHead.innerHTML = consignmentOfferColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -1281,7 +1328,7 @@ function renderBuyingAcceptedRows(items) {
   dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = buyingAcceptedColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -1327,7 +1374,7 @@ function renderConsignmentAcceptedRows(items) {
   // Same layout as the Confirmed tab on purpose — one column set for the
   // whole consignment section rather than a private one per tab.
   dashboardTableHead.innerHTML = skeletonColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -1464,7 +1511,7 @@ function renderBuyingOpenWtbRows(items) {
   dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = buyingOpenWtbColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -1518,7 +1565,7 @@ function renderBuyingOfferRows(items) {
   dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = buyingOffersColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -1564,7 +1611,7 @@ function renderBuyingPaymentRequiredRows(items) {
   dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = buyingPaymentRequiredColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -1618,7 +1665,7 @@ function renderBuyingConfirmedRows(items) {
   dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = buyingConfirmedColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -1658,7 +1705,7 @@ function renderBuyingLabelRequestedRows(items) {
   dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = buyingLabelRequestedColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -1709,7 +1756,7 @@ function renderBuyingReadyToShipRows(items) {
   dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = buyingReadyToShipColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -1750,7 +1797,7 @@ function renderBuyingShippedRows(items) {
   dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = buyingShippedColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -1805,7 +1852,7 @@ function renderBuyingDeliveredRows(items) {
   dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = buyingDeliveredColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -1870,7 +1917,7 @@ function renderWtbAcceptedRows(items) {
     ?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = wtbAcceptedColumns
-    .map((column) => `<th>${column === "Status" ? "Action" : column}</th>`)
+    .map((column) => dashboardHeadCell(column === "Status" ? "Action" : column))
     .join("");
 
   if (!items.length) {
@@ -1956,7 +2003,7 @@ function renderWtbOpenOffersRows(offers) {
   }
 
   dashboardTableHead.innerHTML = wtbOpenOfferColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!offers.length) {
@@ -2119,7 +2166,7 @@ function renderBuyingUnifiedOfferRows(items) {
       ? ["Product", "WTB ID", "Max Price", "My Last Offer", "Seller's Offer", "VAT Type", "Date", "Actions"]
       : ["Product", "WTB ID", "Max Price", "My Offer", "Seller's Last Offer", "VAT Type", "Date", "Actions"];
 
-  dashboardTableHead.innerHTML = columns.map((c) => `<th${c === "Product" ? ' class="dashboard-product-col"' : ""}>${c}</th>`).join("");
+  dashboardTableHead.innerHTML = columns.map((c) => dashboardHeadCell(c)).join("");
 
   if (!items.length) {
     dashboardTableBody.innerHTML = `
@@ -2242,7 +2289,7 @@ function renderWtbUnifiedOfferRows(items) {
     ? ["", "Product", "Order ID", "Your Offer", "VAT Type", "Buyer's Last Offer", "Current Lowest", "Denied", "Actions"]
     : ["", "Product", "Order ID", "Your Offer", (activeOfferStatusFilter === "counter" ? "Counter Offer" : "Buyer's Last Offer"), "VAT Type", "Current Lowest", "Date", "Actions"];
 
-  dashboardTableHead.innerHTML = columns.map((c) => `<th${c === "Product" ? ' class="dashboard-product-col"' : ""}>${c}</th>`).join("");
+  dashboardTableHead.innerHTML = columns.map((c) => dashboardHeadCell(c)).join("");
 
   if (!items.length) {
     dashboardTableBody.innerHTML = `
@@ -2381,7 +2428,7 @@ function renderReadyToShipRows(items) {
     ?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = skeletonColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -2502,7 +2549,7 @@ function renderTrackingRows(items) {
     ?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = skeletonColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -2609,7 +2656,7 @@ function renderHistoryIssuesRows(items) {
     ?.classList.remove("open-offers-table");
 
   dashboardTableHead.innerHTML = historyIssueColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
@@ -2679,7 +2726,7 @@ function renderHistoryIssuesRows(items) {
 function renderHistorySalesRows(items) {
   if (isMobileDashboard()) {
     dashboardTableHead.innerHTML = skeletonColumns
-      .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+      .map((column) => dashboardHeadCell(column))
       .join("");
 
     if (!items.length) {
@@ -2736,7 +2783,7 @@ function renderOpenClaimsRows(claims) {
     .closest(".dashboard-table")
     ?.classList.remove("open-offers-table");
   dashboardTableHead.innerHTML = skeletonColumns
-    .map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`)
+    .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!claims.length) {
@@ -4401,7 +4448,7 @@ async function loadDashboardData() {
 }
 
 function renderTableShell() {
-  dashboardTableHead.innerHTML = skeletonColumns.map((column) => `<th${column === "Product" ? ' class="dashboard-product-col"' : ""}>${column}</th>`).join("");
+  dashboardTableHead.innerHTML = skeletonColumns.map((column) => dashboardHeadCell(column)).join("");
   dashboardTableBody.innerHTML = `
     <tr>
       <td colspan="${skeletonColumns.length}">
