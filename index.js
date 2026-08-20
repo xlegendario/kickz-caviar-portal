@@ -615,7 +615,12 @@ async function denyConsignmentSellerOffer(sellerOfferRecordId) {
   }
 
   await airtable(SELLER_OFFERS_TABLE).update(sellerOfferRecordId, {
-    "Withdrawn?": true
+    "Withdrawn?": true,
+    // Cleared so the guard's "already asked" check starts fresh: this
+    // question has been answered, and a later accept on this stock should
+    // ask again rather than assume someone is still thinking about it.
+    "Consignment Confirm Message ID": "",
+    "Consignment Confirm Channel ID": ""
   });
 
   // Closes the round the store accept was waiting on. The order itself is
@@ -9845,6 +9850,24 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
             .select("*")
             .eq("id", consignmentInventoryId)
             .maybeSingle();
+
+          // Idempotency — the guard returns BEFORE store-accept writes
+          // "Offer Sent?": false and disables the buttons, so the store's
+          // Accept stays clickable while we wait on the consignor. A second
+          // click must not send him a second Confirmation embed.
+          if (asText(sellerOfferForGuard.fields?.["Consignment Confirm Message ID"])) {
+            console.log(
+              `⏸️ Store accept on ${linkedOrderId}: consignor was already asked ` +
+                `(Seller Offer ${sellerOfferRecordIdForGuard}) — not asking twice.`
+            );
+
+            return res.json({
+              ok: true,
+              awaiting_consignor_confirmation: true,
+              already_asked: true,
+              seller_offer_record_id: sellerOfferRecordIdForGuard
+            });
+          }
 
           if (inventoryRowForGuard) {
             const consignorForGuard = await airtable(SELLERS_TABLE)
