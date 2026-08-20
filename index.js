@@ -8216,6 +8216,135 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
 //
 // The old /api/consignment/pre-offer/calculate stays untouched until
 // the cleanup step, so there is a way back.
+// NEW — repair job for consignment stock levels.
+//
+// refreshConsignmentStockLevel only runs when stock CHANGES, so anything
+// added along a path that never called it has no row in
+// consignment_stock_levels and therefore none in Airtable's Stock Levels
+// either. autoAllocateBestUnit matches on {Stock Counter Key} there, so
+// that stock exists and is simply never offered to anyone. Silent, and it
+// grows over time.
+//
+// Walks every consignment_inventory row, finds the sku+size pairs with no
+// stock level, and runs the normal refresh for each — which upserts the
+// Supabase row AND syncs it to Airtable, so there is no second
+// implementation of that logic here.
+app.post("/api/consignment/stock-levels/repair", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (
+      !process.env.COUNTER_OFFERS_SECRET ||
+      secret !== process.env.COUNTER_OFFERS_SECRET
+    ) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const dryRun = req.body?.dry_run === true;
+    const force = req.body?.force === true;
+    const limit = Number(req.body?.limit) > 0 ? Number(req.body.limit) : null;
+
+    // Supabase caps a select at 1000 rows, so both tables are paged.
+    const readAll = async (table, columns) => {
+      const rows = [];
+      const pageSize = 1000;
+
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await supabase
+          .from(table)
+          .select(columns)
+          .range(from, from + pageSize - 1);
+
+        if (error) throw error;
+        if (!data?.length) break;
+
+        rows.push(...data);
+
+        if (data.length < pageSize) break;
+      }
+
+      return rows;
+    };
+
+    const inventoryRows = await readAll("consignment_inventory", "sku, size, quantity");
+    const stockRows = await readAll("consignment_stock_levels", "stock_counter_key");
+
+    const existingKeys = new Set(
+      stockRows.map((row) => asText(row.stock_counter_key)).filter(Boolean)
+    );
+
+    // One entry per sku+size, however many inventory rows share it.
+    const pairs = new Map();
+
+    for (const row of inventoryRows) {
+      const sku = asText(row.sku).toUpperCase();
+      const size = asText(row.size);
+
+      if (!sku || !size) continue;
+
+      pairs.set(`${sku}-${size}`, { sku, size });
+    }
+
+    const missing = [...pairs.entries()]
+      .filter(([key]) => force || !existingKeys.has(key))
+      .map(([key, pair]) => ({ key, ...pair }));
+
+    const target = limit ? missing.slice(0, limit) : missing;
+
+    if (dryRun) {
+      return res.json({
+        ok: true,
+        dry_run: true,
+        inventory_rows: inventoryRows.length,
+        distinct_pairs: pairs.size,
+        existing_stock_levels: existingKeys.size,
+        missing: missing.length,
+        would_repair: target.length,
+        sample: target.slice(0, 25).map((item) => item.key)
+      });
+    }
+
+    let repaired = 0;
+    const failures = [];
+
+    for (const item of target) {
+      try {
+        await refreshConsignmentStockLevel(item.sku, item.size);
+        repaired++;
+      } catch (err) {
+        failures.push({ key: item.key, error: err.message });
+        console.error(`Failed to repair stock level for ${item.key}:`, err.message);
+      }
+
+      // Airtable allows 5 requests per second per base and each refresh
+      // makes several; pacing this keeps the repair from throttling the
+      // live traffic beside it.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    console.log(
+      `\u2705 Consignment stock level repair: ${repaired}/${target.length} rebuilt, ${failures.length} failed.`
+    );
+
+    res.json({
+      ok: true,
+      inventory_rows: inventoryRows.length,
+      distinct_pairs: pairs.size,
+      missing: missing.length,
+      repaired,
+      failed: failures.length,
+      failures: failures.slice(0, 25)
+    });
+  } catch (err) {
+    console.error("Consignment stock level repair failed:", err);
+
+    res.status(500).json({
+      error: "Repair failed",
+      details: err.message
+    });
+  }
+});
+
 app.post("/api/consignment/auto-offer/create", async (req, res) => {
   try {
     const orderRecordId = asText(req.body?.order_record_id);
@@ -14478,7 +14607,15 @@ async function syncConsignmentStockLevelToAirtable(stockLevel) {
   const size = asText(stockLevel?.size);
   const partnerStockLevel = Number(stockLevel?.stock_level || 0);
 
+  // A silent return here is how consignment stock ends up invisible to
+  // autoAllocateBestUnit: that automation matches on Airtable's
+  // {Stock Counter Key}, so without a row there the stock exists in
+  // Supabase and is never offered to anyone.
   if (!stockCounterKey || !sku || !size) {
+    console.error(
+      "❌ Consignment stock level NOT synced to Airtable — missing key fields.",
+      { stockCounterKey, sku, size }
+    );
     return;
   }
 
