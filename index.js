@@ -3276,13 +3276,11 @@ async function requestConsignmentShippingLabel(orderRecordId) {
     throw new Error("Missing orderRecordId");
   }
 
-  await airtable(ORDERS_TABLE).update(orderRecordId, {
-    "Fulfillment Status": "Requested Label"
-  });
-
-  return {
-    ok: true
-  };
+  // FIXED — this only set the status and posted nothing, so pressing
+  // Request Label in Discord moved the order to "Requested Label" while
+  // the store never received a request. Now runs the exact same path as
+  // the portal button.
+  return await postLabelRequestForOrder(orderRecordId);
 }
 
 async function safeEditInteractionMessage(interaction, payload, preferredClient = null) {
@@ -19031,97 +19029,112 @@ async function getPreferredCourierForCountryCode(countryCode) {
   };
 }
 
+// NEW — was the body of POST /api/dashboard/request-label, pulled out so
+// the Discord button can run the SAME thing.
+//
+// requestConsignmentShippingLabel used to only flip "Fulfillment Status"
+// to "Requested Label" and post nothing, so a consignor pressing Request
+// Label in Discord moved the order forward while the store never received
+// a label request. No error, no log — the worst shape a bug can take.
+//
+// Throws on failure, with statusCode carried so the route below keeps
+// returning the exact codes it did before.
+async function postLabelRequestForOrder(orderRecordId) {
+  const fail = (message, statusCode) => {
+    const err = new Error(message);
+    err.statusCode = statusCode;
+    return err;
+  };
+
+  if (!orderRecordId) throw fail("Missing order_record_id", 400);
+  if (!DISCORD_BOT_BASE_URL) throw fail("Missing DISCORD_BOT_BASE_URL", 500);
+
+  const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
+  const f = orderRecord.fields || {};
+
+  const orderId = displayValue(f["Order ID"]) || orderRecord.id;
+  const clientId = Array.isArray(f["Client"]) ? f["Client"][0] : "";
+
+  if (!clientId) {
+    throw fail(`Order ${orderId} has no linked merchant/client`, 400);
+  }
+
+  const merchantRecord = await airtable(MERCHANTS_TABLE).find(clientId);
+  const mf = merchantRecord.fields || {};
+
+  const labelRequestChannelId =
+    displayValue(mf["Label Request Channel ID"]) || "1506989427183058996";
+
+  const labelRequestUrl =
+    `${LOJIQ_WMS_BASE_URL.replace(/\/$/, "")}/label-request.html?record_id=${encodeURIComponent(orderRecord.id)}`;
+
+  // Same three values the WMS resolves for a Discord-initiated request,
+  // including its fallback sentence when the routing row has a courier
+  // but no instruction text.
+  const sellerCountryCode = await getSellerCountryCodeForOrder(f);
+
+  const { preferredCourier, instructionText } =
+    await getPreferredCourierForCountryCode(sellerCountryCode);
+
+  const courierInstruction =
+    instructionText ||
+    (preferredCourier ? `Please provide a ${preferredCourier} label.` : "");
+
+  const response = await fetch(
+    `${DISCORD_BOT_BASE_URL.replace(/\/$/, "")}/post-label-request`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        channel_id: labelRequestChannelId,
+        record_id: orderRecord.id,
+        order_id: orderId,
+        shopify_order_number: displayValue(f["Shopify Order Number"]),
+        product_name: displayValue(f["Product Name"]),
+        sku: displayValue(f["SKU"]),
+        size: displayValue(f["Size"]),
+        store_name: displayValue(f["Store Name"]) || displayValue(mf["Store Name"]),
+        label_request_url: labelRequestUrl,
+        seller_country_code: sellerCountryCode,
+        preferred_courier: preferredCourier,
+        courier_instruction: courierInstruction
+      })
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.details || data.error || "Failed to post label request");
+  }
+
+  // Status last, and only after the store actually has the request — the
+  // old Discord path did this first and then nothing.
+  await airtable(ORDERS_TABLE).update(orderRecord.id, {
+    "Fulfillment Status": "Requested Label",
+    "Label Error Message": null
+  });
+
+  return { ok: true, order_id: orderId };
+}
+
 app.post("/api/dashboard/request-label", async (req, res) => {
   try {
-    const orderRecordId = asText(req.body?.order_record_id);
+    const result = await postLabelRequestForOrder(asText(req.body?.order_record_id));
 
-    if (!orderRecordId) {
-      return res.status(400).json({
-        error: "Missing order_record_id"
-      });
-    }
-
-    if (!DISCORD_BOT_BASE_URL) {
-      return res.status(500).json({
-        error: "Missing DISCORD_BOT_BASE_URL"
-      });
-    }
-
-    const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
-    const f = orderRecord.fields || {};
-
-    const orderId = displayValue(f["Order ID"]) || orderRecord.id;
-    const clientId = Array.isArray(f["Client"]) ? f["Client"][0] : "";
-
-    if (!clientId) {
-      return res.status(400).json({
-        error: `Order ${orderId} has no linked merchant/client`
-      });
-    }
-
-    const merchantRecord = await airtable(MERCHANTS_TABLE).find(clientId);
-    const mf = merchantRecord.fields || {};
-
-    const labelRequestChannelId =
-      displayValue(mf["Label Request Channel ID"]) || "1506989427183058996";
-
-    const labelRequestUrl =
-      `${LOJIQ_WMS_BASE_URL.replace(/\/$/, "")}/label-request.html?record_id=${encodeURIComponent(orderRecord.id)}`;
-
-    // Same three values the WMS resolves for a Discord-initiated request,
-    // including its fallback sentence when the routing row has a courier
-    // but no instruction text.
-    const sellerCountryCode = await getSellerCountryCodeForOrder(f);
-
-    const { preferredCourier, instructionText } =
-      await getPreferredCourierForCountryCode(sellerCountryCode);
-
-    const courierInstruction =
-      instructionText ||
-      (preferredCourier ? `Please provide a ${preferredCourier} label.` : "");
-
-
-    const response = await fetch(
-      `${DISCORD_BOT_BASE_URL.replace(/\/$/, "")}/post-label-request`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          channel_id: labelRequestChannelId,
-          record_id: orderRecord.id,
-          order_id: orderId,
-          shopify_order_number: displayValue(f["Shopify Order Number"]),
-          product_name: displayValue(f["Product Name"]),
-          sku: displayValue(f["SKU"]),
-          size: displayValue(f["Size"]),
-          store_name: displayValue(f["Store Name"]) || displayValue(mf["Store Name"]),
-          label_request_url: labelRequestUrl,
-          seller_country_code: sellerCountryCode,
-          preferred_courier: preferredCourier,
-          courier_instruction: courierInstruction
-        })
-      }
-    );
-
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      throw new Error(data.details || data.error || "Failed to post label request");
-    }
-
-    await airtable(ORDERS_TABLE).update(orderRecord.id, {
-      "Fulfillment Status": "Requested Label",
-      "Label Error Message": null
-    });
-
-    res.json({
-      ok: true,
-      order_id: orderId
-    });
+    res.json(result);
   } catch (err) {
     console.error("Dashboard request label failed:", err);
+
+    if (err.statusCode === 400) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    if (err.statusCode === 500) {
+      return res.status(500).json({ error: err.message });
+    }
 
     res.status(500).json({
       error: "Failed to request label",
