@@ -1091,13 +1091,33 @@ async function disableCounterOfferDiscordButtons(channelId, messageId, note) {
     }
   };
 
+  // FIXED — this only ever tried kickzDealDiscordClient, so a counter
+  // embed sent by the OTHER client could never be disabled: Discord
+  // refuses with "Cannot edit a message authored by another user", and the
+  // updates service can't edit it either (a third application). Seen live
+  // on 20-08-2026 on a consignment round-1 embed, which goes to the
+  // consignor's private channel and is therefore sent by discordClient.
+  //
+  // Now tries both of this service's own clients before delegating, same
+  // shape as disableConsignmentDiscordButtons. Order unchanged for every
+  // existing flow: kickzDeal first.
   await initKickzDealDiscord();
 
-  const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
-  if (!channel) return delegateToOwner("channel not visible to this bot");
+  let channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
+  let message = channel
+    ? await channel.messages.fetch(messageId).catch(() => null)
+    : null;
 
-  const message = await channel.messages.fetch(messageId).catch(() => null);
-  if (!message) return delegateToOwner("message not found");
+  if (!message) {
+    await initDiscord();
+
+    channel = await discordClient.channels.fetch(channelId).catch(() => null);
+    message = channel
+      ? await channel.messages.fetch(messageId).catch(() => null)
+      : null;
+  }
+
+  if (!message) return delegateToOwner("message not reachable by either client");
 
   const edited = await message
     .edit({
