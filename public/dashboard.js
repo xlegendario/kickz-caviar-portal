@@ -1400,6 +1400,13 @@ function renderConsignmentAcceptedRows(items) {
         >
           Confirm
         </button>
+        <button
+          class="dashboard-deny-btn"
+          type="button"
+          data-consignment-deny="${escapeHtml(item.seller_offer_record_id)}"
+        >
+          Deny
+        </button>
         ${
           item.discord_url
             ? `
@@ -1417,6 +1424,44 @@ function renderConsignmentAcceptedRows(items) {
       </td>
     </tr>
   `).join("");
+
+  // Deny sits next to Confirm so the consignor can answer either way
+  // without going to Discord. Same two endpoints the Discord buttons hit.
+  dashboardTableBody
+    .querySelectorAll("[data-consignment-deny]")
+    .forEach((button) => {
+      button.addEventListener("click", async () => {
+        const sellerOfferRecordId = button.getAttribute("data-consignment-deny");
+
+        if (!confirm("Deny this match? The order goes back to other sellers.")) return;
+
+        button.disabled = true;
+        button.textContent = "Denying...";
+
+        try {
+          const response = await fetch("/api/dashboard/consignment-deny", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              seller_record_id: dashboardSeller.id,
+              seller_offer_record_id: sellerOfferRecordId
+            })
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || "Could not deny. Please try again.");
+          }
+
+          await loadDashboardData();
+        } catch (err) {
+          button.disabled = false;
+          button.textContent = "Deny";
+          alert(err.message);
+        }
+      });
+    });
 
   dashboardTableBody
     .querySelectorAll("[data-consignment-confirm]")
