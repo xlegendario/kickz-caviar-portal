@@ -6068,6 +6068,59 @@ function bindConsignmentDiscordButtons(client) {
         "Closed At": new Date().toISOString()
       });
 
+      // Same consignment interception as the portal's seller-accept
+      // endpoint. This handler carries its OWN copy of the finalisation
+      // rather than calling that endpoint, so the branch has to exist
+      // twice — noted in CONSIGNMENT-FLOW.md as cleanup for step 8.
+      const consignmentSellerOfferId = asText(f["Seller Offer Record ID"]);
+
+      if (consignmentSellerOfferId) {
+        const consignmentOfferRecord = await airtable(SELLER_OFFERS_TABLE)
+          .find(consignmentSellerOfferId)
+          .catch(() => null);
+
+        const consignmentInventoryIdForDiscordAccept = asText(
+          consignmentOfferRecord?.fields?.["Consignment Inventory ID"]
+        );
+
+        if (consignmentInventoryIdForDiscordAccept) {
+          const acceptedVat = asText(f["Counter Payout VAT Type"])
+            || asText(f["Seller Original VAT Type"]);
+
+          const acceptedStoreVat =
+            acceptedVat === "Margin"
+              ? "Margin"
+              : (isDutchClientCountry(orderRecord.fields?.["Client Country"]) ? "VAT21" : "VAT0");
+
+          const result = await confirmConsignmentSellerOffer(consignmentSellerOfferId, {
+            payout: numberValue(f["Counter Payout"]),
+            vatType: acceptedVat,
+            storePrice: customOfferValueForAccept(
+              acceptedStoreVat,
+              numberValue(f["Store Counter Price"]),
+              numberValue(f["Store Counter Price Excl VAT"])
+            ),
+            storeVatType: acceptedStoreVat
+          });
+
+          await disableCounterOfferDiscordButtons(
+            interaction.channelId,
+            interaction.message.id,
+            result.ok
+              ? "✅ Accepted — deal update sent."
+              : "❌ This deal could no longer be finalised.",
+            client
+          );
+
+          console.log(
+            `✅ Consignor accepted round ${counterOfferRecordId} on ${linkedOrderId} from Discord — ` +
+              `finalised in the portal (ok=${result.ok}).`
+          );
+
+          return;
+        }
+      }
+
       if (!COUNTER_OFFER_ACCEPT_WEBHOOK_URL) {
         throw new Error("Missing COUNTER_OFFER_ACCEPT_WEBHOOK_URL");
       }
@@ -17840,6 +17893,78 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-accept", async (req,
       "Accepted At": new Date().toISOString(),
       "Closed At": new Date().toISOString()
     });
+
+    // The consignor accepting a round himself — the fourth and most common
+    // way a consignment deal closes, and the one that was missing: without
+    // this it fell through to the regular seller finalisation below, which
+    // creates a deal channel in the main server and treats the consignor as
+    // an ordinary seller. Seen live on 20-08-2026.
+    //
+    // No confirmation guard here: he is the one clicking accept, so his
+    // presence is not in question.
+    //
+    // Placed after the round is marked Accepted and before the webhook, so
+    // the regular finalisation never starts.
+    const sellerOfferRecordIdForConsignment = asText(f["Seller Offer Record ID"]);
+
+    if (sellerOfferRecordIdForConsignment) {
+      const sellerOfferForConsignment = await airtable(SELLER_OFFERS_TABLE)
+        .find(sellerOfferRecordIdForConsignment)
+        .catch(() => null);
+
+      const consignmentInventoryIdForSellerAccept = asText(
+        sellerOfferForConsignment?.fields?.["Consignment Inventory ID"]
+      );
+
+      if (consignmentInventoryIdForSellerAccept) {
+        const acceptedVatType = asText(f["Counter Payout VAT Type"])
+          || asText(f["Seller Original VAT Type"]);
+
+        const acceptedStoreVatType =
+          acceptedVatType === "Margin"
+            ? "Margin"
+            : (isDutchClientCountry(orderRecord.fields?.["Client Country"]) ? "VAT21" : "VAT0");
+
+        // Same two numbers the regular path writes further down, read from
+        // the very round being accepted — not recomputed from his listing
+        // price, which would be a different amount entirely.
+        const acceptedStorePriceForConsignment = customOfferValueForAccept(
+          acceptedStoreVatType,
+          numberValue(f["Store Counter Price"]),
+          numberValue(f["Store Counter Price Excl VAT"])
+        );
+
+        const consignmentResult = await confirmConsignmentSellerOffer(
+          sellerOfferRecordIdForConsignment,
+          {
+            payout: numberValue(f["Counter Payout"]),
+            vatType: acceptedVatType,
+            storePrice: acceptedStorePriceForConsignment,
+            storeVatType: acceptedStoreVatType
+          }
+        );
+
+        if (!consignmentResult.ok) {
+          return res.status(409).json({
+            error: "Could not finalise this consignment deal.",
+            reason: consignmentResult.reason
+          });
+        }
+
+        console.log(
+          `✅ Consignor accepted round ${counterOfferRecordId} on ${linkedOrderId} — ` +
+            `finalised in the portal (payout €${numberValue(f["Counter Payout"])} ${acceptedVatType}, ` +
+            `store €${acceptedStorePriceForConsignment}).`
+        );
+
+        return res.json({
+          ok: true,
+          consignment: true,
+          seller_offer_record_id: sellerOfferRecordIdForConsignment,
+          inventory_unit_record_id: consignmentResult.inventory_unit_record_id
+        });
+      }
+    }
 
     if (COUNTER_OFFER_ACCEPT_WEBHOOK_URL) {
       await fetch(COUNTER_OFFER_ACCEPT_WEBHOOK_URL, {
