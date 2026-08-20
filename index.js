@@ -9853,24 +9853,25 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
       consignmentInventoryIdForAccept = consignmentInventoryId;
 
       if (consignmentInventoryId) {
-        // FIXED — this counted ANY other round as engagement, which is
-        // wrong twice over. create-fresh-round makes a round at accept
-        // time, and a denied attempt leaves one behind: after a Deny the
-        // guard would then never fire again, and a later accept would
-        // close the deal without asking the consignor anything.
+        // The round being accepted was created by create-fresh-round at
+        // accept time, so it is not evidence of engagement — only rounds
+        // that already existed before it count.
         //
-        // Engagement means HE moved, and the only proof of that is a round
-        // carrying his own counter price. Rounds placed by the store say
-        // nothing about whether he is there.
+        // NOTE — do not "improve" this by testing for a Seller Counter
+        // Price instead: create-fresh-round deliberately writes one
+        // ("shaped exactly like a genuine seller-placed round"), so that
+        // test matches the accept scaffolding itself and the guard never
+        // fires. Tried on 20-08-2026; it silently closed a deal without
+        // asking the consignor.
         const roundsForOffer = await airtable(COUNTER_OFFERS_TABLE)
           .select({
             filterByFormula: `{Seller Offer Record ID} = '${escapeFormulaValue(sellerOfferRecordIdForGuard)}'`,
-            fields: ["Seller Offer Record ID", "Seller Counter Price"]
+            fields: ["Seller Offer Record ID"]
           })
           .all();
 
         const consignorEngaged = roundsForOffer.some(
-          (record) => numberValue(record.fields?.["Seller Counter Price"]) > 0
+          (record) => record.id !== counterOfferRecordId
         );
 
         if (!consignorEngaged) {
