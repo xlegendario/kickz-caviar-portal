@@ -8372,9 +8372,77 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       offer_cost_normalized: best.sellerComparePrice
     };
 
+    const orderRecordForOffer = await airtable(ORDERS_TABLE).find(orderRecordId);
+    const orderFieldsForOffer = orderRecordForOffer.fields || {};
+
     // Route A stops here: the offer is live, computeAndPushLowestOffer
     // picks it up from the rollup and the store is asked as usual.
+    //
+    // Except when it would be absurd. Going over the store's Maximum
+    // Buying Price is fine — they can counter, or accept because their own
+    // selling price was too low. Going over their SELLING PRICE is not:
+    // you would be offering someone more than they sell the pair for.
+    // Seen live on 20-08-2026: a consignor at €200 VAT21 produced a €177,50
+    // VAT0 offer to an Italian store, which is €216,55 including their VAT,
+    // against a Selling Price of €164.
     if (!holdFromStore) {
+      const sellingPrice = numberValue(orderFieldsForOffer["Selling Price"]);
+
+      if (sellingPrice > 0) {
+        const storeBaseForCeiling = convertConsignorPriceToStoreBasePrice(
+          best.sellerPrice,
+          best.row.vat_type,
+          asText(orderFieldsForOffer["Client Country"])
+        );
+
+        const storeOfferForCeiling = calculateStoreCustomOfferFromConsignmentBase(
+          storeBaseForCeiling,
+          orderFieldsForOffer
+        );
+
+        const storeOfferVatType = getStoreOfferVatTypeFromConsignmentVat(
+          best.row.vat_type,
+          asText(orderFieldsForOffer["Client Country"])
+        );
+
+        // "Selling Price" is the store's own all-in figure. A VAT0 offer is
+        // exclusive, so the ceiling has to come down to that same scale
+        // using the CLIENT's rate — not 1.21, which would hand an Italian
+        // or Danish store a ceiling several euro off.
+        const rawVatRate = numberValue(orderFieldsForOffer["Client VAT Rate"]);
+        const clientVatRate = rawVatRate > 1 ? rawVatRate / 100 : rawVatRate;
+
+        const ceiling =
+          storeOfferVatType === "VAT0" && clientVatRate > 0
+            ? sellingPrice / (1 + clientVatRate)
+            : sellingPrice;
+
+        if (Number.isFinite(storeOfferForCeiling) && storeOfferForCeiling > ceiling) {
+          console.log(
+            `⏭️ Consignment auto-offer skipped for ${orderRecordId}: store price ` +
+              `€${storeOfferForCeiling} ${storeOfferVatType} exceeds the store's Selling Price ` +
+              `€${sellingPrice} (ceiling €${ceiling.toFixed(2)} on that scale).`
+          );
+
+          // The Seller Offer stays, held, so the consignor's price still
+          // acts as the undercut benchmark for other sellers — it simply
+          // never reaches the store.
+          await airtable(SELLER_OFFERS_TABLE).update(createdOffer.id, {
+            "Hold From Store?": true
+          }).catch((err) =>
+            console.error("Failed to hold an over-ceiling consignment offer:", err)
+          );
+
+          return res.json({
+            ...baseResponse,
+            held: true,
+            skipped: "above_selling_price",
+            store_offer: storeOfferForCeiling,
+            selling_price: sellingPrice
+          });
+        }
+      }
+
       return res.json(baseResponse);
     }
 
@@ -8394,8 +8462,8 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     // accept — is the machinery every other seller already runs through.
     const maximumBuyingPrice = Number(req.body?.maximum_buying_price);
 
-    const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
-    const orderFields = orderRecord.fields || {};
+    const orderRecord = orderRecordForOffer;
+    const orderFields = orderFieldsForOffer;
 
     const calculatedOfferPrice = calculateConsignmentOfferPrice(
       maximumBuyingPrice,
@@ -9460,7 +9528,7 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
       await disableCounterOfferDiscordButtons(
         sellerDmChannelId,
         sellerDmMessageId,
-        "🔁 You countered in your dashboard. You can still Accept or Edit your choice there."
+        "🔁 You countered in your dashboard. You can still Accept the previous offer or Edit your counter there."
       ).catch((err) => console.error("Failed to disable seller DM embed on Portal counter (non-blocking):", err.message));
     }
 
@@ -16409,7 +16477,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
           disableCounterOfferDiscordButtons(
             dmChannelId,
             dmMessageId,
-            "🔁 You countered in your dashboard. You can still Accept or Edit your choice there."
+            "🔁 You countered in your dashboard. You can still Accept the previous offer or Edit your counter there."
           ).catch((err) => console.error("Failed to disable embed on retry-counter (non-blocking):", err.message));
         }
       }
@@ -16589,7 +16657,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
         disableCounterOfferDiscordButtons(
           dmChannelId,
           dmMessageId,
-          "🔁 You countered in your dashboard. You can still Accept or Edit your choice there."
+          "🔁 You countered in your dashboard. You can still Accept the previous offer or Edit your counter there."
         ).catch((err) => console.error("Failed to disable embed on retry-counter (non-blocking):", err.message));
       }
     }
@@ -27553,7 +27621,7 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
       await disableCounterOfferDiscordButtons(
         mwSellerDmChannelId,
         mwSellerDmMessageId,
-        "🔁 You countered in your dashboard. You can still Accept or Edit your choice there."
+        "🔁 You countered in your dashboard. You can still Accept the previous offer or Edit your counter there."
       ).catch((err) => console.error("Failed to disable MW seller DM embed on Portal counter (non-blocking):", err.message));
     }
 
@@ -27765,7 +27833,7 @@ app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) =>
       await disableCounterOfferDiscordButtons(
         mwBuyerDmChannelId,
         mwBuyerDmMessageId,
-        "🔁 You countered in your dashboard. You can still Accept or Edit your choice there."
+        "🔁 You countered in your dashboard. You can still Accept the previous offer or Edit your counter there."
       ).catch((err) => console.error("Failed to disable MW buyer DM embed on Portal counter (non-blocking):", err.message));
     }
 
