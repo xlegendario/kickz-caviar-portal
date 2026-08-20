@@ -451,6 +451,75 @@
   font-weight: 700;
 }
 
+/* ---- UX-ronde 1.2 ---------------------------------------------------
+   Het productblok en de knoppen blijven staan terwijl je zijwaarts
+   scrollt, en de kolomkoppen blijven staan terwijl je naar beneden
+   scrollt. Je weet zo altijd naar welke order je kijkt en wat een kolom
+   betekent, ook halverwege een brede tabel.
+   -------------------------------------------------------------------- */
+
+.dashboard-product-name {
+  font-weight: 800;
+  color: rgba(255,255,255,0.94);
+}
+
+.dashboard-product-meta {
+  margin-top: 3px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.46);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Alleen vastzetten wanneer Product ook echt vooraan staat. In de tabel
+   met lopende biedingen staat er een statusbolletje voor. */
+.dashboard-table th.dashboard-product-col:first-child,
+.dashboard-table td.dashboard-product-col:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  box-shadow: 1px 0 0 #242424;
+}
+
+.dashboard-table td.dashboard-product-col:first-child {
+  background: #101010;
+}
+
+.dashboard-table th:last-child,
+.dashboard-table td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  box-shadow: -1px 0 0 #242424;
+}
+
+.dashboard-table td:last-child {
+  background: #101010;
+}
+
+.dashboard-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: #151515;
+}
+
+.dashboard-table thead th.dashboard-product-col:first-child,
+.dashboard-table thead th:last-child {
+  z-index: 5;
+  background: #151515;
+}
+
+.dashboard-table-wrap.is-scrolled-x th.dashboard-product-col:first-child,
+.dashboard-table-wrap.is-scrolled-x td.dashboard-product-col:first-child {
+  box-shadow: 10px 0 14px -10px rgba(0,0,0,0.85), 1px 0 0 #242424;
+}
+
+.dashboard-table-wrap:not(.is-at-end) th:last-child,
+.dashboard-table-wrap:not(.is-at-end) td:last-child {
+  box-shadow: -10px 0 14px -10px rgba(0,0,0,0.85), -1px 0 0 #242424;
+}
+
 .dashboard-empty-state {
   min-height: 280px;
   display: grid;
@@ -784,11 +853,12 @@
 }
 
 .dashboard-table-wrap {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: calc(100vh - 340px);
 }
 
 .dashboard-table {
-  min-width: 1280px;
+  min-width: 1040px;
 }
 
 .dashboard-table th,
@@ -796,24 +866,18 @@
   white-space: nowrap;
 }
 
-.dashboard-table th:nth-child(2),
-.dashboard-table td:nth-child(2) {
-  min-width: 320px;
+/* De losse SKU- en Brand-kolommen bestaan niet meer, dus die twee
+   breedtes vervallen. De productbreedte hangt nu aan de kolom zelf.
+   Alles achter Product schuift drie plaatsen op: de oude regel voor
+   nummer 9 hoort nu bij nummer 6. */
+.dashboard-table th.dashboard-product-col,
+.dashboard-table td.dashboard-product-col {
+  min-width: 300px;
   white-space: normal;
 }
 
-.dashboard-table th:nth-child(3),
-.dashboard-table td:nth-child(3) {
-  min-width: 150px;
-}
-
-.dashboard-table th:nth-child(5),
-.dashboard-table td:nth-child(5) {
-  min-width: 160px;
-}
-
-.dashboard-table th:nth-child(9),
-.dashboard-table td:nth-child(9) {
+.dashboard-table th:nth-child(6),
+.dashboard-table td:nth-child(6) {
   min-width: 130px;
   text-align: center;
 }
@@ -3261,7 +3325,8 @@
 .dashboard-pill-row {
   display: flex;
   gap: 8px;
-  padding: 0 24px 16px;
+  padding: 14px 24px;
+  border-bottom: 1px solid #242424;
   flex-wrap: wrap;
 }
 
@@ -3292,9 +3357,10 @@
 }
 
 .dashboard-pill-btn.active {
-  background: rgba(88, 166, 255, 0.16);
-  border-color: rgba(88, 166, 255, 0.5);
-  color: #58a6ff;
+  background: rgba(255, 204, 0, 0.16);
+  border-color: rgba(255, 204, 0, 0.55);
+  color: #ffe07a;
+  box-shadow: 0 0 14px rgba(255, 204, 0, 0.12);
 }
 
 .dashboard-pill-btn .dashboard-pill-count {
