@@ -564,7 +564,9 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
       body: JSON.stringify({
         trigger_type: "disable-offer-messages",
         store_name: asText(orderFields["Store Name"]),
-        record_id: orderRecordId
+        record_id: orderRecordId,
+        content: "✅ **Deal confirmed.** This order is being fulfilled.",
+        disable_edit: true
       })
     }).catch((err) =>
       console.error("Failed to fire disable-offer-messages sweep (non-blocking):", err)
@@ -650,6 +652,24 @@ async function denyConsignmentSellerOffer(sellerOfferRecordId) {
   // deliberately left alone: nothing was finalised, so it is still on
   // "Outsource" and regular sellers can take it.
   await closeConsignmentRoundsForSellerOffer(sellerOfferRecordId, "Denied");
+
+  // The guard killed the store's Offer Request embed when it paused the
+  // accept. Now that the answer is "no", the store needs a live one again,
+  // otherwise the order sits on Outsource with nothing to click.
+  //
+  // Clearing the key rather than rebuilding the payload here:
+  // sendOfferRequestWebhook watches this field and re-fires whenever it
+  // differs from the freshly computed one, so the engine sends its own
+  // payload. One builder, no second copy to drift.
+  const deniedOrderId = firstLinkedRecordId(offerRecord.fields?.["Linked Orders"]);
+
+  if (deniedOrderId) {
+    await airtable(ORDERS_TABLE).update(deniedOrderId, {
+      offer_request_webhook_key: ""
+    }).catch((err) =>
+      console.error("Failed to re-arm the offer request after a consignment deny:", err)
+    );
+  }
 
   return { ok: true, seller_offer_record_id: sellerOfferRecordId };
 }
@@ -9942,6 +9962,26 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
               sellerOfferRecordIdForGuard,
               guardDiscordResult
             );
+
+            // The store has acted, so its Offer Request embed must stop
+            // looking actionable — somebody working only in Discord reads
+            // the state off what is still clickable. Safe to kill here
+            // because a Deny re-sends it (see denyConsignmentSellerOffer).
+            if (AIRTABLE_DISCORD_UPDATES_URL) {
+              fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  trigger_type: "disable-offer-messages",
+                  store_name: asText(orderRecord.fields?.["Store Name"]),
+                  record_id: linkedOrderId,
+                  content: "⏳ **Offer accepted.** Waiting on the seller to process.",
+                  disable_edit: true
+                })
+              }).catch((err) =>
+                console.error("Failed to fire disable-offer-messages from guard (non-blocking):", err)
+              );
+            }
 
             console.log(
               `\u23f8\ufe0f Store accept on ${linkedOrderId} held for consignor confirmation ` +
