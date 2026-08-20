@@ -6335,7 +6335,14 @@ function bindConsignmentDiscordButtons(client) {
     try {
       if (customId.startsWith("request_consignment_label:")) {
         const [, orderRecordId] = customId.split(":");
-      
+
+        // Discord drops an interaction that is not acknowledged within
+        // 3 seconds ("didn't respond in time"), and the work below now
+        // includes an Airtable read, a courier lookup and a call to the
+        // bot. Acknowledge first; the message edit further down still
+        // works afterwards.
+        await interaction.deferUpdate().catch(() => {});
+
         await requestConsignmentShippingLabel(orderRecordId);
       
         await safeEditInteractionMessage(interaction, {
@@ -6361,6 +6368,10 @@ function bindConsignmentDiscordButtons(client) {
       }
       
       if (action === "confirm_consignment_seller_offer") {
+        // Same 3-second rule: creating the unit, decrementing stock and
+        // sending the deal update takes longer than that.
+        await interaction.deferUpdate().catch(() => {});
+
         await safeEditInteractionMessage(interaction, {
           content: "⏳ Processing confirmation...",
           embeds: interaction.message.embeds,
@@ -6415,6 +6426,8 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       if (action === "deny_consignment_seller_offer") {
+        await interaction.deferUpdate().catch(() => {});
+
         const result = await denyConsignmentSellerOffer(offerId);
 
         await disableConsignmentDiscordButtons(
