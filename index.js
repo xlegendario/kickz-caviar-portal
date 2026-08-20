@@ -13747,7 +13747,17 @@ function calculateConsignmentOfferPrice(
     rawOffer = candidateFromFloor <= threshold ? candidateFromFloor : candidateFromPercentage;
   }
 
-  return roundUpToStep(rawOffer, 2.5);
+  // FIXED — this rounded UP, and this number is derived by INVERTING the
+  // store's ceiling: rounding it up pushes the resulting store price back
+  // over that ceiling. Live example (20-08-2026): Maximum Buying Price
+  // €160, store on 5% + €5. Raw payout 147.619 rounded up to €150, and
+  // "Offer To Store" then charges MAX(150+10, 150*1.05+5) = €162.50 —
+  // €2.50 ABOVE the store's own stated maximum. Rounding down gives
+  // €147.50, which lands on exactly €160.
+  //
+  // Down is the only safe direction here: every €2.50 step up is money
+  // charged past what the store agreed to.
+  return roundDownToStep(rawOffer, 2.5);
 }
 
 async function lookupProductFromRetailed(sku) {
