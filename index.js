@@ -13174,6 +13174,8 @@ async function sendCounterOfferDiscordDM({
     target = await discordClient.channels.fetch(channelId).catch(() => null);
   }
 
+  let deliveryType = channelId ? "private_channel" : "dm";
+
   if (!target) {
     await initKickzDealDiscord();
 
@@ -13183,6 +13185,7 @@ async function sendCounterOfferDiscordDM({
 
     const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
     target = await user.createDM();
+    deliveryType = "dm";
   }
 
   // FIXED — his call: primary reference should be the seller's LAST
@@ -13290,10 +13293,13 @@ async function sendCounterOfferDiscordDM({
     console.error("Failed to supersede prior seller embeds (non-blocking):", supersedeErr.message);
   }
 
+  // FIXED — this was hardcoded "dm", so a counter delivered to a
+  // consignor's private channel was recorded on the round as a DM. Wrong
+  // data, and misleading for anyone debugging why an embed will not edit.
   return {
     channelId: message.channelId,
     messageId: message.id,
-    deliveryType: "dm"
+    deliveryType
   };
 }
 
