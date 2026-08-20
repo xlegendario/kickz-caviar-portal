@@ -8397,7 +8397,7 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         // Discord hiccup must not undo them. Logged loudly instead,
         // because a silent miss here means a consignor who is never
         // asked — and that looks exactly like a quiet week.
-        await sendCounterOfferDiscordDM({
+        const roundDiscordResult = await sendCounterOfferDiscordDM({
           counterOfferRecordId: createdRound.id,
           sellerDiscordId: consignorDiscordId,
           productName: best.row.product_name,
@@ -8410,12 +8410,31 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
           sellerOriginalVatType: best.row.vat_type,
           sellerLastOfferPrice: best.sellerPrice,
           channelId: consignorOfferChannelId || null
-        }).catch((err) =>
+        }).catch((err) => {
           console.error(
             `❌ Failed to notify consignor ${best.row.seller_id} about consignment round 1 (non-blocking):`,
             err
-          )
-        );
+          );
+          return null;
+        });
+
+        // Without these three the embed can never be disabled or updated
+        // later: every other counter path writes them back onto the round,
+        // and the disable logic looks them up there. Leaving them empty
+        // makes a stale "Counter Offer" embed sit in the channel with live
+        // buttons after the consignor has already moved on.
+        if (roundDiscordResult?.messageId) {
+          await airtable(COUNTER_OFFERS_TABLE).update(createdRound.id, {
+            "Discord Channel ID": roundDiscordResult.channelId,
+            "Discord Message ID": roundDiscordResult.messageId,
+            "Discord Delivery Type": roundDiscordResult.deliveryType
+          }).catch((err) =>
+            console.error(
+              `Failed to store Discord IDs on consignment round ${createdRound.id} (non-blocking):`,
+              err
+            )
+          );
+        }
       } else {
         console.error(
           `❌ Consignment round 1 for ${orderRecordId}: consignor ${best.row.seller_id} has neither an offer channel nor a Discord ID — nobody was asked.`
