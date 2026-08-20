@@ -548,6 +548,29 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
 
   await closeConsignmentRoundsForSellerOffer(sellerOfferRecordId, "Accepted");
 
+  // Same stale-embed sweep the regular flow fires: the store's "Offer
+  // Request" embed is now dead and must stop being clickable.
+  //
+  // Deliberately HERE and not in the confirmation guard. At guard time the
+  // deal is not yet real — the consignor can still deny, and then the order
+  // returns to "Outsource" while nothing would re-send the store an offer
+  // request, stranding it with a dead embed. Here the deal IS final, so
+  // there is nothing to restore. All four accept paths reach this function,
+  // so one call covers them all.
+  if (AIRTABLE_DISCORD_UPDATES_URL && orderRecordId) {
+    fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        trigger_type: "disable-offer-messages",
+        store_name: asText(orderFields["Store Name"]),
+        record_id: orderRecordId
+      })
+    }).catch((err) =>
+      console.error("Failed to fire disable-offer-messages sweep (non-blocking):", err)
+    );
+  }
+
   // Without this the consignor never gets his Request Label button and
   // the deal stalls silently — so it is sent, but non-blocking: the unit
   // and the stock decrement above are the deal and must stand either way.
@@ -14547,6 +14570,32 @@ async function getConsignmentSellerOfferIds() {
   return new Set(records.map((record) => record.id));
 }
 
+// Seller Offers whose consignment confirmation is still outstanding: the
+// question went to the consignor and he has not answered. Those belong in
+// the Accepted tab and nowhere else — without this they show up in Offers
+// too and count twice in the badges.
+//
+// Covers both shapes: the offer itself, and the round create-fresh-round
+// makes when the store accepts (which stays Open while the guard waits).
+async function getConsignmentPendingConfirmOfferIds() {
+  const records = await airtable(SELLER_OFFERS_TABLE)
+    .select({
+      fields: ["Consignment Confirm Message ID", "Linked Inventory Unit"],
+      filterByFormula: `{Consignment Confirm Message ID} != ''`
+    })
+    .all()
+    .catch((err) => {
+      console.error("Failed to load pending consignment confirmations:", err);
+      return [];
+    });
+
+  return new Set(
+    records
+      .filter((record) => !firstLinkedRecordId(record.fields?.["Linked Inventory Unit"]))
+      .map((record) => record.id)
+  );
+}
+
 // "consignment" shows only consignment offers, anything else excludes
 // them. Default is exclusion, so every existing caller keeps its current
 // behaviour without passing anything.
@@ -14615,15 +14664,20 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
 
     const scope = asText(req.query.scope);
     const consignmentOfferIds = await getConsignmentSellerOfferIds();
+    const pendingConfirmOfferIds = await getConsignmentPendingConfirmOfferIds();
 
-    const filteredRecords = records.filter(
-      (record) =>
+    const filteredRecords = records.filter((record) => {
+      const sellerOfferId = asText(record.fields?.["Seller Offer Record ID"]);
+
+      // A round belonging to an offer that is waiting on the consignor's
+      // Confirm lives in the Accepted tab, not here.
+      if (pendingConfirmOfferIds.has(sellerOfferId)) return false;
+
+      return (
         linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId) &&
-        matchesOfferScope(
-          consignmentOfferIds.has(asText(record.fields?.["Seller Offer Record ID"])),
-          scope
-        )
-    );
+        matchesOfferScope(consignmentOfferIds.has(sellerOfferId), scope)
+      );
+    });
 
     const preFilteredByStatusRaw = filteredRecords.filter((record) => {
       if (filter === "denied") return true;
