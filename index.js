@@ -15716,6 +15716,69 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
     }).catch((err) => console.error("Failed to close abandoned own counter (non-blocking):", err));
     }
 
+    // Fourth and last place a deal is finalised, found by grepping every
+    // COUNTER_OFFER_ACCEPT_WEBHOOK_URL call site rather than by guessing:
+    // the consignor falling back to the counterparty's earlier position.
+    // Without this it produced a regular Want To Buys deal channel and an
+    // ordinary unit — seen live on 20-08-2026.
+    const consignmentOfferIdForPrevious = asText(f["Seller Offer Record ID"]);
+
+    if (consignmentOfferIdForPrevious) {
+      const consignmentOfferForPrevious = await airtable(SELLER_OFFERS_TABLE)
+        .find(consignmentOfferIdForPrevious)
+        .catch(() => null);
+
+      const consignmentInventoryIdForPrevious = asText(
+        consignmentOfferForPrevious?.fields?.["Consignment Inventory ID"]
+      );
+
+      if (consignmentInventoryIdForPrevious) {
+        const previousVatType = asText(f["Counter Payout VAT Type"])
+          || asText(f["Seller Original VAT Type"]);
+
+        const previousStoreVatType =
+          previousVatType === "Margin"
+            ? "Margin"
+            : (isDutchClientCountry(orderRecord.fields?.["Client Country"]) ? "VAT21" : "VAT0");
+
+        const previousStorePrice = customOfferValueForAccept(
+          previousStoreVatType,
+          numberValue(f["Store Counter Price"]),
+          numberValue(f["Store Counter Price Excl VAT"])
+        );
+
+        const consignmentResult = await confirmConsignmentSellerOffer(
+          consignmentOfferIdForPrevious,
+          {
+            payout: numberValue(f["Counter Payout"]),
+            vatType: previousVatType,
+            storePrice: previousStorePrice,
+            storeVatType: previousStoreVatType
+          }
+        );
+
+        if (!consignmentResult.ok) {
+          return res.status(409).json({
+            error: "Could not finalise this consignment deal.",
+            reason: consignmentResult.reason
+          });
+        }
+
+        console.log(
+          `✅ Consignor accepted previous round ${acceptTargetId} on ${linkedOrderId} — ` +
+            `finalised in the portal (payout €${numberValue(f["Counter Payout"])} ${previousVatType}, ` +
+            `store €${previousStorePrice}).`
+        );
+
+        return res.json({
+          ok: true,
+          consignment: true,
+          seller_offer_record_id: consignmentOfferIdForPrevious,
+          inventory_unit_record_id: consignmentResult.inventory_unit_record_id
+        });
+      }
+    }
+
     if (COUNTER_OFFER_ACCEPT_WEBHOOK_URL) {
       await fetch(COUNTER_OFFER_ACCEPT_WEBHOOK_URL, {
         method: "POST",
