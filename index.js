@@ -1167,6 +1167,29 @@ async function disableCounterOfferDiscordButtons(channelId, messageId, note) {
 
   if (!message) return delegateToOwner("message not reachable by either client");
 
+  // Diagnostic — a 50005 means the message belongs to a THIRD application,
+  // and "which one" is the only thing that tells us where the wrong ID came
+  // from. channel.messages.fetch() succeeds for any message the bot can
+  // see, so finding it proves nothing about ownership.
+  const authorId = asText(message.author?.id);
+  const ownIds = [
+    asText(kickzDealDiscordClient?.user?.id),
+    asText(discordClient?.user?.id)
+  ].filter(Boolean);
+
+  if (authorId && !ownIds.includes(authorId)) {
+    console.error(
+      `❌ Counter-offer embed is authored by another application — cannot edit it.`,
+      {
+        channelId,
+        messageId,
+        authorId,
+        authorName: asText(message.author?.username),
+        ourClientIds: ownIds
+      }
+    );
+  }
+
   const edited = await message
     .edit({
     content: note || message.content,
