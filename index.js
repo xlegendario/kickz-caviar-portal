@@ -8621,6 +8621,26 @@ app.post("/api/counter-offers/create", async (req, res) => {
       const sellerOriginalPrice = numberValue(f["Seller Offer"]);
       const sellerVatType = asText(f["Offer VAT Type"]);
 
+      // A consignor with his own channels reads everything there, so the
+      // store's counter belongs in his OFFER channel rather than a DM.
+      // This is the store's FIRST counter on an order; the per-round
+      // variant lives in /store-counter and does the same.
+      let consignorChannelIdForBulk = null;
+
+      if (asText(f["Consignment Inventory ID"]) && sellerRecordId) {
+        const consignorForBulk = await airtable(SELLERS_TABLE)
+          .find(sellerRecordId)
+          .catch(() => null);
+
+        consignorChannelIdForBulk = getSellerOfferChannelId(
+          {
+            consignment_offer_channel_id: asText(consignorForBulk?.fields?.["Consignment Offer Channel ID"]),
+            consignment_confirmation_channel_id: asText(consignorForBulk?.fields?.["Consignment Confirmation Channel ID"])
+          },
+          false
+        ) || null;
+      }
+
       if (!sellerRecordId || !sellerOriginalPrice || !sellerVatType) continue;
 
       const counterPayout = calculateCounterPayoutForVatType(
@@ -8663,6 +8683,7 @@ app.post("/api/counter-offers/create", async (req, res) => {
 
       try {
         const discordResult = await sendCounterOfferDiscordDM({
+          channelId: consignorChannelIdForBulk,
           counterOfferRecordId: createdCounter.id,
           sellerDiscordId,
           productName,
