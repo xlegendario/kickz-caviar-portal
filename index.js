@@ -8710,7 +8710,19 @@ app.post("/api/counter-offers/create", async (req, res) => {
 
     if (consignmentError) throw consignmentError;
 
-    for (const row of consignmentRows || []) {
+    // DISABLED — the legacy consignment branch. A consignment offer is a
+    // regular Seller Offer now, so the seller-counter loop above already
+    // created a proper Counter Offers round for it. Leaving this running
+    // sent the consignor a SECOND, older embed ("We Got An Offer For Your
+    // Item") in his private channel next to the correct one, and that copy
+    // answers to none of the new disable/sweep logic. Seen live on
+    // 20-08-2026.
+    //
+    // Switched off rather than deleted so reverting is one word; the whole
+    // block goes at cleanup (step 8).
+    const LEGACY_CONSIGNMENT_COUNTERS_ENABLED = false;
+
+    for (const row of (LEGACY_CONSIGNMENT_COUNTERS_ENABLED ? consignmentRows || [] : [])) {
       const sellerVatType = asText(row.vat_type);
       const sellerOriginalPrice = Number(row.selling_price_suggested);
 
@@ -9638,9 +9650,38 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
         Number.isFinite(recomputedPayout) &&
         !hasRoomForNextStep(sellerOwnPosition, recomputedPayout);
 
+      // A consignor with his own channels reads everything there, so a
+      // store counter belongs in his OFFER channel and not in a DM. Only
+      // consignment offers resolve to a channel; a regular seller passes
+      // null and keeps the DM exactly as before.
+      let consignorCounterChannelId = null;
+
+      const consignmentOfferIdForCounter = asText(f["Seller Offer Record ID"]);
+
+      if (consignmentOfferIdForCounter) {
+        const offerForCounter = await airtable(SELLER_OFFERS_TABLE)
+          .find(consignmentOfferIdForCounter)
+          .catch(() => null);
+
+        if (asText(offerForCounter?.fields?.["Consignment Inventory ID"])) {
+          const consignorForCounter = await airtable(SELLERS_TABLE)
+            .find(firstLinkedRecordId(f["Seller ID"]))
+            .catch(() => null);
+
+          consignorCounterChannelId = getSellerOfferChannelId(
+            {
+              consignment_offer_channel_id: asText(consignorForCounter?.fields?.["Consignment Offer Channel ID"]),
+              consignment_confirmation_channel_id: asText(consignorForCounter?.fields?.["Consignment Confirmation Channel ID"])
+            },
+            false
+          ) || null;
+        }
+      }
+
       const discordResult = await sendCounterOfferDiscordDM({
         counterOfferRecordId: newRound.id,
         sellerDiscordId,
+        channelId: consignorCounterChannelId,
         productName: asText(f["Product Name"]),
         sku: asText(f["SKU"]),
         size: asText(f["Size"]),
