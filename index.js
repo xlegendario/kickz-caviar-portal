@@ -10102,6 +10102,48 @@ app.post("/api/counter-offers/create-fresh-round", async (req, res) => {
       return res.status(409).json({ error: "Could not determine this seller's current price." });
     }
 
+    // FIXED — no duplicate guard. Every store action that lands here made
+    // ANOTHER round for the same Seller Offer, so a store that denied twice,
+    // or a deny broadcast that ran more than once, left two or three
+    // identical rows behind. Live on 21-08-2026: order 15446 carried three
+    // Denied rounds for one offer (CTO-000501/502/503, same
+    // Seller Offer Record ID, no Previous Record ID), order 15528 two.
+    //
+    // The store sees those as duplicate lines in its Offers tab and cannot
+    // tell them apart. Reuse the open round instead of stacking another on
+    // top: the caller only needs a round to act on, and an existing open one
+    // is exactly that.
+    //
+    // Filtered on the plain text field, never on the link — a
+    // FIND(recordId, ARRAYJOIN({Order})) formula does not match in this base.
+    const existingOpenRounds = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `AND(
+          {Seller Offer Record ID} = '${escapeFormulaValue(sellerOfferRecordId)}',
+          {Status} = 'Open'
+        )`,
+        fields: ["Seller Offer Record ID", "Order", "Created At"]
+      })
+      .all()
+      .catch(() => []);
+
+    const reusableRound = existingOpenRounds.find((record) =>
+      linkedRecordIncludes(record.fields?.["Order"], orderRecordId)
+    );
+
+    if (reusableRound) {
+      console.log(
+        `♻️ create-fresh-round reused open round ${reusableRound.id} for Seller Offer ` +
+          `${sellerOfferRecordId} on ${orderRecordId} instead of creating a duplicate.`
+      );
+
+      return res.json({
+        ok: true,
+        reused: true,
+        counter_offer_record_id: reusableRound.id
+      });
+    }
+
     const createdRound = await airtable(COUNTER_OFFERS_TABLE).create({
       "Order": [orderRecordId],
       "Seller ID": [sellerRecordId],
