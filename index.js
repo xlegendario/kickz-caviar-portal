@@ -1151,44 +1151,61 @@ async function disableCounterOfferDiscordButtons(channelId, messageId, note) {
   // existing flow: kickzDeal first.
   await initKickzDealDiscord();
 
-  let channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
-  let message = channel
-    ? await channel.messages.fetch(messageId).catch(() => null)
-    : null;
+  // FIXED — picking the first client that can SEE the message is wrong.
+  // Both bots sit in the same server, so kickzDeal happily fetches a
+  // message that discordClient posted into a consignor's private channel,
+  // and then edits it — which Discord refuses with 50005 ("Cannot edit a
+  // message authored by another user"). Seen live on 20-08-2026: the
+  // reachable-vs-owner distinction is the whole bug.
+  //
+  // What matters is who WROTE it. Fetch once to learn the author, then act
+  // through that client.
+  await initKickzDealDiscord();
+  await initDiscord();
 
-  if (!message) {
-    await initDiscord();
+  const candidates = [kickzDealDiscordClient, discordClient].filter(
+    (client) => client?.isReady?.()
+  );
 
-    channel = await discordClient.channels.fetch(channelId).catch(() => null);
-    message = channel
-      ? await channel.messages.fetch(messageId).catch(() => null)
-      : null;
+  let message = null;
+  let owningClient = null;
+
+  for (const client of candidates) {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel) continue;
+
+    const found = await channel.messages.fetch(messageId).catch(() => null);
+    if (!found) continue;
+
+    message = found;
+
+    // The author is the same regardless of which client fetched it, so one
+    // successful fetch is enough to identify the owner.
+    owningClient = candidates.find(
+      (client) => asText(client?.user?.id) === asText(found.author?.id)
+    ) || null;
+
+    break;
   }
 
   if (!message) return delegateToOwner("message not reachable by either client");
 
-  // Diagnostic — a 50005 means the message belongs to a THIRD application,
-  // and "which one" is the only thing that tells us where the wrong ID came
-  // from. channel.messages.fetch() succeeds for any message the bot can
-  // see, so finding it proves nothing about ownership.
-  const authorId = asText(message.author?.id);
-  const ownIds = [
-    asText(kickzDealDiscordClient?.user?.id),
-    asText(discordClient?.user?.id)
-  ].filter(Boolean);
-
-  if (authorId && !ownIds.includes(authorId)) {
-    console.error(
-      `❌ Counter-offer embed is authored by another application — cannot edit it.`,
-      {
-        channelId,
-        messageId,
-        authorId,
-        authorName: asText(message.author?.username),
-        ourClientIds: ownIds
-      }
+  if (!owningClient) {
+    return delegateToOwner(
+      `message authored by another application (${asText(message.author?.username) || "unknown"})`
     );
   }
+
+  // Re-fetch through the owning client so the edit is performed by the bot
+  // that actually posted it.
+  const ownChannel = await owningClient.channels.fetch(channelId).catch(() => null);
+  const ownMessage = ownChannel
+    ? await ownChannel.messages.fetch(messageId).catch(() => null)
+    : null;
+
+  if (!ownMessage) return delegateToOwner("owning client could not reach the message");
+
+  message = ownMessage;
 
   const edited = await message
     .edit({
