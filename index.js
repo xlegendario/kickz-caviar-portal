@@ -7591,10 +7591,6 @@ async function processCsvImportJob(job) {
       });
     }
 
-    for (const item of affectedStockKeys.values()) {
-      await refreshConsignmentStockLevel(item.sku, item.size);
-    }
-
     await updateCsvImportJob(job.id, {
       status: "completed",
       processed_rows: rows.length,
@@ -7617,6 +7613,26 @@ async function processCsvImportJob(job) {
       total: rows.length,
       error: err.message
     });
+  } finally {
+    // FIXED — this ran inside the try, after the row loop, so a single bad
+    // row aborted the whole job BEFORE any stock level was refreshed. The
+    // rows already inserted then existed in Supabase with no row in
+    // consignment_stock_levels and therefore none in Airtable's Stock
+    // Levels — and autoAllocateBestUnit matches on that, so the stock was
+    // simply never offered to anyone. Silent, and it explains why whole
+    // products went missing at once (IH7799: 15 sizes, added 13-08-2026).
+    //
+    // In a finally now, so whatever DID land still becomes visible. Each
+    // refresh is caught on its own: one bad SKU must not take the rest of
+    // the batch down with it.
+    for (const item of affectedStockKeys.values()) {
+      await refreshConsignmentStockLevel(item.sku, item.size).catch((err) =>
+        console.error(
+          `Failed to refresh stock level for ${item.sku} / ${item.size} after CSV import:`,
+          err.message
+        )
+      );
+    }
   }
 }
 
