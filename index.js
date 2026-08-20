@@ -23567,6 +23567,71 @@ async function normalizeConsignmentDashboardItems(records, sellerRecordId) {
   return sortDashboardItemsNewestFirst(items);
 }
 
+// NEW — the Deny counterpart of the confirm endpoint above, so a consignor
+// can answer either way without leaving the portal. Same function the
+// Discord Deny button calls.
+app.post("/api/dashboard/consignment-deny", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const sellerOfferRecordId = asText(req.body?.seller_offer_record_id);
+
+    if (!sellerRecordId || !sellerOfferRecordId) {
+      return res.status(400).json({
+        error: "Missing seller_record_id or seller_offer_record_id"
+      });
+    }
+
+    const offerRecord = await airtable(SELLER_OFFERS_TABLE)
+      .find(sellerOfferRecordId)
+      .catch(() => null);
+
+    if (!offerRecord) {
+      return res.status(404).json({ error: "Offer not found" });
+    }
+
+    if (!linkedRecordIncludes(offerRecord.fields?.["Seller ID"], sellerRecordId)) {
+      return res.status(403).json({ error: "Not allowed for this seller." });
+    }
+
+    // Read the Discord IDs BEFORE denying — the deny clears them so a later
+    // accept on this stock asks again rather than assuming someone is still
+    // thinking about it.
+    const channelId = asText(offerRecord.fields?.["Consignment Confirm Channel ID"]);
+    const messageId = asText(offerRecord.fields?.["Consignment Confirm Message ID"]);
+
+    const result = await denyConsignmentSellerOffer(sellerOfferRecordId);
+
+    if (!result.ok) {
+      return res.status(409).json({
+        error:
+          result.reason === "already_confirmed"
+            ? "This match was already confirmed."
+            : "This match is no longer available.",
+        reason: result.reason
+      });
+    }
+
+    if (channelId && messageId) {
+      await disableConsignmentDiscordButtons(
+        channelId,
+        messageId,
+        "❌ Denied via the portal."
+      ).catch((err) =>
+        console.error("Failed to disable consignment confirm embed (non-blocking):", err)
+      );
+    }
+
+    res.json({ ok: true, seller_offer_record_id: sellerOfferRecordId });
+  } catch (err) {
+    console.error("Failed to deny consignment offer from portal:", err);
+
+    res.status(500).json({
+      error: "Failed to deny",
+      details: err.message
+    });
+  }
+});
+
 // NEW — the Consignment "Accepted" tab.
 //
 // Deliberately NOT a copy of the Want To Buys Accepted tab, which filters
