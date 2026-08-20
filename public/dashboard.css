@@ -452,10 +452,10 @@
 }
 
 /* ---- UX-ronde 1.2 ---------------------------------------------------
-   Het productblok en de knoppen blijven staan terwijl je zijwaarts
-   scrollt, en de kolomkoppen blijven staan terwijl je naar beneden
-   scrollt. Je weet zo altijd naar welke order je kijkt en wat een kolom
-   betekent, ook halverwege een brede tabel.
+   Het productblok en de actiekolom blijven staan tijdens het zijwaarts
+   scrollen, kop en inhoud samen. De kolomkoppen blijven staan tijdens het
+   scrollen naar beneden. Beide kolommen worden herkend aan hun klasse en
+   niet aan hun positie, want niet elke tabel heeft dezelfde eerste kolom.
    -------------------------------------------------------------------- */
 
 .dashboard-product-name {
@@ -471,29 +471,43 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Alleen vastzetten wanneer Product ook echt vooraan staat. In de tabel
-   met lopende biedingen staat er een statusbolletje voor. */
-.dashboard-table th.dashboard-product-col:first-child,
-.dashboard-table td.dashboard-product-col:first-child {
+.dashboard-table th.dashboard-product-col,
+.dashboard-table td.dashboard-product-col {
   position: sticky;
   left: 0;
   z-index: 3;
   box-shadow: 1px 0 0 #242424;
 }
 
-.dashboard-table td.dashboard-product-col:first-child {
-  background: #101010;
+/* De tabel met lopende biedingen begint met een statusbolletje. Die kolom
+   gaat mee vastzitten en Product schuift er precies achter. */
+.dashboard-table th:first-child:not(.dashboard-product-col),
+.dashboard-table td:first-child:not(.dashboard-product-col) {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  width: 54px;
+  min-width: 54px;
 }
 
-.dashboard-table th:last-child,
-.dashboard-table td:last-child {
+.dashboard-table th:first-child:not(.dashboard-product-col) + th.dashboard-product-col,
+.dashboard-table td:first-child:not(.dashboard-product-col) + td.dashboard-product-col {
+  left: 54px;
+}
+
+.dashboard-table th.dashboard-action-col,
+.dashboard-table td.dashboard-action-col {
   position: sticky;
   right: 0;
   z-index: 3;
   box-shadow: -1px 0 0 #242424;
 }
 
-.dashboard-table td:last-child {
+/* Een dichte ondergrond, anders schuiven de andere kolommen er zichtbaar
+   onderdoor. */
+.dashboard-table td.dashboard-product-col,
+.dashboard-table td.dashboard-action-col,
+.dashboard-table td:first-child:not(.dashboard-product-col) {
   background: #101010;
 }
 
@@ -504,19 +518,20 @@
   background: #151515;
 }
 
-.dashboard-table thead th.dashboard-product-col:first-child,
-.dashboard-table thead th:last-child {
+.dashboard-table thead th.dashboard-product-col,
+.dashboard-table thead th.dashboard-action-col,
+.dashboard-table thead th:first-child:not(.dashboard-product-col) {
   z-index: 5;
   background: #151515;
 }
 
-.dashboard-table-wrap.is-scrolled-x th.dashboard-product-col:first-child,
-.dashboard-table-wrap.is-scrolled-x td.dashboard-product-col:first-child {
+.dashboard-table-wrap.is-scrolled-x th.dashboard-product-col,
+.dashboard-table-wrap.is-scrolled-x td.dashboard-product-col {
   box-shadow: 10px 0 14px -10px rgba(0,0,0,0.85), 1px 0 0 #242424;
 }
 
-.dashboard-table-wrap:not(.is-at-end) th:last-child,
-.dashboard-table-wrap:not(.is-at-end) td:last-child {
+.dashboard-table-wrap:not(.is-at-end) th.dashboard-action-col,
+.dashboard-table-wrap:not(.is-at-end) td.dashboard-action-col {
   box-shadow: -10px 0 14px -10px rgba(0,0,0,0.85), -1px 0 0 #242424;
 }
 
@@ -866,10 +881,10 @@
   white-space: nowrap;
 }
 
-/* De losse SKU- en Brand-kolommen bestaan niet meer, dus die twee
-   breedtes vervallen. De productbreedte hangt nu aan de kolom zelf.
-   Alles achter Product schuift drie plaatsen op: de oude regel voor
-   nummer 9 hoort nu bij nummer 6. */
+/* De losse SKU- en Brand-kolommen bestaan niet meer, dus die twee breedtes
+   vervallen. De productbreedte hangt nu aan de kolom zelf. Alles achter
+   Product schuift drie plaatsen op: de oude regel voor nummer 9 hoort nu
+   bij nummer 6. */
 .dashboard-table th.dashboard-product-col,
 .dashboard-table td.dashboard-product-col {
   min-width: 300px;
