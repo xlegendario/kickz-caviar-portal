@@ -3527,27 +3527,27 @@ body.venster-open {
     justify-self: center !important;
   }
 
-  /* Menu en Logout even hoog en niet hoger dan nodig; de Logout-knop stond
-     op 52 px en maakte daarmee de hele balk hoger dan bij Lojiq.
-
-     GECORRIGEERD — ik had hier ook de lettergrootte omlaag geforceerd, en
-     daardoor liepen het pictogram en het woord "Menu" buiten de knop. De
-     inhoud staat nu gewoon naast elkaar op een regel en de knop groeit mee
-     met wat erin staat. */
-  .dashboard-mobile-menu-btn,
-  .dashboard-logout-btn {
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    gap: 6px;
-
+  /* De balk is slanker geworden, dus menu en Logout iets kleiner. Verder
+     blijft het oorspronkelijke ontwerp staan: de menuknop is bewust alleen
+     een pictogram, met font-size 0 op de knop zelf en de hamburger uit een
+     ::before. Zet je daar een lettergrootte overheen, dan wordt de verborgen
+     tekst "Menu" ineens zichtbaar bovenop dat pictogram. */
+  .dashboard-mobile-menu-btn {
+    width: 46px !important;
+    min-width: 46px !important;
     height: 40px !important;
-    min-height: 0 !important;
-    width: auto !important;
-    padding: 0 14px !important;
+    border-radius: 14px !important;
+  }
 
-    line-height: 1 !important;
-    white-space: nowrap;
+  .dashboard-mobile-menu-btn::before {
+    font-size: 22px;
+  }
+
+  .dashboard-logout-btn {
+    height: 40px !important;
+    min-height: 40px !important;
+    padding: 0 16px !important;
+    border-radius: 14px !important;
   }
 
   .dashboard-mobile-menu-btn {
@@ -3601,12 +3601,6 @@ body.venster-open {
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 11px;
-  }
-
-  .dashboard-mobile-menu-btn {
-    height: 38px !important;
-    padding: 0 12px !important;
-    flex: 0 0 auto;
   }
 
   /* De consignment-voorraad heeft eigen breedtes per positie via een
@@ -3770,4 +3764,51 @@ body.venster-open {
     white-space: nowrap;
   }
 
+}
+
+/* ---- UX-lijst D3 ----------------------------------------------------
+   Een kruisje om in een keer te wissen. Verschijnt pas zodra er iets staat,
+   zodat het veld leeg net zo rustig blijft als eerst.
+   -------------------------------------------------------------------- */
+
+.dashboard-search-wrap {
+  position: relative;
+}
+
+.dashboard-search-wrap input {
+  padding-right: 44px;
+}
+
+.zoek-wissen {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+
+  display: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+
+  background: rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.86);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dashboard-search-wrap.heeft-tekst .zoek-wissen {
+  display: inline-flex;
+}
+
+/* Het ingebouwde kruisje van type="search" is in een donker vlak vrijwel
+   onzichtbaar; we tonen ons eigen kruisje. */
+.dashboard-search-wrap input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
 }
