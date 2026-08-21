@@ -8417,6 +8417,101 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
 // stock level, and runs the normal refresh for each — which upserts the
 // Supabase row AND syncs it to Airtable, so there is no second
 // implementation of that logic here.
+// NEW — een SKU opzoeken voor andere diensten.
+//
+// De Shopify-productsync deed dit zelf, met searchRetailed() en dan
+// results[0] zonder enige controle. Retailed geeft op een zoekterm die hij
+// niet kan plaatsen een pagina losjes verwante schoenen terug, dus dat
+// eerste resultaat is regelmatig een ander model. Dat kwam als waarheid in
+// store_listings terecht, met match_risk_level "Low", want dat veld keek
+// alleen of er een SKU ingevuld was.
+//
+// Hier loopt het door dezelfde resolver als de consignment-intake:
+// identiteit uit StockX op een exacte match, foto uit Retailed maar alleen
+// als de slug klopt, en een SKU Master-record uitsluitend bij een match.
+//
+// Neemt een enkele sku of een lijst. De lijst is er voor de sync, die per
+// ronde duizenden producten langsloopt; per stuk aanroepen zou evenveel
+// http-verkeer opleveren als het bespaart.
+app.post("/api/internal/resolve-sku", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+
+    if (
+      !process.env.COUNTER_OFFERS_SECRET ||
+      secret !== process.env.COUNTER_OFFERS_SECRET
+    ) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const enkel = asText(req.body?.sku);
+    const lijst = Array.isArray(req.body?.skus) ? req.body.skus : [];
+
+    const gevraagd = [
+      ...new Set(
+        (enkel ? [enkel, ...lijst] : lijst)
+          .map((waarde) => normalizeSkuStrict(waarde))
+          .filter(Boolean)
+      )
+    ];
+
+    if (!gevraagd.length) {
+      return res.status(400).json({ error: "Missing sku or skus" });
+    }
+
+    // Meer dan dit per aanroep loopt tegen de tijdslimiet van de proxy aan,
+    // en een halve uitkomst is lastiger op te vangen dan een nette 400.
+    if (gevraagd.length > 50) {
+      return res.status(400).json({
+        error: "Too many SKUs",
+        message: "Send at most 50 SKUs per request"
+      });
+    }
+
+    const results = {};
+
+    for (const sku of gevraagd) {
+      try {
+        const uitkomst = await resolveSkuThroughCatalog(sku);
+
+        results[sku] = uitkomst.ok
+          ? {
+              ok: true,
+              product_name: uitkomst.product_name,
+              brand: uitkomst.brand || "",
+              image: uitkomst.image || "",
+              source: uitkomst.source,
+              picture_source: uitkomst.picture_source || ""
+            }
+          : {
+              ok: false,
+              reason: uitkomst.reason || "not_found"
+            };
+      } catch (err) {
+        // Een storing is niet hetzelfde als "bestaat niet". De aanroeper
+        // moet die twee uit elkaar kunnen houden, anders markeert hij bij
+        // de eerste hapering zijn halve catalogus als onbekend.
+        console.error("resolve-sku failed:", { sku, error: err.message });
+
+        results[sku] = { ok: false, reason: "lookup_failed" };
+      }
+    }
+
+    res.json({
+      count: gevraagd.length,
+      resolved: Object.values(results).filter((r) => r.ok).length,
+      results
+    });
+  } catch (err) {
+    console.error("resolve-sku endpoint failed:", err);
+
+    res.status(500).json({
+      error: "Failed to resolve SKUs",
+      details: err.message
+    });
+  }
+});
+
 app.post("/api/consignment/stock-levels/repair", async (req, res) => {
   try {
     const secret = asText(req.headers["x-kc-secret"]);
