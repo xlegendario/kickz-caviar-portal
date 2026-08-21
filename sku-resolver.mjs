@@ -45,6 +45,16 @@ import Airtable from "airtable";
 // Retailed against without asking StockX again.
 export const URL_KEY_FIELD = "StockX URL Key";
 
+// De volledige style id zoals StockX hem schrijft, inclusief de schuine
+// streep bij een dubbele code ("315115-112/DD8959-100"). StockX bundelt
+// die twee omdat het dezelfde schoen is, ooit twee keer uitgebracht.
+//
+// Bewust NIET in het SKU-veld: daar wordt overal exact op gezocht
+// (readSkuMaster, getSkuMasterImageMap, en SKU Master Link vanuit
+// Make.com). Dit veld ernaast maakt zichtbaar welke van jouw codes
+// dezelfde schoen zijn, zonder een sleutel te verbouwen.
+export const STYLE_ID_FIELD = "StockX Style ID";
+
 /**
  * Read on use, not on import.
  *
@@ -217,13 +227,27 @@ export function isExactSkuMatch(candidate, wanted) {
 /* StockX — identity                                                   */
 /* ------------------------------------------------------------------ */
 
-async function getStockxAccessToken() {
+// Het token stond in Airtable en werd bij elke opzoeking opnieuw opgehaald.
+// Bij een ronde van duizenden SKU's is dat evenveel extra Airtable-aanroepen
+// voor een waarde die niet verandert. Vijf minuten vasthouden is ruim binnen
+// de levensduur van het token en scheelt het leeuwendeel.
+let tokenCache = { waarde: "", tot: 0 };
+
+async function getStockxAccessToken({ ververs = false } = {}) {
+  const nu = Date.now();
+
+  if (!ververs && tokenCache.waarde && nu < tokenCache.tot) {
+    return tokenCache.waarde;
+  }
+
   const records = await airtable(env.tokenTable())
     .select({ fields: ["Access Token"], maxRecords: 1 })
     .firstPage();
 
   const token = asText(records[0]?.fields?.["Access Token"]);
   if (!token) throw new Error("StockX access token is empty in Airtable");
+
+  tokenCache = { waarde: token, tot: nu + 5 * 60 * 1000 };
 
   return token;
 }
@@ -276,34 +300,82 @@ function stockxNameOf(item) {
   );
 }
 
-export async function searchStockx(sku, { token } = {}) {
+const slaap = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Zoekt in de StockX-catalogus, met herkansing.
+ *
+ * Zonder herkansing kost een korte piek van rate limiting je een handvol
+ * SKU's per ronde, en die worden dan als "niet op te zoeken" afgevoerd. Bij
+ * een ronde over duizenden SKU's telt dat op. Alleen 429 en 5xx worden
+ * opnieuw geprobeerd; een 4xx betekent dat het verzoek zelf niet deugt en
+ * daar helpt herhalen niet.
+ *
+ * Bij een 401 wordt het token opnieuw uit Airtable gehaald: dat is de enige
+ * plek waar de server hem ververst, dus een langlopende ronde pikt een
+ * nieuw token vanzelf op.
+ */
+export async function searchStockx(sku, { token, pogingen = 4 } = {}) {
   if (!env.stockxKey()) throw new Error("Missing STOCKX_API_KEY");
 
   const cleanSku = normalizeSku(sku);
-  const accessToken = token || (await getStockxAccessToken());
 
   const url = new URL("https://api.stockx.com/v2/catalog/search");
   url.searchParams.set("query", cleanSku);
 
-  const response = await fetch(url.toString(), {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "x-api-key": env.stockxKey(),
-      Accept: "application/json"
+  let laatsteFout = null;
+
+  for (let poging = 1; poging <= pogingen; poging++) {
+    const accessToken =
+      token || (await getStockxAccessToken({ ververs: poging > 1 && laatsteFout?.status === 401 }));
+
+    let response;
+
+    try {
+      response = await fetch(url.toString(), {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "x-api-key": env.stockxKey(),
+          Accept: "application/json"
+        }
+      });
+    } catch (err) {
+      // Netwerkfout: wel opnieuw proberen.
+      laatsteFout = err;
+
+      if (poging < pogingen) {
+        await slaap(500 * 2 ** (poging - 1));
+        continue;
+      }
+
+      throw err;
     }
-  });
 
-  const data = await response.json().catch(() => ({}));
+    const data = await response.json().catch(() => ({}));
 
-  if (!response.ok) {
+    if (response.ok) return stockxResults(data);
+
     const err = new Error(`StockX catalog search failed: ${response.status}`);
     err.status = response.status;
     err.body = data;
-    throw err;
+    laatsteFout = err;
+
+    const magOpnieuw = response.status === 429 || response.status === 401 || response.status >= 500;
+
+    if (!magOpnieuw || poging === pogingen) throw err;
+
+    // Respecteer Retry-After als StockX hem meestuurt.
+    const wacht = Number(response.headers.get("retry-after"));
+
+    await slaap(
+      Number.isFinite(wacht) && wacht > 0
+        ? Math.min(wacht * 1000, 15000)
+        : 500 * 2 ** (poging - 1)
+    );
   }
 
-  return stockxResults(data);
+  throw laatsteFout;
 }
 
 /**
@@ -462,7 +534,14 @@ export async function readSkuMaster(sku) {
 
   const records = await airtable(env.skuMasterTable())
     .select({
-      fields: ["SKU", "Product Name", "Brand", "Picture", URL_KEY_FIELD],
+      fields: [
+        "SKU",
+        "Product Name",
+        "Brand",
+        "Picture",
+        URL_KEY_FIELD,
+        STYLE_ID_FIELD
+      ],
       filterByFormula: `{SKU} = '${escapeFormulaValue(cleanSku)}'`,
       maxRecords: 1
     })
@@ -480,6 +559,7 @@ export async function readSkuMaster(sku) {
     brand: asText(record.fields?.["Brand"]),
     image: pictureUrlOf(record.fields),
     url_key: normalizeSlug(record.fields?.[URL_KEY_FIELD]),
+    style_id: normalizeSku(record.fields?.[STYLE_ID_FIELD]),
 
     // A record whose name is empty or is just the SKU is a leftover from
     // the old fallback. It is a cache miss, not a hit.
@@ -518,7 +598,8 @@ export async function resolve(sku, { write = true, token = null } = {}) {
       product_name: cached.product_name,
       brand: cached.brand,
       image: cached.image,
-      url_key: cached.url_key
+      url_key: cached.url_key,
+      matched_sku: cached.style_id || cached.sku
     };
   }
 
@@ -583,6 +664,7 @@ export async function resolve(sku, { write = true, token = null } = {}) {
   };
 
   if (identity.url_key) fields[URL_KEY_FIELD] = identity.url_key;
+  if (identity.matched_sku) fields[STYLE_ID_FIELD] = identity.matched_sku;
   if (image) fields["Picture"] = [{ url: image }];
 
   if (cached?.id) {
