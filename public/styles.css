@@ -2183,3 +2183,224 @@ body.venster-open {
     font-size: 12px;
   }
 }
+
+/* ---- vensters: kleuren van dit portal -------------------------------
+   De structuur hieronder is in beide portals gelijk; alleen deze acht
+   waarden verschillen. Hier het zwart-goud van dit dashboard.
+   -------------------------------------------------------------------- */
+
+:root {
+  --kc-dialog-surface: #17171b;
+  --kc-dialog-border: rgba(255, 255, 255, 0.12);
+  --kc-dialog-text: #f2f2f4;
+  --kc-dialog-muted: rgba(255, 255, 255, 0.8);
+  --kc-dialog-accent: linear-gradient(180deg, #e5c869, #c9a227);
+  --kc-dialog-accent-text: #1a1508;
+  --kc-dialog-accent-ring: rgba(212, 175, 55, 0.9);
+  --kc-dialog-danger: linear-gradient(180deg, #ef6b6b, #c93a3a);
+}
+
+/* ---- vensters: structuur --------------------------------------------
+   Hoort bij showAlert / showConfirm / showPrompt. Eigen klassen in plaats
+   van de bestaande vensterklassen van het portal: die verschillen per
+   portal en dan zou hetzelfde venster zich op twee plekken anders
+   gedragen.
+   -------------------------------------------------------------------- */
+
+html.kc-dialog-open,
+body.kc-dialog-open {
+  overflow: hidden;
+}
+
+.kc-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 20px;
+}
+
+.kc-dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(2px);
+}
+
+.kc-dialog-card {
+  position: relative;
+
+  width: 100%;
+  max-width: 420px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+
+  padding: 26px 24px 22px;
+
+  border-radius: 20px;
+  border: 1px solid var(--kc-dialog-border);
+  background: var(--kc-dialog-surface);
+  color: var(--kc-dialog-text);
+
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+
+  animation: kc-dialog-in 140ms ease-out;
+}
+
+@keyframes kc-dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kc-dialog-card { animation: none; }
+}
+
+.kc-dialog-title {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 900;
+  line-height: 1.3;
+  color: var(--kc-dialog-text);
+}
+
+.kc-dialog-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--kc-dialog-muted);
+  white-space: pre-wrap;
+}
+
+.kc-dialog-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  margin-top: 16px;
+  padding: 0 14px;
+
+  border: 1px solid var(--kc-dialog-border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.kc-dialog-field:focus-within {
+  border-color: var(--kc-dialog-accent-ring);
+}
+
+.kc-dialog-prefix {
+  font-size: 16px;
+  font-weight: 900;
+  opacity: 0.65;
+}
+
+.kc-dialog-input {
+  flex: 1;
+  min-width: 0;
+
+  height: 50px;
+  border: none;
+  background: none;
+  color: inherit;
+
+  font-size: 16px;   /* 16px voorkomt dat iOS bij focus inzoomt */
+  font-weight: 700;
+  outline: none;
+}
+
+.kc-dialog-error {
+  margin: 8px 2px 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #ff9b9b;
+}
+
+.kc-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+
+  margin-top: 22px;
+}
+
+.kc-dialog-btn {
+  min-width: 108px;
+  height: 46px;
+  padding: 0 20px;
+
+  border: 1px solid transparent;
+  border-radius: 14px;
+
+  font-size: 14.5px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.kc-dialog-btn.cancel {
+  border-color: var(--kc-dialog-border);
+  background: transparent;
+  color: var(--kc-dialog-muted);
+}
+
+.kc-dialog-btn.cancel:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.kc-dialog-btn.confirm {
+  background: var(--kc-dialog-accent);
+  color: var(--kc-dialog-accent-text);
+}
+
+.kc-dialog-btn.confirm:hover {
+  filter: brightness(1.06);
+}
+
+/* Verwijderen en afwijzen krijgen rood, zodat je aan de knop ziet dat er
+   iets onomkeerbaars gebeurt. */
+.kc-dialog-btn.confirm.danger {
+  background: var(--kc-dialog-danger);
+  color: #fff;
+}
+
+.kc-dialog-btn:focus-visible {
+  outline: 2px solid var(--kc-dialog-accent-ring);
+  outline-offset: 2px;
+}
+
+/* Op een telefoon staat het venster onderaan en zijn de knoppen volle
+   breedte: daar reikt een duim, en 50 px hoog is genoeg om te raken. */
+@media (max-width: 768px) {
+  .kc-dialog {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .kc-dialog-card {
+    max-width: none;
+    max-height: 86vh;
+    padding: 24px 20px calc(20px + env(safe-area-inset-bottom, 0px));
+    border-radius: 22px 22px 0 0;
+    border-bottom: none;
+    animation: kc-dialog-up 160ms ease-out;
+  }
+
+  @keyframes kc-dialog-up {
+    from { transform: translateY(14px); opacity: 0; }
+    to   { transform: none; opacity: 1; }
+  }
+
+  .kc-dialog-actions {
+    flex-direction: column-reverse;
+    gap: 9px;
+  }
+
+  .kc-dialog-btn {
+    width: 100%;
+    height: 50px;
+  }
+}
