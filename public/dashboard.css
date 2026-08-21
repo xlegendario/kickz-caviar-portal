@@ -3427,6 +3427,12 @@ body.venster-open {
      precies een gelijk deel, wat er ook in staat, en mag hij onder zijn eigen
      inhoud krimpen. Een knop met een bedrag erin viel daardoor buiten zijn
      eigen rand. Met `auto` groeit elke knop vanaf zijn eigen tekst. */
+  /* Is er maar één knop, dan vult die de volle breedte zonder van flex af
+     te hangen — dat werkt in elke browser hetzelfde. */
+  .dashboard-table td.dashboard-action-col .dashboard-action-row > *:only-child {
+    width: 100%;
+  }
+
   .dashboard-table td.dashboard-action-col .dashboard-action-row > * {
     flex: 1 1 auto;
     min-height: 44px;
@@ -3574,78 +3580,16 @@ body.venster-open {
    Vaste breedtes per soort inhoud, overal gelijk en gelijk aan de
    Lojiq-portal. Product is de enige kolom die meebeweegt en de rest
    opslokt; de actiekolom wordt aan zijn eigen knoppen gemeten.
+
+   De tabelregels staan bewust in een bereik voor brede schermen. Deze
+   opmaak wordt achteraan het bestand geplakt, dus na het blok voor de
+   kaartweergave, en bij gelijke zwaarte wint wat later staat. Zonder
+   dat bereik overschreven ze de kaarten: waarden bleven links plakken
+   en de knoppen rekten niet meer uit.
    -------------------------------------------------------------------- */
 
-.dashboard-table {
-  table-layout: fixed;
-}
-
-.dashboard-table th.kol-kort,
-.dashboard-table td.kol-kort {
-  width: 75px;
-}
-
-.dashboard-table th.kol-type,
-.dashboard-table td.kol-type {
-  width: 85px;
-}
-
-.dashboard-table th.kol-datum,
-.dashboard-table td.kol-datum {
-  width: 105px;
-}
-
-.dashboard-table th.kol-geld,
-.dashboard-table td.kol-geld {
-  width: 100px;
-}
-
-.dashboard-table th.kol-kenmerk,
-.dashboard-table td.kol-kenmerk {
-  width: 110px;
-}
-
-.dashboard-table th.kol-status,
-.dashboard-table td.kol-status {
-  width: 130px;
-}
-
-.dashboard-table th.kol-lang,
-.dashboard-table td.kol-lang {
-  width: 140px;
-}
-
-.dashboard-table th.kol-standaard,
-.dashboard-table td.kol-standaard {
-  width: 110px;
-}
-
-.dashboard-table th.dashboard-product-col,
-.dashboard-table td.dashboard-product-col {
-  width: auto;
-  min-width: 0;
-}
-
-.dashboard-table th.dashboard-size-col,
-.dashboard-table td.dashboard-size-col {
-  width: 75px;
-  min-width: 0;
-}
-
-.dashboard-table th.dashboard-action-col,
-.dashboard-table td.dashboard-action-col {
-  width: var(--actiebreedte, 180px);
-}
-
-/* De bolletjeskolom in de tabel met lopende biedingen. */
-.dashboard-table th:first-child:not(.dashboard-product-col),
-.dashboard-table td:first-child:not(.dashboard-product-col) {
-  width: 54px;
-}
-
-/* GEWIJZIGD — de productnaam stond op één regel met een beletselteken en
-   werd daardoor afgekapt. Twee regels lost dat op zonder extra breedte, en
-   het vak is altijd twee regels hoog zodat alle rijen even hoog blijven. */
+/* De productnaam en de metaregel gelden op elke breedte: ook op een
+   kaart hoort de naam volledig te staan. */
 .dashboard-product-name {
   line-height: 1.25;
   min-height: 2.5em;
@@ -3663,20 +3607,90 @@ body.venster-open {
   text-overflow: ellipsis;
 }
 
-/* C7 — er waren vijf knopvormen. Nu één hoogte, één hoekafronding, één
-   lettergrootte; kleur is het enige dat nog verschilt. */
-.dashboard-table .dashboard-confirm-btn,
-.dashboard-table .dashboard-deny-btn,
-.dashboard-table .dashboard-action-row > button,
-.dashboard-table .dashboard-action-row > a {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 34px;
-  min-height: 34px;
-  padding: 0 14px;
-  border-radius: 10px;
-  font-size: 12px;
-  font-weight: 900;
-  white-space: nowrap;
+@media (min-width: 769px) {
+  .dashboard-table {
+    table-layout: fixed;
+  }
+
+  .dashboard-table th.kol-kort,
+  .dashboard-table td.kol-kort {
+    width: 75px;
+  }
+
+  .dashboard-table th.kol-type,
+  .dashboard-table td.kol-type {
+    width: 85px;
+  }
+
+  .dashboard-table th.kol-datum,
+  .dashboard-table td.kol-datum {
+    width: 105px;
+  }
+
+  .dashboard-table th.kol-geld,
+  .dashboard-table td.kol-geld {
+    width: 100px;
+  }
+
+  .dashboard-table th.kol-kenmerk,
+  .dashboard-table td.kol-kenmerk {
+    width: 110px;
+  }
+
+  .dashboard-table th.kol-status,
+  .dashboard-table td.kol-status {
+    width: 130px;
+  }
+
+  .dashboard-table th.kol-lang,
+  .dashboard-table td.kol-lang {
+    width: 140px;
+  }
+
+  .dashboard-table th.kol-standaard,
+  .dashboard-table td.kol-standaard {
+    width: 110px;
+  }
+
+  .dashboard-table th.dashboard-product-col,
+  .dashboard-table td.dashboard-product-col {
+    width: auto;
+    min-width: 0;
+  }
+
+  .dashboard-table th.dashboard-size-col,
+  .dashboard-table td.dashboard-size-col {
+    width: 75px;
+    min-width: 0;
+  }
+
+  .dashboard-table th.dashboard-action-col,
+  .dashboard-table td.dashboard-action-col {
+    width: var(--actiebreedte, 180px);
+  }
+
+  /* De bolletjeskolom in de tabel met lopende biedingen. */
+  .dashboard-table th:first-child:not(.dashboard-product-col),
+  .dashboard-table td:first-child:not(.dashboard-product-col) {
+    width: 54px;
+  }
+
+  /* C7 — er waren vijf knopvormen. Nu een hoogte, een hoekafronding en
+     een lettergrootte; kleur is het enige dat nog verschilt. */
+  .dashboard-table .dashboard-confirm-btn,
+  .dashboard-table .dashboard-deny-btn,
+  .dashboard-table .dashboard-action-row > button,
+  .dashboard-table .dashboard-action-row > a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 34px;
+    min-height: 34px;
+    padding: 0 14px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 900;
+    white-space: nowrap;
+  }
+
 }
