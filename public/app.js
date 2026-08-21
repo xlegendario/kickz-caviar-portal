@@ -1634,3 +1634,53 @@ function showSuccessToast(message) {
     }, 250);
   }, 2600);
 }
+
+// NEW — additief: vensters gedroegen zich niet. De achtergrond schoof mee
+// tijdens het scrollen en Escape sloot niets. Beide horen bij het venster
+// zelf, niet bij de plek die hem opent, dus staat het hier op één plek voor
+// alle vensters van dit portal.
+(function () {
+  const VENSTERS = ".modal-backdrop";
+  const SLUITKNOPPEN = ".modal-close";
+
+  function openVensters() {
+    return Array.from(document.querySelectorAll(VENSTERS))
+      .filter((v) => getComputedStyle(v).display !== "none" && !v.classList.contains("hidden"));
+  }
+
+  function bijwerken() {
+    const open = openVensters().length > 0;
+    document.documentElement.classList.toggle("venster-open", open);
+    document.body.classList.toggle("venster-open", open);
+  }
+
+  // Alleen de vensters zelf in de gaten houden, niet de hele pagina: de
+  // tabellen wisselen voortdurend van klasse en dat hoeft hier niets te doen.
+  const waarnemer = new MutationObserver(bijwerken);
+  document.querySelectorAll(VENSTERS).forEach((v) => {
+    waarnemer.observe(v, { attributes: true, attributeFilter: ["class", "style"] });
+  });
+
+  document.addEventListener("keydown", (gebeurtenis) => {
+    if (gebeurtenis.key !== "Escape") return;
+
+    const open = openVensters();
+    if (!open.length) return;
+
+    // Het bovenste venster sluiten via zijn eigen sluitknop, zodat de
+    // opruimcode die daaraan hangt gewoon loopt.
+    const bovenste = open[open.length - 1];
+    const knop = bovenste.querySelector(SLUITKNOPPEN);
+
+    if (knop) {
+      knop.click();
+    } else {
+      bovenste.classList.add("hidden");
+      bovenste.style.display = "none";
+    }
+
+    bijwerken();
+  });
+
+  bijwerken();
+})();
