@@ -1,3 +1,236 @@
+/* ==================================================================
+   NEW — vensters in plaats van de grijze vakjes van de browser.
+   ==================================================================
+
+   Verving 78 alert(), 18 confirm() en 12 prompt(). Die zien er per
+   telefoon en per browser anders uit, negeren de huisstijl volledig, en
+   bij een prompt krijg je een gewoon tekstveld voor iets waar alleen een
+   bedrag in hoort — dus geen numeriek toetsenbord en geen controle.
+
+   Drie functies, allemaal een belofte, zodat een aanroep leest als de
+   oude:
+
+     alert(x)              ->  showAlert(x)
+     if (!confirm(x))      ->  if (!(await showConfirm(x)))
+     const y = prompt(x)   ->  const y = await showPrompt(x)
+
+   Eigen klassen in plaats van de vensterklassen van het portal: die
+   verschillen per portal en dan zou hetzelfde venster er op twee plekken
+   anders uitzien.
+   ================================================================== */
+
+const kcDialogState = {
+  open: 0,
+  vorigeFocus: null
+};
+
+function kcDialogVergrendel(aan) {
+  kcDialogState.open += aan ? 1 : -1;
+
+  if (kcDialogState.open < 0) kcDialogState.open = 0;
+
+  const bezet = kcDialogState.open > 0;
+
+  document.documentElement.classList.toggle("kc-dialog-open", bezet);
+  document.body.classList.toggle("kc-dialog-open", bezet);
+}
+
+function kcDialogEscape(v) {
+  return String(v == null ? "" : v)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * De kern. De andere drie functies zijn er een laagje omheen.
+ *
+ * soort:  "alert" | "confirm" | "prompt"
+ * opties: { title, confirmLabel, cancelLabel, danger, money,
+ *           placeholder, value, validate }
+ */
+function kcDialog(soort, tekst, opties) {
+  const o = opties || {};
+
+  return new Promise((klaar) => {
+    const laag = document.createElement("div");
+    laag.className = "kc-dialog";
+    laag.setAttribute("role", "dialog");
+    laag.setAttribute("aria-modal", "true");
+
+    const heeftInvoer = soort === "prompt";
+    const heeftAnnuleer = soort !== "alert";
+
+    const titel = o.title || (
+      soort === "confirm" ? "Are you sure?" :
+      soort === "prompt" ? "" : ""
+    );
+
+    const bevestigTekst = o.confirmLabel || (
+      soort === "alert" ? "OK" :
+      soort === "confirm" ? "Confirm" : "Confirm"
+    );
+
+    laag.innerHTML =
+      '<div class="kc-dialog-backdrop" data-kc-cancel></div>' +
+      '<div class="kc-dialog-card">' +
+        (titel ? '<h3 class="kc-dialog-title">' + kcDialogEscape(titel) + "</h3>" : "") +
+        '<p class="kc-dialog-text">' + kcDialogEscape(tekst) + "</p>" +
+        (heeftInvoer
+          ? '<label class="kc-dialog-field' + (o.money ? " money" : "") + '">' +
+              (o.money ? '<span class="kc-dialog-prefix">&euro;</span>' : "") +
+              '<input class="kc-dialog-input" type="text"' +
+              (o.money ? ' inputmode="decimal"' : "") +
+              ' placeholder="' + kcDialogEscape(o.placeholder || "") + '"' +
+              ' value="' + kcDialogEscape(o.value || "") + '" />' +
+            "</label>" +
+            '<p class="kc-dialog-error" hidden></p>'
+          : "") +
+        '<div class="kc-dialog-actions">' +
+          (heeftAnnuleer
+            ? '<button type="button" class="kc-dialog-btn cancel" data-kc-cancel>' +
+              kcDialogEscape(o.cancelLabel || "Cancel") + "</button>"
+            : "") +
+          '<button type="button" class="kc-dialog-btn confirm' +
+          (o.danger ? " danger" : "") + '">' + kcDialogEscape(bevestigTekst) + "</button>" +
+        "</div>" +
+      "</div>";
+
+    document.body.appendChild(laag);
+    kcDialogVergrendel(true);
+
+    // Zodat de focus na het sluiten terugkeert naar de knop waar je vandaan
+    // kwam, in plaats van naar de bovenkant van de pagina.
+    if (kcDialogState.open === 1) {
+      kcDialogState.vorigeFocus = document.activeElement;
+    }
+
+    const invoer = laag.querySelector(".kc-dialog-input");
+    const fout = laag.querySelector(".kc-dialog-error");
+    const bevestigKnop = laag.querySelector(".kc-dialog-btn.confirm");
+
+    function sluit(waarde) {
+      document.removeEventListener("keydown", opToets, true);
+      laag.remove();
+      kcDialogVergrendel(false);
+
+      if (kcDialogState.open === 0 && kcDialogState.vorigeFocus) {
+        try { kcDialogState.vorigeFocus.focus(); } catch (e) { /* weggehaald */ }
+        kcDialogState.vorigeFocus = null;
+      }
+
+      klaar(waarde);
+    }
+
+    function annuleer() {
+      sluit(soort === "prompt" ? null : soort === "confirm" ? false : undefined);
+    }
+
+    function bevestig() {
+      if (!heeftInvoer) {
+        sluit(soort === "confirm" ? true : undefined);
+        return;
+      }
+
+      const waarde = invoer.value.trim();
+
+      // De aanroeper mag zelf bepalen wat geldig is; zonder controle laten
+      // we alles door en blijft het gedrag gelijk aan het oude prompt().
+      if (typeof o.validate === "function") {
+        const melding = o.validate(waarde);
+
+        if (melding) {
+          fout.textContent = melding;
+          fout.hidden = false;
+          invoer.focus();
+          invoer.select();
+          return;
+        }
+      }
+
+      sluit(waarde);
+    }
+
+    laag.querySelectorAll("[data-kc-cancel]").forEach((el) => {
+      el.addEventListener("click", annuleer);
+    });
+
+    bevestigKnop.addEventListener("click", bevestig);
+
+    function opToets(gebeurtenis) {
+      // Alleen het bovenste venster reageert, anders sluiten er twee
+      // tegelijk als er eentje bovenop een andere staat.
+      if (laag !== document.querySelector(".kc-dialog:last-of-type")) return;
+
+      if (gebeurtenis.key === "Escape") {
+        gebeurtenis.preventDefault();
+        gebeurtenis.stopPropagation();
+        annuleer();
+        return;
+      }
+
+      if (gebeurtenis.key === "Enter") {
+        // In een tekstveld met meerdere regels hoort Enter een regel te
+        // maken, niet te bevestigen.
+        if (gebeurtenis.target && gebeurtenis.target.tagName === "TEXTAREA") return;
+
+        gebeurtenis.preventDefault();
+        bevestig();
+      }
+    }
+
+    document.addEventListener("keydown", opToets, true);
+
+    // Een frame wachten zodat de invoer op mobiel het toetsenbord opent.
+    requestAnimationFrame(() => {
+      if (invoer) {
+        invoer.focus();
+        invoer.select();
+      } else {
+        bevestigKnop.focus();
+      }
+    });
+  });
+}
+
+/**
+ * Standaardcontrole voor de bedragvensters.
+ *
+ * Het oude prompt() nam alles aan: een lege regel, "abc", een negatief
+ * getal. Dat ging dan naar de server en kwam terug als een foutmelding, of
+ * erger, als een order van nul euro. Hier wordt het meteen tegengehouden,
+ * naast het veld, zonder dat je opnieuw hoeft te beginnen.
+ *
+ * Komma en punt allebei goed: op een Nederlands toetsenbord typ je een
+ * komma, en dat hoort gewoon te werken.
+ */
+function kcMoneyCheck(waarde) {
+  const tekst = String(waarde || "").replace(/\s/g, "").replace(",", ".");
+
+  if (!tekst) return "Please enter an amount.";
+
+  const getal = Number(tekst);
+
+  if (!Number.isFinite(getal)) return "That is not a valid amount.";
+  if (getal <= 0) return "The amount must be higher than 0.";
+
+  return "";
+}
+
+function showAlert(tekst, opties) {
+  return kcDialog("alert", tekst, opties);
+}
+
+function showConfirm(tekst, opties) {
+  return kcDialog("confirm", tekst, opties);
+}
+
+function showPrompt(tekst, opties) {
+  return kcDialog("prompt", tekst, opties);
+}
+
 const dashboardConfig = {
   quick: {
     label: "Quick Deals",
@@ -1697,7 +1930,7 @@ function renderConsignmentAcceptedRows(items) {
       button.addEventListener("click", async () => {
         const sellerOfferRecordId = button.getAttribute("data-consignment-deny");
 
-        if (!confirm("Deny this match? The order goes back to other sellers.")) return;
+        if (!(await showConfirm("Deny this match? The order goes back to other sellers."))) return;
 
         button.disabled = true;
         button.textContent = "Denying...";
@@ -1722,7 +1955,7 @@ function renderConsignmentAcceptedRows(items) {
         } catch (err) {
           button.disabled = false;
           button.textContent = "Deny";
-          alert(err.message);
+          showAlert(err.message);
         }
       });
     });
@@ -1756,7 +1989,7 @@ function renderConsignmentAcceptedRows(items) {
         } catch (err) {
           button.disabled = false;
           button.textContent = "Confirm";
-          alert(err.message);
+          showAlert(err.message);
         }
       });
     });
@@ -5150,7 +5383,7 @@ function closeViewIssueModal() {
 async function handleDeleteOffer(button) {
   const offerId = button.dataset.deleteOfferId;
 
-  const confirmed = window.confirm(
+  const confirmed = await showConfirm(
     "Are you sure you want to delete this offer?"
   );
 
@@ -5186,7 +5419,7 @@ async function handleDeleteOffer(button) {
     await loadDashboardData();
     await loadDashboardCounts();
   } catch (err) {
-    alert(err.message);
+    showAlert(err.message);
   } finally {
     button.disabled = false;
   }
@@ -5195,7 +5428,7 @@ async function handleDeleteOffer(button) {
 async function handleCancelBuyingWtb(button) {
   const memberWtbRecordId = button.dataset.buyingDeleteWtbId;
 
-  const confirmed = window.confirm(
+  const confirmed = await showConfirm(
     "Are you sure you want to cancel this Want To Buy?"
   );
 
@@ -5225,7 +5458,7 @@ async function handleCancelBuyingWtb(button) {
     await loadDashboardData();
     await loadDashboardCounts();
   } catch (err) {
-    alert(err.message);
+    showAlert(err.message);
   } finally {
     button.disabled = false;
   }
@@ -5267,7 +5500,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       // in place).
       const isStoreCounterBack = consignmentCounterOfferButton.dataset.isCounterOffer === "true";
 
-      const raw = window.prompt("Enter your requested payout. Example: 250");
+      const raw = await showPrompt("Enter your requested payout. Example: 250", { money: true, validate: kcMoneyCheck, confirmLabel: "Confirm" });
     
       if (!raw) return;
     
@@ -5278,7 +5511,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       );
     
       if (!Number.isFinite(counterPrice) || counterPrice <= 0) {
-        alert("Please enter a valid counter price. Example: 250");
+        showAlert("Please enter a valid counter price. Example: 250");
         return;
       }
     
@@ -5306,12 +5539,12 @@ dashboardTableBody.addEventListener("click", async (event) => {
           throw new Error(data.details || data.error || "Failed to submit counter offer");
         }
     
-        alert(`Counter offer sent to store. Store offer: €${Number(data.store_offer_price).toFixed(2)} (${data.store_offer_vat_type})`);
+        showAlert(`Counter offer sent to store. Store offer: €${Number(data.store_offer_price).toFixed(2)} (${data.store_offer_vat_type})`);
     
         await loadDashboardData();
         await loadDashboardCounts();
       } catch (err) {
-        alert("Could not submit counter offer. Please try again or contact support.");
+        showAlert("Could not submit counter offer. Please try again or contact support.");
       } finally {
         consignmentCounterOfferButton.disabled = false;
         consignmentCounterOfferButton.textContent = "Counter";
@@ -5348,7 +5581,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
         await loadDashboardData();
         await loadDashboardCounts();
       } catch (err) {
-        alert(err.message);
+        showAlert(err.message);
       } finally {
         consignmentConfirmOfferButton.disabled = false;
         consignmentConfirmOfferButton.textContent = "Confirm";
@@ -5384,7 +5617,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
         await loadDashboardData();
         await loadDashboardCounts();
       } catch (err) {
-        alert(err.message);
+        showAlert(err.message);
       } finally {
         consignmentDenyOfferButton.disabled = false;
       }
@@ -5398,13 +5631,13 @@ dashboardTableBody.addEventListener("click", async (event) => {
     if (consignmentOfferEditButton) {
       const offerId = consignmentOfferEditButton.dataset.consignmentOfferEditId;
 
-      const raw = window.prompt("Enter your new counter. Example: 250");
+      const raw = await showPrompt("Enter your new counter. Example: 250", { money: true, validate: kcMoneyCheck, confirmLabel: "Confirm" });
       if (!raw) return;
 
       const newPrice = Number(String(raw).replace(/[^\d.,-]/g, "").replace(",", "."));
 
       if (!Number.isFinite(newPrice) || newPrice <= 0) {
-        alert("Please enter a valid price. Example: 250");
+        showAlert("Please enter a valid price. Example: 250");
         return;
       }
 
@@ -5430,7 +5663,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
         await loadDashboardData();
         await loadDashboardCounts();
       } catch (err) {
-        alert(err.message);
+        showAlert(err.message);
       } finally {
         consignmentOfferEditButton.disabled = false;
         consignmentOfferEditButton.textContent = "Edit";
@@ -5448,7 +5681,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       const offerId = consignmentAcceptPreviousButton.dataset.consignmentAcceptPreviousId;
       const originalLabel = consignmentAcceptPreviousButton.textContent;
 
-      if (!confirm("Accept the store's previous offer instead of waiting for a response to your counter?")) {
+      if (!(await showConfirm("Accept the store's previous offer instead of waiting for a response to your counter?"))) {
         return;
       }
 
@@ -5471,7 +5704,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
         await loadDashboardData();
         await loadDashboardCounts();
       } catch (err) {
-        alert(err.message);
+        showAlert(err.message);
       } finally {
         consignmentAcceptPreviousButton.disabled = false;
         consignmentAcceptPreviousButton.textContent = originalLabel;
@@ -5487,7 +5720,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
     if (consignmentCancelOfferButton) {
       const offerId = consignmentCancelOfferButton.dataset.consignmentCancelOfferId;
 
-      if (!confirm("Remove this offer? This can't be undone.")) return;
+      if (!(await showConfirm("Remove this offer? This can't be undone."))) return;
 
       consignmentCancelOfferButton.disabled = true;
 
@@ -5507,7 +5740,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
         await loadDashboardData();
         await loadDashboardCounts();
       } catch (err) {
-        alert(err.message);
+        showAlert(err.message);
       } finally {
         consignmentCancelOfferButton.disabled = false;
       }
@@ -5523,13 +5756,13 @@ dashboardTableBody.addEventListener("click", async (event) => {
     if (consignmentRetryButton) {
       const offerId = consignmentRetryButton.dataset.consignmentRetryOfferId;
 
-      const raw = window.prompt("Enter your new, higher counter. Example: 250");
+      const raw = await showPrompt("Enter your new, higher counter. Example: 250", { money: true, validate: kcMoneyCheck, confirmLabel: "Confirm" });
       if (!raw) return;
 
       const retryPrice = Number(String(raw).replace(/[^\d.,-]/g, "").replace(",", "."));
 
       if (!Number.isFinite(retryPrice) || retryPrice <= 0) {
-        alert("Please enter a valid price. Example: 250");
+        showAlert("Please enter a valid price. Example: 250");
         return;
       }
 
@@ -5555,7 +5788,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
         await loadDashboardData();
         await loadDashboardCounts();
       } catch (err) {
-        alert(err.message);
+        showAlert(err.message);
       } finally {
         consignmentRetryButton.disabled = false;
         consignmentRetryButton.textContent = "Retry";
@@ -5592,7 +5825,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
     } finally {
       consignmentDeleteButton.disabled = false;
     }
@@ -5615,7 +5848,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
     const memberWtbRecordId = requestLabelButton.dataset.memberWtbRecordId || "";
   
     if (!orderRecordId && !memberWtbRecordId) {
-      alert("Missing order or Member WTB record ID.");
+      showAlert("Missing order or Member WTB record ID.");
       return;
     }
   
@@ -5649,7 +5882,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message || "Failed to request label");
+      showAlert(err.message || "Failed to request label");
       requestLabelButton.disabled = false;
       requestLabelButton.textContent = "REQUEST LABEL";
     }
@@ -5674,7 +5907,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
   }
   
   if (solveIssueButton) {
-    const confirmed = window.confirm("Mark this issue as solved?");
+    const confirmed = await showConfirm("Mark this issue as solved?");
   
     if (!confirmed) return;
   
@@ -5692,7 +5925,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
     const data = await response.json();
   
     if (!response.ok) {
-      alert(data.details || data.error || "Failed to solve issue");
+      showAlert(data.details || data.error || "Failed to solve issue");
       return;
     }
   
@@ -5713,7 +5946,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
     const offerId = deleteButton.dataset.deleteOfferId;
     if (!offerId) return;
 
-    if (!confirm("Delete this offer? This can't be undone.")) return;
+    if (!(await showConfirm("Delete this offer? This can't be undone."))) return;
 
     deleteButton.disabled = true;
 
@@ -5732,7 +5965,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       deleteButton.disabled = false;
     }
 
@@ -5746,7 +5979,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
     const offerId = wtbSellerAcceptButton.dataset.wtbSellerAcceptId;
     const originalLabel = wtbSellerAcceptButton.textContent;
 
-    if (!confirm("Accept this offer?")) return;
+    if (!(await showConfirm("Accept this offer?"))) return;
 
     wtbSellerAcceptButton.disabled = true;
     wtbSellerAcceptButton.textContent = "Accepting...";
@@ -5767,7 +6000,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       wtbSellerAcceptButton.disabled = false;
       wtbSellerAcceptButton.textContent = originalLabel;
     }
@@ -5782,7 +6015,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
   if (wtbSellerDenyButton) {
     const offerId = wtbSellerDenyButton.dataset.wtbSellerDenyId;
 
-    if (!confirm("Deny this offer?")) return;
+    if (!(await showConfirm("Deny this offer?"))) return;
 
     wtbSellerDenyButton.disabled = true;
 
@@ -5802,7 +6035,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       wtbSellerDenyButton.disabled = false;
     }
 
@@ -5811,9 +6044,9 @@ dashboardTableBody.addEventListener("click", async (event) => {
 
   // NEW — additive only: seller counters back on the store/buyer's
   // current counter, reusing the existing (already band-validated)
-  // seller-counter endpoint. Simple prompt() for the price, matching
-  // the same deliberately-basic input pattern used elsewhere this
-  // session — the real design pass comes later.
+  // seller-counter endpoint. Vraagt de prijs via showPrompt met een
+  // geldveld: euroteken, numeriek toetsenbord op mobiel, en een
+  // controle op het bedrag voordat het naar de server gaat.
   // NEW — additive only: retry a fresh, never-countered offer that
   // was denied outright, using the pre-existing edit-after-denial
   // endpoint (already Portal-safe — seller_record_id, no secret).
@@ -5823,14 +6056,14 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const wtbRetryCounterButton = event.target.closest("[data-wtb-retry-counter-id]");
   if (wtbRetryCounterButton) {
     const offerId = wtbRetryCounterButton.dataset.wtbRetryCounterId;
-    const priceInput = prompt("Your new counter offer (€):");
+    const priceInput = await showPrompt("Your new counter offer (€):", { money: true, validate: kcMoneyCheck, confirmLabel: "Confirm" });
 
     if (!priceInput) return;
 
     const price = Number(priceInput);
 
     if (!Number.isFinite(price) || price <= 0) {
-      alert("Enter a valid amount.");
+      showAlert("Enter a valid amount.");
       return;
     }
 
@@ -5852,7 +6085,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       wtbRetryCounterButton.disabled = false;
     }
 
@@ -5866,14 +6099,14 @@ dashboardTableBody.addEventListener("click", async (event) => {
     const deniedAmountText = wtbRetryFreshOfferButton.dataset.deniedAmount;
     const deniedAmount = Number(String(deniedAmountText).replace(/[^\d.,-]/g, "").replace(",", "."));
 
-    const priceInput = prompt(`Your new offer (€, must be at least €2.50 lower than the denied €${deniedAmount || "?"}):`);
+    const priceInput = await showPrompt(`Your new offer (€, must be at least €2.50 lower than the denied €${deniedAmount || "?"}):`, { money: true, validate: kcMoneyCheck, confirmLabel: "Confirm" });
 
     if (!priceInput) return;
 
     const price = Number(priceInput);
 
     if (!Number.isFinite(price) || price <= 0) {
-      alert("Enter a valid amount.");
+      showAlert("Enter a valid amount.");
       return;
     }
 
@@ -5900,7 +6133,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       wtbRetryFreshOfferButton.disabled = false;
     }
 
@@ -5914,7 +6147,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
   if (wtbDeleteFreshOfferButton) {
     const offerId = wtbDeleteFreshOfferButton.dataset.wtbDeleteFreshOfferId;
 
-    if (!confirm("Delete this offer? This can't be undone.")) return;
+    if (!(await showConfirm("Delete this offer? This can't be undone."))) return;
 
     wtbDeleteFreshOfferButton.disabled = true;
 
@@ -5933,7 +6166,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       wtbDeleteFreshOfferButton.disabled = false;
     }
 
@@ -5952,14 +6185,14 @@ dashboardTableBody.addEventListener("click", async (event) => {
     // error text ("for this order" instead of "for this WTB"). Now
     // routes to the correct endpoint based on the item's own type.
     const isMemberWtb = wtbSellerCounterButton.dataset.wtbSellerCounterIsMemberWtb === "1";
-    const priceInput = prompt("Your counter offer (€):");
+    const priceInput = await showPrompt("Your counter offer (€):", { money: true, validate: kcMoneyCheck, confirmLabel: "Confirm" });
 
     if (!priceInput) return;
 
     const price = Number(priceInput);
 
     if (!Number.isFinite(price) || price <= 0) {
-      alert("Enter a valid amount.");
+      showAlert("Enter a valid amount.");
       return;
     }
 
@@ -5984,7 +6217,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       wtbSellerCounterButton.disabled = false;
     }
 
@@ -6002,7 +6235,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
     const memberWtbRecordId = buyingAcceptCurrentLowestButton.dataset.buyingAcceptCurrentLowestId;
     if (!memberWtbRecordId) return;
 
-    if (!confirm("Accept the current lowest offer?")) return;
+    if (!(await showConfirm("Accept the current lowest offer?"))) return;
 
     buyingAcceptCurrentLowestButton.disabled = true;
 
@@ -6047,7 +6280,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       buyingAcceptCurrentLowestButton.disabled = false;
     }
 
@@ -6068,18 +6301,18 @@ dashboardTableBody.addEventListener("click", async (event) => {
     // another step) instead of a Counter button that quietly did
     // nothing, or a wasted round trip to the server just to find out.
     if (buyingCounterButton.dataset.buyingCounterNoRoom === "1") {
-      alert("No room to counter — the gap between your own previous position on this WTB and this seller's ask is too small for another step. Please accept or deny.");
+      showAlert("No room to counter — the gap between your own previous position on this WTB and this seller's ask is too small for another step. Please accept or deny.");
       return;
     }
 
-    const priceInput = prompt("Your counter offer (€):");
+    const priceInput = await showPrompt("Your counter offer (€):", { money: true, validate: kcMoneyCheck, confirmLabel: "Confirm" });
 
     if (!priceInput) return;
 
     const price = Number(priceInput);
 
     if (!Number.isFinite(price) || price <= 0) {
-      alert("Enter a valid amount.");
+      showAlert("Enter a valid amount.");
       return;
     }
 
@@ -6115,7 +6348,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       buyingCounterButton.disabled = false;
     }
 
@@ -6130,7 +6363,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
   if (buyingDenyButton) {
     const kind = buyingDenyButton.dataset.buyingDenyKind;
 
-    if (!confirm("Deny this offer?")) return;
+    if (!(await showConfirm("Deny this offer?"))) return;
 
     buyingDenyButton.disabled = true;
 
@@ -6170,7 +6403,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       buyingDenyButton.disabled = false;
     }
 
@@ -6181,14 +6414,14 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const buyingEditCounterButton = event.target.closest("[data-buying-edit-counter-id]");
   if (buyingEditCounterButton) {
     const offerId = buyingEditCounterButton.dataset.buyingEditCounterId;
-    const priceInput = prompt("Your new counter offer (€):");
+    const priceInput = await showPrompt("Your new counter offer (€):", { money: true, validate: kcMoneyCheck, confirmLabel: "Confirm" });
 
     if (!priceInput) return;
 
     const price = Number(priceInput);
 
     if (!Number.isFinite(price) || price <= 0) {
-      alert("Enter a valid amount.");
+      showAlert("Enter a valid amount.");
       return;
     }
 
@@ -6210,7 +6443,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       buyingEditCounterButton.disabled = false;
     }
 
@@ -6221,14 +6454,14 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const buyingRetryCounterButton = event.target.closest("[data-buying-retry-counter-id]");
   if (buyingRetryCounterButton) {
     const offerId = buyingRetryCounterButton.dataset.buyingRetryCounterId;
-    const priceInput = prompt("Your new counter offer (€):");
+    const priceInput = await showPrompt("Your new counter offer (€):", { money: true, validate: kcMoneyCheck, confirmLabel: "Confirm" });
 
     if (!priceInput) return;
 
     const price = Number(priceInput);
 
     if (!Number.isFinite(price) || price <= 0) {
-      alert("Enter a valid amount.");
+      showAlert("Enter a valid amount.");
       return;
     }
 
@@ -6250,7 +6483,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       buyingRetryCounterButton.disabled = false;
     }
 
@@ -6262,7 +6495,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
   if (buyingCancelOfferButton) {
     const offerId = buyingCancelOfferButton.dataset.buyingCancelOfferId;
 
-    if (!confirm("Delete this offer? This can't be undone.")) return;
+    if (!(await showConfirm("Delete this offer? This can't be undone."))) return;
 
     buyingCancelOfferButton.disabled = true;
 
@@ -6282,7 +6515,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       buyingCancelOfferButton.disabled = false;
     }
 
@@ -6298,7 +6531,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
   if (buyingDeleteDeniedButton) {
     const sellerOfferId = buyingDeleteDeniedButton.dataset.buyingDeleteDeniedId;
 
-    if (!confirm("Delete this offer? This can't be undone.")) return;
+    if (!(await showConfirm("Delete this offer? This can't be undone."))) return;
 
     buyingDeleteDeniedButton.disabled = true;
 
@@ -6318,7 +6551,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       buyingDeleteDeniedButton.disabled = false;
     }
 
@@ -6330,7 +6563,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
     const offerId = wtbAcceptPreviousButton.dataset.wtbAcceptPreviousId;
     const originalLabel = wtbAcceptPreviousButton.textContent;
 
-    if (!confirm("Accept the buyer's previous offer instead of waiting for a response to your counter?")) {
+    if (!(await showConfirm("Accept the buyer's previous offer instead of waiting for a response to your counter?"))) {
       return;
     }
 
@@ -6353,7 +6586,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       wtbAcceptPreviousButton.disabled = false;
       wtbAcceptPreviousButton.textContent = originalLabel;
     }
@@ -6369,14 +6602,14 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const wtbEditCounterButton = event.target.closest("[data-wtb-edit-counter-id]");
   if (wtbEditCounterButton) {
     const offerId = wtbEditCounterButton.dataset.wtbEditCounterId;
-    const priceInput = prompt("Your new counter offer (€):");
+    const priceInput = await showPrompt("Your new counter offer (€):", { money: true, validate: kcMoneyCheck, confirmLabel: "Confirm" });
 
     if (!priceInput) return;
 
     const price = Number(priceInput);
 
     if (!Number.isFinite(price) || price <= 0) {
-      alert("Enter a valid amount.");
+      showAlert("Enter a valid amount.");
       return;
     }
 
@@ -6398,7 +6631,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       wtbEditCounterButton.disabled = false;
     }
 
@@ -6410,7 +6643,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
     const offerId = wtbCancelCounterButton.dataset.wtbCancelCounterId;
     if (!offerId) return;
 
-    if (!confirm("Delete this counter? This can't be undone.")) return;
+    if (!(await showConfirm("Delete this counter? This can't be undone."))) return;
 
     wtbCancelCounterButton.disabled = true;
 
@@ -6430,7 +6663,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       wtbCancelCounterButton.disabled = false;
     }
 
@@ -6443,7 +6676,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
     const offerId = wtbCancelOfferButton.dataset.wtbCancelOfferId;
     if (!offerId) return;
 
-    if (!confirm("Delete this offer? This can't be undone.")) return;
+    if (!(await showConfirm("Delete this offer? This can't be undone."))) return;
 
     wtbCancelOfferButton.disabled = true;
 
@@ -6463,7 +6696,7 @@ dashboardTableBody.addEventListener("click", async (event) => {
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       wtbCancelOfferButton.disabled = false;
     }
 
@@ -6494,12 +6727,12 @@ dashboardTableBody.addEventListener("click", async (event) => {
         throw new Error(data.details || data.error || "Failed to accept offer");
       }
   
-      alert("Offer accepted. We are now waiting for the seller to process the deal.");
+      showAlert("Offer accepted. We are now waiting for the seller to process the deal.");
   
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
       buyingAcceptOfferButton.disabled = false;
       buyingAcceptOfferButton.textContent = "Accept";
     }
@@ -6526,12 +6759,12 @@ dashboardTableBody.addEventListener("click", async (event) => {
         throw new Error(data.details || data.error || "Failed to deny offer");
       }
 
-      alert("Offer declined.");
+      showAlert("Offer declined.");
   
       await loadDashboardData();
       await loadDashboardCounts();
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message);
     } finally {
       buyingDenyOfferButton.disabled = false;
     }
