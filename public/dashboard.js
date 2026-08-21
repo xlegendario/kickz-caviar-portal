@@ -794,7 +794,59 @@ if (dashboardTableBody) {
   new MutationObserver(() => {
     syncDashboardCellColumns();
     fitDashboardColumns();
+    filterZichtbareRijen();
   }).observe(dashboardTableBody, { childList: true });
+}
+
+// NEW — een filter na het tekenen in plaats van in elk renderpad apart. De
+// rijen staan al in de tabel, dus verbergen we wat de zoekterm niet bevat.
+// Werkt daardoor op elk pad, ook op paden die er later bij komen.
+//
+// De aantallen in de zijbalk en op de pills blijven tellen wat er werkelijk
+// is: die komen uit de API en worden hier niet aangeraakt.
+function zoektermVanDashboard() {
+  return String(dashboardSearchInput?.value || "").trim().toLowerCase();
+}
+
+function filterZichtbareRijen() {
+  const lichaam = dashboardTableBody;
+  if (!lichaam) return;
+
+  const rijen = Array.from(lichaam.querySelectorAll("tr"))
+    .filter((rij) => !rij.dataset.zoekMelding);
+
+  const term = zoektermVanDashboard();
+  let gevonden = 0;
+
+  rijen.forEach((rij) => {
+    // De lege staat is een cel met colspan; die hoort altijd te blijven staan.
+    const isLegeStaat = rij.children.length === 1 && rij.children[0].hasAttribute("colspan");
+
+    if (!term || isLegeStaat) {
+      rij.style.display = "";
+      if (!isLegeStaat) gevonden++;
+      return;
+    }
+
+    const raak = rij.textContent.toLowerCase().includes(term);
+    rij.style.display = raak ? "" : "none";
+    if (raak) gevonden++;
+  });
+
+  // Een eigen regel als de zoekterm niets oplevert, anders staar je naar een
+  // lege tabel zonder te weten waarom.
+  const bestaande = lichaam.querySelector("[data-zoek-melding]");
+  if (bestaande) bestaande.remove();
+
+  if (term && gevonden === 0 && rijen.length) {
+    const melding = document.createElement("tr");
+    melding.dataset.zoekMelding = "1";
+    melding.innerHTML =
+      '<td colspan="20" style="padding:28px 14px;text-align:center;opacity:.7">' +
+      "Niets gevonden voor \u201c" + term.replace(/[<>&]/g, "") + "\u201d" +
+      "</td>";
+    lichaam.appendChild(melding);
+  }
 }
 
 // NEW — additief: vensters gedroegen zich niet. De achtergrond schoof mee
@@ -6797,18 +6849,12 @@ dashboardRefreshBtn.addEventListener("click", async () => {
   }
 });
 
+// GEWIJZIGD — haalde bij elke toetsaanslag de hele lijst opnieuw op en
+// filterde vervolgens nergens op, dus je kreeg altijd alles terug.
+// Filteren kan op de rijen die er al staan; dat scheelt meteen een
+// verzoek per toetsaanslag.
 dashboardSearchInput.addEventListener("input", () => {
-  loadDashboardData().catch((err) => {
-    dashboardTableBody.innerHTML = `
-      <tr>
-        <td colspan="${skeletonColumns.length}">
-          <div class="dashboard-empty-state">
-            <strong>${escapeHtml(err.message)}</strong>
-          </div>
-        </td>
-      </tr>
-    `;
-  });
+  filterZichtbareRijen();
 });
 
 document.addEventListener(
