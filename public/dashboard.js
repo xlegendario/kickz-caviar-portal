@@ -606,8 +606,8 @@ function escapeHtml(value) {
 }
 
 // NEW — de breedte van een kolom hangt aan wat erin staat, niet aan
-// zijn plek in de rij. Dezelfde zeven maten als in de Lojiq-portal, zodat
-// een datum in beide portals even breed is.
+// zijn plek in de rij. Dezelfde zeven maten als in de Lojiq-portal,
+// zodat een datum in beide portals even breed is.
 const KOLOMSOORT_PER_KOP = {
   "Amount": "kol-geld",
   "Brand": "kol-kenmerk",
@@ -647,6 +647,13 @@ function fitDashboardColumns() {
   const tabel = document.querySelector(".dashboard-table");
   if (!tabel) return;
 
+  // Op een smal scherm zijn het kaarten; daar hoort geen kolombreedte bij.
+  if (window.matchMedia("(max-width: 768px)").matches) {
+    tabel.style.removeProperty("--actiebreedte");
+    tabel.style.minWidth = "";
+    return;
+  }
+
   const rijen = Array.from(
     document.querySelectorAll("#dashboardTableBody .dashboard-action-col .dashboard-action-row")
   );
@@ -673,10 +680,43 @@ function fitDashboardColumns() {
   tabel.style.minWidth = Math.round(vast + 275) + "px";
 }
 
+window.addEventListener("resize", () => {
+  fitDashboardColumns();
+});
+
 // NEW — additief: SKU, Size en Brand hadden elk een eigen kolom en stonden
 // daardoor los van de naam waar ze bij horen. Ze staan nu onder de
 // productnaam in hetzelfde blok. Niets verdwijnt; elke tabel wordt drie
 // kolommen smaller. Beide veldnamen komen voor in de API, vandaar de twee.
+// NEW — één plek voor bedragen op knoppen. De bestaande code deed
+// `€${Number(payout)}`, wat van 172,50 een "172.5" maakt: punt in plaats van
+// komma en de laatste nul weg. Kan de waarde niet gelezen worden, dan komt er
+// niets op de knop te staan in plaats van "€NaN".
+function bedragVoorKnop(waarde) {
+  const tekst = String(waarde === null || waarde === undefined ? "" : waarde).trim();
+  if (!tekst) return "";
+
+  // Al opgemaakt door de API (bijvoorbeeld "€ 172,50")? Dan zo laten.
+  if (tekst.indexOf("\u20ac") >= 0) return tekst;
+
+  const getal = Number(tekst.replace(/\s/g, "").replace(",", "."));
+  if (!Number.isFinite(getal) || getal <= 0) return "";
+
+  return "\u20ac " + getal.toFixed(2).replace(".", ",");
+}
+
+// NEW — dezelfde opmaak voor geld in een kolom. Verschil met de knop: een
+// waarde die geen bedrag is blijft hier gewoon staan (er kan "Margin" of een
+// streepje in zo'n cel belanden), en leeg wordt een streepje in plaats van
+// niets.
+function bedragVoorKolom(waarde) {
+  const tekst = String(waarde === null || waarde === undefined ? "" : waarde).trim();
+  if (!tekst) return "-";
+
+  const opgemaakt = bedragVoorKnop(tekst);
+  return opgemaakt || escapeHtml(tekst);
+}
+
 function dashboardProductCell(item) {
   const naam = item.product || item.product_name || "-";
 
@@ -1228,8 +1268,8 @@ function renderConsignmentInventoryRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
-      <td>${item.selling_price_suggested ? `€${escapeHtml(item.selling_price_suggested)}` : "-"}</td>
-      <td>${item.lowest_suggested_price ? `€${escapeHtml(item.lowest_suggested_price)}` : "-"}</td>
+      <td>${bedragVoorKolom(item.selling_price_suggested)}</td>
+      <td>${bedragVoorKolom(item.lowest_suggested_price)}</td>
       <td>${escapeHtml(item.quantity || "0")}</td>
       <td>
         <div class="dashboard-action-row">
@@ -1303,7 +1343,7 @@ function renderConsignmentOfferRows(items) {
           <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
           <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
-          <td>${item.consignor_counter_price ? `€${escapeHtml(item.consignor_counter_price)}` : (item.seller_price ? `€${escapeHtml(item.seller_price)}` : "-")}</td>
+          <td>${bedragVoorKolom(item.consignor_counter_price || item.seller_price)}</td>
           <td>${item.denied_at ? escapeHtml(new Date(item.denied_at).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
@@ -1348,8 +1388,8 @@ function renderConsignmentOfferRows(items) {
           <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
           <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
-          <td>${item.consignor_counter_price ? `€${escapeHtml(item.consignor_counter_price)}` : (item.seller_price ? `€${escapeHtml(item.seller_price)}` : "-")}</td>
-          <td>${item.previous_store_price ? `€${escapeHtml(item.previous_store_price)}` : "-"}</td>
+          <td>${bedragVoorKolom(item.consignor_counter_price || item.seller_price)}</td>
+          <td>${bedragVoorKolom(item.previous_store_price)}</td>
           <td>${(item.consignor_counter_at || item.created_at) ? escapeHtml(new Date(item.consignor_counter_at || item.created_at).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
@@ -1397,8 +1437,8 @@ function renderConsignmentOfferRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${item.seller_price ? `€${escapeHtml(item.seller_price)}` : "-"}</td>
-      <td>${item.offer_price ? `€${escapeHtml(item.offer_price)}` : "-"}</td>
+      <td>${bedragVoorKolom(item.seller_price)}</td>
+      <td>${bedragVoorKolom(item.offer_price)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${item.created_at ? escapeHtml(new Date(item.created_at).toLocaleDateString("en-GB")) : "-"}</td>
       <td>
@@ -1408,7 +1448,7 @@ function renderConsignmentOfferRows(items) {
             type="button"
             data-consignment-confirm-offer-id="${escapeHtml(item.id || "")}"
           >
-            Accept
+            Accept ${escapeHtml(bedragVoorKnop(item.offer_price))}
           </button>
 
           ${canCounter ? `
@@ -1506,7 +1546,7 @@ function renderBuyingAcceptedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.offer || "-")}</td>
+      <td>${bedragVoorKolom(item.offer)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-offer">Waiting for seller</span></td>
       ${renderBuyingPaymentCell(item)}
@@ -1553,7 +1593,7 @@ function renderConsignmentAcceptedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.payout || "-")}</td>
+      <td>${bedragVoorKolom(item.payout)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
@@ -1562,7 +1602,7 @@ function renderConsignmentAcceptedRows(items) {
           type="button"
           data-consignment-confirm="${escapeHtml(item.seller_offer_record_id)}"
         >
-          Confirm
+          Confirm ${escapeHtml(bedragVoorKnop(item.payout))}
         </button>
         <button
           class="dashboard-deny-btn"
@@ -1692,8 +1732,8 @@ function renderBuyingOpenWtbRows(items) {
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.inventory_filter || "-")}</td>
-      <td>${escapeHtml(item.max_price || "-")}</td>
-      <td>${escapeHtml(item.current_lowest || "-")}</td>
+      <td>${bedragVoorKolom(item.max_price)}</td>
+      <td>${bedragVoorKolom(item.current_lowest)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Open</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
@@ -1746,14 +1786,14 @@ function renderBuyingOfferRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.max_price || "-")}</td>
-      <td>${escapeHtml(item.offer || "-")}</td>
+      <td>${bedragVoorKolom(item.max_price)}</td>
+      <td>${bedragVoorKolom(item.offer)}</td>
       <td><span class="dashboard-status-pill dashboard-status-offer">Offer Received</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
         <div class="dashboard-action-row">
           <button class="dashboard-confirm-btn" type="button" data-buying-accept-offer-id="${escapeHtml(item.member_wtb_record_id || "")}">
-            Accept
+            Accept ${escapeHtml(bedragVoorKnop(item.offer))}
           </button>
           <button class="dashboard-deny-btn" type="button" data-buying-deny-offer-id="${escapeHtml(item.member_wtb_record_id || "")}">
             Deny
@@ -1793,7 +1833,7 @@ function renderBuyingPaymentRequiredRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${bedragVoorKolom(item.amount)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>
         ${
@@ -1848,7 +1888,7 @@ function renderBuyingConfirmedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${bedragVoorKolom(item.amount)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       ${renderBuyingPaymentCell(item)}
       <td><span class="dashboard-status-pill dashboard-status-open">Confirmed</span></td>
@@ -1889,7 +1929,7 @@ function renderBuyingLabelRequestedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${bedragVoorKolom(item.amount)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-payment">Waiting for Label</span></td>
       ${renderBuyingPaymentCell(item)}
@@ -1941,7 +1981,7 @@ function renderBuyingReadyToShipRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${bedragVoorKolom(item.amount)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.tracking_number || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Ready to Ship</span></td>
@@ -1983,7 +2023,7 @@ function renderBuyingShippedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${bedragVoorKolom(item.amount)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Shipped</span></td>
       ${renderBuyingPaymentCell(item)}
@@ -2039,7 +2079,7 @@ function renderBuyingDeliveredRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.amount || "-")}</td>
+      <td>${bedragVoorKolom(item.amount)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>
         ${
@@ -2119,7 +2159,7 @@ function renderWtbAcceptedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.offer || "-")}</td>
+      <td>${bedragVoorKolom(item.offer)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
@@ -2259,9 +2299,9 @@ function renderWtbOpenOffersRows(offers) {
       <td class="dashboard-product-col">${dashboardProductCell(offer)}</td>
       <td class="dashboard-size-col">${escapeHtml(offer.size || "-")}</td>
       <td>${escapeHtml(offer.order_id || "-")}</td>
-      <td>${escapeHtml(offer.offer || "-")}</td>
+      <td>${bedragVoorKolom(offer.offer)}</td>
       <td>${escapeHtml(offer.vat_type || "-")}</td>
-      <td>${escapeHtml(offer.current_lowest || "-")}</td>
+      <td>${bedragVoorKolom(offer.current_lowest)}</td>
       <td>${escapeHtml(offer.date || "-")}</td>
       <td>
         <div class="dashboard-action-row">
@@ -2375,15 +2415,15 @@ function renderBuyingUnifiedOfferRows(items) {
           <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
           <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
-          <td>${escapeHtml(maxPrice || "-")}</td>
-          <td>${escapeHtml(myLastOffer || "-")}</td>
-          <td>${escapeHtml(sellersOffer || "-")}</td>
+          <td>${bedragVoorKolom(maxPrice)}</td>
+          <td>${bedragVoorKolom(myLastOffer)}</td>
+          <td>${bedragVoorKolom(sellersOffer)}</td>
           <td>${escapeHtml(item.vat_type || "-")}</td>
           <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
               ${item.member_wtb_record_id ? `
-                <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(isFreshDenied ? "" : (item.id || ""))}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
+                <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(isFreshDenied ? "" : (item.id || ""))}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${`Accept ${escapeHtml(bedragVoorKnop(sellersOffer))}`.trim()}</button>
               ` : ""}
               ${isFreshDenied ? `
                 <button class="dashboard-counter-btn" type="button" data-buying-counter-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-counter-kind="fresh" data-buying-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">Counter</button>
@@ -2411,14 +2451,14 @@ function renderBuyingUnifiedOfferRows(items) {
       const counterButtonHtml = `<button class="dashboard-counter-btn" type="button" data-buying-counter-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-counter-kind="${item._kind}" data-buying-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}" data-buying-counter-no-room="${item.no_room_to_counter ? "1" : "0"}">Counter</button>`;
 
       actionsCell = `
-        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(item._kind === "fresh" ? "" : (item.id || ""))}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
+        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(item._kind === "fresh" ? "" : (item.id || ""))}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${`Accept ${escapeHtml(bedragVoorKnop(sellersOffer))}`.trim()}</button>
         ${counterButtonHtml}
         <button class="dashboard-deny-btn" type="button" data-buying-deny-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-deny-kind="${item._kind}" data-buying-deny-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">Deny</button>
       `;
     } else {
       // "my_counter" — buyer's own pending counter, awaiting seller.
       actionsCell = `
-        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(item.id || "")}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${sellersOffer ? `Accept ${escapeHtml(sellersOffer)}` : "Accept"}</button>
+        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(item.id || "")}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${`Accept ${escapeHtml(bedragVoorKnop(sellersOffer))}`.trim()}</button>
         <button class="dashboard-counter-btn" type="button" data-buying-edit-counter-id="${escapeHtml(item.id || "")}">Edit</button>
         <button class="dashboard-deny-btn" type="button" data-buying-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
       `;
@@ -2430,13 +2470,13 @@ function renderBuyingUnifiedOfferRows(items) {
         <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
         <td>${escapeHtml(item.order_id || "-")}</td>
         ${isOpen ? `
-          <td>${escapeHtml(maxPrice || "-")}</td>
-          <td>${escapeHtml(myLastOffer || "-")}</td>
+          <td>${bedragVoorKolom(maxPrice)}</td>
+          <td>${bedragVoorKolom(myLastOffer)}</td>
         ` : `
-          <td>${escapeHtml(maxPrice || "-")}</td>
-          <td>${escapeHtml(myOffer || "-")}</td>
+          <td>${bedragVoorKolom(maxPrice)}</td>
+          <td>${bedragVoorKolom(myOffer)}</td>
         `}
-        <td>${escapeHtml(sellersOffer || "-")}</td>
+        <td>${bedragVoorKolom(sellersOffer)}</td>
         <td>${escapeHtml(item.vat_type || "-")}</td>
         <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
         <td>
@@ -2491,7 +2531,7 @@ function renderWtbUnifiedOfferRows(items) {
           <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
           <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
-          <td>${escapeHtml(amount || "-")}</td>
+          <td>${bedragVoorKolom(amount)}</td>
           <td>${escapeHtml(item.vat_type || "-")}</td>
           <td>${isFreshDenied ? "-" : escapeHtml(item.previous_store_price || "-")}</td>
           <td>${item.current_lowest ? escapeHtml(item.current_lowest) : "-"}</td>
@@ -2577,10 +2617,10 @@ function renderWtbUnifiedOfferRows(items) {
         <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
         <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
         <td>${escapeHtml(item.order_id || "-")}</td>
-        <td>${escapeHtml(amount || "-")}</td>
-        <td>${escapeHtml(buyersLastOfferCell)}</td>
+        <td>${bedragVoorKolom(amount)}</td>
+        <td>${bedragVoorKolom(buyersLastOfferCell)}</td>
         <td>${escapeHtml(item.vat_type || "-")}</td>
-        <td>${escapeHtml(currentLowestCell)}</td>
+        <td>${bedragVoorKolom(currentLowestCell)}</td>
         <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
         <td>
           <div class="dashboard-action-row">
@@ -2658,7 +2698,7 @@ function renderReadyToShipRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.payout || "-")}</td>
+      <td>${bedragVoorKolom(item.payout)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
 
@@ -2764,7 +2804,7 @@ function renderTrackingRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.payout || "-")}</td>
+      <td>${bedragVoorKolom(item.payout)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
 
@@ -2871,7 +2911,7 @@ function renderHistoryIssuesRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${escapeHtml(item.payout || "-")}</td>
+      <td>${bedragVoorKolom(item.payout)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
@@ -2989,7 +3029,7 @@ function renderOpenClaimsRows(claims) {
       <td class="dashboard-product-col">${dashboardProductCell(claim)}</td>
       <td class="dashboard-size-col">${escapeHtml(claim.size || "-")}</td>
       <td>${escapeHtml(claim.order_id || "-")}</td>
-      <td>${escapeHtml(claim.payout || "-")}</td>
+      <td>${bedragVoorKolom(claim.payout)}</td>
       <td>${escapeHtml(claim.vat_type || "-")}</td>
       <td>${escapeHtml(claim.date || "-")}</td>
 
