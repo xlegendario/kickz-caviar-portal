@@ -3411,31 +3411,42 @@ body.venster-open {
 
   /* De knoppen vullen samen altijd de volle kaartbreedte: bij één knop is
      dat een balk onderaan die meteen als scheiding tussen de kaarten werkt,
-     bij twee of drie verdelen ze de ruimte gelijk. */
-  .dashboard-table td.dashboard-action-col .dashboard-action-row {
-    display: flex;
-    justify-content: stretch;
-    gap: 8px;
-    width: 100%;
+     bij twee of drie verdelen ze de ruimte gelijk.
 
-    /* Past het niet op één regel, dan zakt de breedste knop naar de volgende
-       in plaats van dat zijn tekst wordt afgeknipt. */
-    flex-wrap: wrap;
+     De knoppen zitten in drie verschillende omhulsels: .dashboard-action-row,
+     .dashboard-action-stack, of los in de cel. Een regel per omhulsel dekt er
+     dus steeds maar een — daarom is de cel zelf nu de container en vallen de
+     omhulsels erdoorheen met display:contents. Zo doet elke knop mee, waar
+     hij ook in zit. */
+  .dashboard-table td.dashboard-action-col {
+    /* Een raster in plaats van flex: kolommen van 1fr vullen de breedte
+       gegarandeerd, terwijl flex-grow in sommige browsers niets deed en de
+       knop op zijn eigen tekstbreedte bleef staan. auto-fit laat ze doorlopen
+       naar een tweede regel zodra ze niet meer naast elkaar passen. */
+    display: grid;
+    /* Het aantal kolommen wordt door de code gezet (--actieknoppen), niet met
+       auto-fit: dat laat te veel ruimte voor uitleg en sommige browsers laten
+       een lege kolom staan, waardoor een enkele knop op de helft bleef hangen. */
+    grid-template-columns: repeat(var(--actieknoppen, 1), minmax(0, 1fr));
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .dashboard-table td.dashboard-action-col > div {
+    display: contents;
   }
 
   /* GEWIJZIGD — stond op `flex: 1 1 0` met `min-width: 0`: dan krijgt elke knop
      precies een gelijk deel, wat er ook in staat, en mag hij onder zijn eigen
      inhoud krimpen. Een knop met een bedrag erin viel daardoor buiten zijn
-     eigen rand. Met `auto` groeit elke knop vanaf zijn eigen tekst. */
-  /* Is er maar één knop, dan vult die de volle breedte zonder van flex af
-     te hangen — dat werkt in elke browser hetzelfde. */
-  .dashboard-table td.dashboard-action-col .dashboard-action-row > *:only-child {
+     eigen rand. Met `auto` groeit elke knop vanaf zijn eigen tekst, en past het
+     niet op een regel dan zakt de breedste naar de volgende. */
+  .dashboard-table td.dashboard-action-col button,
+  .dashboard-table td.dashboard-action-col a {
     width: 100%;
-  }
-
-  .dashboard-table td.dashboard-action-col .dashboard-action-row > * {
-    flex: 1 1 auto;
     min-height: 44px;
+    white-space: normal;
+    padding: 8px 10px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -3477,26 +3488,34 @@ body.venster-open {
     overflow-x: clip;
   }
 
+  /* Een slanke balk die blijft staan: menu links, titel in het midden,
+     Logout rechts. Al het andere — zoekbalk, tellers, filters — scrolt gewoon
+     weg, zodat er tijdens het lezen zo min mogelijk vast in beeld staat.
+
+     Het middenvak staat op grid met drie kolommen waarvan de buitenste even
+     breed zijn: dan staat de titel echt in het midden en niet net ernaast,
+     ook als het menu en Logout verschillend breed zijn. */
   .dashboard-topbar {
     position: sticky !important;
     top: 0 !important;
     z-index: 100 !important;
 
-    display: flex !important;
-    flex-direction: row !important;
+    display: grid !important;
+    grid-template-columns: 1fr auto 1fr !important;
     align-items: center !important;
-    gap: 12px !important;
+    gap: 10px !important;
 
     height: auto !important;
     min-height: 0 !important;
-    padding: 9px 14px !important;
+    padding: 8px 12px !important;
   }
 
   .dashboard-topbar h1 {
     margin: 0 !important;
-    font-size: 20px !important;
+    font-size: 17px !important;
     line-height: 1.2 !important;
     letter-spacing: -0.2px !important;
+    text-align: center;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3504,6 +3523,51 @@ body.venster-open {
 
   .dashboard-topbar > div:first-of-type {
     min-width: 0 !important;
+    grid-column: 2 !important;
+    justify-self: center !important;
+  }
+
+  /* Menu en Logout even hoog en niet hoger dan nodig; de Logout-knop stond
+     op 52 px en maakte daarmee de hele balk hoger dan bij Lojiq. */
+  .dashboard-mobile-menu-btn,
+  .dashboard-logout-btn {
+    height: 38px !important;
+    min-height: 0 !important;
+    padding: 0 12px !important;
+    font-size: 12px !important;
+  }
+
+  .dashboard-mobile-menu-btn {
+    grid-column: 1 !important;
+    justify-self: start !important;
+  }
+
+  .dashboard-account {
+    grid-column: 3 !important;
+    justify-self: end !important;
+
+    /* Op een rij, niet gestapeld: gestapeld werd de balk 99 px in plaats van
+       de 57 die Lojiq heeft. */
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 8px !important;
+    min-width: 0 !important;
+  }
+
+  /* Het e-mailadres en het verkopersnummer staan al in het menu; wie inlogt
+     weet wie hij is. In de balk is alleen Logout nodig. */
+  .dashboard-account > div {
+    display: none !important;
+  }
+
+  .dashboard-topbar .dashboard-eyebrow {
+    display: none !important;
+  }
+
+  .dashboard-topbar,
+  .dashboard-topbar > * {
+    grid-row: 1 !important;
   }
 
   /* "Seller Dashboard" boven de titel voegt op deze breedte niets toe. */
