@@ -6857,6 +6857,37 @@ dashboardSearchInput.addEventListener("input", () => {
   filterZichtbareRijen();
 });
 
+// NEW — een kruisje om het zoekveld in een keer leeg te maken. Wordt hier
+// aangemaakt in plaats van in de HTML, zodat er geen extra bestand mee hoeft
+// in de uitrol.
+(function () {
+  const veld = dashboardSearchInput;
+  const rij = veld && veld.closest(".dashboard-search-wrap");
+  if (!veld || !rij) return;
+
+  const knop = document.createElement("button");
+  knop.type = "button";
+  knop.className = "zoek-wissen";
+  knop.setAttribute("aria-label", "Clear search");
+  knop.textContent = "\u00d7";
+  rij.appendChild(knop);
+
+  function toonOfVerberg() {
+    rij.classList.toggle("heeft-tekst", !!veld.value);
+  }
+
+  knop.addEventListener("click", () => {
+    veld.value = "";
+    toonOfVerberg();
+    filterZichtbareRijen();
+    veld.focus();
+  });
+
+  veld.addEventListener("input", toonOfVerberg);
+  toonOfVerberg();
+})();
+
+
 document.addEventListener(
   "click",
   async (event) => {
