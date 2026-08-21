@@ -665,6 +665,27 @@ export async function resolve(sku, { write = true, token = null } = {}) {
   } catch (err) {
     // A failed call is not the same as "does not exist". Never let an API
     // outage delete or reject real stock.
+    //
+    // FIXED — dit gaf altijd lookup_failed terug, ook als SKU Master de
+    // naam allang wist. Negentien Fear of God-codes bleven daardoor op
+    // "niet op te zoeken" staan terwijl er een prima record lag: StockX
+    // antwoordt op zulke codes met 404 "No product found for GTIN", ook
+    // na herhalen. Wat we al weten is dan het beste dat er is.
+    if (cached?.usable) {
+      return {
+        ok: true,
+        source: "sku_master",
+        sku: cleanSku,
+        record_id: cached.id,
+        product_name: cached.product_name,
+        brand: cached.brand,
+        image: cached.image,
+        url_key: cached.url_key,
+        matched_sku: cached.style_id || cleanSku,
+        lookup_failed: true
+      };
+    }
+
     return { ok: false, reason: "lookup_failed", sku: cleanSku, error: err.message };
   }
 
