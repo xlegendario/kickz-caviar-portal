@@ -3,6 +3,12 @@ import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
 import Airtable from "airtable";
+
+import {
+  resolve as resolveSkuThroughCatalog,
+  normalizeSku as normalizeSkuStrict
+} from "./sku-resolver.mjs";
+
 import compression from "compression";
 import crypto from "crypto";
 import sgMail from "@sendgrid/mail";
@@ -7108,6 +7114,86 @@ app.get("/api/consignment/inventory", async (req, res) => {
   }
 });
 
+// NEW — de enige plek waar een SKU een product wordt bij consignment.
+//
+// Hiervoor liep dit via lookupSkuMasterProduct, en die gaf bij een
+// mislukte opzoeking de SKU terug als productnaam. Die naam werd in
+// Supabase gezet en daarna nooit meer bijgewerkt, terwijl de foto wel een
+// herstelketen heeft (store_listings -> SKU Master -> UOL, en het
+// resultaat wordt teruggeschreven). Vandaar voorraadregels met de SKU als
+// naam en toch een foto: de foto kwam later alsnog, de naam nooit.
+//
+// Nu: geen exacte StockX-match, geen regel. De aanroeper vangt dit op en
+// zet de SKU op de overslaanlijst.
+class UnknownSkuError extends Error {
+  constructor(sku, reason) {
+    super(`SKU not recognised: ${sku}`);
+
+    this.name = "UnknownSkuError";
+    this.sku = sku;
+    this.reason = reason;
+    this.isUnknownSku = true;
+  }
+}
+
+// Een storing bij StockX is niet hetzelfde als "bestaat niet". Die mag
+// nooit voorraad weigeren, dus die krijgt een eigen fout die de rij laat
+// mislukken in plaats van hem als onbekend af te voeren.
+class SkuLookupFailedError extends Error {
+  constructor(sku, details) {
+    super(`SKU lookup failed for ${sku}: ${details}`);
+
+    this.name = "SkuLookupFailedError";
+    this.sku = sku;
+    this.isLookupFailure = true;
+  }
+}
+
+/**
+ * Een CSV van 200 regels bevat vaak maar 30 unieke SKU's, want elke maat
+ * is een eigen regel. Zonder cache zijn dat 200 StockX-aanroepen voor 30
+ * producten. Geef een Map mee en het worden er 30.
+ */
+async function resolveConsignmentProduct(sku, cache = null) {
+  const cleanSku = normalizeSkuStrict(sku);
+
+  if (!cleanSku) throw new UnknownSkuError("", "empty_sku");
+
+  if (cache && cache.has(cleanSku)) {
+    const onthouden = cache.get(cleanSku);
+
+    if (onthouden.ok) return onthouden.value;
+
+    throw new UnknownSkuError(cleanSku, onthouden.reason);
+  }
+
+  const uitkomst = await resolveSkuThroughCatalog(cleanSku).catch((err) => ({
+    ok: false,
+    reason: "lookup_failed",
+    error: err.message
+  }));
+
+  if (!uitkomst.ok && uitkomst.reason === "lookup_failed") {
+    // Niet in de cache: bij de volgende regel mag hij het opnieuw proberen.
+    throw new SkuLookupFailedError(cleanSku, uitkomst.error || "unknown");
+  }
+
+  if (!uitkomst.ok) {
+    if (cache) cache.set(cleanSku, { ok: false, reason: uitkomst.reason });
+
+    throw new UnknownSkuError(cleanSku, uitkomst.reason);
+  }
+
+  const waarde = {
+    product_name: uitkomst.product_name,
+    brand: uitkomst.brand || ""
+  };
+
+  if (cache) cache.set(cleanSku, { ok: true, value: waarde });
+
+  return waarde;
+}
+
 async function addConsignmentInventoryRow({
   sellerRecordId,
   sellerId,
@@ -7115,7 +7201,11 @@ async function addConsignmentInventoryRow({
   size,
   vatType,
   sellingPriceSuggested,
-  quantity
+  quantity,
+  // NEW — optioneel. Een CSV met 200 regels heeft vaak 30 unieke
+  // SKU's; hiermee wordt elke SKU een keer opgezocht in plaats van
+  // een keer per maat.
+  skuCache = null
 }) {
   const cleanSku = asText(sku).toUpperCase();
   const cleanSize = asText(size);
@@ -7123,7 +7213,10 @@ async function addConsignmentInventoryRow({
   const cleanPrice = Number(sellingPriceSuggested);
   const cleanQuantity = Number(quantity);
 
-  const productInfo = await lookupSkuMasterProduct(cleanSku);
+  // GEWIJZIGD — gaat nu door de poort. Bij een onbekende SKU gooit
+  // deze een UnknownSkuError en wordt er geen regel geschreven,
+  // in plaats van een regel met de SKU als productnaam.
+  const productInfo = await resolveConsignmentProduct(cleanSku, skuCache);
 
   const { data: existingRows, error: existingError } = await supabase
     .from("consignment_inventory")
@@ -7198,7 +7291,11 @@ async function setConsignmentInventoryRow({
   size,
   vatType,
   sellingPriceSuggested,
-  quantity
+  quantity,
+  // NEW — optioneel. Een CSV met 200 regels heeft vaak 30 unieke
+  // SKU's; hiermee wordt elke SKU een keer opgezocht in plaats van
+  // een keer per maat.
+  skuCache = null
 }) {
   const cleanSku = asText(sku).toUpperCase();
   const cleanSize = asText(size);
@@ -7206,7 +7303,8 @@ async function setConsignmentInventoryRow({
   const cleanPrice = Number(sellingPriceSuggested);
   const cleanQuantity = Number(quantity);
 
-  const productInfo = await lookupSkuMasterProduct(cleanSku);
+  // GEWIJZIGD — zie addConsignmentInventoryRow.
+  const productInfo = await resolveConsignmentProduct(cleanSku, skuCache);
 
   const { data: existingRows, error: existingError } = await supabase
     .from("consignment_inventory")
@@ -7307,6 +7405,27 @@ app.post("/api/consignment/inventory/manual", async (req, res) => {
       ...result
     });
   } catch (err) {
+    // NEW — een SKU die StockX niet exact kent is een invoerfout, geen
+    // serverfout. Hiervoor werd de regel gewoon aangemaakt met de SKU
+    // als productnaam en merkte niemand er iets van.
+    if (err?.isUnknownSku) {
+      return res.status(400).json({
+        error: "SKU not recognised",
+        sku: err.sku,
+        message:
+          `We could not find ${err.sku} in our catalog, so it was not added. ` +
+          "Please double-check the SKU. If you think this is a mistake, get in touch and we will look into it."
+      });
+    }
+
+    // Een storing bij StockX mag geen echte voorraad weigeren.
+    if (err?.isLookupFailure) {
+      return res.status(503).json({
+        error: "Product lookup temporarily unavailable",
+        message: "We could not verify this SKU right now. Please try again in a moment."
+      });
+    }
+
     console.error("Failed to manually add consignment inventory:", err);
 
     res.status(500).json({
@@ -7449,7 +7568,27 @@ async function updateCsvImportJob(jobId, fields) {
     })
     .eq("id", jobId);
 
-  if (error) throw error;
+  if (!error) return;
+
+  // NEW — skipped_json is een nieuwe kolom:
+  //   alter table csv_import_jobs add column if not exists skipped_json jsonb;
+  // Zolang die er niet is, gaat de import gewoon door zonder de lijst
+  // op te slaan in plaats van te falen op een ontbrekende kolom.
+  if ("skipped_json" in fields) {
+    const { skipped_json, ...zonder } = fields;
+
+    const tweedePoging = await supabase
+      .from(SUPABASE_CSV_IMPORT_JOBS_TABLE)
+      .update({
+        ...zonder,
+        heartbeat_at: new Date().toISOString()
+      })
+      .eq("id", jobId);
+
+    if (!tweedePoging.error) return;
+  }
+
+  throw error;
 }
 
 async function getNextCsvImportJob() {
@@ -7502,6 +7641,13 @@ async function processCsvImportJob(job) {
   let processed = Number(job.processed_rows || 0);
 
   const affectedStockKeys = new Map();
+
+  // NEW — SKU's die StockX niet exact kent. Die krijgen geen regel;
+  // de consignor krijgt ze aan het eind te zien.
+  const skipped = Array.isArray(job.skipped_json) ? [...job.skipped_json] : [];
+
+  // NEW — een SKU wordt een keer opgezocht, niet een keer per maat.
+  const skuCache = new Map();
 
   function rememberStockKey(sku, size) {
     const cleanSku = asText(sku).toUpperCase();
@@ -7558,36 +7704,61 @@ async function processCsvImportJob(job) {
         current_row_number: row.row_number || i + 1
       });
 
-      if (job.import_type === "replace") {
-        await setConsignmentInventoryRow({
-          sellerRecordId: job.seller_record_id,
-          sellerId: job.seller_id,
+      // NEW — een SKU die StockX niet exact kent levert geen regel op.
+      // Hiervoor werd de SKU als productnaam weggeschreven en stond de
+      // voorraad er gewoon, met een naam die niemand kon plaatsen.
+      try {
+        if (job.import_type === "replace") {
+          await setConsignmentInventoryRow({
+            sellerRecordId: job.seller_record_id,
+            sellerId: job.seller_id,
+            sku: row.sku,
+            size: row.size,
+            vatType: row.vat_type,
+            sellingPriceSuggested: row.selling_price_suggested,
+            quantity: row.quantity,
+            skuCache
+          });
+
+          rememberStockKey(row.sku, row.size);
+        } else {
+          await addConsignmentInventoryRow({
+            sellerRecordId: job.seller_record_id,
+            sellerId: job.seller_id,
+            sku: row.sku,
+            size: row.size,
+            vatType: row.vat_type,
+            sellingPriceSuggested: row.selling_price_suggested,
+            quantity: row.quantity,
+            skuCache
+          });
+      
+          rememberStockKey(row.sku, row.size);
+        }
+
+      } catch (rowError) {
+        if (!rowError?.isUnknownSku) throw rowError;
+
+        skipped.push({
+          row_number: row.row_number || i + 1,
           sku: row.sku,
           size: row.size,
-          vatType: row.vat_type,
-          sellingPriceSuggested: row.selling_price_suggested,
-          quantity: row.quantity
+          quantity: row.quantity,
+          reason: rowError.reason || "not_found"
         });
 
-        rememberStockKey(row.sku, row.size);
-      } else {
-        await addConsignmentInventoryRow({
-          sellerRecordId: job.seller_record_id,
-          sellerId: job.seller_id,
+        console.warn("CSV row skipped, SKU not recognised:", {
+          jobId: job.id,
           sku: row.sku,
-          size: row.size,
-          vatType: row.vat_type,
-          sellingPriceSuggested: row.selling_price_suggested,
-          quantity: row.quantity
+          row: row.row_number || i + 1
         });
-      
-        rememberStockKey(row.sku, row.size);
       }
 
       processed = i + 1;
 
       await updateCsvImportJob(job.id, {
-        processed_rows: processed
+        processed_rows: processed,
+        skipped_json: skipped
       });
     }
 
@@ -7596,7 +7767,8 @@ async function processCsvImportJob(job) {
       processed_rows: rows.length,
       completed_at: new Date().toISOString(),
       current_row_number: null,
-      error_message: null
+      error_message: null,
+      skipped_json: skipped
     });
   } catch (err) {
     await updateCsvImportJob(job.id, {
@@ -14636,8 +14808,16 @@ async function lookupSkuMasterProduct(sku) {
   });
 
   if (!stockxProduct || !stockxProduct.is_exact_sku_match) {
+    // GEWIJZIGD — gaf hier de SKU terug als productnaam. Dat is de
+    // bron van elke regel met een SKU als naam: onherkenbaar van een
+    // echte naam, en niets probeerde het ooit opnieuw.
+    //
+    // De consignment-intake loopt inmiddels via
+    // resolveConsignmentProduct en komt hier niet meer langs. Voor
+    // wat er nog wel langskomt: een lege naam, zodat een aanroeper
+    // het verschil ziet tussen gevonden en niet gevonden.
     return {
-      product_name: cleanSku,
+      product_name: "",
       brand: ""
     };
   }
