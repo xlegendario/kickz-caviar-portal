@@ -464,11 +464,16 @@
 }
 
 .dashboard-product-meta {
-  margin-top: 3px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: rgba(255,255,255,0.46);
+  margin-top: 4px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.66);
   font-variant-numeric: tabular-nums;
+}
+
+.dashboard-product-sku {
+  color: rgba(255,255,255,0.94);
+  font-weight: 800;
 }
 
 .dashboard-table th.dashboard-product-col,
@@ -891,8 +896,14 @@
   white-space: normal;
 }
 
-.dashboard-table th:nth-child(6),
-.dashboard-table td:nth-child(6) {
+.dashboard-table th.dashboard-size-col,
+.dashboard-table td.dashboard-size-col {
+  min-width: 84px;
+  white-space: nowrap;
+}
+
+.dashboard-table th:nth-child(7),
+.dashboard-table td:nth-child(7) {
   min-width: 130px;
   text-align: center;
 }
@@ -3496,6 +3507,86 @@
 
   .dashboard-table td:first-child:not(.dashboard-product-col) .dashboard-status-dot {
     margin: 0;
+  }
+
+  /* De bovenbalk blijft staan tijdens het scrollen, zodat het menu, de
+     titel en Logout bereikbaar zijn zonder eerst helemaal terug te scrollen.
+
+     Er stond al een mobiele behandeling die er een raster van maakte met een
+     titel van 46 pixels en 34 pixels ruimte eromheen: samen 181 pixels, ruim
+     een vijfde van een telefoonscherm. Als zo'n balk blijft staan is dat te
+     veel, dus hij gaat terug naar één compacte regel. Die oude regels staan
+     volledig op !important, vandaar dat het hier ook moet.
+
+     Let op de body hieronder: overflow-x hidden maakt van body een
+     scrollgebied, en dan plakt een sticky element aan een gebied dat zelf
+     nooit scrollt — het schuift dus gewoon weg. Met clip wordt er wel
+     afgeknipt maar geen scrollgebied gemaakt, en blijft de balk staan. */
+  html,
+  body {
+    overflow-x: clip;
+  }
+
+  .dashboard-topbar {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 100 !important;
+
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 12px !important;
+
+    height: auto !important;
+    min-height: 0 !important;
+    padding: 9px 14px !important;
+  }
+
+  .dashboard-topbar h1 {
+    margin: 0 !important;
+    font-size: 20px !important;
+    line-height: 1.2 !important;
+    letter-spacing: -0.2px !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .dashboard-topbar > div:first-of-type {
+    min-width: 0 !important;
+  }
+
+  /* "Seller Dashboard" boven de titel voegt op deze breedte niets toe. */
+  .dashboard-topbar .dashboard-eyebrow {
+    display: none !important;
+  }
+
+  .dashboard-account {
+    min-width: 0;
+    margin-left: auto;
+    gap: 8px;
+  }
+
+  .dashboard-account-name,
+  .dashboard-account-id {
+    max-width: 92px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+  }
+
+  .dashboard-mobile-menu-btn {
+    height: 38px !important;
+    padding: 0 12px !important;
+    flex: 0 0 auto;
+  }
+
+  /* De maat heeft op het bureaublad een eigen kolom om snel te kunnen
+     scannen. Op een kaart staat hij al in het productblok bovenaan, dus
+     daar zou de losse regel dubbelop zijn. */
+  .dashboard-table td.dashboard-size-col {
+    display: none;
   }
 
   /* De lege staat is één cel met colspan; die hoort geen kaart te zijn. */
