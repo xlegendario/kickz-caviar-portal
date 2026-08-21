@@ -3214,6 +3214,128 @@ function getCsvImportStatusEl() {
   return document.getElementById("consignmentCsvImportStatus");
 }
 
+// NEW — de lijst met overgeslagen regels.
+//
+// De import slaat een regel over als StockX de SKU niet exact kent. Zonder
+// deze lijst verdwijnt zo'n regel geruisloos: de teller zegt "completed" en
+// de voorraad is stiller kleiner dan het bestand dat je uploadde.
+//
+// Zelfde vorm als het venster voor dubbele regels, maar amber in plaats van
+// rood. Dat verschil is opzet: dubbele regels blokkeren de upload en moet je
+// eerst oplossen, dit is een melding achteraf terwijl de rest gewoon binnen
+// is. Rood zou suggereren dat er niets gelukt is.
+//
+// Wordt door de code aangemaakt in plaats van in dashboard.html gezet, zodat
+// dat bestand niet mee hoeft in de uitrol. De klassen zijn dezelfde als de
+// andere vensters, dus Escape en de scrollvergrendeling werken er vanzelf op.
+let overgeslagenVenster = null;
+
+function maakOvergeslagenVenster() {
+  if (overgeslagenVenster) return overgeslagenVenster;
+
+  const venster = document.createElement("div");
+  venster.className = "dashboard-modal hidden";
+  venster.id = "consignmentCsvSkippedModal";
+
+  venster.innerHTML = `
+    <div class="dashboard-modal-backdrop" data-skipped-close></div>
+
+    <div class="dashboard-modal-card">
+      <h2>Rows we could not add</h2>
+      <p>
+        These SKUs are not in our catalog, so they were left out. Everything
+        else from your file was imported.
+      </p>
+
+      <div class="consignment-skipped-list" id="consignmentCsvSkippedList"></div>
+
+      <p class="consignment-skipped-help">
+        Please double-check these SKUs. If you believe one of them is correct,
+        get in touch and we will look into it.
+      </p>
+
+      <button type="button" class="dashboard-issue-submit-btn" data-skipped-close>
+        Back
+      </button>
+    </div>
+  `;
+
+  document.body.appendChild(venster);
+
+  venster.querySelectorAll("[data-skipped-close]").forEach((knop) => {
+    knop.addEventListener("click", () => {
+      venster.classList.add("hidden");
+      document.documentElement.classList.remove("venster-open");
+      document.body.classList.remove("venster-open");
+    });
+  });
+
+  overgeslagenVenster = venster;
+
+  return venster;
+}
+
+function toonOvergeslagen(regels) {
+  const venster = maakOvergeslagenVenster();
+  const lijst = venster.querySelector("#consignmentCsvSkippedList");
+
+  lijst.innerHTML = (regels || [])
+    .map((r) => {
+      const sku = escapeHtml(String(r.sku ?? ""));
+      const maat = r.size ? escapeHtml(String(r.size)) : "";
+      const aantal = r.quantity ? escapeHtml(String(r.quantity)) : "";
+
+      const achter = [maat && `Size ${maat}`, aantal && `${aantal} pcs`]
+        .filter(Boolean)
+        .join(" &middot; ");
+
+      return `
+        <div>
+          <span class="consignment-skipped-sku">${sku}</span>
+          ${achter ? `<span class="consignment-skipped-meta">${achter}</span>` : ""}
+        </div>
+      `;
+    })
+    .join("");
+
+  venster.classList.remove("hidden");
+  document.documentElement.classList.add("venster-open");
+  document.body.classList.add("venster-open");
+}
+
+// NEW — onthouden welke afgeronde import je al gezien hebt.
+//
+// loadCsvImportStatus haalt altijd de laatste taak op, en die verandert
+// niet meer zodra hij klaar is. Zonder dit stond de melding van je vorige
+// import bij elk bezoek aan deze tab weer in beeld.
+//
+// Per verkoper bewaard, want een browser kan bij meerdere accounts horen.
+function csvImportWeggekliktSleutel() {
+  return `csv-import-gezien:${dashboardSeller?.id || "onbekend"}`;
+}
+
+function csvImportWeggeklikt(jobId) {
+  if (!jobId) return false;
+
+  try {
+    return localStorage.getItem(csvImportWeggekliktSleutel()) === String(jobId);
+  } catch {
+    // Privémodus of geblokkeerde opslag: dan liever de melding te vaak
+    // tonen dan een overgeslagen regel verzwijgen.
+    return false;
+  }
+}
+
+function onthoudCsvImportWeggeklikt(jobId) {
+  if (!jobId) return;
+
+  try {
+    localStorage.setItem(csvImportWeggekliktSleutel(), String(jobId));
+  } catch {
+    /* niets aan te doen, zie hierboven */
+  }
+}
+
 function renderCsvImportStatus(job) {
   const el = getCsvImportStatusEl();
   if (!el) return;
@@ -3241,15 +3363,75 @@ function renderCsvImportStatus(job) {
     return;
   }
 
+  const overgeslagen = Array.isArray(job.skipped_json) ? job.skipped_json : [];
+
   if (job.status === "completed") {
+    // GEWIJZIGD — twee dingen.
+    //
+    // Ten eerste zei dit altijd "completed", ook als er regels waren
+    // overgeslagen. Dan klopt je voorraad niet met het bestand dat je
+    // uploadde en zie je daar niets van.
+    //
+    // Ten tweede kwam de melding bij elk bezoek aan deze tab terug. Er
+    // wordt namelijk altijd de laatste taak opgehaald, en die blijft
+    // eeuwig dezelfde: een import van vorige week stond dus elke keer
+    // opnieuw vijftien seconden in beeld, alsof hij nog bezig was.
+    // Wegklikken wordt nu onthouden, en vanzelf verdwijnen telt daar ook
+    // als wegklikken.
+    if (csvImportWeggeklikt(job.id)) {
+      el.classList.add("hidden");
+      el.textContent = "";
+      return;
+    }
+
+    if (overgeslagen.length) {
+      el.classList.add("skipped");
+      el.title = "Click to see which rows were skipped";
+
+      el.innerHTML = `
+        <span class="csv-import-status-mark" aria-hidden="true">!</span>
+        <span class="csv-import-status-text" role="button" tabindex="0">
+          ${processed - overgeslagen.length}/${total} imported,
+          ${overgeslagen.length} skipped
+        </span>
+        <button type="button" class="csv-import-status-dismiss"
+                aria-label="Dismiss">&times;</button>
+      `;
+
+      const openen = () => toonOvergeslagen(overgeslagen);
+      const tekst = el.querySelector(".csv-import-status-text");
+
+      tekst.addEventListener("click", openen);
+      tekst.addEventListener("keydown", (gebeurtenis) => {
+        if (gebeurtenis.key === "Enter" || gebeurtenis.key === " ") {
+          gebeurtenis.preventDefault();
+          openen();
+        }
+      });
+
+      // Blijft staan tot je hem wegklikt: vanzelf verdwijnen zou betekenen
+      // dat je hem mist als je even wegkijkt, en dan is je voorraad stil
+      // kleiner geworden dan je bestand.
+      el.querySelector(".csv-import-status-dismiss")
+        .addEventListener("click", () => {
+          onthoudCsvImportWeggeklikt(job.id);
+          el.classList.add("hidden");
+          el.textContent = "";
+        });
+
+      return;
+    }
+
     el.textContent = `✅ Import completed`;
     el.classList.add("completed");
-  
+    el.onclick = null;
+
     csvImportCompletedHideTimer = setTimeout(() => {
+      onthoudCsvImportWeggeklikt(job.id);
       el.classList.add("hidden");
       el.textContent = "";
     }, 15000);
-  
+
     return;
   }
 
