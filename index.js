@@ -7938,7 +7938,15 @@ app.get("/api/consignment/csv-import/latest", async (req, res) => {
 
     const { data, error } = await supabase
       .from(SUPABASE_CSV_IMPORT_JOBS_TABLE)
-      .select("id, import_type, status, total_rows, processed_rows, error_message, created_at, started_at, completed_at, failed_at")
+      // GEWIJZIGD — skipped_json erbij. De verwerking vult dat sinds
+      // kort met de SKU's die geen exacte StockX-match hadden, maar
+      // zonder dit veld kon de voorkant er niet bij en zag de
+      // consignor niet dat er regels waren overgeslagen.
+      .select(
+        "id, import_type, status, total_rows, processed_rows, " +
+        "error_message, created_at, started_at, completed_at, " +
+        "failed_at, skipped_json"
+      )
       .eq("seller_record_id", sellerRecordId)
       .order("created_at", { ascending: false })
       .limit(1);
