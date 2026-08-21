@@ -1,3 +1,236 @@
+/* ==================================================================
+   NEW — vensters in plaats van de grijze vakjes van de browser.
+   ==================================================================
+
+   Verving 78 alert(), 18 confirm() en 12 prompt(). Die zien er per
+   telefoon en per browser anders uit, negeren de huisstijl volledig, en
+   bij een prompt krijg je een gewoon tekstveld voor iets waar alleen een
+   bedrag in hoort — dus geen numeriek toetsenbord en geen controle.
+
+   Drie functies, allemaal een belofte, zodat een aanroep leest als de
+   oude:
+
+     alert(x)              ->  showAlert(x)
+     if (!confirm(x))      ->  if (!(await showConfirm(x)))
+     const y = prompt(x)   ->  const y = await showPrompt(x)
+
+   Eigen klassen in plaats van de vensterklassen van het portal: die
+   verschillen per portal en dan zou hetzelfde venster er op twee plekken
+   anders uitzien.
+   ================================================================== */
+
+const kcDialogState = {
+  open: 0,
+  vorigeFocus: null
+};
+
+function kcDialogVergrendel(aan) {
+  kcDialogState.open += aan ? 1 : -1;
+
+  if (kcDialogState.open < 0) kcDialogState.open = 0;
+
+  const bezet = kcDialogState.open > 0;
+
+  document.documentElement.classList.toggle("kc-dialog-open", bezet);
+  document.body.classList.toggle("kc-dialog-open", bezet);
+}
+
+function kcDialogEscape(v) {
+  return String(v == null ? "" : v)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * De kern. De andere drie functies zijn er een laagje omheen.
+ *
+ * soort:  "alert" | "confirm" | "prompt"
+ * opties: { title, confirmLabel, cancelLabel, danger, money,
+ *           placeholder, value, validate }
+ */
+function kcDialog(soort, tekst, opties) {
+  const o = opties || {};
+
+  return new Promise((klaar) => {
+    const laag = document.createElement("div");
+    laag.className = "kc-dialog";
+    laag.setAttribute("role", "dialog");
+    laag.setAttribute("aria-modal", "true");
+
+    const heeftInvoer = soort === "prompt";
+    const heeftAnnuleer = soort !== "alert";
+
+    const titel = o.title || (
+      soort === "confirm" ? "Are you sure?" :
+      soort === "prompt" ? "" : ""
+    );
+
+    const bevestigTekst = o.confirmLabel || (
+      soort === "alert" ? "OK" :
+      soort === "confirm" ? "Confirm" : "Confirm"
+    );
+
+    laag.innerHTML =
+      '<div class="kc-dialog-backdrop" data-kc-cancel></div>' +
+      '<div class="kc-dialog-card">' +
+        (titel ? '<h3 class="kc-dialog-title">' + kcDialogEscape(titel) + "</h3>" : "") +
+        '<p class="kc-dialog-text">' + kcDialogEscape(tekst) + "</p>" +
+        (heeftInvoer
+          ? '<label class="kc-dialog-field' + (o.money ? " money" : "") + '">' +
+              (o.money ? '<span class="kc-dialog-prefix">&euro;</span>' : "") +
+              '<input class="kc-dialog-input" type="text"' +
+              (o.money ? ' inputmode="decimal"' : "") +
+              ' placeholder="' + kcDialogEscape(o.placeholder || "") + '"' +
+              ' value="' + kcDialogEscape(o.value || "") + '" />' +
+            "</label>" +
+            '<p class="kc-dialog-error" hidden></p>'
+          : "") +
+        '<div class="kc-dialog-actions">' +
+          (heeftAnnuleer
+            ? '<button type="button" class="kc-dialog-btn cancel" data-kc-cancel>' +
+              kcDialogEscape(o.cancelLabel || "Cancel") + "</button>"
+            : "") +
+          '<button type="button" class="kc-dialog-btn confirm' +
+          (o.danger ? " danger" : "") + '">' + kcDialogEscape(bevestigTekst) + "</button>" +
+        "</div>" +
+      "</div>";
+
+    document.body.appendChild(laag);
+    kcDialogVergrendel(true);
+
+    // Zodat de focus na het sluiten terugkeert naar de knop waar je vandaan
+    // kwam, in plaats van naar de bovenkant van de pagina.
+    if (kcDialogState.open === 1) {
+      kcDialogState.vorigeFocus = document.activeElement;
+    }
+
+    const invoer = laag.querySelector(".kc-dialog-input");
+    const fout = laag.querySelector(".kc-dialog-error");
+    const bevestigKnop = laag.querySelector(".kc-dialog-btn.confirm");
+
+    function sluit(waarde) {
+      document.removeEventListener("keydown", opToets, true);
+      laag.remove();
+      kcDialogVergrendel(false);
+
+      if (kcDialogState.open === 0 && kcDialogState.vorigeFocus) {
+        try { kcDialogState.vorigeFocus.focus(); } catch (e) { /* weggehaald */ }
+        kcDialogState.vorigeFocus = null;
+      }
+
+      klaar(waarde);
+    }
+
+    function annuleer() {
+      sluit(soort === "prompt" ? null : soort === "confirm" ? false : undefined);
+    }
+
+    function bevestig() {
+      if (!heeftInvoer) {
+        sluit(soort === "confirm" ? true : undefined);
+        return;
+      }
+
+      const waarde = invoer.value.trim();
+
+      // De aanroeper mag zelf bepalen wat geldig is; zonder controle laten
+      // we alles door en blijft het gedrag gelijk aan het oude prompt().
+      if (typeof o.validate === "function") {
+        const melding = o.validate(waarde);
+
+        if (melding) {
+          fout.textContent = melding;
+          fout.hidden = false;
+          invoer.focus();
+          invoer.select();
+          return;
+        }
+      }
+
+      sluit(waarde);
+    }
+
+    laag.querySelectorAll("[data-kc-cancel]").forEach((el) => {
+      el.addEventListener("click", annuleer);
+    });
+
+    bevestigKnop.addEventListener("click", bevestig);
+
+    function opToets(gebeurtenis) {
+      // Alleen het bovenste venster reageert, anders sluiten er twee
+      // tegelijk als er eentje bovenop een andere staat.
+      if (laag !== document.querySelector(".kc-dialog:last-of-type")) return;
+
+      if (gebeurtenis.key === "Escape") {
+        gebeurtenis.preventDefault();
+        gebeurtenis.stopPropagation();
+        annuleer();
+        return;
+      }
+
+      if (gebeurtenis.key === "Enter") {
+        // In een tekstveld met meerdere regels hoort Enter een regel te
+        // maken, niet te bevestigen.
+        if (gebeurtenis.target && gebeurtenis.target.tagName === "TEXTAREA") return;
+
+        gebeurtenis.preventDefault();
+        bevestig();
+      }
+    }
+
+    document.addEventListener("keydown", opToets, true);
+
+    // Een frame wachten zodat de invoer op mobiel het toetsenbord opent.
+    requestAnimationFrame(() => {
+      if (invoer) {
+        invoer.focus();
+        invoer.select();
+      } else {
+        bevestigKnop.focus();
+      }
+    });
+  });
+}
+
+/**
+ * Standaardcontrole voor de bedragvensters.
+ *
+ * Het oude prompt() nam alles aan: een lege regel, "abc", een negatief
+ * getal. Dat ging dan naar de server en kwam terug als een foutmelding, of
+ * erger, als een order van nul euro. Hier wordt het meteen tegengehouden,
+ * naast het veld, zonder dat je opnieuw hoeft te beginnen.
+ *
+ * Komma en punt allebei goed: op een Nederlands toetsenbord typ je een
+ * komma, en dat hoort gewoon te werken.
+ */
+function kcMoneyCheck(waarde) {
+  const tekst = String(waarde || "").replace(/\s/g, "").replace(",", ".");
+
+  if (!tekst) return "Please enter an amount.";
+
+  const getal = Number(tekst);
+
+  if (!Number.isFinite(getal)) return "That is not a valid amount.";
+  if (getal <= 0) return "The amount must be higher than 0.";
+
+  return "";
+}
+
+function showAlert(tekst, opties) {
+  return kcDialog("alert", tekst, opties);
+}
+
+function showConfirm(tekst, opties) {
+  return kcDialog("confirm", tekst, opties);
+}
+
+function showPrompt(tekst, opties) {
+  return kcDialog("prompt", tekst, opties);
+}
+
 const dealsGrid = document.getElementById("dealsGrid");
 const mainToggleButtons = document.querySelectorAll("[data-main-mode]");
 const buyingProductModal = document.getElementById("buyingProductModal");
@@ -223,7 +456,7 @@ function renderBuyingProducts() {
 function openBuyingProductModal(productKey) {
   const product = currentBuyingProducts.find((item) => item.key === productKey);
   if (!product) {
-    alert("Product not found. Please refresh and try again.");
+    showAlert("Product not found. Please refresh and try again.");
     return;
   }
   buyingProductModalContent.innerHTML = `
@@ -359,7 +592,7 @@ function openBuyingActionFlow(action, productKey, sizeValue) {
   const product = currentBuyingProducts.find((item) => item.key === productKey);
   const size = product?.sizes?.find((item) => String(item.size) === String(sizeValue));
   if (!product || !size) {
-    alert("Product or size not found. Please refresh and try again.");
+    showAlert("Product or size not found. Please refresh and try again.");
     return;
   }
   selectedBuyingAction = {
@@ -1434,7 +1667,7 @@ function openClaimModal(dealId) {
   }
   selectedDeal = currentDeals.find((deal) => deal.id === dealId);
   if (!selectedDeal) {
-    alert("Deal not found. Please refresh and try again.");
+    showAlert("Deal not found. Please refresh and try again.");
     return;
   }
   // FIXED — a real, confirmed bug found via his live report: this
@@ -1447,7 +1680,7 @@ function openClaimModal(dealId) {
   // Deal (deal_type !== "quick"), rather than trusting the button
   // that was clicked.
   if (selectedDeal.deal_type && selectedDeal.deal_type !== "quick") {
-    alert("This listing is a Want To Buy, not a Quick Deal. Please refresh and use Make Offer instead.");
+    showAlert("This listing is a Want To Buy, not a Quick Deal. Please refresh and use Make Offer instead.");
     selectedDeal = null;
     loadDeals(currentType, true);
     return;
@@ -1529,7 +1762,7 @@ function openOfferFlow(dealId) {
   }
   selectedOfferDeal = currentDeals.find((deal) => deal.id === dealId);
   if (!selectedOfferDeal) {
-    alert("Deal not found. Please refresh and try again.");
+    showAlert("Deal not found. Please refresh and try again.");
     return;
   }
   selectedOfferVatType = priceView === "vat0" ? "VAT0" : "Margin";
