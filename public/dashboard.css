@@ -3528,13 +3528,26 @@ body.venster-open {
   }
 
   /* Menu en Logout even hoog en niet hoger dan nodig; de Logout-knop stond
-     op 52 px en maakte daarmee de hele balk hoger dan bij Lojiq. */
+     op 52 px en maakte daarmee de hele balk hoger dan bij Lojiq.
+
+     GECORRIGEERD — ik had hier ook de lettergrootte omlaag geforceerd, en
+     daardoor liepen het pictogram en het woord "Menu" buiten de knop. De
+     inhoud staat nu gewoon naast elkaar op een regel en de knop groeit mee
+     met wat erin staat. */
   .dashboard-mobile-menu-btn,
   .dashboard-logout-btn {
-    height: 38px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 6px;
+
+    height: 40px !important;
     min-height: 0 !important;
-    padding: 0 12px !important;
-    font-size: 12px !important;
+    width: auto !important;
+    padding: 0 14px !important;
+
+    line-height: 1 !important;
+    white-space: nowrap;
   }
 
   .dashboard-mobile-menu-btn {
