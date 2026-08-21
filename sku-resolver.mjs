@@ -703,6 +703,11 @@ export async function resolve(sku, { write = true, token = null } = {}) {
     source: "stockx",
     sku: cleanSku,
     matched_sku: identity.matched_sku,
+    // Hoorde hier al te staan. Werd intern gebruikt om weg te schrijven,
+    // maar kwam nooit mee naar buiten, dus met write:false wist een
+    // aanroeper de url key nooit en bleef dat veld leeg.
+    url_key: identity.url_key,
+    colorway: identity.colorway,
     product_name: identity.product_name,
     brand: identity.brand,
     image,
