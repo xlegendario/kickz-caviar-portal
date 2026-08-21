@@ -778,6 +778,14 @@ function syncDashboardCellColumns() {
       if (kop.product) cel.classList.add("dashboard-product-col");
       if (kop.actie) cel.classList.add("dashboard-action-col");
       if (kop.maat) cel.classList.add(kop.maat);
+
+      // Het aantal knoppen bepaalt hoeveel kolommen de actiecel krijgt op een
+      // kaart. Zelf tellen is betrouwbaarder dan het aan de opmaak overlaten:
+      // auto-fit liet in sommige browsers een lege kolom staan.
+      if (kop.actie) {
+        const aantal = cel.querySelectorAll("button, a").length;
+        cel.style.setProperty("--actieknoppen", String(Math.max(1, Math.min(aantal, 3))));
+      }
     });
   });
 }
