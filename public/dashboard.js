@@ -64,6 +64,7 @@ const dashboardConfig = {
 
 const skeletonColumns = [
   "Product",
+  "Size",
   "Order ID",
   "Payout",
   "VAT Type",
@@ -73,6 +74,7 @@ const skeletonColumns = [
 
 const consignmentInventoryColumns = [
   "Product",
+  "Size",
   "VAT Type",
   "Selling Price",
   "Lowest Price",
@@ -82,6 +84,7 @@ const consignmentInventoryColumns = [
 
 const consignmentOfferColumns = [
   "Product",
+  "Size",
   "Order ID",
   "Your Price",
   "Offer",
@@ -488,7 +491,15 @@ function renderStats() {
 }
 
 function isMobileDashboard() {
-  return window.innerWidth <= 768;
+  // UITGEZET — stond op window.innerWidth <= 768 en liet acht renderfuncties
+  // een eigen mobiele HTML-variant schrijven, naast de gewone tabel. Twee
+  // uitvoeringen van dezelfde tabel, en ze liepen uit elkaar: sommige tabs
+  // kregen de nieuwe kaartopmaak, andere bleven op de oude hangen.
+  //
+  // Nu schrijft elke tabel dezelfde rijen en maakt de opmaak er onder 768
+  // pixels kaarten van. De mobiele tak blijft staan voor het geval hij
+  // teruggezet moet worden, maar wordt niet meer gelopen.
+  return false;
 }
 
 function setMobileTableMode(isMobile = isMobileDashboard()) {
@@ -601,11 +612,13 @@ function escapeHtml(value) {
 function dashboardProductCell(item) {
   const naam = item.product || item.product_name || "-";
 
-  const meta = [
-    item.sku,
-    item.size ? `Size ${item.size}` : "",
-    item.brand
-  ].filter(Boolean).map(escapeHtml).join(" &middot; ");
+  // De SKU is het veld waar het meest op gezocht wordt, dus die krijgt de
+  // volle tekstkleur; maat en merk blijven secundair.
+  const delen = [];
+  if (item.sku) delen.push(`<span class="dashboard-product-sku">${escapeHtml(item.sku)}</span>`);
+  if (item.size) delen.push(escapeHtml(`Size ${item.size}`));
+  if (item.brand) delen.push(escapeHtml(item.brand));
+  const meta = delen.join(" &middot; ");
 
   return `
     <div class="dashboard-product-name">${escapeHtml(naam)}</div>
@@ -621,9 +634,11 @@ function dashboardHeadCell(label) {
   const klasse =
     label === "Product"
       ? "dashboard-product-col"
-      : label === "Action" || label === "Actions"
-        ? "dashboard-action-col"
-        : "";
+      : label === "Size"
+        ? "dashboard-size-col"
+        : label === "Action" || label === "Actions"
+          ? "dashboard-action-col"
+          : "";
 
   return `<th${klasse ? ` class="${klasse}"` : ""}>${label}</th>`;
 }
@@ -897,6 +912,7 @@ function renderBuyingPaymentCell(item) {
 
 const buyingOpenWtbColumns = [
   "Product",
+  "Size",
   "WTB ID",
   "Filter",
   "Max Price",
@@ -909,6 +925,7 @@ const buyingOpenWtbColumns = [
 
 const buyingOffersColumns = [
   "Product",
+  "Size",
   "WTB ID",
   "Max Price",
   "Offer",
@@ -919,6 +936,7 @@ const buyingOffersColumns = [
 
 const buyingAcceptedColumns = [
   "Product",
+  "Size",
   "WTB ID",
   "Amount",
   "VAT Type",
@@ -930,6 +948,7 @@ const buyingAcceptedColumns = [
 
 const buyingPaymentRequiredColumns = [
   "Product",
+  "Size",
   "WTB ID",
   "Amount",
   "VAT Type",
@@ -941,6 +960,7 @@ const buyingPaymentRequiredColumns = [
 
 const wtbAcceptedColumns = [
   "Product",
+  "Size",
   "Order ID",
   "Payout",
   "VAT Type",
@@ -950,6 +970,7 @@ const wtbAcceptedColumns = [
 
 const buyingConfirmedColumns = [
   "Product",
+  "Size",
   "WTB ID",
   "Amount",
   "VAT Type",
@@ -961,6 +982,7 @@ const buyingConfirmedColumns = [
 
 const buyingLabelRequestedColumns = [
   "Product",
+  "Size",
   "WTB ID",
   "Amount",
   "VAT Type",
@@ -972,6 +994,7 @@ const buyingLabelRequestedColumns = [
 
 const buyingReadyToShipColumns = [
   "Product",
+  "Size",
   "WTB ID",
   "Amount",
   "VAT Type",
@@ -984,6 +1007,7 @@ const buyingReadyToShipColumns = [
 
 const buyingShippedColumns = [
   "Product",
+  "Size",
   "WTB ID",
   "Amount",
   "VAT Type",
@@ -995,6 +1019,7 @@ const buyingShippedColumns = [
 
 const buyingDeliveredColumns = [
   "Product",
+  "Size",
   "WTB ID",
   "Amount",
   "VAT Type",
@@ -1077,6 +1102,7 @@ function renderConsignmentInventoryRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${item.selling_price_suggested ? `€${escapeHtml(item.selling_price_suggested)}` : "-"}</td>
       <td>${item.lowest_suggested_price ? `€${escapeHtml(item.lowest_suggested_price)}` : "-"}</td>
@@ -1125,7 +1151,7 @@ function renderConsignmentOfferRows(items) {
   // a full mobile-friendly redesign is planned as a separate pass.
 
   if (activeOfferStatusFilter === "denied") {
-    const deniedColumns = ["Product", "Order ID", "Your Offer", "Denied", "Actions"];
+    const deniedColumns = ["Product", "Size", "Order ID", "Your Offer", "Denied", "Actions"];
 
     dashboardTableHead.innerHTML = deniedColumns.map((c) => dashboardHeadCell(c)).join("");
 
@@ -1151,6 +1177,7 @@ function renderConsignmentOfferRows(items) {
       return `
         <tr>
           <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+          <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
           <td>${item.consignor_counter_price ? `€${escapeHtml(item.consignor_counter_price)}` : (item.seller_price ? `€${escapeHtml(item.seller_price)}` : "-")}</td>
           <td>${item.denied_at ? escapeHtml(new Date(item.denied_at).toLocaleDateString("en-GB")) : "-"}</td>
@@ -1170,7 +1197,7 @@ function renderConsignmentOfferRows(items) {
   }
 
   if (activeOfferStatusFilter === "counter") {
-    const counterColumns = ["Product", "Order ID", "Your Offer", "Buyer's Last Offer", "Date", "Actions"];
+    const counterColumns = ["Product", "Size", "Order ID", "Your Offer", "Buyer's Last Offer", "Date", "Actions"];
 
     dashboardTableHead.innerHTML = counterColumns.map((c) => dashboardHeadCell(c)).join("");
 
@@ -1195,6 +1222,7 @@ function renderConsignmentOfferRows(items) {
       return `
         <tr>
           <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+          <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
           <td>${item.consignor_counter_price ? `€${escapeHtml(item.consignor_counter_price)}` : (item.seller_price ? `€${escapeHtml(item.seller_price)}` : "-")}</td>
           <td>${item.previous_store_price ? `€${escapeHtml(item.previous_store_price)}` : "-"}</td>
@@ -1243,6 +1271,7 @@ function renderConsignmentOfferRows(items) {
     return `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${item.seller_price ? `€${escapeHtml(item.seller_price)}` : "-"}</td>
       <td>${item.offer_price ? `€${escapeHtml(item.offer_price)}` : "-"}</td>
@@ -1351,6 +1380,7 @@ function renderBuyingAcceptedRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.offer || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
@@ -1397,6 +1427,7 @@ function renderConsignmentAcceptedRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.payout || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
@@ -1534,6 +1565,7 @@ function renderBuyingOpenWtbRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.inventory_filter || "-")}</td>
       <td>${escapeHtml(item.max_price || "-")}</td>
@@ -1588,6 +1620,7 @@ function renderBuyingOfferRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.max_price || "-")}</td>
       <td>${escapeHtml(item.offer || "-")}</td>
@@ -1634,6 +1667,7 @@ function renderBuyingPaymentRequiredRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
@@ -1688,6 +1722,7 @@ function renderBuyingConfirmedRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
@@ -1728,6 +1763,7 @@ function renderBuyingLabelRequestedRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
@@ -1779,6 +1815,7 @@ function renderBuyingReadyToShipRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
@@ -1820,6 +1857,7 @@ function renderBuyingShippedRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
@@ -1875,6 +1913,7 @@ function renderBuyingDeliveredRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.amount || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
@@ -1954,6 +1993,7 @@ function renderWtbAcceptedRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.offer || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
@@ -1981,6 +2021,7 @@ function renderWtbAcceptedRows(items) {
 const wtbOpenOfferColumns = [
   "",
   "Product",
+  "Size",
   "Order ID",
   "Offer",
   "VAT Type",
@@ -2092,6 +2133,7 @@ function renderWtbOpenOffersRows(offers) {
         <div class="dashboard-status-dot ${offer.status === "Lowest" ? "dashboard-status-dot-lowest" : "dashboard-status-dot-beaten"}"></div>
       </td>
       <td class="dashboard-product-col">${dashboardProductCell(offer)}</td>
+      <td class="dashboard-size-col">${escapeHtml(offer.size || "-")}</td>
       <td>${escapeHtml(offer.order_id || "-")}</td>
       <td>${escapeHtml(offer.offer || "-")}</td>
       <td>${escapeHtml(offer.vat_type || "-")}</td>
@@ -2161,10 +2203,10 @@ function renderBuyingUnifiedOfferRows(items) {
   // isn't always literally a counter (could be their original,
   // never-countered ask).
   const columns = isDenied
-    ? ["Product", "WTB ID", "Max Price", "My Last Offer", "Seller's Last Offer", "VAT Type", "Denied", "Actions"]
+    ? ["Product", "Size", "WTB ID", "Max Price", "My Last Offer", "Seller's Last Offer", "VAT Type", "Denied", "Actions"]
     : isOpen
-      ? ["Product", "WTB ID", "Max Price", "My Last Offer", "Seller's Offer", "VAT Type", "Date", "Actions"]
-      : ["Product", "WTB ID", "Max Price", "My Offer", "Seller's Last Offer", "VAT Type", "Date", "Actions"];
+      ? ["Product", "Size", "WTB ID", "Max Price", "My Last Offer", "Seller's Offer", "VAT Type", "Date", "Actions"]
+      : ["Product", "Size", "WTB ID", "Max Price", "My Offer", "Seller's Last Offer", "VAT Type", "Date", "Actions"];
 
   dashboardTableHead.innerHTML = columns.map((c) => dashboardHeadCell(c)).join("");
 
@@ -2207,6 +2249,7 @@ function renderBuyingUnifiedOfferRows(items) {
       return `
         <tr>
           <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+          <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
           <td>${escapeHtml(maxPrice || "-")}</td>
           <td>${escapeHtml(myLastOffer || "-")}</td>
@@ -2260,6 +2303,7 @@ function renderBuyingUnifiedOfferRows(items) {
     return `
       <tr>
         <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+        <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
         <td>${escapeHtml(item.order_id || "-")}</td>
         ${isOpen ? `
           <td>${escapeHtml(maxPrice || "-")}</td>
@@ -2286,8 +2330,8 @@ function renderWtbUnifiedOfferRows(items) {
 
   const isDenied = activeOfferStatusFilter === "denied";
   const columns = isDenied
-    ? ["", "Product", "Order ID", "Your Offer", "VAT Type", "Buyer's Last Offer", "Current Lowest", "Denied", "Actions"]
-    : ["", "Product", "Order ID", "Your Offer", (activeOfferStatusFilter === "counter" ? "Counter Offer" : "Buyer's Last Offer"), "VAT Type", "Current Lowest", "Date", "Actions"];
+    ? ["", "Product", "Size", "Order ID", "Your Offer", "VAT Type", "Buyer's Last Offer", "Current Lowest", "Denied", "Actions"]
+    : ["", "Product", "Size", "Order ID", "Your Offer", (activeOfferStatusFilter === "counter" ? "Counter Offer" : "Buyer's Last Offer"), "VAT Type", "Current Lowest", "Date", "Actions"];
 
   dashboardTableHead.innerHTML = columns.map((c) => dashboardHeadCell(c)).join("");
 
@@ -2321,6 +2365,7 @@ function renderWtbUnifiedOfferRows(items) {
         <tr>
           <td>${item.status ? `<div class="dashboard-status-dot ${item.status === "Lowest" ? "dashboard-status-dot-lowest" : "dashboard-status-dot-beaten"}"></div>` : ""}</td>
           <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+          <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
           <td>${escapeHtml(amount || "-")}</td>
           <td>${escapeHtml(item.vat_type || "-")}</td>
@@ -2406,6 +2451,7 @@ function renderWtbUnifiedOfferRows(items) {
       <tr>
         <td>${dotCell}</td>
         <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+        <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
         <td>${escapeHtml(item.order_id || "-")}</td>
         <td>${escapeHtml(amount || "-")}</td>
         <td>${escapeHtml(buyersLastOfferCell)}</td>
@@ -2486,6 +2532,7 @@ function renderReadyToShipRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.payout || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
@@ -2591,6 +2638,7 @@ function renderTrackingRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.payout || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
@@ -2641,6 +2689,7 @@ function renderTrackingRows(items) {
 
 const historyIssueColumns = [
   "Product",
+  "Size",
   "Order ID",
   "Payout",
   "VAT Type",
@@ -2696,6 +2745,7 @@ function renderHistoryIssuesRows(items) {
   dashboardTableBody.innerHTML = items.map((item) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
+      <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.payout || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
@@ -2813,6 +2863,7 @@ function renderOpenClaimsRows(claims) {
   dashboardTableBody.innerHTML = claims.map((claim) => `
     <tr>
       <td class="dashboard-product-col">${dashboardProductCell(claim)}</td>
+      <td class="dashboard-size-col">${escapeHtml(claim.size || "-")}</td>
       <td>${escapeHtml(claim.order_id || "-")}</td>
       <td>${escapeHtml(claim.payout || "-")}</td>
       <td>${escapeHtml(claim.vat_type || "-")}</td>
