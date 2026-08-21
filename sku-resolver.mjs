@@ -55,6 +55,11 @@ export const URL_KEY_FIELD = "StockX URL Key";
 // dezelfde schoen zijn, zonder een sleutel te verbouwen.
 export const STYLE_ID_FIELD = "StockX Style ID";
 
+// De oorspronkelijke, blijvende url van de foto. Het Picture-veld is een
+// bijlage en levert een adres dat vervalt; dit veld houdt vast waar de
+// afbeelding echt vandaan komt, zodat andere diensten hem kunnen opslaan.
+export const PICTURE_URL_FIELD = "Picture URL";
+
 /**
  * Read on use, not on import.
  *
@@ -361,7 +366,22 @@ export async function searchStockx(sku, { token, pogingen = 4 } = {}) {
     err.body = data;
     laatsteFout = err;
 
-    const magOpnieuw = response.status === 429 || response.status === 401 || response.status >= 500;
+    // 404 hoort hier ook bij, hoe vreemd dat ook oogt. StockX antwoordt
+    // soms met 404 "No product found for GTIN" op een SKU die bij de
+    // volgende poging gewoon tien resultaten geeft. Zeventien SKU's uit de
+    // eerste SKU Master-ronde waren precies dat, en alle zeventien werden
+    // bij het opnieuw proberen wel gevonden.
+    //
+    // Een echt niet-bestaande SKU levert geen 404 op maar een 200 met een
+    // lege lijst; die wordt verderop afgehandeld. Blijft het na alle
+    // pogingen 404, dan gaat het als storing terug en niet als "bestaat
+    // niet" — een SKU ten onrechte als niet-bestaand markeren kost echte
+    // voorraad, nog een keer proberen kost een API-aanroep.
+    const magOpnieuw =
+      response.status === 404 ||
+      response.status === 429 ||
+      response.status === 401 ||
+      response.status >= 500;
 
     if (!magOpnieuw || poging === pogingen) throw err;
 
@@ -523,9 +543,42 @@ function escapeFormulaValue(value) {
   return asText(value).replaceAll("\\", "\\\\").replaceAll("'", "\\'");
 }
 
+/**
+ * Airtable levert bijlagen uit op een tijdelijke url die na een paar uur
+ * vervalt. Binnen Airtable is dat prima — het veld zelf blijft werken —
+ * maar zo'n url doorgeven aan een andere dienst die hem opslaat levert
+ * over een dag een dood plaatje op.
+ *
+ * index.js heeft hier al een controle voor (isUnstableImageUrl) en de
+ * fotoketen daar behandelt zulke urls als "geen foto". Dezelfde regel dus.
+ */
+export function isUnstableImageUrl(value) {
+  const url = asText(value).toLowerCase();
+
+  return (
+    !url ||
+    url.includes("airtableusercontent.com") ||
+    url.includes("dl.airtable.com")
+  );
+}
+
+/** De bijlage-url. Goed om te zien of er een foto is, niet om door te geven. */
 function pictureUrlOf(fields) {
   const picture = fields?.["Picture"];
   return Array.isArray(picture) && picture[0]?.url ? asText(picture[0].url) : "";
+}
+
+/**
+ * De url die je wel mag doorgeven.
+ *
+ * Het Picture-veld is een bijlage: Airtable haalt de afbeelding binnen en
+ * serveert hem daarna van een eigen adres dat na een paar uur vervalt. Prima
+ * binnen Airtable, dodelijk zodra een andere dienst hem opslaat. Daarom
+ * bewaren we de oorspronkelijke url er als tekst naast.
+ */
+function stablePictureUrl(fields) {
+  const url = asText(fields?.[PICTURE_URL_FIELD]);
+  return isUnstableImageUrl(url) ? "" : url;
 }
 
 export async function readSkuMaster(sku) {
@@ -540,7 +593,8 @@ export async function readSkuMaster(sku) {
         "Brand",
         "Picture",
         URL_KEY_FIELD,
-        STYLE_ID_FIELD
+        STYLE_ID_FIELD,
+        PICTURE_URL_FIELD
       ],
       filterByFormula: `{SKU} = '${escapeFormulaValue(cleanSku)}'`,
       maxRecords: 1
@@ -557,7 +611,8 @@ export async function readSkuMaster(sku) {
     sku: normalizeSku(record.fields?.["SKU"]),
     product_name: name,
     brand: asText(record.fields?.["Brand"]),
-    image: pictureUrlOf(record.fields),
+    image: stablePictureUrl(record.fields),
+    heeft_bijlage: Boolean(pictureUrlOf(record.fields)),
     url_key: normalizeSlug(record.fields?.[URL_KEY_FIELD]),
     style_id: normalizeSku(record.fields?.[STYLE_ID_FIELD]),
 
@@ -665,7 +720,13 @@ export async function resolve(sku, { write = true, token = null } = {}) {
 
   if (identity.url_key) fields[URL_KEY_FIELD] = identity.url_key;
   if (identity.matched_sku) fields[STYLE_ID_FIELD] = identity.matched_sku;
-  if (image) fields["Picture"] = [{ url: image }];
+  if (image) {
+    fields[PICTURE_URL_FIELD] = image;
+
+    // De bijlage alleen aanmaken als hij er nog niet is. Opnieuw zetten laat
+    // Airtable de afbeelding opnieuw binnenhalen, en dat is puur verkeer.
+    if (!cached?.heeft_bijlage) fields["Picture"] = [{ url: image }];
+  }
 
   if (cached?.id) {
     await airtable(env.skuMasterTable()).update(cached.id, fields);
