@@ -605,6 +605,74 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+// NEW — de breedte van een kolom hangt aan wat erin staat, niet aan
+// zijn plek in de rij. Dezelfde zeven maten als in de Lojiq-portal, zodat
+// een datum in beide portals even breed is.
+const KOLOMSOORT_PER_KOP = {
+  "Amount": "kol-geld",
+  "Brand": "kol-kenmerk",
+  "Buyer's Last Offer": "kol-geld",
+  "Current Lowest": "kol-geld",
+  "Date": "kol-datum",
+  "Denied": "kol-datum",
+  "Filter": "kol-kort",
+  "Issue": "kol-status",
+  "Lowest Price": "kol-geld",
+  "Max Price": "kol-geld",
+  "My Last Offer": "kol-geld",
+  "Offer": "kol-geld",
+  "Order ID": "kol-kenmerk",
+  "Payment": "kol-status",
+  "Payout": "kol-geld",
+  "Quantity": "kol-kort",
+  "SKU": "kol-kenmerk",
+  "Seller's Last Offer": "kol-geld",
+  "Seller's Offer": "kol-geld",
+  "Selling Price": "kol-geld",
+  "Size": "kol-kort",
+  "Status": "kol-status",
+  "Tracking": "kol-lang",
+  "VAT Type": "kol-type",
+  "WTB ID": "kol-kenmerk",
+  "Your Offer": "kol-geld",
+  "Your Price": "kol-geld"
+};
+
+
+// NEW — de actiekolom stond op een vast getal en had daardoor vaak veel lege
+// ruimte. Hij wordt nu gemeten aan de knoppen die er werkelijk in staan.
+// De knoppen zelf optellen, niet de rij die hen bevat: die rekt zich uit tot
+// de cel en dan meet je je eigen uitkomst.
+function fitDashboardColumns() {
+  const tabel = document.querySelector(".dashboard-table");
+  if (!tabel) return;
+
+  const rijen = Array.from(
+    document.querySelectorAll("#dashboardTableBody .dashboard-action-col .dashboard-action-row")
+  );
+
+  if (rijen.length) {
+    const breedste = Math.max(...rijen.map((rij) => {
+      const knoppen = Array.from(rij.children).filter((k) => k.getBoundingClientRect().width > 0);
+      if (!knoppen.length) return 0;
+      const tussenruimte = parseFloat(getComputedStyle(rij).gap) || 0;
+      return knoppen.reduce((som, k) => som + k.getBoundingClientRect().width, 0)
+           + tussenruimte * (knoppen.length - 1);
+    }));
+
+    if (breedste > 0) {
+      tabel.style.setProperty("--actiebreedte", Math.ceil(breedste) + 36 + "px");
+    }
+  }
+
+  // Genoeg breedte houden voor Product, anders wordt die onleesbaar smal.
+  const vast = Array.from(document.querySelectorAll("#dashboardTableHead th"))
+    .filter((th) => !th.classList.contains("dashboard-product-col"))
+    .reduce((som, th) => som + th.getBoundingClientRect().width, 0);
+
+  tabel.style.minWidth = Math.round(vast + 275) + "px";
+}
+
 // NEW — additief: SKU, Size en Brand hadden elk een eigen kolom en stonden
 // daardoor los van de naam waar ze bij horen. Ze staan nu onder de
 // productnaam in hetzelfde blok. Niets verdwijnt; elke tabel wordt drie
@@ -638,7 +706,7 @@ function dashboardHeadCell(label) {
         ? "dashboard-size-col"
         : label === "Action" || label === "Actions"
           ? "dashboard-action-col"
-          : "";
+          : KOLOMSOORT_PER_KOP[label] || "kol-standaard";
 
   return `<th${klasse ? ` class="${klasse}"` : ""}>${label}</th>`;
 }
@@ -652,7 +720,10 @@ function syncDashboardCellColumns() {
   const koppen = Array.from(dashboardTableHead.querySelectorAll("th")).map((th) => ({
     naam: th.textContent.trim(),
     product: th.classList.contains("dashboard-product-col"),
-    actie: th.classList.contains("dashboard-action-col")
+    actie: th.classList.contains("dashboard-action-col"),
+    // De breedteklasse van de kop hoort ook op de cellen eronder te staan,
+    // anders bepaalt de kop de breedte en de cel iets anders.
+    maat: Array.from(th.classList).find((k) => k.indexOf("kol-") === 0) || ""
   }));
 
   dashboardTableBody.querySelectorAll("tr").forEach((rij) => {
@@ -666,14 +737,67 @@ function syncDashboardCellColumns() {
       if (kop.naam) cel.setAttribute("data-label", kop.naam);
       if (kop.product) cel.classList.add("dashboard-product-col");
       if (kop.actie) cel.classList.add("dashboard-action-col");
+      if (kop.maat) cel.classList.add(kop.maat);
     });
   });
 }
 
 if (dashboardTableBody) {
-  new MutationObserver(syncDashboardCellColumns)
-    .observe(dashboardTableBody, { childList: true });
+  new MutationObserver(() => {
+    syncDashboardCellColumns();
+    fitDashboardColumns();
+  }).observe(dashboardTableBody, { childList: true });
 }
+
+// NEW — additief: vensters gedroegen zich niet. De achtergrond schoof mee
+// tijdens het scrollen en Escape sloot niets. Beide horen bij het venster
+// zelf, niet bij de plek die hem opent, dus staat het hier op één plek voor
+// alle vensters van dit portal.
+(function () {
+  const VENSTERS = ".dashboard-modal";
+  const SLUITKNOPPEN = ".dashboard-modal-close";
+
+  function openVensters() {
+    return Array.from(document.querySelectorAll(VENSTERS))
+      .filter((v) => getComputedStyle(v).display !== "none");
+  }
+
+  function bijwerken() {
+    const open = openVensters().length > 0;
+    document.documentElement.classList.toggle("venster-open", open);
+    document.body.classList.toggle("venster-open", open);
+  }
+
+  // Alleen de vensters zelf in de gaten houden, niet de hele pagina: de
+  // tabellen wisselen voortdurend van klasse en dat hoeft hier niets te doen.
+  const waarnemer = new MutationObserver(bijwerken);
+  document.querySelectorAll(VENSTERS).forEach((v) => {
+    waarnemer.observe(v, { attributes: true, attributeFilter: ["class", "style"] });
+  });
+
+  document.addEventListener("keydown", (gebeurtenis) => {
+    if (gebeurtenis.key !== "Escape") return;
+
+    const open = openVensters();
+    if (!open.length) return;
+
+    // Het bovenste venster sluiten via zijn eigen sluitknop, zodat de
+    // opruimcode die daaraan hangt gewoon loopt.
+    const bovenste = open[open.length - 1];
+    const knop = bovenste.querySelector(SLUITKNOPPEN);
+
+    if (knop) {
+      knop.click();
+    } else {
+      bovenste.classList.add("hidden");
+      bovenste.style.display = "none";
+    }
+
+    bijwerken();
+  });
+
+  bijwerken();
+})();
 
 function cleanSkuInput(value) {
   return String(value || "")
