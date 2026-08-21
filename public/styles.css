@@ -547,6 +547,33 @@ body {
   padding: 24px;
 }
 
+/* ---- UX-lijst A1 en A2 ---------------------------------------------
+   .modal-backdrop kon niet scrollen: een hoge kaart stak er aan de boven- en
+   onderkant uit en er was geen manier om erbij te komen. Gemeten op View
+   Sizes met veertien maten: kaart 5285 px hoog in een scherm van 812, met
+   de bovenkant op -2236.
+   -------------------------------------------------------------------- */
+
+.modal-backdrop {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  align-items: flex-start;
+  justify-items: stretch;
+}
+
+.modal-backdrop > * {
+  /* Midden in beeld zolang het past, bovenaan zodra het niet meer past. */
+  margin: auto;
+  max-height: none;
+}
+
+/* Zolang er een venster open staat mag de pagina erachter niet meescrollen. */
+html.venster-open,
+body.venster-open {
+  overflow: hidden;
+}
+
+
 .login-modal {
   width: min(560px, calc(100vw - 40px));
   background: linear-gradient(180deg, rgba(22,22,24,0.96), rgba(8,8,10,0.97));
