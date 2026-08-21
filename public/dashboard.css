@@ -3812,3 +3812,126 @@ body.venster-open {
   -webkit-appearance: none;
   appearance: none;
 }
+
+/* ---- overgeslagen CSV-regels -----------------------------------------
+   Zelfde vorm als .consignment-duplicate-list hierboven, maar amber in
+   plaats van rood. Dubbele regels blokkeren de upload; dit is een melding
+   achteraf terwijl de rest gewoon binnen is, en rood zou suggereren dat er
+   niets gelukt is.
+   -------------------------------------------------------------------- */
+
+.csv-import-status-pill.skipped {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+
+  background: rgba(212, 160, 23, 0.16);
+  border: 1px solid rgba(212, 160, 23, 0.45);
+  color: #e8c04a;
+}
+
+/* Het uitroepteken. Met de hand getekend in plaats van een emoji, want
+   emoji's verschillen per apparaat in grootte en kleur en zouden hier de
+   enige gekleurde vorm in een verder zwart-gouden scherm zijn. */
+.csv-import-status-mark {
+  flex: none;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 16px;
+  height: 16px;
+
+  border-radius: 999px;
+  background: #e8c04a;
+  color: #1a1508;
+
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+/* De tekst is de knop naar de lijst; het kruisje ernaast klikt hem weg.
+   Twee losse doelen, zodat wegklikken nooit per ongeluk het venster opent
+   of andersom. */
+.csv-import-status-text {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(232, 192, 74, 0.4);
+}
+
+.csv-import-status-text:hover,
+.csv-import-status-text:focus-visible {
+  text-decoration-color: currentColor;
+  outline: none;
+}
+
+.csv-import-status-dismiss {
+  flex: none;
+
+  width: 20px;
+  height: 20px;
+  margin-left: 2px;
+  padding: 0;
+
+  border: none;
+  border-radius: 999px;
+  background: rgba(212, 160, 23, 0.22);
+  color: inherit;
+
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.csv-import-status-dismiss:hover {
+  background: rgba(212, 160, 23, 0.4);
+}
+
+.consignment-skipped-list {
+  max-height: 260px;
+  overflow-y: auto;
+  display: grid;
+  gap: 10px;
+  margin: 20px 0 16px;
+}
+
+.consignment-skipped-list div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+
+  padding: 13px 15px;
+  border-radius: 14px;
+
+  background: rgba(212, 160, 23, 0.09);
+  border: 1px solid rgba(212, 160, 23, 0.26);
+  color: #e8c04a;
+
+  font-size: 14px;
+  font-weight: 900;
+}
+
+/* De SKU is wat de consignor moet corrigeren, dus die moet je in een keer
+   kunnen selecteren en overtypen. */
+.consignment-skipped-sku {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  user-select: all;
+}
+
+.consignment-skipped-meta {
+  font-size: 12.5px;
+  font-weight: 700;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.consignment-skipped-help {
+  font-size: 12.5px;
+  opacity: 0.75;
+  line-height: 1.5;
+  margin: 0;
+}
