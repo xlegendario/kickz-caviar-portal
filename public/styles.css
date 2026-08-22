@@ -547,11 +547,10 @@ body {
   padding: 24px;
 }
 
-/* ---- UX-lijst A1 en A2 ---------------------------------------------
-   .modal-backdrop kon niet scrollen: een hoge kaart stak er aan de boven- en
-   onderkant uit en er was geen manier om erbij te komen. Gemeten op View
-   Sizes met veertien maten: kaart 5285 px hoog in een scherm van 812, met
-   de bovenkant op -2236.
+/* ---- UX list A1 and A2 ---------------------------------------------
+   .modal-backdrop could not scroll: a tall card stuck out at the top and the
+   bottom with no way to reach it. Measured on View Sizes with fourteen
+   sizes: a card 5285 px tall in an 812 px viewport, its top at -2236.
    -------------------------------------------------------------------- */
 
 .modal-backdrop {
@@ -562,14 +561,14 @@ body {
 }
 
 .modal-backdrop > * {
-  /* Midden in beeld zolang het past, bovenaan zodra het niet meer past. */
+  /* Centred while it fits, aligned to the top as soon as it does not. */
   margin: auto;
   max-height: none;
 }
 
-/* Zolang er een venster open staat mag de pagina erachter niet meescrollen. */
-html.venster-open,
-body.venster-open {
+/* While a dialog is open the page behind it must not scroll along. */
+html.modal-open,
+body.modal-open {
   overflow: hidden;
 }
 
@@ -2184,9 +2183,9 @@ body.venster-open {
   }
 }
 
-/* ---- vensters: kleuren van dit portal -------------------------------
-   De structuur hieronder is in beide portals gelijk; alleen deze acht
-   waarden verschillen. Hier het zwart-goud van dit dashboard.
+/* ---- dialogs: this portal's colours ---------------------------------
+   The structure below is identical in both portals; only these eight
+   values differ. This is the black-and-gold of this dashboard.
    -------------------------------------------------------------------- */
 
 :root {
@@ -2200,11 +2199,11 @@ body.venster-open {
   --kc-dialog-danger: linear-gradient(180deg, #ef6b6b, #c93a3a);
 }
 
-/* ---- vensters: structuur --------------------------------------------
-   Hoort bij showAlert / showConfirm / showPrompt. Eigen klassen in plaats
-   van de bestaande vensterklassen van het portal: die verschillen per
-   portal en dan zou hetzelfde venster zich op twee plekken anders
-   gedragen.
+/* ---- dialogs: structure ---------------------------------------------
+   Belongs to showAlert / showConfirm / showPrompt. Own class names rather
+   than the portal's existing modal classes: those differ per portal, and
+   then the same dialog would behave differently depending on where you
+   opened it.
    -------------------------------------------------------------------- */
 
 html.kc-dialog-open,
@@ -2308,7 +2307,7 @@ body.kc-dialog-open {
   background: none;
   color: inherit;
 
-  font-size: 16px;   /* 16px voorkomt dat iOS bij focus inzoomt */
+  font-size: 16px;   /* 16px stops iOS from zooming in on focus */
   font-weight: 700;
   outline: none;
 }
@@ -2360,8 +2359,8 @@ body.kc-dialog-open {
   filter: brightness(1.06);
 }
 
-/* Verwijderen en afwijzen krijgen rood, zodat je aan de knop ziet dat er
-   iets onomkeerbaars gebeurt. */
+/* Deleting and denying get red, so the button itself tells you something
+   irreversible is about to happen. */
 .kc-dialog-btn.confirm.danger {
   background: var(--kc-dialog-danger);
   color: #fff;
@@ -2372,8 +2371,8 @@ body.kc-dialog-open {
   outline-offset: 2px;
 }
 
-/* Op een telefoon staat het venster onderaan en zijn de knoppen volle
-   breedte: daar reikt een duim, en 50 px hoog is genoeg om te raken. */
+/* On a phone the dialog sits at the bottom and the buttons run full
+   width: that is where a thumb reaches, and 50 px is tall enough to hit. */
 @media (max-width: 768px) {
   .kc-dialog {
     align-items: flex-end;
