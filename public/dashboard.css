@@ -451,11 +451,11 @@
   font-weight: 700;
 }
 
-/* ---- UX-ronde 1.2 ---------------------------------------------------
-   Het productblok en de actiekolom blijven staan tijdens het zijwaarts
-   scrollen, kop en inhoud samen. De kolomkoppen blijven staan tijdens het
-   scrollen naar beneden. Beide kolommen worden herkend aan hun klasse en
-   niet aan hun positie, want niet elke tabel heeft dezelfde eerste kolom.
+/* ---- UX round 1.2 ---------------------------------------------------
+   The product block and the action column stay put while scrolling
+   sideways, header and content together. The column headers stay put while
+   scrolling down. Both columns are recognised by their class rather than
+   their position, because not every table has the same first column.
    -------------------------------------------------------------------- */
 
 .dashboard-product-name {
@@ -484,8 +484,8 @@
   box-shadow: 1px 0 0 #242424;
 }
 
-/* De tabel met lopende biedingen begint met een statusbolletje. Die kolom
-   gaat mee vastzitten en Product schuift er precies achter. */
+/* The table of live bids starts with a status dot. That column is pinned
+   too, and Product sits directly behind it. */
 .dashboard-table th:first-child:not(.dashboard-product-col),
 .dashboard-table td:first-child:not(.dashboard-product-col) {
   position: sticky;
@@ -508,8 +508,8 @@
   box-shadow: -1px 0 0 #242424;
 }
 
-/* Een dichte ondergrond, anders schuiven de andere kolommen er zichtbaar
-   onderdoor. */
+/* A solid background, otherwise the other columns are visible sliding
+   underneath. */
 .dashboard-table td.dashboard-product-col,
 .dashboard-table td.dashboard-action-col,
 .dashboard-table td:first-child:not(.dashboard-product-col) {
@@ -886,10 +886,10 @@
   white-space: nowrap;
 }
 
-/* De losse SKU- en Brand-kolommen bestaan niet meer, dus die twee breedtes
-   vervallen. De productbreedte hangt nu aan de kolom zelf. Alles achter
-   Product schuift drie plaatsen op: de oude regel voor nummer 9 hoort nu
-   bij nummer 6. */
+/* The separate SKU and Brand columns no longer exist, so those two widths
+   are gone. Product's width now hangs off the column itself. Everything
+   after Product shifts three places: the old rule for number 9 now belongs
+   to number 6. */
 .dashboard-table th.dashboard-product-col,
 .dashboard-table td.dashboard-product-col {
   min-width: 300px;
@@ -1041,11 +1041,10 @@
   padding: 24px;
 }
 
-/* ---- UX-lijst A1 en A2 ---------------------------------------------
-   .dashboard-modal kon niet scrollen: een hoge kaart stak er aan de boven- en
-   onderkant uit en er was geen manier om erbij te komen. Gemeten op View
-   Sizes met veertien maten: kaart 5285 px hoog in een scherm van 812, met
-   de bovenkant op -2236.
+/* ---- UX list A1 and A2 ---------------------------------------------
+   .dashboard-modal could not scroll: a tall card stuck out at the top and
+   the bottom with no way to reach it. Measured on View Sizes with fourteen
+   sizes: a card 5285 px tall in an 812 px viewport, its top at -2236.
    -------------------------------------------------------------------- */
 
 .dashboard-modal {
@@ -1056,14 +1055,14 @@
 }
 
 .dashboard-modal > * {
-  /* Midden in beeld zolang het past, bovenaan zodra het niet meer past. */
+  /* Centred while it fits, aligned to the top as soon as it does not. */
   margin: auto;
   max-height: none;
 }
 
-/* Zolang er een venster open staat mag de pagina erachter niet meescrollen. */
-html.venster-open,
-body.venster-open {
+/* While a dialog is open the page behind it must not scroll along. */
+html.modal-open,
+body.modal-open {
   overflow: hidden;
 }
 
@@ -2210,25 +2209,14 @@ body.venster-open {
 }
 
 @media (max-width: 768px) {
-  .dashboard-offer-action-row {
-    display: flex;
-    align-items: stretch;
-    gap: 10px;
-  }
+  /* REMOVED — this held the row with the VAT panel next to the Save
+     button. That layout only existed inside this media query, so on desktop
+     it fell apart: the VAT type full width and Save underneath as a small
+     button. The VAT type now sits inside the amount field and the button is
+     a normal full-width button, identical at both sizes.
 
-  .dashboard-offer-action-row .dashboard-locked-vat {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .dashboard-offer-save-btn {
-    width: auto !important;
-    min-width: 104px;
-    height: 58px !important;
-    margin-top: 0 !important;
-    padding: 0 18px !important;
-    flex-shrink: 0;
-  }
+     The `width: auto !important` that used to be here would undo that full
+     width on a phone, so it had to go either way. */
 }
 
 @media (max-width: 768px) {
@@ -3299,11 +3287,11 @@ body.venster-open {
   opacity: 0.8;
 }
 
-/* ---- UX-ronde 1.3 ---------------------------------------------------
-   Een tabel van negen kolommen is op een telefoon niet te lezen. Onder 768
-   pixels wordt elke rij een kaart: de productnaam als kop, daarna per regel
-   de kolomnaam links en de waarde rechts, en de knoppen onderaan. Dezelfde
-   gegevens, andere vorm.
+/* ---- UX round 1.3 ---------------------------------------------------
+   A nine-column table is unreadable on a phone. Below 768 pixels every row
+   becomes a card: the product name as its heading, then one line per column
+   with the column name on the left and the value on the right, and the
+   buttons at the bottom. Same data, different shape.
    -------------------------------------------------------------------- */
 
 @media (max-width: 768px) {
@@ -3354,14 +3342,14 @@ body.venster-open {
     white-space: normal;
   }
 
-  /* De vaste breedtes van het bureaublad hangen aan een klasse en winnen
-     daardoor van de algemene regel hierboven. Op een kaart moet elke cel de
-     kaartbreedte volgen, dus die zetten we hier terug op vrij. */
-  /* De breedtes van het bureaublad hangen aan een klasse en winnen daardoor
-     van de algemene regel hierboven. Op een kaart moet elke cel de kaart
-     volgen, dus die zetten we hier allemaal terug op vrij. */
-  .dashboard-table th[class*="kol-"],
-  .dashboard-table td[class*="kol-"],
+  /* The desktop widths hang off a class and therefore beat the general rule
+     above. On a card every cell has to follow the card's width, so they are
+     set back to free here. */
+  /* The desktop widths hang off a class and therefore beat the general rule
+     above. On a card every cell has to follow the card, so they are all set
+     back to free here. */
+  .dashboard-table th[class*="col-"],
+  .dashboard-table td[class*="col-"],
   .dashboard-table th.dashboard-product-col,
   .dashboard-table td.dashboard-product-col,
   .dashboard-table th.dashboard-size-col,
@@ -3387,7 +3375,7 @@ body.venster-open {
     text-align: left;
   }
 
-  /* Het productblok is de kop van de kaart: volle breedte, geen opschrift. */
+  /* The product block is the card's heading: full width, no label. */
   .dashboard-table td.dashboard-product-col {
     display: block;
     padding: 0 0 10px;
@@ -3398,7 +3386,7 @@ body.venster-open {
     content: none;
   }
 
-  /* De knoppen onderaan, over de volle breedte. */
+  /* The buttons at the bottom, across the full width. */
   .dashboard-table td.dashboard-action-col {
     display: block;
     padding: 12px 0 0;
@@ -3409,25 +3397,25 @@ body.venster-open {
     content: none;
   }
 
-  /* De knoppen vullen samen altijd de volle kaartbreedte: bij één knop is
-     dat een balk onderaan die meteen als scheiding tussen de kaarten werkt,
-     bij twee of drie verdelen ze de ruimte gelijk.
+  /* Together the buttons always fill the card's width: with one button that
+     is a bar at the bottom which doubles as the divider between cards, and
+     with two or three they share the space evenly.
 
-     De knoppen zitten in drie verschillende omhulsels: .dashboard-action-row,
-     .dashboard-action-stack, of los in de cel. Een regel per omhulsel dekt er
-     dus steeds maar een — daarom is de cel zelf nu de container en vallen de
-     omhulsels erdoorheen met display:contents. Zo doet elke knop mee, waar
-     hij ook in zit. */
+     The buttons sit in three different wrappers: .dashboard-action-row,
+     .dashboard-action-stack, or loose in the cell. One rule per wrapper only
+     ever covers one of them — so the cell itself is the container now and
+     the wrappers fall through with display:contents. That way every button
+     takes part, wherever it sits. */
   .dashboard-table td.dashboard-action-col {
-    /* Een raster in plaats van flex: kolommen van 1fr vullen de breedte
-       gegarandeerd, terwijl flex-grow in sommige browsers niets deed en de
-       knop op zijn eigen tekstbreedte bleef staan. auto-fit laat ze doorlopen
-       naar een tweede regel zodra ze niet meer naast elkaar passen. */
+    /* A grid rather than flex: columns of 1fr fill the width reliably, while
+       flex-grow did nothing in some browsers and left the button sitting at
+       its own text width. auto-fit lets them wrap onto a second line as soon
+       as they no longer fit side by side. */
     display: grid;
-    /* Het aantal kolommen wordt door de code gezet (--actieknoppen), niet met
-       auto-fit: dat laat te veel ruimte voor uitleg en sommige browsers laten
-       een lege kolom staan, waardoor een enkele knop op de helft bleef hangen. */
-    grid-template-columns: repeat(var(--actieknoppen, 1), minmax(0, 1fr));
+    /* The number of columns is set from code (--action-buttons) rather than
+       with auto-fit: that leaves too much room for interpretation, and some
+       browsers keep an empty column, leaving a single button at half width. */
+    grid-template-columns: repeat(var(--action-buttons, 1), minmax(0, 1fr));
     align-items: stretch;
     gap: 8px;
   }
@@ -3436,11 +3424,11 @@ body.venster-open {
     display: contents;
   }
 
-  /* GEWIJZIGD — stond op `flex: 1 1 0` met `min-width: 0`: dan krijgt elke knop
-     precies een gelijk deel, wat er ook in staat, en mag hij onder zijn eigen
-     inhoud krimpen. Een knop met een bedrag erin viel daardoor buiten zijn
-     eigen rand. Met `auto` groeit elke knop vanaf zijn eigen tekst, en past het
-     niet op een regel dan zakt de breedste naar de volgende. */
+  /* CHANGED — this was `flex: 1 1 0` with `min-width: 0`: every button then
+     gets an equal share whatever is in it, and may shrink below its own
+     content. A button with an amount in it fell outside its own border. With
+     `auto` each button grows from its own text, and if that does not fit on
+     one line the widest drops to the next. */
   .dashboard-table td.dashboard-action-col button,
   .dashboard-table td.dashboard-action-col a {
     width: 100%;
@@ -3453,7 +3441,7 @@ body.venster-open {
     text-align: center;
   }
 
-  /* De statusbolletjeskolom heeft geen opschrift en hoort naast de naam. */
+  /* The status-dot column has no label and belongs next to the name. */
   .dashboard-table td:first-child:not(.dashboard-product-col) {
     display: block;
     width: auto;
@@ -3470,31 +3458,32 @@ body.venster-open {
     margin: 0;
   }
 
-  /* De bovenbalk blijft staan tijdens het scrollen, zodat het menu, de
-     titel en Logout bereikbaar zijn zonder eerst helemaal terug te scrollen.
+  /* The top bar stays put while scrolling, so the menu, the title and Logout
+     are reachable without scrolling all the way back up.
 
-     Er stond al een mobiele behandeling die er een raster van maakte met een
-     titel van 46 pixels en 34 pixels ruimte eromheen: samen 181 pixels, ruim
-     een vijfde van een telefoonscherm. Als zo'n balk blijft staan is dat te
-     veel, dus hij gaat terug naar één compacte regel. Die oude regels staan
-     volledig op !important, vandaar dat het hier ook moet.
+     There was already a mobile treatment turning it into a grid with a
+     46-pixel title and 34 pixels of space around it: 181 pixels together,
+     well over a fifth of a phone screen. For a bar that stays put that is
+     too much, so it goes back to one compact line. Those old rules are
+     entirely !important, which is why this has to be too.
 
-     Let op de body hieronder: overflow-x hidden maakt van body een
-     scrollgebied, en dan plakt een sticky element aan een gebied dat zelf
-     nooit scrollt — het schuift dus gewoon weg. Met clip wordt er wel
-     afgeknipt maar geen scrollgebied gemaakt, en blijft de balk staan. */
+     Note the body below: overflow-x hidden turns body into a scroll
+     container, and then a sticky element sticks to a container that never
+     scrolls itself — so it simply slides away. With clip it still clips
+     but creates no scroll container, and the bar stays. */
   html,
   body {
     overflow-x: clip;
   }
 
-  /* Een slanke balk die blijft staan: menu links, titel in het midden,
-     Logout rechts. Al het andere — zoekbalk, tellers, filters — scrolt gewoon
-     weg, zodat er tijdens het lezen zo min mogelijk vast in beeld staat.
+  /* A slim bar that stays put: menu on the left, title in the middle, Logout
+     on the right. Everything else — search box, counters, filters — scrolls
+     away as normal, so as little as possible stays fixed on screen while
+     reading.
 
-     Het middenvak staat op grid met drie kolommen waarvan de buitenste even
-     breed zijn: dan staat de titel echt in het midden en niet net ernaast,
-     ook als het menu en Logout verschillend breed zijn. */
+     The middle area is a grid of three columns whose outer two are equally
+     wide: that puts the title truly in the middle rather than just beside
+     it, even when the menu and Logout differ in width. */
   .dashboard-topbar {
     position: sticky !important;
     top: 0 !important;
@@ -3527,11 +3516,11 @@ body.venster-open {
     justify-self: center !important;
   }
 
-  /* De balk is slanker geworden, dus menu en Logout iets kleiner. Verder
-     blijft het oorspronkelijke ontwerp staan: de menuknop is bewust alleen
-     een pictogram, met font-size 0 op de knop zelf en de hamburger uit een
-     ::before. Zet je daar een lettergrootte overheen, dan wordt de verborgen
-     tekst "Menu" ineens zichtbaar bovenop dat pictogram. */
+  /* The bar is slimmer now, so the menu and Logout are a little smaller.
+     Beyond that the original design stands: the menu button is deliberately
+     icon-only, with font-size 0 on the button itself and the hamburger from
+     a ::before. Put a font size over that and the hidden text "Menu"
+     suddenly appears on top of the icon. */
   .dashboard-mobile-menu-btn {
     width: 46px !important;
     min-width: 46px !important;
@@ -3559,8 +3548,8 @@ body.venster-open {
     grid-column: 3 !important;
     justify-self: end !important;
 
-    /* Op een rij, niet gestapeld: gestapeld werd de balk 99 px in plaats van
-       de 57 die Lojiq heeft. */
+    /* On one row, not stacked: stacked made the bar 99 px instead of the 57
+       that Lojiq has. */
     display: flex !important;
     flex-direction: row !important;
     align-items: center !important;
@@ -3568,8 +3557,8 @@ body.venster-open {
     min-width: 0 !important;
   }
 
-  /* Het e-mailadres en het verkopersnummer staan al in het menu; wie inlogt
-     weet wie hij is. In de balk is alleen Logout nodig. */
+  /* The email address and the seller number are already in the menu; whoever
+     logs in knows who they are. The bar only needs Logout. */
   .dashboard-account > div {
     display: none !important;
   }
@@ -3583,7 +3572,7 @@ body.venster-open {
     grid-row: 1 !important;
   }
 
-  /* "Seller Dashboard" boven de titel voegt op deze breedte niets toe. */
+  /* "Seller Dashboard" above the title adds nothing at this width. */
   .dashboard-topbar .dashboard-eyebrow {
     display: none !important;
   }
@@ -3603,11 +3592,11 @@ body.venster-open {
     font-size: 11px;
   }
 
-  /* De consignment-voorraad heeft eigen breedtes per positie via een
-     :has()-selector. Die is specifieker dan de kaartopmaak hierboven en won
-     daardoor ook op de telefoon, waardoor elke regel een andere breedte
-     kreeg. :nth-child(n) raakt alle cellen en heeft dezelfde specificiteit
-     als :nth-child(3), en omdat deze regel later staat wint hij. */
+  /* The consignment inventory has its own widths per position through a
+     :has() selector. That is more specific than the card layout above and
+     therefore won on the phone as well, giving every line a different width.
+     :nth-child(n) hits every cell and carries the same specificity as
+     :nth-child(3), and because this rule comes later it wins. */
   .dashboard-table:has([data-consignment-delete-id]),
   .dashboard-table:has([data-consignment-edit-id]) {
     min-width: 0;
@@ -3622,8 +3611,8 @@ body.venster-open {
     min-width: 0;
   }
 
-  /* En hetzelfde voor de tabel met lopende WTB-aanbiedingen; die zet zijn
-     breedtes met !important, dus dat moet hier ook. */
+  /* And the same for the table of live WTB offers; that one sets its widths
+     with !important, so this has to as well. */
   .dashboard-table.open-offers-table {
     min-width: 0 !important;
     table-layout: auto !important;
@@ -3635,7 +3624,7 @@ body.venster-open {
     min-width: 0;
   }
 
-  /* De lege staat is één cel met colspan; die hoort geen kaart te zijn. */
+  /* The empty state is a single cell with a colspan; it is not a card. */
   .dashboard-table td[colspan] {
     display: block;
     text-align: center;
@@ -3647,20 +3636,20 @@ body.venster-open {
   }
 }
 
-/* ---- UX-lijst C6, C7 en C2 -----------------------------------------
-   Vaste breedtes per soort inhoud, overal gelijk en gelijk aan de
-   Lojiq-portal. Product is de enige kolom die meebeweegt en de rest
-   opslokt; de actiekolom wordt aan zijn eigen knoppen gemeten.
+/* ---- UX list C6, C7 and C2 -----------------------------------------
+   Fixed widths per kind of content, the same everywhere and the same as the
+   Lojiq portal. Product is the only column that flexes and soaks up the
+   rest; the action column is measured against its own buttons.
 
-   De tabelregels staan bewust in een bereik voor brede schermen. Deze
-   opmaak wordt achteraan het bestand geplakt, dus na het blok voor de
-   kaartweergave, en bij gelijke zwaarte wint wat later staat. Zonder
-   dat bereik overschreven ze de kaarten: waarden bleven links plakken
-   en de knoppen rekten niet meer uit.
+   The table rules deliberately sit inside a wide-screen media query. This
+   stylesheet is appended to the end of the file, so after the card block,
+   and at equal specificity whatever comes last wins. Without that query they
+   overrode the cards: values stayed stuck to the left and the buttons no
+   longer stretched.
    -------------------------------------------------------------------- */
 
-/* De productnaam en de metaregel gelden op elke breedte: ook op een
-   kaart hoort de naam volledig te staan. */
+/* The product name and the meta line apply at every width: on a card too
+   the name should be shown in full. */
 .dashboard-product-name {
   line-height: 1.25;
   min-height: 2.5em;
@@ -3683,43 +3672,48 @@ body.venster-open {
     table-layout: fixed;
   }
 
-  .dashboard-table th.kol-kort,
-  .dashboard-table td.kol-kort {
+  .dashboard-table th.col-short,
+  .dashboard-table td.col-short {
     width: 75px;
   }
 
-  .dashboard-table th.kol-type,
-  .dashboard-table td.kol-type {
+  .dashboard-table th.col-type,
+  .dashboard-table td.col-type {
     width: 85px;
   }
 
-  .dashboard-table th.kol-datum,
-  .dashboard-table td.kol-datum {
+  .dashboard-table th.col-date,
+  .dashboard-table td.col-date {
     width: 105px;
   }
 
-  .dashboard-table th.kol-geld,
-  .dashboard-table td.kol-geld {
+  .dashboard-table th.col-money,
+  .dashboard-table td.col-money {
     width: 100px;
   }
 
-  .dashboard-table th.kol-kenmerk,
-  .dashboard-table td.kol-kenmerk {
+  .dashboard-table th.col-code,
+  .dashboard-table td.col-code {
     width: 110px;
   }
 
-  .dashboard-table th.kol-status,
-  .dashboard-table td.kol-status {
+  .dashboard-table th.col-status,
+  .dashboard-table td.col-status {
     width: 130px;
   }
 
-  .dashboard-table th.kol-lang,
-  .dashboard-table td.kol-lang {
-    width: 140px;
+  /* CHANGED — this was 140. Only the Tracking column uses this size, and
+     a carrier code is eighteen characters ("1Z5F71W96825872191"): roughly
+     150 px of text, plus the padding. With table-layout: fixed that text ran
+     out of its cell. A code you cannot read or retype is useless, so wider
+     beats truncated. */
+  .dashboard-table th.col-long,
+  .dashboard-table td.col-long {
+    width: 185px;
   }
 
-  .dashboard-table th.kol-standaard,
-  .dashboard-table td.kol-standaard {
+  .dashboard-table th.col-default,
+  .dashboard-table td.col-default {
     width: 110px;
   }
 
@@ -3737,17 +3731,17 @@ body.venster-open {
 
   .dashboard-table th.dashboard-action-col,
   .dashboard-table td.dashboard-action-col {
-    width: var(--actiebreedte, 180px);
+    width: var(--action-width, 180px);
   }
 
-  /* De bolletjeskolom in de tabel met lopende biedingen. */
+  /* The dot column in the table of live bids. */
   .dashboard-table th:first-child:not(.dashboard-product-col),
   .dashboard-table td:first-child:not(.dashboard-product-col) {
     width: 54px;
   }
 
-  /* C7 — er waren vijf knopvormen. Nu een hoogte, een hoekafronding en
-     een lettergrootte; kleur is het enige dat nog verschilt. */
+  /* C7 — there were five button shapes. Now one height, one corner radius
+     and one font size; colour is the only thing that still differs. */
   .dashboard-table .dashboard-confirm-btn,
   .dashboard-table .dashboard-deny-btn,
   .dashboard-table .dashboard-action-row > button,
@@ -3766,9 +3760,9 @@ body.venster-open {
 
 }
 
-/* ---- UX-lijst D3 ----------------------------------------------------
-   Een kruisje om in een keer te wissen. Verschijnt pas zodra er iets staat,
-   zodat het veld leeg net zo rustig blijft als eerst.
+/* ---- UX list D3 ----------------------------------------------------
+   A cross to clear the field in one go. Only appears once something is
+   there, so an empty field stays as calm as it was.
    -------------------------------------------------------------------- */
 
 .dashboard-search-wrap {
@@ -3779,7 +3773,7 @@ body.venster-open {
   padding-right: 44px;
 }
 
-.zoek-wissen {
+.search-clear {
   position: absolute;
   right: 10px;
   top: 50%;
@@ -3802,22 +3796,22 @@ body.venster-open {
   cursor: pointer;
 }
 
-.dashboard-search-wrap.heeft-tekst .zoek-wissen {
+.dashboard-search-wrap.has-text .search-clear {
   display: inline-flex;
 }
 
-/* Het ingebouwde kruisje van type="search" is in een donker vlak vrijwel
-   onzichtbaar; we tonen ons eigen kruisje. */
+/* The built-in cross of type="search" is nearly invisible on a dark
+   background, so we show our own. */
 .dashboard-search-wrap input::-webkit-search-cancel-button {
   -webkit-appearance: none;
   appearance: none;
 }
 
-/* ---- overgeslagen CSV-regels -----------------------------------------
-   Zelfde vorm als .consignment-duplicate-list hierboven, maar amber in
-   plaats van rood. Dubbele regels blokkeren de upload; dit is een melding
-   achteraf terwijl de rest gewoon binnen is, en rood zou suggereren dat er
-   niets gelukt is.
+/* ---- skipped CSV rows -----------------------------------------------
+   Same shape as .consignment-duplicate-list above, but amber instead of
+   red. Duplicate rows block the upload; this is a notice after the fact with
+   everything else already imported, and red would suggest nothing went
+   through.
    -------------------------------------------------------------------- */
 
 .csv-import-status-pill.skipped {
@@ -3830,9 +3824,9 @@ body.venster-open {
   color: #e8c04a;
 }
 
-/* Het uitroepteken. Met de hand getekend in plaats van een emoji, want
-   emoji's verschillen per apparaat in grootte en kleur en zouden hier de
-   enige gekleurde vorm in een verder zwart-gouden scherm zijn. */
+/* The exclamation mark. Drawn by hand rather than an emoji, because emoji
+   differ per device in size and colour and would be the only coloured shape
+   on an otherwise black-and-gold screen. */
 .csv-import-status-mark {
   flex: none;
 
@@ -3852,9 +3846,9 @@ body.venster-open {
   line-height: 1;
 }
 
-/* De tekst is de knop naar de lijst; het kruisje ernaast klikt hem weg.
-   Twee losse doelen, zodat wegklikken nooit per ongeluk het venster opent
-   of andersom. */
+/* The text is the button to the list; the cross next to it dismisses. Two
+   separate targets, so dismissing never accidentally opens the dialog or the
+   other way round. */
 .csv-import-status-text {
   cursor: pointer;
   text-decoration: underline;
@@ -3915,8 +3909,8 @@ body.venster-open {
   font-weight: 900;
 }
 
-/* De SKU is wat de consignor moet corrigeren, dus die moet je in een keer
-   kunnen selecteren en overtypen. */
+/* The SKU is what the consignor has to correct, so it has to be selectable
+   in one go. */
 .consignment-skipped-sku {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   user-select: all;
@@ -3936,9 +3930,9 @@ body.venster-open {
   margin: 0;
 }
 
-/* ---- vensters: kleuren van dit portal -------------------------------
-   De structuur hieronder is in beide portals gelijk; alleen deze acht
-   waarden verschillen. Hier het zwart-goud van dit dashboard.
+/* ---- dialogs: this portal's colours ---------------------------------
+   The structure below is identical in both portals; only these eight
+   values differ. This is the black-and-gold of this dashboard.
    -------------------------------------------------------------------- */
 
 :root {
@@ -3952,11 +3946,11 @@ body.venster-open {
   --kc-dialog-danger: linear-gradient(180deg, #ef6b6b, #c93a3a);
 }
 
-/* ---- vensters: structuur --------------------------------------------
-   Hoort bij showAlert / showConfirm / showPrompt. Eigen klassen in plaats
-   van de bestaande vensterklassen van het portal: die verschillen per
-   portal en dan zou hetzelfde venster zich op twee plekken anders
-   gedragen.
+/* ---- dialogs: structure ---------------------------------------------
+   Belongs to showAlert / showConfirm / showPrompt. Own class names rather
+   than the portal's existing modal classes: those differ per portal, and
+   then the same dialog would behave differently depending on where you
+   opened it.
    -------------------------------------------------------------------- */
 
 html.kc-dialog-open,
@@ -4060,7 +4054,7 @@ body.kc-dialog-open {
   background: none;
   color: inherit;
 
-  font-size: 16px;   /* 16px voorkomt dat iOS bij focus inzoomt */
+  font-size: 16px;   /* 16px stops iOS from zooming in on focus */
   font-weight: 700;
   outline: none;
 }
@@ -4112,8 +4106,8 @@ body.kc-dialog-open {
   filter: brightness(1.06);
 }
 
-/* Verwijderen en afwijzen krijgen rood, zodat je aan de knop ziet dat er
-   iets onomkeerbaars gebeurt. */
+/* Deleting and denying get red, so the button itself tells you something
+   irreversible is about to happen. */
 .kc-dialog-btn.confirm.danger {
   background: var(--kc-dialog-danger);
   color: #fff;
@@ -4124,8 +4118,8 @@ body.kc-dialog-open {
   outline-offset: 2px;
 }
 
-/* Op een telefoon staat het venster onderaan en zijn de knoppen volle
-   breedte: daar reikt een duim, en 50 px hoog is genoeg om te raken. */
+/* On a phone the dialog sits at the bottom and the buttons run full
+   width: that is where a thumb reaches, and 50 px is tall enough to hit. */
 @media (max-width: 768px) {
   .kc-dialog {
     align-items: flex-end;
@@ -4155,4 +4149,50 @@ body.kc-dialog-open {
     width: 100%;
     height: 50px;
   }
+}
+
+/* ---- edit-offer dialog ------------------------------------------------
+   The VAT type sat as its own panel under the amount, with the Save button
+   beside it in a row that only existed on mobile. On desktop that fell
+   apart. The VAT type is not a choice and not an input but a fact about this
+   offer, so it belongs in the field, not below it.
+   -------------------------------------------------------------------- */
+
+.dashboard-field-with-suffix {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.dashboard-field-with-suffix input {
+  flex: 1;
+  min-width: 0;
+
+  /* Room for the label, so a long amount never slides underneath it. */
+  padding-right: 88px;
+}
+
+.dashboard-field-suffix {
+  position: absolute;
+  right: 12px;
+
+  padding: 5px 10px;
+  border-radius: 999px;
+
+  background: rgba(255, 204, 0, 0.14);
+  color: #ffcc00;
+
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+
+  pointer-events: none;
+}
+
+/* The button now stands on its own at the bottom and should fill the full
+   width, like the other dialogs in this dashboard. */
+.dashboard-offer-save-btn {
+  width: 100%;
+  height: 54px;
+  margin-top: 4px;
 }
