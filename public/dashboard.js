@@ -1748,11 +1748,12 @@ function renderConsignmentOfferRows(items) {
       <td>
         <div class="dashboard-action-row">
           <button
-            class="dashboard-confirm-btn"
+            class="dashboard-confirm-btn action-accept"
             type="button"
             data-consignment-confirm-offer-id="${escapeHtml(item.id || "")}"
           >
-            Accept ${escapeHtml(amountForButton(item.offer_price))}
+            <span class="accept-kop">ACCEPT</span>
+            <span class="accept-amount">${escapeHtml(amountForButton(item.offer_price))}</span>
           </button>
 
           ${canCounter ? `
@@ -1902,11 +1903,12 @@ function renderConsignmentAcceptedRows(items) {
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
         <button
-          class="dashboard-confirm-btn"
+          class="dashboard-confirm-btn action-accept"
           type="button"
           data-consignment-confirm="${escapeHtml(item.seller_offer_record_id)}"
         >
-          Confirm ${escapeHtml(amountForButton(item.payout))}
+          <span class="accept-kop">CONFIRM</span>
+          <span class="accept-amount">${escapeHtml(amountForButton(item.payout))}</span>
         </button>
         <button
           class="dashboard-deny-btn"
@@ -2096,8 +2098,9 @@ function renderBuyingOfferRows(items) {
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
         <div class="dashboard-action-row">
-          <button class="dashboard-confirm-btn" type="button" data-buying-accept-offer-id="${escapeHtml(item.member_wtb_record_id || "")}">
-            Accept ${escapeHtml(amountForButton(item.offer))}
+          <button class="dashboard-confirm-btn action-accept" type="button" data-buying-accept-offer-id="${escapeHtml(item.member_wtb_record_id || "")}">
+            <span class="accept-kop">ACCEPT</span>
+            <span class="accept-amount">${escapeHtml(amountForButton(item.offer))}</span>
           </button>
           <button class="dashboard-deny-btn" type="button" data-buying-deny-offer-id="${escapeHtml(item.member_wtb_record_id || "")}">
             Deny
