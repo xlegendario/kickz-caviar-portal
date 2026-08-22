@@ -33,7 +33,10 @@
 .seller-dashboard {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  /* CHANGED - was 280px. The longest item is "Label Requested" plus its
+     counter, which needs about 178px, so this was 70px of air. On a half
+     screen that is most of a column. */
+  grid-template-columns: 210px minmax(0, 1fr);
 }
 
 .dashboard-sidebar {
@@ -884,6 +887,19 @@
 .dashboard-table th,
 .dashboard-table td {
   white-space: nowrap;
+}
+
+/* CHANGED - a header could not wrap, so a long one ran out of its column:
+   "Buyer's Last Offer" wants 171 px in a column of 100. That is what put
+   "YOUR OFFE" and "VAT TYP" half outside their cells.
+
+   Letting the header wrap costs no width at all - the header row grows by
+   one line and every column keeps its size. The cells underneath stay on
+   one line; only the header wraps. The Lojiq portal already worked this
+   way, which is why "VAT / Type" reads fine there. */
+.dashboard-table thead th {
+  white-space: normal;
+  line-height: 1.25;
 }
 
 /* The separate SKU and Brand columns no longer exist, so those two widths
@@ -4195,4 +4211,72 @@ body.kc-dialog-open {
   width: 100%;
   height: 54px;
   margin-top: 4px;
+}
+
+/* ---- UX list: the action column ------------------------------------
+   Three buttons side by side made this column wide enough that a half
+   screen only had room for a few information columns.
+
+   The button carrying the amount becomes a block on the left with that
+   amount on its own line; the rest stacks beside it. Measured in the Lojiq
+   portal, which has the same layout: 355 -> 207 px, and the amount reads
+   better than it did on one line.
+
+   The accept button is placed explicitly in the grid, so the order in the
+   HTML does not matter.
+
+   Rows without an amount button (Edit, Delete, Track) are untouched: the
+   rule only applies to a row that actually holds one.
+   -------------------------------------------------------------------- */
+
+.dashboard-action-row:has(.action-accept) {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 6px;
+  width: fit-content;
+}
+
+.dashboard-action-row .action-accept {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+
+  min-width: 86px;
+  height: auto;
+  padding: 7px 12px;
+}
+
+.dashboard-action-row .action-accept .accept-kop {
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  opacity: 0.85;
+}
+
+.dashboard-action-row .action-accept .accept-amount {
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.dashboard-action-row:has(.action-accept) > :not(.action-accept) {
+  grid-column: 2;
+
+  height: 28px;
+  padding: 0 11px;
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+}
+
+/* With only two buttons the second column would be half empty, so the
+   single one beside Accept takes the full height. Counted through :has()
+   rather than an extra class, so a row that later gains a third button
+   needs no change. */
+.dashboard-action-row:has(.action-accept):not(:has(> :nth-child(3)))
+  > :not(.action-accept) {
+  grid-row: 1 / span 2;
+  height: auto;
 }
