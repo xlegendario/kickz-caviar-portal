@@ -936,7 +936,16 @@ function amountForButton(rawValue) {
   const parsed = Number(messageText.replace(/\s/g, "").replace(",", "."));
   if (!Number.isFinite(parsed) || parsed <= 0) return "";
 
-  return "\u20ac " + parsed.toFixed(2).replace(".", ",");
+  // CHANGED - this used toFixed(2) unconditionally, so a round amount
+  // came out as "172,00". Sellers enter whole numbers, so most amounts
+  // are whole and should read clean; a genuine decimal (a VAT
+  // conversion landing on 102,10) still has to stay visible exactly as
+  // computed. Same rule as moneySmartValue on the server.
+  const isWhole = Math.abs(parsed - Math.round(parsed)) < 0.005;
+
+  return "\u20ac " + (isWhole
+    ? String(Math.round(parsed))
+    : parsed.toFixed(2).replace(".", ","));
 }
 
 // NEW — the same formatting for money in a column. Differs from the button
@@ -947,8 +956,8 @@ function amountForColumn(rawValue) {
   const messageText = String(rawValue === null || rawValue === undefined ? "" : rawValue).trim();
   if (!messageText) return "-";
 
-  const opgemaakt = amountForButton(messageText);
-  return opgemaakt || escapeHtml(messageText);
+  const formatted = amountForButton(messageText);
+  return formatted || escapeHtml(messageText);
 }
 
 function dashboardProductCell(item) {
