@@ -1,42 +1,44 @@
 /* ==================================================================
-   NEW — vensters in plaats van de grijze vakjes van de browser.
+   NEW — in-app dialogs, replacing the browser's own grey boxes.
    ==================================================================
 
-   Verving 78 alert(), 18 confirm() en 12 prompt(). Die zien er per
-   telefoon en per browser anders uit, negeren de huisstijl volledig, en
-   bij een prompt krijg je een gewoon tekstveld voor iets waar alleen een
-   bedrag in hoort — dus geen numeriek toetsenbord en geen controle.
+   Replaced 78 alert(), 28 confirm() and 12 prompt() calls. Those look
+   different on every phone and browser, ignore the portal's styling
+   entirely, and for a prompt you get a plain text field for something
+   that can only ever be an amount — so no numeric keyboard and no
+   validation.
 
-   Drie functies, allemaal een belofte, zodat een aanroep leest als de
-   oude:
+   Three functions, all returning a promise, so a call site reads almost
+   like the one it replaced:
 
      alert(x)              ->  showAlert(x)
      if (!confirm(x))      ->  if (!(await showConfirm(x)))
      const y = prompt(x)   ->  const y = await showPrompt(x)
 
-   Eigen klassen in plaats van de vensterklassen van het portal: die
-   verschillen per portal en dan zou hetzelfde venster er op twee plekken
-   anders uitzien.
+   Own class names rather than the portal's existing modal classes: those
+   differ between the two portals, and then the same dialog would behave
+   differently depending on where you opened it. Colours do come from the
+   portal, through a handful of CSS variables.
    ================================================================== */
 
 const kcDialogState = {
   open: 0,
-  vorigeFocus: null
+  previousFocus: null
 };
 
-function kcDialogVergrendel(aan) {
-  kcDialogState.open += aan ? 1 : -1;
+function kcDialogLockScroll(on) {
+  kcDialogState.open += on ? 1 : -1;
 
   if (kcDialogState.open < 0) kcDialogState.open = 0;
 
-  const bezet = kcDialogState.open > 0;
+  const busy = kcDialogState.open > 0;
 
-  document.documentElement.classList.toggle("kc-dialog-open", bezet);
-  document.body.classList.toggle("kc-dialog-open", bezet);
+  document.documentElement.classList.toggle("kc-dialog-open", busy);
+  document.body.classList.toggle("kc-dialog-open", busy);
 }
 
-function kcDialogEscape(v) {
-  return String(v == null ? "" : v)
+function kcDialogEscapeHtml(value) {
+  return String(value == null ? "" : value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -45,190 +47,187 @@ function kcDialogEscape(v) {
 }
 
 /**
- * De kern. De andere drie functies zijn er een laagje omheen.
+ * Default validation for the amount dialogs.
  *
- * soort:  "alert" | "confirm" | "prompt"
- * opties: { title, confirmLabel, cancelLabel, danger, money,
- *           placeholder, value, validate }
+ * The old prompt() accepted anything: an empty line, "abc", a negative
+ * number. That went to the server and came back as an error, or worse, as
+ * an order of zero euros. Caught here instead, next to the field, without
+ * having to start over.
+ *
+ * Comma and dot both work: on a Dutch keyboard you type a comma, and that
+ * should simply be accepted.
  */
-function kcDialog(soort, tekst, opties) {
-  const o = opties || {};
+function kcMoneyCheck(value) {
+  const text = String(value || "").replace(/\s/g, "").replace(",", ".");
 
-  return new Promise((klaar) => {
-    const laag = document.createElement("div");
-    laag.className = "kc-dialog";
-    laag.setAttribute("role", "dialog");
-    laag.setAttribute("aria-modal", "true");
+  if (!text) return "Please enter an amount.";
 
-    const heeftInvoer = soort === "prompt";
-    const heeftAnnuleer = soort !== "alert";
+  const amount = Number(text);
 
-    const titel = o.title || (
-      soort === "confirm" ? "Are you sure?" :
-      soort === "prompt" ? "" : ""
-    );
+  if (!Number.isFinite(amount)) return "That is not a valid amount.";
+  if (amount <= 0) return "The amount must be higher than 0.";
 
-    const bevestigTekst = o.confirmLabel || (
-      soort === "alert" ? "OK" :
-      soort === "confirm" ? "Confirm" : "Confirm"
-    );
+  return "";
+}
 
-    laag.innerHTML =
+/**
+ * The core. The three exported functions are a thin layer around it.
+ *
+ * kind:    "alert" | "confirm" | "prompt"
+ * options: { title, confirmLabel, cancelLabel, danger, money,
+ *            placeholder, value, validate }
+ */
+function kcDialog(kind, message, options) {
+  const opts = options || {};
+
+  return new Promise((done) => {
+    const layer = document.createElement("div");
+    layer.className = "kc-dialog";
+    layer.setAttribute("role", "dialog");
+    layer.setAttribute("aria-modal", "true");
+
+    const hasInput = kind === "prompt";
+    const hasCancel = kind !== "alert";
+
+    const title = opts.title || (kind === "confirm" ? "Are you sure?" : "");
+    const confirmLabel = opts.confirmLabel || (kind === "alert" ? "OK" : "Confirm");
+
+    layer.innerHTML =
       '<div class="kc-dialog-backdrop" data-kc-cancel></div>' +
       '<div class="kc-dialog-card">' +
-        (titel ? '<h3 class="kc-dialog-title">' + kcDialogEscape(titel) + "</h3>" : "") +
-        '<p class="kc-dialog-text">' + kcDialogEscape(tekst) + "</p>" +
-        (heeftInvoer
-          ? '<label class="kc-dialog-field' + (o.money ? " money" : "") + '">' +
-              (o.money ? '<span class="kc-dialog-prefix">&euro;</span>' : "") +
+        (title ? '<h3 class="kc-dialog-title">' + kcDialogEscapeHtml(title) + "</h3>" : "") +
+        '<p class="kc-dialog-text">' + kcDialogEscapeHtml(message) + "</p>" +
+        (hasInput
+          ? '<label class="kc-dialog-field' + (opts.money ? " money" : "") + '">' +
+              (opts.money ? '<span class="kc-dialog-prefix">&euro;</span>' : "") +
               '<input class="kc-dialog-input" type="text"' +
-              (o.money ? ' inputmode="decimal"' : "") +
-              ' placeholder="' + kcDialogEscape(o.placeholder || "") + '"' +
-              ' value="' + kcDialogEscape(o.value || "") + '" />' +
+              (opts.money ? ' inputmode="decimal"' : "") +
+              ' placeholder="' + kcDialogEscapeHtml(opts.placeholder || "") + '"' +
+              ' value="' + kcDialogEscapeHtml(opts.value || "") + '" />' +
             "</label>" +
             '<p class="kc-dialog-error" hidden></p>'
           : "") +
         '<div class="kc-dialog-actions">' +
-          (heeftAnnuleer
+          (hasCancel
             ? '<button type="button" class="kc-dialog-btn cancel" data-kc-cancel>' +
-              kcDialogEscape(o.cancelLabel || "Cancel") + "</button>"
+              kcDialogEscapeHtml(opts.cancelLabel || "Cancel") + "</button>"
             : "") +
           '<button type="button" class="kc-dialog-btn confirm' +
-          (o.danger ? " danger" : "") + '">' + kcDialogEscape(bevestigTekst) + "</button>" +
+          (opts.danger ? " danger" : "") + '">' + kcDialogEscapeHtml(confirmLabel) + "</button>" +
         "</div>" +
       "</div>";
 
-    document.body.appendChild(laag);
-    kcDialogVergrendel(true);
+    document.body.appendChild(layer);
+    kcDialogLockScroll(true);
 
-    // Zodat de focus na het sluiten terugkeert naar de knop waar je vandaan
-    // kwam, in plaats van naar de bovenkant van de pagina.
+    // So focus returns to the button you came from after closing, instead
+    // of jumping to the top of the page.
     if (kcDialogState.open === 1) {
-      kcDialogState.vorigeFocus = document.activeElement;
+      kcDialogState.previousFocus = document.activeElement;
     }
 
-    const invoer = laag.querySelector(".kc-dialog-input");
-    const fout = laag.querySelector(".kc-dialog-error");
-    const bevestigKnop = laag.querySelector(".kc-dialog-btn.confirm");
+    const input = layer.querySelector(".kc-dialog-input");
+    const errorEl = layer.querySelector(".kc-dialog-error");
+    const confirmButton = layer.querySelector(".kc-dialog-btn.confirm");
 
-    function sluit(waarde) {
-      document.removeEventListener("keydown", opToets, true);
-      laag.remove();
-      kcDialogVergrendel(false);
+    function close(result) {
+      document.removeEventListener("keydown", onKeyDown, true);
+      layer.remove();
+      kcDialogLockScroll(false);
 
-      if (kcDialogState.open === 0 && kcDialogState.vorigeFocus) {
-        try { kcDialogState.vorigeFocus.focus(); } catch (e) { /* weggehaald */ }
-        kcDialogState.vorigeFocus = null;
+      if (kcDialogState.open === 0 && kcDialogState.previousFocus) {
+        try {
+          kcDialogState.previousFocus.focus();
+        } catch (err) {
+          /* the element is gone; nothing to focus */
+        }
+
+        kcDialogState.previousFocus = null;
       }
 
-      klaar(waarde);
+      done(result);
     }
 
-    function annuleer() {
-      sluit(soort === "prompt" ? null : soort === "confirm" ? false : undefined);
+    function cancel() {
+      close(kind === "prompt" ? null : kind === "confirm" ? false : undefined);
     }
 
-    function bevestig() {
-      if (!heeftInvoer) {
-        sluit(soort === "confirm" ? true : undefined);
+    function confirm() {
+      if (!hasInput) {
+        close(kind === "confirm" ? true : undefined);
         return;
       }
 
-      const waarde = invoer.value.trim();
+      const value = input.value.trim();
 
-      // De aanroeper mag zelf bepalen wat geldig is; zonder controle laten
-      // we alles door en blijft het gedrag gelijk aan het oude prompt().
-      if (typeof o.validate === "function") {
-        const melding = o.validate(waarde);
+      // The caller decides what counts as valid; without a check anything
+      // goes through and the behaviour matches the old prompt().
+      if (typeof opts.validate === "function") {
+        const problem = opts.validate(value);
 
-        if (melding) {
-          fout.textContent = melding;
-          fout.hidden = false;
-          invoer.focus();
-          invoer.select();
+        if (problem) {
+          errorEl.textContent = problem;
+          errorEl.hidden = false;
+          input.focus();
+          input.select();
           return;
         }
       }
 
-      sluit(waarde);
+      close(value);
     }
 
-    laag.querySelectorAll("[data-kc-cancel]").forEach((el) => {
-      el.addEventListener("click", annuleer);
+    layer.querySelectorAll("[data-kc-cancel]").forEach((el) => {
+      el.addEventListener("click", cancel);
     });
 
-    bevestigKnop.addEventListener("click", bevestig);
+    confirmButton.addEventListener("click", confirm);
 
-    function opToets(gebeurtenis) {
-      // Alleen het bovenste venster reageert, anders sluiten er twee
-      // tegelijk als er eentje bovenop een andere staat.
-      if (laag !== document.querySelector(".kc-dialog:last-of-type")) return;
+    function onKeyDown(event) {
+      // Only the topmost dialog reacts, otherwise two close at once when
+      // one is opened on top of another.
+      if (layer !== document.querySelector(".kc-dialog:last-of-type")) return;
 
-      if (gebeurtenis.key === "Escape") {
-        gebeurtenis.preventDefault();
-        gebeurtenis.stopPropagation();
-        annuleer();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        cancel();
         return;
       }
 
-      if (gebeurtenis.key === "Enter") {
-        // In een tekstveld met meerdere regels hoort Enter een regel te
-        // maken, niet te bevestigen.
-        if (gebeurtenis.target && gebeurtenis.target.tagName === "TEXTAREA") return;
+      if (event.key === "Enter") {
+        // In a multi-line field Enter should add a line, not submit.
+        if (event.target && event.target.tagName === "TEXTAREA") return;
 
-        gebeurtenis.preventDefault();
-        bevestig();
+        event.preventDefault();
+        confirm();
       }
     }
 
-    document.addEventListener("keydown", opToets, true);
+    document.addEventListener("keydown", onKeyDown, true);
 
-    // Een frame wachten zodat de invoer op mobiel het toetsenbord opent.
+    // One frame later, so the input opens the keyboard on mobile.
     requestAnimationFrame(() => {
-      if (invoer) {
-        invoer.focus();
-        invoer.select();
+      if (input) {
+        input.focus();
+        input.select();
       } else {
-        bevestigKnop.focus();
+        confirmButton.focus();
       }
     });
   });
 }
 
-/**
- * Standaardcontrole voor de bedragvensters.
- *
- * Het oude prompt() nam alles aan: een lege regel, "abc", een negatief
- * getal. Dat ging dan naar de server en kwam terug als een foutmelding, of
- * erger, als een order van nul euro. Hier wordt het meteen tegengehouden,
- * naast het veld, zonder dat je opnieuw hoeft te beginnen.
- *
- * Komma en punt allebei goed: op een Nederlands toetsenbord typ je een
- * komma, en dat hoort gewoon te werken.
- */
-function kcMoneyCheck(waarde) {
-  const tekst = String(waarde || "").replace(/\s/g, "").replace(",", ".");
-
-  if (!tekst) return "Please enter an amount.";
-
-  const getal = Number(tekst);
-
-  if (!Number.isFinite(getal)) return "That is not a valid amount.";
-  if (getal <= 0) return "The amount must be higher than 0.";
-
-  return "";
+function showAlert(message, options) {
+  return kcDialog("alert", message, options);
 }
 
-function showAlert(tekst, opties) {
-  return kcDialog("alert", tekst, opties);
+function showConfirm(message, options) {
+  return kcDialog("confirm", message, options);
 }
 
-function showConfirm(tekst, opties) {
-  return kcDialog("confirm", tekst, opties);
-}
-
-function showPrompt(tekst, opties) {
-  return kcDialog("prompt", tekst, opties);
+function showPrompt(message, options) {
+  return kcDialog("prompt", message, options);
 }
 
 const dashboardConfig = {
@@ -724,14 +723,14 @@ function renderStats() {
 }
 
 function isMobileDashboard() {
-  // UITGEZET — stond op window.innerWidth <= 768 en liet acht renderfuncties
-  // een eigen mobiele HTML-variant schrijven, naast de gewone tabel. Twee
-  // uitvoeringen van dezelfde tabel, en ze liepen uit elkaar: sommige tabs
-  // kregen de nieuwe kaartopmaak, andere bleven op de oude hangen.
+  // DISABLED — this returned window.innerWidth <= 768, which let eight
+  // render functions write their own mobile HTML on top of the normal
+  // table. Two implementations of the same table, and they drifted apart:
+  // some tabs got the new card layout, others stayed on the old one.
   //
-  // Nu schrijft elke tabel dezelfde rijen en maakt de opmaak er onder 768
-  // pixels kaarten van. De mobiele tak blijft staan voor het geval hij
-  // teruggezet moet worden, maar wordt niet meer gelopen.
+  // Every table now writes the same rows and the stylesheet turns them into
+  // cards below 768 pixels. The mobile branch stays in place in case it has
+  // to come back, but is no longer reached.
   return false;
 }
 
@@ -838,186 +837,189 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-// NEW — de breedte van een kolom hangt aan wat erin staat, niet aan
-// zijn plek in de rij. Dezelfde zeven maten als in de Lojiq-portal,
-// zodat een datum in beide portals even breed is.
-const KOLOMSOORT_PER_KOP = {
-  "Amount": "kol-geld",
-  "Brand": "kol-kenmerk",
-  "Buyer's Last Offer": "kol-geld",
-  "Current Lowest": "kol-geld",
-  "Date": "kol-datum",
-  "Denied": "kol-datum",
-  "Filter": "kol-kort",
-  "Issue": "kol-status",
-  "Lowest Price": "kol-geld",
-  "Max Price": "kol-geld",
-  "My Last Offer": "kol-geld",
-  "Offer": "kol-geld",
-  "Order ID": "kol-kenmerk",
-  "Payment": "kol-status",
-  "Payout": "kol-geld",
-  "Quantity": "kol-kort",
-  "SKU": "kol-kenmerk",
-  "Seller's Last Offer": "kol-geld",
-  "Seller's Offer": "kol-geld",
-  "Selling Price": "kol-geld",
-  "Size": "kol-kort",
-  "Status": "kol-status",
-  "Tracking": "kol-lang",
-  "VAT Type": "kol-type",
-  "WTB ID": "kol-kenmerk",
-  "Your Offer": "kol-geld",
-  "Your Price": "kol-geld"
+// NEW — a column's width follows what it holds, not where it sits in the
+// row. The same seven sizes as the Lojiq portal, so a date is equally wide
+// in both.
+const COLUMN_SIZE_BY_HEADER = {
+  "Amount": "col-money",
+  "Brand": "col-code",
+  "Buyer's Last Offer": "col-money",
+  "Current Lowest": "col-money",
+  "Date": "col-date",
+  "Denied": "col-date",
+  "Filter": "col-short",
+  "Issue": "col-status",
+  "Lowest Price": "col-money",
+  "Max Price": "col-money",
+  "My Last Offer": "col-money",
+  "Offer": "col-money",
+  "Order ID": "col-code",
+  "Payment": "col-status",
+  "Payout": "col-money",
+  "Quantity": "col-short",
+  "SKU": "col-code",
+  "Seller's Last Offer": "col-money",
+  "Seller's Offer": "col-money",
+  "Selling Price": "col-money",
+  "Size": "col-short",
+  "Status": "col-status",
+  "Tracking": "col-long",
+  "VAT Type": "col-type",
+  "WTB ID": "col-code",
+  "Your Offer": "col-money",
+  "Your Price": "col-money"
 };
 
 
-// NEW — de actiekolom stond op een vast getal en had daardoor vaak veel lege
-// ruimte. Hij wordt nu gemeten aan de knoppen die er werkelijk in staan.
-// De knoppen zelf optellen, niet de rij die hen bevat: die rekt zich uit tot
-// de cel en dan meet je je eigen uitkomst.
+// NEW — the action column had a fixed width and was usually mostly empty.
+// It is now measured against the buttons actually in it.
+//
+// Measure the buttons themselves, not the row holding them: that row
+// stretches to fill the cell, so measuring it means measuring your own
+// result.
 function fitDashboardColumns() {
   const tabel = document.querySelector(".dashboard-table");
   if (!tabel) return;
 
-  // Op een smal scherm zijn het kaarten; daar hoort geen kolombreedte bij.
+  // On a narrow screen these are cards, and a card has no column width.
   if (window.matchMedia("(max-width: 768px)").matches) {
-    tabel.style.removeProperty("--actiebreedte");
+    tabel.style.removeProperty("--action-width");
     tabel.style.minWidth = "";
     return;
   }
 
-  const rijen = Array.from(
+  const rowEls = Array.from(
     document.querySelectorAll("#dashboardTableBody .dashboard-action-col .dashboard-action-row")
   );
 
-  if (rijen.length) {
-    const breedste = Math.max(...rijen.map((rij) => {
-      const knoppen = Array.from(rij.children).filter((k) => k.getBoundingClientRect().width > 0);
-      if (!knoppen.length) return 0;
-      const tussenruimte = parseFloat(getComputedStyle(rij).gap) || 0;
-      return knoppen.reduce((som, k) => som + k.getBoundingClientRect().width, 0)
-           + tussenruimte * (knoppen.length - 1);
+  if (rowEls.length) {
+    const widest = Math.max(...rowEls.map((rowEl) => {
+      const btnEls = Array.from(rowEl.children).filter((k) => k.getBoundingClientRect().width > 0);
+      if (!btnEls.length) return 0;
+      const gapWidth = parseFloat(getComputedStyle(rowEl).gap) || 0;
+      return btnEls.reduce((som, k) => som + k.getBoundingClientRect().width, 0)
+           + gapWidth * (btnEls.length - 1);
     }));
 
-    if (breedste > 0) {
-      tabel.style.setProperty("--actiebreedte", Math.ceil(breedste) + 36 + "px");
+    if (widest > 0) {
+      tabel.style.setProperty("--action-width", Math.ceil(widest) + 36 + "px");
     }
   }
 
-  // Genoeg breedte houden voor Product, anders wordt die onleesbaar smal.
-  const vast = Array.from(document.querySelectorAll("#dashboardTableHead th"))
+  // Keep enough room for Product, or it collapses to unreadable.
+  const fixedWidth = Array.from(document.querySelectorAll("#dashboardTableHead th"))
     .filter((th) => !th.classList.contains("dashboard-product-col"))
     .reduce((som, th) => som + th.getBoundingClientRect().width, 0);
 
-  tabel.style.minWidth = Math.round(vast + 275) + "px";
+  tabel.style.minWidth = Math.round(fixedWidth + 275) + "px";
 }
 
 window.addEventListener("resize", () => {
   fitDashboardColumns();
 });
 
-// NEW — additief: SKU, Size en Brand hadden elk een eigen kolom en stonden
-// daardoor los van de naam waar ze bij horen. Ze staan nu onder de
-// productnaam in hetzelfde blok. Niets verdwijnt; elke tabel wordt drie
-// kolommen smaller. Beide veldnamen komen voor in de API, vandaar de twee.
-// NEW — één plek voor bedragen op knoppen. De bestaande code deed
-// `€${Number(payout)}`, wat van 172,50 een "172.5" maakt: punt in plaats van
-// komma en de laatste nul weg. Kan de waarde niet gelezen worden, dan komt er
-// niets op de knop te staan in plaats van "€NaN".
-function bedragVoorKnop(waarde) {
-  const tekst = String(waarde === null || waarde === undefined ? "" : waarde).trim();
-  if (!tekst) return "";
+// NEW — additive: SKU, Size and Brand each had their own column, which put
+// them far from the product name they describe. They now sit under that name
+// in the same block. Nothing is lost; every table gets three columns
+// narrower. Both field names occur in the API, hence the two.
+// NEW — one place for amounts on buttons. The existing code did
+// `€${Number(payout)}`, which turns 172,50 into "172.5": a dot instead of a
+// comma and the trailing zero gone. If the value cannot be read, the button
+// gets no amount at all rather than "€NaN".
+function amountForButton(rawValue) {
+  const messageText = String(rawValue === null || rawValue === undefined ? "" : rawValue).trim();
+  if (!messageText) return "";
 
-  // Al opgemaakt door de API (bijvoorbeeld "€ 172,50")? Dan zo laten.
-  if (tekst.indexOf("\u20ac") >= 0) return tekst;
+  // Already formatted by the API (for example "€ 172,50")? Leave it be.
+  if (messageText.indexOf("\u20ac") >= 0) return messageText;
 
-  const getal = Number(tekst.replace(/\s/g, "").replace(",", "."));
-  if (!Number.isFinite(getal) || getal <= 0) return "";
+  const parsed = Number(messageText.replace(/\s/g, "").replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed <= 0) return "";
 
-  return "\u20ac " + getal.toFixed(2).replace(".", ",");
+  return "\u20ac " + parsed.toFixed(2).replace(".", ",");
 }
 
-// NEW — dezelfde opmaak voor geld in een kolom. Verschil met de knop: een
-// waarde die geen bedrag is blijft hier gewoon staan (er kan "Margin" of een
-// streepje in zo'n cel belanden), en leeg wordt een streepje in plaats van
-// niets.
-function bedragVoorKolom(waarde) {
-  const tekst = String(waarde === null || waarde === undefined ? "" : waarde).trim();
-  if (!tekst) return "-";
+// NEW — the same formatting for money in a column. Differs from the button
+// version in two ways: a value that is not money is kept as-is ("Margin" or a
+// dash can end up in such a cell), and empty becomes a dash rather than
+// nothing.
+function amountForColumn(rawValue) {
+  const messageText = String(rawValue === null || rawValue === undefined ? "" : rawValue).trim();
+  if (!messageText) return "-";
 
-  const opgemaakt = bedragVoorKnop(tekst);
-  return opgemaakt || escapeHtml(tekst);
+  const opgemaakt = amountForButton(messageText);
+  return opgemaakt || escapeHtml(messageText);
 }
 
 function dashboardProductCell(item) {
-  const naam = item.product || item.product_name || "-";
+  const labelText = item.product || item.product_name || "-";
 
-  // De SKU is het veld waar het meest op gezocht wordt, dus die krijgt de
-  // volle tekstkleur; maat en merk blijven secundair.
-  const delen = [];
-  if (item.sku) delen.push(`<span class="dashboard-product-sku">${escapeHtml(item.sku)}</span>`);
-  if (item.size) delen.push(escapeHtml(`Size ${item.size}`));
-  if (item.brand) delen.push(escapeHtml(item.brand));
-  const meta = delen.join(" &middot; ");
+  // The SKU is what people search on most, so it gets the full text colour;
+  // size and brand stay secondary.
+  const parts = [];
+  if (item.sku) parts.push(`<span class="dashboard-product-sku">${escapeHtml(item.sku)}</span>`);
+  if (item.size) parts.push(escapeHtml(`Size ${item.size}`));
+  if (item.brand) parts.push(escapeHtml(item.brand));
+  const meta = parts.join(" &middot; ");
 
   return `
-    <div class="dashboard-product-name">${escapeHtml(naam)}</div>
+    <div class="dashboard-product-name">${escapeHtml(labelText)}</div>
     ${meta ? `<div class="dashboard-product-meta">${meta}</div>` : ""}
   `;
 }
 
-// NEW — elke kopcel komt hier langs. De klasse bepaalt welke kolom blijft
-// staan tijdens het scrollen. Eén plek, zodat er geen tabel kan
-// achterblijven met een kop zonder klasse terwijl zijn cellen hem wel
-// hebben — dan schuift de kop weg en blijft de inhoud staan.
+// NEW — every header cell goes through here. The class decides which column
+// stays put while scrolling. One place, so no table can end up with a header
+// missing the class while its cells have it — which is how you get a header
+// that scrolls away while the content underneath stays.
 function dashboardHeadCell(label) {
-  const klasse =
+  const columnClass =
     label === "Product"
       ? "dashboard-product-col"
       : label === "Size"
         ? "dashboard-size-col"
         : label === "Action" || label === "Actions"
           ? "dashboard-action-col"
-          : KOLOMSOORT_PER_KOP[label] || "kol-standaard";
+          : COLUMN_SIZE_BY_HEADER[label] || "col-default";
 
-  return `<th${klasse ? ` class="${klasse}"` : ""}>${label}</th>`;
+  return `<th${columnClass ? ` class="${columnClass}"` : ""}>${label}</th>`;
 }
 
-// NEW — de cellen worden per tabel met de hand uitgeschreven en weten dus
-// niet bij welke kolom ze horen. Deze functie leest de kop en zet het op de
-// cellen: de klasse voor het vastzetten, en de kolomnaam als data-label.
+// NEW — the cells are written out by hand per table and therefore have no
+// idea which column they belong to. This reads the header and puts it on the
+// cells: the class that pins the column, and the column name as data-label.
 function syncDashboardCellColumns() {
   if (!dashboardTableHead || !dashboardTableBody) return;
 
-  const koppen = Array.from(dashboardTableHead.querySelectorAll("th")).map((th) => ({
-    naam: th.textContent.trim(),
+  const headCells = Array.from(dashboardTableHead.querySelectorAll("th")).map((th) => ({
+    labelText: th.textContent.trim(),
     product: th.classList.contains("dashboard-product-col"),
     actie: th.classList.contains("dashboard-action-col"),
-    // De breedteklasse van de kop hoort ook op de cellen eronder te staan,
-    // anders bepaalt de kop de breedte en de cel iets anders.
-    maat: Array.from(th.classList).find((k) => k.indexOf("kol-") === 0) || ""
+    // The header's width class has to sit on the cells below it too,
+    // otherwise the header decides one width and the cell another.
+    sizeLabel: Array.from(th.classList).find((k) => k.indexOf("col-") === 0) || ""
   }));
 
-  dashboardTableBody.querySelectorAll("tr").forEach((rij) => {
-    // De lege staat is één cel met colspan; die hoort bij geen kolom.
-    if (rij.children.length === 1 && rij.children[0].hasAttribute("colspan")) return;
+  dashboardTableBody.querySelectorAll("tr").forEach((rowEl) => {
+    // The empty state is a single cell with a colspan; it belongs to no
+    // column.
+    if (rowEl.children.length === 1 && rowEl.children[0].hasAttribute("colspan")) return;
 
-    Array.from(rij.children).forEach((cel, i) => {
-      const kop = koppen[i];
+    Array.from(rowEl.children).forEach((cel, i) => {
+      const kop = headCells[i];
       if (!kop) return;
 
-      if (kop.naam) cel.setAttribute("data-label", kop.naam);
+      if (kop.labelText) cel.setAttribute("data-label", kop.labelText);
       if (kop.product) cel.classList.add("dashboard-product-col");
       if (kop.actie) cel.classList.add("dashboard-action-col");
-      if (kop.maat) cel.classList.add(kop.maat);
+      if (kop.sizeLabel) cel.classList.add(kop.sizeLabel);
 
-      // Het aantal knoppen bepaalt hoeveel kolommen de actiecel krijgt op een
-      // kaart. Zelf tellen is betrouwbaarder dan het aan de opmaak overlaten:
-      // auto-fit liet in sommige browsers een lege kolom staan.
+      // The number of buttons decides how many columns the action cell gets
+      // on a card. Counting them here is more reliable than leaving it to
+      // the stylesheet: auto-fit left an empty column in some browsers.
       if (kop.actie) {
-        const aantal = cel.querySelectorAll("button, a").length;
-        cel.style.setProperty("--actieknoppen", String(Math.max(1, Math.min(aantal, 3))));
+        const qty = cel.querySelectorAll("button, a").length;
+        cel.style.setProperty("--action-buttons", String(Math.max(1, Math.min(qty, 3))));
       }
     });
   });
@@ -1027,109 +1029,109 @@ if (dashboardTableBody) {
   new MutationObserver(() => {
     syncDashboardCellColumns();
     fitDashboardColumns();
-    filterZichtbareRijen();
+    filterVisibleRows();
   }).observe(dashboardTableBody, { childList: true });
 }
 
-// NEW — een filter na het tekenen in plaats van in elk renderpad apart. De
-// rijen staan al in de tabel, dus verbergen we wat de zoekterm niet bevat.
-// Werkt daardoor op elk pad, ook op paden die er later bij komen.
+// NEW — one filter after rendering, instead of one per render path. The rows
+// are already in the table, so anything the search term does not match is
+// hidden. That covers every path, including paths added later.
 //
-// De aantallen in de zijbalk en op de pills blijven tellen wat er werkelijk
-// is: die komen uit de API en worden hier niet aangeraakt.
-function zoektermVanDashboard() {
+// The counts in the sidebar and on the pills keep counting what actually
+// exists: those come from the API and are not touched here.
+function dashboardSearchTerm() {
   return String(dashboardSearchInput?.value || "").trim().toLowerCase();
 }
 
-function filterZichtbareRijen() {
-  const lichaam = dashboardTableBody;
-  if (!lichaam) return;
+function filterVisibleRows() {
+  const tableBody = dashboardTableBody;
+  if (!tableBody) return;
 
-  const rijen = Array.from(lichaam.querySelectorAll("tr"))
-    .filter((rij) => !rij.dataset.zoekMelding);
+  const rowEls = Array.from(tableBody.querySelectorAll("tr"))
+    .filter((rowEl) => !rowEl.dataset.searchNotice);
 
-  const term = zoektermVanDashboard();
-  let gevonden = 0;
+  const term = dashboardSearchTerm();
+  let hitCount = 0;
 
-  rijen.forEach((rij) => {
-    // De lege staat is een cel met colspan; die hoort altijd te blijven staan.
-    const isLegeStaat = rij.children.length === 1 && rij.children[0].hasAttribute("colspan");
+  rowEls.forEach((rowEl) => {
+    // The empty state is a cell with a colspan; it must always stay.
+    const isEmptyState = rowEl.children.length === 1 && rowEl.children[0].hasAttribute("colspan");
 
-    if (!term || isLegeStaat) {
-      rij.style.display = "";
-      if (!isLegeStaat) gevonden++;
+    if (!term || isEmptyState) {
+      rowEl.style.display = "";
+      if (!isEmptyState) hitCount++;
       return;
     }
 
-    const raak = rij.textContent.toLowerCase().includes(term);
-    rij.style.display = raak ? "" : "none";
-    if (raak) gevonden++;
+    const isHit = rowEl.textContent.toLowerCase().includes(term);
+    rowEl.style.display = isHit ? "" : "none";
+    if (isHit) hitCount++;
   });
 
-  // Een eigen regel als de zoekterm niets oplevert, anders staar je naar een
-  // lege tabel zonder te weten waarom.
-  const bestaande = lichaam.querySelector("[data-zoek-melding]");
+  // A row of its own when the term matches nothing, otherwise you stare at
+  // an empty table with no idea why.
+  const bestaande = tableBody.querySelector("[data-search-notice]");
   if (bestaande) bestaande.remove();
 
-  if (term && gevonden === 0 && rijen.length) {
-    const melding = document.createElement("tr");
-    melding.dataset.zoekMelding = "1";
-    melding.innerHTML =
+  if (term && hitCount === 0 && rowEls.length) {
+    const notice = document.createElement("tr");
+    notice.dataset.searchNotice = "1";
+    notice.innerHTML =
       '<td colspan="20" style="padding:28px 14px;text-align:center;opacity:.7">' +
       "No results for \u201c" + term.replace(/[<>&]/g, "") + "\u201d" +
       "</td>";
-    lichaam.appendChild(melding);
+    tableBody.appendChild(notice);
   }
 }
 
-// NEW — additief: vensters gedroegen zich niet. De achtergrond schoof mee
-// tijdens het scrollen en Escape sloot niets. Beide horen bij het venster
-// zelf, niet bij de plek die hem opent, dus staat het hier op één plek voor
-// alle vensters van dit portal.
+// NEW — additive: dialogs did not behave. The page behind them scrolled
+// along, and Escape closed nothing. Both belong to the dialog itself rather
+// than to whatever opens it, so this sits in one place for every dialog in
+// this portal.
 (function () {
   const VENSTERS = ".dashboard-modal";
   const SLUITKNOPPEN = ".dashboard-modal-close";
 
-  function openVensters() {
+  function openDialogs() {
     return Array.from(document.querySelectorAll(VENSTERS))
       .filter((v) => getComputedStyle(v).display !== "none");
   }
 
-  function bijwerken() {
-    const open = openVensters().length > 0;
-    document.documentElement.classList.toggle("venster-open", open);
-    document.body.classList.toggle("venster-open", open);
+  function syncOpenState() {
+    const open = openDialogs().length > 0;
+    document.documentElement.classList.toggle("modal-open", open);
+    document.body.classList.toggle("modal-open", open);
   }
 
-  // Alleen de vensters zelf in de gaten houden, niet de hele pagina: de
-  // tabellen wisselen voortdurend van klasse en dat hoeft hier niets te doen.
-  const waarnemer = new MutationObserver(bijwerken);
+  // Watch only the dialogs, not the whole page: the tables change classes
+  // constantly and none of that needs to trigger anything here.
+  const observer = new MutationObserver(syncOpenState);
   document.querySelectorAll(VENSTERS).forEach((v) => {
-    waarnemer.observe(v, { attributes: true, attributeFilter: ["class", "style"] });
+    observer.observe(v, { attributes: true, attributeFilter: ["class", "style"] });
   });
 
-  document.addEventListener("keydown", (gebeurtenis) => {
-    if (gebeurtenis.key !== "Escape") return;
+  document.addEventListener("keydown", (evt) => {
+    if (evt.key !== "Escape") return;
 
-    const open = openVensters();
+    const open = openDialogs();
     if (!open.length) return;
 
-    // Het bovenste venster sluiten via zijn eigen sluitknop, zodat de
-    // opruimcode die daaraan hangt gewoon loopt.
-    const bovenste = open[open.length - 1];
-    const knop = bovenste.querySelector(SLUITKNOPPEN);
+    // Close the topmost dialog through its own close button, so whatever
+    // cleanup is attached to it still runs.
+    const topDialog = open[open.length - 1];
+    const btnEl = topDialog.querySelector(SLUITKNOPPEN);
 
-    if (knop) {
-      knop.click();
+    if (btnEl) {
+      btnEl.click();
     } else {
-      bovenste.classList.add("hidden");
-      bovenste.style.display = "none";
+      topDialog.classList.add("hidden");
+      topDialog.style.display = "none";
     }
 
-    bijwerken();
+    syncOpenState();
   });
 
-  bijwerken();
+  syncOpenState();
 })();
 
 function cleanSkuInput(value) {
@@ -1561,8 +1563,8 @@ function renderConsignmentInventoryRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
-      <td>${bedragVoorKolom(item.selling_price_suggested)}</td>
-      <td>${bedragVoorKolom(item.lowest_suggested_price)}</td>
+      <td>${amountForColumn(item.selling_price_suggested)}</td>
+      <td>${amountForColumn(item.lowest_suggested_price)}</td>
       <td>${escapeHtml(item.quantity || "0")}</td>
       <td>
         <div class="dashboard-action-row">
@@ -1636,7 +1638,7 @@ function renderConsignmentOfferRows(items) {
           <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
           <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
-          <td>${bedragVoorKolom(item.consignor_counter_price || item.seller_price)}</td>
+          <td>${amountForColumn(item.consignor_counter_price || item.seller_price)}</td>
           <td>${item.denied_at ? escapeHtml(new Date(item.denied_at).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
@@ -1681,8 +1683,8 @@ function renderConsignmentOfferRows(items) {
           <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
           <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
-          <td>${bedragVoorKolom(item.consignor_counter_price || item.seller_price)}</td>
-          <td>${bedragVoorKolom(item.previous_store_price)}</td>
+          <td>${amountForColumn(item.consignor_counter_price || item.seller_price)}</td>
+          <td>${amountForColumn(item.previous_store_price)}</td>
           <td>${(item.consignor_counter_at || item.created_at) ? escapeHtml(new Date(item.consignor_counter_at || item.created_at).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
@@ -1730,8 +1732,8 @@ function renderConsignmentOfferRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.seller_price)}</td>
-      <td>${bedragVoorKolom(item.offer_price)}</td>
+      <td>${amountForColumn(item.seller_price)}</td>
+      <td>${amountForColumn(item.offer_price)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${item.created_at ? escapeHtml(new Date(item.created_at).toLocaleDateString("en-GB")) : "-"}</td>
       <td>
@@ -1741,7 +1743,7 @@ function renderConsignmentOfferRows(items) {
             type="button"
             data-consignment-confirm-offer-id="${escapeHtml(item.id || "")}"
           >
-            Accept ${escapeHtml(bedragVoorKnop(item.offer_price))}
+            Accept ${escapeHtml(amountForButton(item.offer_price))}
           </button>
 
           ${canCounter ? `
@@ -1839,7 +1841,7 @@ function renderBuyingAcceptedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.offer)}</td>
+      <td>${amountForColumn(item.offer)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-offer">Waiting for seller</span></td>
       ${renderBuyingPaymentCell(item)}
@@ -1886,7 +1888,7 @@ function renderConsignmentAcceptedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.payout)}</td>
+      <td>${amountForColumn(item.payout)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
@@ -1895,7 +1897,7 @@ function renderConsignmentAcceptedRows(items) {
           type="button"
           data-consignment-confirm="${escapeHtml(item.seller_offer_record_id)}"
         >
-          Confirm ${escapeHtml(bedragVoorKnop(item.payout))}
+          Confirm ${escapeHtml(amountForButton(item.payout))}
         </button>
         <button
           class="dashboard-deny-btn"
@@ -2025,8 +2027,8 @@ function renderBuyingOpenWtbRows(items) {
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
       <td>${escapeHtml(item.inventory_filter || "-")}</td>
-      <td>${bedragVoorKolom(item.max_price)}</td>
-      <td>${bedragVoorKolom(item.current_lowest)}</td>
+      <td>${amountForColumn(item.max_price)}</td>
+      <td>${amountForColumn(item.current_lowest)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Open</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
@@ -2079,14 +2081,14 @@ function renderBuyingOfferRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.max_price)}</td>
-      <td>${bedragVoorKolom(item.offer)}</td>
+      <td>${amountForColumn(item.max_price)}</td>
+      <td>${amountForColumn(item.offer)}</td>
       <td><span class="dashboard-status-pill dashboard-status-offer">Offer Received</span></td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
         <div class="dashboard-action-row">
           <button class="dashboard-confirm-btn" type="button" data-buying-accept-offer-id="${escapeHtml(item.member_wtb_record_id || "")}">
-            Accept ${escapeHtml(bedragVoorKnop(item.offer))}
+            Accept ${escapeHtml(amountForButton(item.offer))}
           </button>
           <button class="dashboard-deny-btn" type="button" data-buying-deny-offer-id="${escapeHtml(item.member_wtb_record_id || "")}">
             Deny
@@ -2126,7 +2128,7 @@ function renderBuyingPaymentRequiredRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.amount)}</td>
+      <td>${amountForColumn(item.amount)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>
         ${
@@ -2181,7 +2183,7 @@ function renderBuyingConfirmedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.amount)}</td>
+      <td>${amountForColumn(item.amount)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       ${renderBuyingPaymentCell(item)}
       <td><span class="dashboard-status-pill dashboard-status-open">Confirmed</span></td>
@@ -2222,7 +2224,7 @@ function renderBuyingLabelRequestedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.amount)}</td>
+      <td>${amountForColumn(item.amount)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-payment">Waiting for Label</span></td>
       ${renderBuyingPaymentCell(item)}
@@ -2274,7 +2276,7 @@ function renderBuyingReadyToShipRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.amount)}</td>
+      <td>${amountForColumn(item.amount)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.tracking_number || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Ready to Ship</span></td>
@@ -2316,7 +2318,7 @@ function renderBuyingShippedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.amount)}</td>
+      <td>${amountForColumn(item.amount)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td><span class="dashboard-status-pill dashboard-status-open">Shipped</span></td>
       ${renderBuyingPaymentCell(item)}
@@ -2372,7 +2374,7 @@ function renderBuyingDeliveredRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.amount)}</td>
+      <td>${amountForColumn(item.amount)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>
         ${
@@ -2452,7 +2454,7 @@ function renderWtbAcceptedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.offer)}</td>
+      <td>${amountForColumn(item.offer)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
@@ -2592,9 +2594,9 @@ function renderWtbOpenOffersRows(offers) {
       <td class="dashboard-product-col">${dashboardProductCell(offer)}</td>
       <td class="dashboard-size-col">${escapeHtml(offer.size || "-")}</td>
       <td>${escapeHtml(offer.order_id || "-")}</td>
-      <td>${bedragVoorKolom(offer.offer)}</td>
+      <td>${amountForColumn(offer.offer)}</td>
       <td>${escapeHtml(offer.vat_type || "-")}</td>
-      <td>${bedragVoorKolom(offer.current_lowest)}</td>
+      <td>${amountForColumn(offer.current_lowest)}</td>
       <td>${escapeHtml(offer.date || "-")}</td>
       <td>
         <div class="dashboard-action-row">
@@ -2708,15 +2710,15 @@ function renderBuyingUnifiedOfferRows(items) {
           <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
           <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
-          <td>${bedragVoorKolom(maxPrice)}</td>
-          <td>${bedragVoorKolom(myLastOffer)}</td>
-          <td>${bedragVoorKolom(sellersOffer)}</td>
+          <td>${amountForColumn(maxPrice)}</td>
+          <td>${amountForColumn(myLastOffer)}</td>
+          <td>${amountForColumn(sellersOffer)}</td>
           <td>${escapeHtml(item.vat_type || "-")}</td>
           <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
           <td>
             <div class="dashboard-action-row">
               ${item.member_wtb_record_id ? `
-                <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(isFreshDenied ? "" : (item.id || ""))}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${`Accept ${escapeHtml(bedragVoorKnop(sellersOffer))}`.trim()}</button>
+                <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(isFreshDenied ? "" : (item.id || ""))}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${`Accept ${escapeHtml(amountForButton(sellersOffer))}`.trim()}</button>
               ` : ""}
               ${isFreshDenied ? `
                 <button class="dashboard-counter-btn" type="button" data-buying-counter-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-counter-kind="fresh" data-buying-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">Counter</button>
@@ -2744,14 +2746,14 @@ function renderBuyingUnifiedOfferRows(items) {
       const counterButtonHtml = `<button class="dashboard-counter-btn" type="button" data-buying-counter-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-counter-kind="${item._kind}" data-buying-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}" data-buying-counter-no-room="${item.no_room_to_counter ? "1" : "0"}">Counter</button>`;
 
       actionsCell = `
-        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(item._kind === "fresh" ? "" : (item.id || ""))}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${`Accept ${escapeHtml(bedragVoorKnop(sellersOffer))}`.trim()}</button>
+        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(item._kind === "fresh" ? "" : (item.id || ""))}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${`Accept ${escapeHtml(amountForButton(sellersOffer))}`.trim()}</button>
         ${counterButtonHtml}
         <button class="dashboard-deny-btn" type="button" data-buying-deny-id="${escapeHtml(item.id || item.member_wtb_record_id || "")}" data-buying-deny-kind="${item._kind}" data-buying-deny-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">Deny</button>
       `;
     } else {
       // "my_counter" — buyer's own pending counter, awaiting seller.
       actionsCell = `
-        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(item.id || "")}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${`Accept ${escapeHtml(bedragVoorKnop(sellersOffer))}`.trim()}</button>
+        <button class="dashboard-confirm-btn" type="button" data-buying-accept-current-lowest-id="${escapeHtml(item.member_wtb_record_id || "")}" data-buying-accept-payout="${escapeHtml(item.sellers_offer_payout ?? "")}" data-buying-accept-vat-type="${escapeHtml(item.vat_type || "")}" data-buying-accept-record-id="${escapeHtml(item.id || "")}" data-buying-accept-seller-offer-id="${escapeHtml(item.seller_offer_record_id || "")}">${`Accept ${escapeHtml(amountForButton(sellersOffer))}`.trim()}</button>
         <button class="dashboard-counter-btn" type="button" data-buying-edit-counter-id="${escapeHtml(item.id || "")}">Edit</button>
         <button class="dashboard-deny-btn" type="button" data-buying-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
       `;
@@ -2763,13 +2765,13 @@ function renderBuyingUnifiedOfferRows(items) {
         <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
         <td>${escapeHtml(item.order_id || "-")}</td>
         ${isOpen ? `
-          <td>${bedragVoorKolom(maxPrice)}</td>
-          <td>${bedragVoorKolom(myLastOffer)}</td>
+          <td>${amountForColumn(maxPrice)}</td>
+          <td>${amountForColumn(myLastOffer)}</td>
         ` : `
-          <td>${bedragVoorKolom(maxPrice)}</td>
-          <td>${bedragVoorKolom(myOffer)}</td>
+          <td>${amountForColumn(maxPrice)}</td>
+          <td>${amountForColumn(myOffer)}</td>
         `}
-        <td>${bedragVoorKolom(sellersOffer)}</td>
+        <td>${amountForColumn(sellersOffer)}</td>
         <td>${escapeHtml(item.vat_type || "-")}</td>
         <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
         <td>
@@ -2824,7 +2826,7 @@ function renderWtbUnifiedOfferRows(items) {
           <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
           <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
           <td>${escapeHtml(item.order_id || "-")}</td>
-          <td>${bedragVoorKolom(amount)}</td>
+          <td>${amountForColumn(amount)}</td>
           <td>${escapeHtml(item.vat_type || "-")}</td>
           <td>${isFreshDenied ? "-" : escapeHtml(item.previous_store_price || "-")}</td>
           <td>${item.current_lowest ? escapeHtml(item.current_lowest) : "-"}</td>
@@ -2910,10 +2912,10 @@ function renderWtbUnifiedOfferRows(items) {
         <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
         <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
         <td>${escapeHtml(item.order_id || "-")}</td>
-        <td>${bedragVoorKolom(amount)}</td>
-        <td>${bedragVoorKolom(buyersLastOfferCell)}</td>
+        <td>${amountForColumn(amount)}</td>
+        <td>${amountForColumn(buyersLastOfferCell)}</td>
         <td>${escapeHtml(item.vat_type || "-")}</td>
-        <td>${bedragVoorKolom(currentLowestCell)}</td>
+        <td>${amountForColumn(currentLowestCell)}</td>
         <td>${dateValue ? escapeHtml(new Date(dateValue).toLocaleDateString("en-GB")) : "-"}</td>
         <td>
           <div class="dashboard-action-row">
@@ -2991,7 +2993,7 @@ function renderReadyToShipRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.payout)}</td>
+      <td>${amountForColumn(item.payout)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
 
@@ -3097,7 +3099,7 @@ function renderTrackingRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.payout)}</td>
+      <td>${amountForColumn(item.payout)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
 
@@ -3204,7 +3206,7 @@ function renderHistoryIssuesRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${bedragVoorKolom(item.payout)}</td>
+      <td>${amountForColumn(item.payout)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
@@ -3322,7 +3324,7 @@ function renderOpenClaimsRows(claims) {
       <td class="dashboard-product-col">${dashboardProductCell(claim)}</td>
       <td class="dashboard-size-col">${escapeHtml(claim.size || "-")}</td>
       <td>${escapeHtml(claim.order_id || "-")}</td>
-      <td>${bedragVoorKolom(claim.payout)}</td>
+      <td>${amountForColumn(claim.payout)}</td>
       <td>${escapeHtml(claim.vat_type || "-")}</td>
       <td>${escapeHtml(claim.date || "-")}</td>
 
@@ -3447,30 +3449,30 @@ function getCsvImportStatusEl() {
   return document.getElementById("consignmentCsvImportStatus");
 }
 
-// NEW — de lijst met overgeslagen regels.
+// NEW — the list of skipped rows.
 //
-// De import slaat een regel over als StockX de SKU niet exact kent. Zonder
-// deze lijst verdwijnt zo'n regel geruisloos: de teller zegt "completed" en
-// de voorraad is stiller kleiner dan het bestand dat je uploadde.
+// The import skips a row when StockX does not know the SKU exactly. Without
+// this list such a row disappears silently: the counter says "completed" and
+// the inventory is quietly smaller than the file you uploaded.
 //
-// Zelfde vorm als het venster voor dubbele regels, maar amber in plaats van
-// rood. Dat verschil is opzet: dubbele regels blokkeren de upload en moet je
-// eerst oplossen, dit is een melding achteraf terwijl de rest gewoon binnen
-// is. Rood zou suggereren dat er niets gelukt is.
+// Same shape as the duplicate-rows dialog, but amber instead of red. That
+// difference is deliberate: duplicates block the upload and have to be fixed
+// first, while this is a notice after the fact with everything else already
+// imported. Red would suggest nothing went through.
 //
-// Wordt door de code aangemaakt in plaats van in dashboard.html gezet, zodat
-// dat bestand niet mee hoeft in de uitrol. De klassen zijn dezelfde als de
-// andere vensters, dus Escape en de scrollvergrendeling werken er vanzelf op.
-let overgeslagenVenster = null;
+// Built from code rather than placed in dashboard.html, so that file does not
+// have to ship. The classes match the other dialogs, so Escape and the scroll
+// lock apply to it automatically.
+let skippedRowsDialog = null;
 
-function maakOvergeslagenVenster() {
-  if (overgeslagenVenster) return overgeslagenVenster;
+function buildSkippedRowsDialog() {
+  if (skippedRowsDialog) return skippedRowsDialog;
 
-  const venster = document.createElement("div");
-  venster.className = "dashboard-modal hidden";
-  venster.id = "consignmentCsvSkippedModal";
+  const dialogEl = document.createElement("div");
+  dialogEl.className = "dashboard-modal hidden";
+  dialogEl.id = "consignmentCsvSkippedModal";
 
-  venster.innerHTML = `
+  dialogEl.innerHTML = `
     <div class="dashboard-modal-backdrop" data-skipped-close></div>
 
     <div class="dashboard-modal-card">
@@ -3493,81 +3495,122 @@ function maakOvergeslagenVenster() {
     </div>
   `;
 
-  document.body.appendChild(venster);
+  document.body.appendChild(dialogEl);
 
-  venster.querySelectorAll("[data-skipped-close]").forEach((knop) => {
-    knop.addEventListener("click", () => {
-      venster.classList.add("hidden");
-      document.documentElement.classList.remove("venster-open");
-      document.body.classList.remove("venster-open");
+  dialogEl.querySelectorAll("[data-skipped-close]").forEach((btnEl) => {
+    btnEl.addEventListener("click", () => {
+      dialogEl.classList.add("hidden");
+      document.documentElement.classList.remove("modal-open");
+      document.body.classList.remove("modal-open");
     });
   });
 
-  overgeslagenVenster = venster;
+  skippedRowsDialog = dialogEl;
 
-  return venster;
+  return dialogEl;
 }
 
-function toonOvergeslagen(regels) {
-  const venster = maakOvergeslagenVenster();
-  const lijst = venster.querySelector("#consignmentCsvSkippedList");
+function showSkippedRows(skippedRows) {
+  const dialogEl = buildSkippedRowsDialog();
+  const listEl = dialogEl.querySelector("#consignmentCsvSkippedList");
 
-  lijst.innerHTML = (regels || [])
+  listEl.innerHTML = (skippedRows || [])
     .map((r) => {
       const sku = escapeHtml(String(r.sku ?? ""));
-      const maat = r.size ? escapeHtml(String(r.size)) : "";
-      const aantal = r.quantity ? escapeHtml(String(r.quantity)) : "";
+      const sizeLabel = r.size ? escapeHtml(String(r.size)) : "";
+      const qty = r.quantity ? escapeHtml(String(r.quantity)) : "";
 
-      const achter = [maat && `Size ${maat}`, aantal && `${aantal} pcs`]
+      const metaText = [sizeLabel && `Size ${sizeLabel}`, qty && `${qty} pcs`]
         .filter(Boolean)
         .join(" &middot; ");
 
       return `
         <div>
           <span class="consignment-skipped-sku">${sku}</span>
-          ${achter ? `<span class="consignment-skipped-meta">${achter}</span>` : ""}
+          ${metaText ? `<span class="consignment-skipped-meta">${metaText}</span>` : ""}
         </div>
       `;
     })
     .join("");
 
-  venster.classList.remove("hidden");
-  document.documentElement.classList.add("venster-open");
-  document.body.classList.add("venster-open");
+  dialogEl.classList.remove("hidden");
+  document.documentElement.classList.add("modal-open");
+  document.body.classList.add("modal-open");
 }
 
-// NEW — onthouden welke afgeronde import je al gezien hebt.
+// NEW — remember which finished import you have already seen.
 //
-// loadCsvImportStatus haalt altijd de laatste taak op, en die verandert
-// niet meer zodra hij klaar is. Zonder dit stond de melding van je vorige
-// import bij elk bezoek aan deze tab weer in beeld.
+// loadCsvImportStatus always fetches the latest job, and that stops changing
+// once it completes. Without this, the notice from your previous import
+// reappeared every time you opened this tab.
 //
-// Per verkoper bewaard, want een browser kan bij meerdere accounts horen.
-function csvImportWeggekliktSleutel() {
+// Stored per seller, since one browser can be used for several accounts.
+function csvImportSeenKey() {
   return `csv-import-gezien:${dashboardSeller?.id || "onbekend"}`;
 }
 
-function csvImportWeggeklikt(jobId) {
+function csvImportWasSeen(jobId) {
   if (!jobId) return false;
 
   try {
-    return localStorage.getItem(csvImportWeggekliktSleutel()) === String(jobId);
+    return localStorage.getItem(csvImportSeenKey()) === String(jobId);
   } catch {
-    // Privémodus of geblokkeerde opslag: dan liever de melding te vaak
-    // tonen dan een overgeslagen regel verzwijgen.
+    // Private mode or blocked storage: better to show the notice too often
+    // than to hide a skipped row.
     return false;
   }
 }
 
-function onthoudCsvImportWeggeklikt(jobId) {
+function rememberCsvImportSeen(jobId) {
   if (!jobId) return;
 
   try {
-    localStorage.setItem(csvImportWeggekliktSleutel(), String(jobId));
+    localStorage.setItem(csvImportSeenKey(), String(jobId));
   } catch {
     /* niets aan te doen, zie hierboven */
   }
 }
+
+// NEW — the edit-offer dialog was laid out wrong.
+//
+// The VAT block and the Save button shared .dashboard-offer-action-row, but
+// the rule that turns that into a row lives inside @media (max-width: 768px)
+// and therefore only applies on a phone. On a desktop it fell apart: the VAT
+// type as a full-width panel, with Save underneath as a small button on the
+// left.
+//
+// Beyond that, the VAT type should not be a panel at all. It is not a choice
+// and not an input — it is fixed for this offer — so it belongs as a label on
+// the amount field, not as a separate line below it.
+//
+// The HTML is untouched; the pieces are moved here. The id stays the same, so
+// the code that fills the label keeps working.
+(function () {
+  const moneyValue = document.getElementById("editOfferAmount");
+  const btw = document.getElementById("editOfferVatTypeLabel");
+
+  if (!moneyValue || !btw) return;
+
+  const omhulsel = document.createElement("div");
+  omhulsel.className = "dashboard-field-with-suffix";
+
+  moneyValue.parentNode.insertBefore(omhulsel, moneyValue);
+  omhulsel.appendChild(moneyValue);
+  omhulsel.appendChild(btw);
+
+  btw.classList.add("dashboard-field-suffix");
+
+  // The now-empty panel and the row around it have nothing left in them.
+  document.querySelector(".dashboard-locked-vat")?.remove();
+
+  const rowEl = document.querySelector(".dashboard-offer-action-row");
+  const btnEl = rowEl?.querySelector(".dashboard-offer-save-btn");
+
+  if (rowEl && btnEl) {
+    rowEl.parentNode.insertBefore(btnEl, rowEl);
+    rowEl.remove();
+  }
+})();
 
 function renderCsvImportStatus(job) {
   const el = getCsvImportStatusEl();
@@ -3599,19 +3642,18 @@ function renderCsvImportStatus(job) {
   const overgeslagen = Array.isArray(job.skipped_json) ? job.skipped_json : [];
 
   if (job.status === "completed") {
-    // GEWIJZIGD — twee dingen.
+    // CHANGED — two things.
     //
-    // Ten eerste zei dit altijd "completed", ook als er regels waren
-    // overgeslagen. Dan klopt je voorraad niet met het bestand dat je
-    // uploadde en zie je daar niets van.
+    // First, this always said "completed", even when rows had been skipped.
+    // Your inventory then does not match the file you uploaded and you see
+    // nothing about it.
     //
-    // Ten tweede kwam de melding bij elk bezoek aan deze tab terug. Er
-    // wordt namelijk altijd de laatste taak opgehaald, en die blijft
-    // eeuwig dezelfde: een import van vorige week stond dus elke keer
-    // opnieuw vijftien seconden in beeld, alsof hij nog bezig was.
-    // Wegklikken wordt nu onthouden, en vanzelf verdwijnen telt daar ook
-    // als wegklikken.
-    if (csvImportWeggeklikt(job.id)) {
+    // Second, the notice came back on every visit to this tab. The latest
+    // job is always fetched, and that stays the same forever: an import from
+    // last week showed up again for fifteen seconds every time, as if it
+    // were still running. Dismissing is now remembered, and auto-hiding
+    // counts as dismissing.
+    if (csvImportWasSeen(job.id)) {
       el.classList.add("hidden");
       el.textContent = "";
       return;
@@ -3631,23 +3673,23 @@ function renderCsvImportStatus(job) {
                 aria-label="Dismiss">&times;</button>
       `;
 
-      const openen = () => toonOvergeslagen(overgeslagen);
-      const tekst = el.querySelector(".csv-import-status-text");
+      const openen = () => showSkippedRows(overgeslagen);
+      const messageText = el.querySelector(".csv-import-status-text");
 
-      tekst.addEventListener("click", openen);
-      tekst.addEventListener("keydown", (gebeurtenis) => {
-        if (gebeurtenis.key === "Enter" || gebeurtenis.key === " ") {
-          gebeurtenis.preventDefault();
+      messageText.addEventListener("click", openen);
+      messageText.addEventListener("keydown", (evt) => {
+        if (evt.key === "Enter" || evt.key === " ") {
+          evt.preventDefault();
           openen();
         }
       });
 
-      // Blijft staan tot je hem wegklikt: vanzelf verdwijnen zou betekenen
-      // dat je hem mist als je even wegkijkt, en dan is je voorraad stil
-      // kleiner geworden dan je bestand.
+      // Stays until dismissed: hiding itself would mean you miss it if you
+      // look away for a moment, and then your inventory is quietly smaller
+      // than your file.
       el.querySelector(".csv-import-status-dismiss")
         .addEventListener("click", () => {
-          onthoudCsvImportWeggeklikt(job.id);
+          rememberCsvImportSeen(job.id);
           el.classList.add("hidden");
           el.textContent = "";
         });
@@ -3660,7 +3702,7 @@ function renderCsvImportStatus(job) {
     el.onclick = null;
 
     csvImportCompletedHideTimer = setTimeout(() => {
-      onthoudCsvImportWeggeklikt(job.id);
+      rememberCsvImportSeen(job.id);
       el.classList.add("hidden");
       el.textContent = "";
     }, 15000);
@@ -6044,9 +6086,9 @@ dashboardTableBody.addEventListener("click", async (event) => {
 
   // NEW — additive only: seller counters back on the store/buyer's
   // current counter, reusing the existing (already band-validated)
-  // seller-counter endpoint. Vraagt de prijs via showPrompt met een
-  // geldveld: euroteken, numeriek toetsenbord op mobiel, en een
-  // controle op het bedrag voordat het naar de server gaat.
+  // seller-counter endpoint. Asks for the price through showPrompt with a
+  // money field: euro sign, numeric keyboard on mobile, and a check on the
+  // amount before it reaches the server.
   // NEW — additive only: retry a fresh, never-countered offer that
   // was denied outright, using the pre-existing edit-after-denial
   // endpoint (already Portal-safe — seller_record_id, no secret).
@@ -7264,42 +7306,41 @@ dashboardRefreshBtn.addEventListener("click", async () => {
   }
 });
 
-// GEWIJZIGD — haalde bij elke toetsaanslag de hele lijst opnieuw op en
-// filterde vervolgens nergens op, dus je kreeg altijd alles terug.
-// Filteren kan op de rijen die er al staan; dat scheelt meteen een
-// verzoek per toetsaanslag.
+// CHANGED — this refetched the whole list on every keystroke and then
+// filtered on nothing, so you always got everything back. Filtering can
+// happen on the rows already there, which also saves a request per
+// keystroke.
 dashboardSearchInput.addEventListener("input", () => {
-  filterZichtbareRijen();
+  filterVisibleRows();
 });
 
-// NEW — een kruisje om het zoekveld in een keer leeg te maken. Wordt hier
-// aangemaakt in plaats van in de HTML, zodat er geen extra bestand mee hoeft
-// in de uitrol.
+// NEW — a cross to clear the search field in one go. Built here rather than
+// in the HTML, so no extra file has to ship.
 (function () {
   const veld = dashboardSearchInput;
-  const rij = veld && veld.closest(".dashboard-search-wrap");
-  if (!veld || !rij) return;
+  const rowEl = veld && veld.closest(".dashboard-search-wrap");
+  if (!veld || !rowEl) return;
 
-  const knop = document.createElement("button");
-  knop.type = "button";
-  knop.className = "zoek-wissen";
-  knop.setAttribute("aria-label", "Clear search");
-  knop.textContent = "\u00d7";
-  rij.appendChild(knop);
+  const btnEl = document.createElement("button");
+  btnEl.type = "button";
+  btnEl.className = "search-clear";
+  btnEl.setAttribute("aria-label", "Clear search");
+  btnEl.textContent = "\u00d7";
+  rowEl.appendChild(btnEl);
 
-  function toonOfVerberg() {
-    rij.classList.toggle("heeft-tekst", !!veld.value);
+  function syncClearButton() {
+    rowEl.classList.toggle("has-text", !!veld.value);
   }
 
-  knop.addEventListener("click", () => {
+  btnEl.addEventListener("click", () => {
     veld.value = "";
-    toonOfVerberg();
-    filterZichtbareRijen();
+    syncClearButton();
+    filterVisibleRows();
     veld.focus();
   });
 
-  veld.addEventListener("input", toonOfVerberg);
-  toonOfVerberg();
+  veld.addEventListener("input", syncClearButton);
+  syncClearButton();
 })();
 
 
