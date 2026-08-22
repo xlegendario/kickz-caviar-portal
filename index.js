@@ -700,7 +700,7 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     "Type": "Consignment",
     "Source": "Regular",
     "Verification Status": "Consigned",
-    "Payment Note": `€${purchasePrice.toFixed(2)}`,
+    "Payment Note": `${moneySmartValue(purchasePrice.toFixed(2))}`,
     "Payment Status": "To Pay",
     "Availability Status": "Sold",
     "Margin %": "7.5%",
@@ -758,7 +758,7 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
         type: "Consignment",
         source: "Regular",
         verification_status: "Consigned",
-        payment_note: `€${purchasePrice.toFixed(2)}`,
+        payment_note: `${moneySmartValue(purchasePrice.toFixed(2))}`,
         payment_status: "To Pay",
         availability_status: "Sold",
         margin: "7.5%",
@@ -799,7 +799,7 @@ function buildCompactConsignmentOfferEmbed({ offer, isConfirmation }) {
 
     description: [
       `**${offer.product_name || "—"}**`,
-      `Your price: €${Number(offer.seller_price).toFixed(2)} → Offer: €${Number(offer.offer_price).toFixed(2)} · ${offer.vat_type || "—"}`,
+      `Your price: ${moneySmartValue(Number(offer.seller_price).toFixed(2))} → Offer: ${moneySmartValue(Number(offer.offer_price).toFixed(2))} · ${offer.vat_type || "—"}`,
       "",
       "Confirm if still available."
     ].join("\n"),
@@ -818,7 +818,7 @@ function buildCompactConsignmentDealUpdateEmbed({ offer }) {
 
     description: [
       `**${offer.product_name || "—"}**`,
-      `€${Number(offer.offer_price || 0).toFixed(2)} · ${offer.vat_type || "—"}`,
+      `${moneySmartValue(Number(offer.offer_price || 0).toFixed(2))} · ${offer.vat_type || "—"}`,
       "",
       "Sale confirmed. Request your label below."
     ].join("\n"),
@@ -928,12 +928,12 @@ async function sendConsignmentOfferDiscordMessage({
         fields: [
           {
             name: "Your Price",
-            value: `€${Number(offer.seller_price).toFixed(2)}`,
+            value: `${moneySmartValue(Number(offer.seller_price).toFixed(2))}`,
             inline: true
           },
           {
             name: isConfirmation ? "Matched At" : "Our Offer",
-            value: `€${Number(offer.offer_price).toFixed(2)}`,
+            value: `${moneySmartValue(Number(offer.offer_price).toFixed(2))}`,
             inline: true
           }
         ],
@@ -1056,7 +1056,7 @@ async function sendConsignmentCounterOfferDiscordMessage({
 
   const deniedNote =
     deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== ""
-      ? [`❌ Your counter of €${Number(deniedAmount).toFixed(2)} was denied.`, ""]
+      ? [`❌ Your counter of ${moneySmartValue(Number(deniedAmount).toFixed(2))} was denied.`, ""]
       : [];
 
   const embed = {
@@ -1072,10 +1072,10 @@ async function sendConsignmentCounterOfferDiscordMessage({
       `The store sent a counter offer.`,
       "",
       `**${isFirstStoreResponse ? "Your Price" : "Your Previous Counter"}**`,
-      `€${Number(yourPreviousCounter).toFixed(2)}`,
+      `${moneySmartValue(Number(yourPreviousCounter).toFixed(2))}`,
       "",
       `**New Counter**`,
-      `€${Number(consignorEquivalent).toFixed(2)}`,
+      `${moneySmartValue(Number(consignorEquivalent).toFixed(2))}`,
       "",
       closingLine
     ].join("\n"),
@@ -1090,11 +1090,11 @@ async function sendConsignmentCounterOfferDiscordMessage({
         type: 1,
         components: noRoomToCounter
           ? [
-              { type: 2, style: 3, label: `Accept €${Number(consignorEquivalent)}`, custom_id: `consignment_counter_accept:${offer.id}` },
+              { type: 2, style: 3, label: `Accept ${moneySmartValue(Number(consignorEquivalent))}`, custom_id: `consignment_counter_accept:${offer.id}` },
               { type: 2, style: 4, label: "Deny", custom_id: `consignment_counter_deny:${offer.id}` }
             ]
           : [
-              { type: 2, style: 3, label: `Accept €${Number(consignorEquivalent)}`, custom_id: `consignment_counter_accept:${offer.id}` },
+              { type: 2, style: 3, label: `Accept ${moneySmartValue(Number(consignorEquivalent))}`, custom_id: `consignment_counter_accept:${offer.id}` },
               { type: 2, style: 1, label: "Counter", custom_id: `consignment_counter_counter:${offer.id}` },
               { type: 2, style: 4, label: "Deny", custom_id: `consignment_counter_deny:${offer.id}` }
             ]
@@ -1454,7 +1454,7 @@ function buildMemberWtbReadyToShipEmbed({ memberFields, payout, compact = false 
       title: "📦 Ready to Ship",
       description: [
         "💶 **Payout**",
-        `Final payout: €${Number(payout || 0).toFixed(2)}`,
+        `Final payout: ${moneySmartValue(Number(payout || 0).toFixed(2))}`,
         "",
         "📦 **Next Step**",
         "Click **Request Label** when you are ready to ship.",
@@ -1486,7 +1486,7 @@ function buildMemberWtbReadyToShipEmbed({ memberFields, payout, compact = false 
       `**Size:** ${asText(memberFields["Size"]) || "—"}`,
       `**Brand:** ${asText(memberFields["Brand"]) || "—"}`,
       "",
-      `**Final payout:** €${Number(payout || 0).toFixed(2)}`,
+      `**Final payout:** ${moneySmartValue(Number(payout || 0).toFixed(2))}`,
       "",
       "Click **Request Label** when you are ready to ship."
     ].join("\n"),
@@ -2191,7 +2191,7 @@ async function updateMemberWtbPaymentRequestMessage(
 
       description = [
         `**Order Number:** ${memberWtbId}`,
-        `**Amount:** €${amount.toFixed(2)}`,
+        `**Amount:** ${moneySmartValue(amount.toFixed(2))}`,
         "",
         "Your SEPA bank transfer has been submitted through Mollie.",
         "We are waiting for Mollie to confirm receipt.",
@@ -2208,7 +2208,7 @@ async function updateMemberWtbPaymentRequestMessage(
 
       description = [
         `**Order Number:** ${memberWtbId}`,
-        `**Amount:** €${amount.toFixed(2)}`,
+        `**Amount:** ${moneySmartValue(amount.toFixed(2))}`,
         "",
         "Mollie has confirmed your payment.",
         "Your order is now being processed."
@@ -2224,7 +2224,7 @@ async function updateMemberWtbPaymentRequestMessage(
 
       description = [
         `**Order Number:** ${memberWtbId}`,
-        `**Amount:** €${amount.toFixed(2)}`,
+        `**Amount:** ${moneySmartValue(amount.toFixed(2))}`,
         "",
         "This Mollie payment was cancelled.",
         "A new payment link must be created before payment can be completed."
@@ -2239,7 +2239,7 @@ async function updateMemberWtbPaymentRequestMessage(
 
       description = [
         `**Order Number:** ${memberWtbId}`,
-        `**Amount:** €${amount.toFixed(2)}`,
+        `**Amount:** ${moneySmartValue(amount.toFixed(2))}`,
         "",
         "This Mollie payment link has expired.",
         "A new payment link must be created before payment can be completed."
@@ -2254,7 +2254,7 @@ async function updateMemberWtbPaymentRequestMessage(
 
       description = [
         `**Order Number:** ${memberWtbId}`,
-        `**Amount:** €${amount.toFixed(2)}`,
+        `**Amount:** ${moneySmartValue(amount.toFixed(2))}`,
         "",
         "Mollie could not complete this payment.",
         "Please use a new Mollie payment link."
@@ -2406,7 +2406,7 @@ async function sendMemberWtbPaymentRequest(
             "—"
           }`,
           "",
-          `**Amount:** €${amount.toFixed(2)}`,
+          `**Amount:** ${moneySmartValue(amount.toFixed(2))}`,
           "",
           ...paymentExplanation,
           "",
@@ -2440,7 +2440,7 @@ async function sendMemberWtbPaymentRequest(
           {
             type: 2,
             style: 5,
-            label: `Pay €${amount.toFixed(2)} with Mollie`,
+            label: `Pay ${moneySmartValue(amount.toFixed(2))} with Mollie`,
             url: paymentUrl
           }
         ]
@@ -2850,7 +2850,7 @@ async function createConsignmentDealChannelForDmSeller({
           shopifyOrderNumber || "—",
           "",
           "**Price**",
-          `€${price.toFixed(2)} (${offer.vat_type || "—"})`,
+          `${moneySmartValue(price.toFixed(2))} (${offer.vat_type || "—"})`,
           "",
           "Please request your shipping label below. You can also use this channel for questions about this specific deal."
         ].join("\n"),
@@ -2972,7 +2972,7 @@ async function sendConsignmentDealUpdateDiscordMessage({
           offer.order_id || offer.order_record_id || "—",
           "",
           "**Price**",
-          `€${price.toFixed(2)} (${offer.vat_type || "—"})`,
+          `${moneySmartValue(price.toFixed(2))} (${offer.vat_type || "—"})`,
           "",
           "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
         ].join("\n"),
@@ -3613,9 +3613,9 @@ function bindMemberWtbDiscordCreation(
               `**Product:** ${result.product_name}`,
               `**SKU:** ${result.sku}`,
               `**Size:** ${result.size}`,
-              `**Max Price:** €${Number(
+              `**Max Price:** ${moneySmartValue(Number(
                 result.max_price
-              ).toFixed(2)}`,
+              ).toFixed(2))}`,
               `**Buying Type:** ${getBuyingInventoryFilterLabel(
                 result.inventory_type
               )}`,
@@ -3987,7 +3987,7 @@ function bindConsignmentDiscordButtons(client) {
       }
     
       await interaction.reply({
-        content: `🔁 Counter offer sent to store: €${counterPrice.toFixed(2)}.`,
+        content: `🔁 Counter offer sent to store: ${moneySmartValue(counterPrice.toFixed(2))}.`,
         ephemeral: true
       }).catch(() => {});
     
@@ -4116,12 +4116,12 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       await interaction.reply({
-        content: `🔁 Counter offer sent to store: €${counterPrice.toFixed(2)}.`,
+        content: `🔁 Counter offer sent to store: ${moneySmartValue(counterPrice.toFixed(2))}.`,
         ephemeral: true
       }).catch(() => {});
 
       await safeEditInteractionMessage(interaction, {
-        content: `🔁 You countered with €${counterPrice.toFixed(2)}. Waiting on the store.`,
+        content: `🔁 You countered with ${moneySmartValue(counterPrice.toFixed(2))}. Waiting on the store.`,
         embeds: interaction.message.embeds,
         components: [
           {
@@ -4204,12 +4204,12 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       await interaction.reply({
-        content: `✅ Your counter was updated to €${editedPrice.toFixed(2)}.`,
+        content: `✅ Your counter was updated to ${moneySmartValue(editedPrice.toFixed(2))}.`,
         ephemeral: true
       }).catch(() => {});
 
       await safeEditInteractionMessage(interaction, {
-        content: `✏️ You edited your counter to €${editedPrice.toFixed(2)}. Waiting on the store.`,
+        content: `✏️ You edited your counter to ${moneySmartValue(editedPrice.toFixed(2))}. Waiting on the store.`,
         embeds: interaction.message.embeds,
         components: []
       }).catch(() => {});
@@ -4297,7 +4297,7 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       await interaction.editReply({
-        content: `✅ New offer sent: €${offerAmount.toFixed(2)} · ${vatType || "—"}`
+        content: `✅ New offer sent: ${moneySmartValue(offerAmount.toFixed(2))} · ${vatType || "—"}`
       }).catch(() => {});
 
       return;
@@ -4501,11 +4501,11 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       await interaction.editReply({
-        content: `✅ Your counter of €${counterPrice} was sent to the seller(s).`
+        content: `✅ Your counter of ${moneySmartValue(counterPrice)} was sent to the seller(s).`
       }).catch(() => {});
 
       await safeEditInteractionMessage(interaction, {
-        content: `🔁 You countered with €${counterPrice}. Waiting on the seller(s). You can still edit your counter through your dashboard.`,
+        content: `🔁 You countered with ${moneySmartValue(counterPrice)}. Waiting on the seller(s). You can still edit your counter through your dashboard.`,
         embeds: interaction.message.embeds,
         components: []
       }).catch(() => {});
@@ -4862,7 +4862,7 @@ function bindConsignmentDiscordButtons(client) {
                     `**SKU:** ${asText(wtbFieldsForFallback["SKU"]) || "—"}`,
                     `**Size:** ${asText(wtbFieldsForFallback["Size"]) || "—"}`,
                     "",
-                    `**Current Offer:** €${offerToBuyerForFallback.toFixed(2)}`,
+                    `**Current Offer:** ${moneySmartValue(offerToBuyerForFallback.toFixed(2))}`,
                     "",
                     "You can accept this seller's offer, counter again, or decline."
                   ].join("\n"),
@@ -4877,7 +4877,7 @@ function bindConsignmentDiscordButtons(client) {
                       {
                         type: 2,
                         style: 3,
-                        label: `Accept €${Number(offerToBuyerForFallback)}`,
+                        label: `Accept ${moneySmartValue(Number(offerToBuyerForFallback))}`,
                         custom_id: `accept_member_wtb_buyer_offer:${memberWtbRecordIdForFallback}:${sellerOfferRecordIdForFallback}`
                       },
                       {
@@ -5005,11 +5005,11 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       await interaction.editReply({
-        content: `✅ Your counter of €${counterPrice} was sent to the buyer.`
+        content: `✅ Your counter of ${moneySmartValue(counterPrice)} was sent to the buyer.`
       }).catch(() => {});
 
       await safeEditInteractionMessage(interaction, {
-        content: `🔁 You countered with €${counterPrice}. Waiting on the buyer.`,
+        content: `🔁 You countered with ${moneySmartValue(counterPrice)}. Waiting on the buyer.`,
         embeds: interaction.message.embeds,
         components: [
           {
@@ -5345,11 +5345,11 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       await interaction.editReply({
-        content: `✅ Your counter of €${counterPrice} was sent to the seller.`
+        content: `✅ Your counter of ${moneySmartValue(counterPrice)} was sent to the seller.`
       }).catch(() => {});
 
       await safeEditInteractionMessage(interaction, {
-        content: `🔁 You countered with €${counterPrice}. Waiting on the seller.`,
+        content: `🔁 You countered with ${moneySmartValue(counterPrice)}. Waiting on the seller.`,
         embeds: interaction.message.embeds,
         components: [
           {
@@ -5432,12 +5432,12 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       await interaction.reply({
-        content: `✅ Your counter was updated to €${editedPrice}.`,
+        content: `✅ Your counter was updated to ${moneySmartValue(editedPrice)}.`,
         ephemeral: true
       }).catch(() => {});
 
       await safeEditInteractionMessage(interaction, {
-        content: `✏️ You edited your counter to €${editedPrice}.`,
+        content: `✏️ You edited your counter to ${moneySmartValue(editedPrice)}.`,
         embeds: interaction.message.embeds,
         components: []
       }).catch(() => {});
@@ -5820,12 +5820,12 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       await interaction.reply({
-        content: `✅ Your counter was updated to €${editedPrice}.`,
+        content: `✅ Your counter was updated to ${moneySmartValue(editedPrice)}.`,
         ephemeral: true
       }).catch(() => {});
 
       await interaction.message.edit({
-        content: `🔁 You countered with €${editedPrice}. Waiting on the store.`,
+        content: `🔁 You countered with ${moneySmartValue(editedPrice)}. Waiting on the store.`,
         embeds: interaction.message.embeds,
         components: interaction.message.components
       }).catch(() => {});
@@ -5901,7 +5901,7 @@ function bindConsignmentDiscordButtons(client) {
       }
 
       await interaction.editReply({
-        content: `✅ Your counter of €${counterPrice} was sent to the store.`
+        content: `✅ Your counter of ${moneySmartValue(counterPrice)} was sent to the store.`
       }).catch(() => {});
 
       // FIXED — CRASH: this used the discord.js ActionRowBuilder/
@@ -7114,17 +7114,17 @@ app.get("/api/consignment/inventory", async (req, res) => {
   }
 });
 
-// NEW — de enige plek waar een SKU een product wordt bij consignment.
+// NEW — the only place a SKU becomes a product for consignment.
 //
-// Hiervoor liep dit via lookupSkuMasterProduct, en die gaf bij een
-// mislukte opzoeking de SKU terug als productnaam. Die naam werd in
-// Supabase gezet en daarna nooit meer bijgewerkt, terwijl de foto wel een
-// herstelketen heeft (store_listings -> SKU Master -> UOL, en het
-// resultaat wordt teruggeschreven). Vandaar voorraadregels met de SKU als
-// naam en toch een foto: de foto kwam later alsnog, de naam nooit.
+// This used to go through lookupSkuMasterProduct, which returned the SKU
+// itself as the product name when the lookup failed. That name went into
+// Supabase and was never revisited, while the picture does have a repair
+// chain (store_listings -> SKU Master -> UOL, with the result written
+// back). Hence inventory rows with a SKU for a name and a picture anyway:
+// the picture turned up later, the name never did.
 //
-// Nu: geen exacte StockX-match, geen regel. De aanroeper vangt dit op en
-// zet de SKU op de overslaanlijst.
+// Now: no exact StockX match, no row. The caller catches this and puts the
+// SKU on the skipped list.
 class UnknownSkuError extends Error {
   constructor(sku, reason) {
     super(`SKU not recognised: ${sku}`);
@@ -7136,9 +7136,9 @@ class UnknownSkuError extends Error {
   }
 }
 
-// Een storing bij StockX is niet hetzelfde als "bestaat niet". Die mag
-// nooit voorraad weigeren, dus die krijgt een eigen fout die de rij laat
-// mislukken in plaats van hem als onbekend af te voeren.
+// A StockX outage is not the same as "does not exist". It must never
+// refuse real stock, so it gets its own error that fails the row instead
+// of writing it off as unknown.
 class SkuLookupFailedError extends Error {
   constructor(sku, details) {
     super(`SKU lookup failed for ${sku}: ${details}`);
@@ -7150,9 +7150,9 @@ class SkuLookupFailedError extends Error {
 }
 
 /**
- * Een CSV van 200 regels bevat vaak maar 30 unieke SKU's, want elke maat
- * is een eigen regel. Zonder cache zijn dat 200 StockX-aanroepen voor 30
- * producten. Geef een Map mee en het worden er 30.
+ * A 200-row CSV often holds only 30 unique SKUs, because every size is its
+ * own row. Without a cache that is 200 StockX calls for 30 products. Pass a
+ * Map and it becomes 30.
  */
 async function resolveConsignmentProduct(sku, cache = null) {
   const cleanSku = normalizeSkuStrict(sku);
@@ -7174,7 +7174,7 @@ async function resolveConsignmentProduct(sku, cache = null) {
   }));
 
   if (!uitkomst.ok && uitkomst.reason === "lookup_failed") {
-    // Niet in de cache: bij de volgende regel mag hij het opnieuw proberen.
+    // Not cached: the next row is allowed to try again.
     throw new SkuLookupFailedError(cleanSku, uitkomst.error || "unknown");
   }
 
@@ -7202,9 +7202,8 @@ async function addConsignmentInventoryRow({
   vatType,
   sellingPriceSuggested,
   quantity,
-  // NEW — optioneel. Een CSV met 200 regels heeft vaak 30 unieke
-  // SKU's; hiermee wordt elke SKU een keer opgezocht in plaats van
-  // een keer per maat.
+  // NEW — optional. A 200-row CSV often has 30 unique SKUs; this
+  // looks each one up once instead of once per size.
   skuCache = null
 }) {
   const cleanSku = asText(sku).toUpperCase();
@@ -7213,9 +7212,9 @@ async function addConsignmentInventoryRow({
   const cleanPrice = Number(sellingPriceSuggested);
   const cleanQuantity = Number(quantity);
 
-  // GEWIJZIGD — gaat nu door de poort. Bij een onbekende SKU gooit
-  // deze een UnknownSkuError en wordt er geen regel geschreven,
-  // in plaats van een regel met de SKU als productnaam.
+  // CHANGED — this now goes through the gate. An unknown SKU throws
+  // an UnknownSkuError and no row is written, instead of a row carrying the
+  // SKU as its product name.
   const productInfo = await resolveConsignmentProduct(cleanSku, skuCache);
 
   const { data: existingRows, error: existingError } = await supabase
@@ -7292,9 +7291,8 @@ async function setConsignmentInventoryRow({
   vatType,
   sellingPriceSuggested,
   quantity,
-  // NEW — optioneel. Een CSV met 200 regels heeft vaak 30 unieke
-  // SKU's; hiermee wordt elke SKU een keer opgezocht in plaats van
-  // een keer per maat.
+  // NEW — optional. A 200-row CSV often has 30 unique SKUs; this
+  // looks each one up once instead of once per size.
   skuCache = null
 }) {
   const cleanSku = asText(sku).toUpperCase();
@@ -7405,9 +7403,9 @@ app.post("/api/consignment/inventory/manual", async (req, res) => {
       ...result
     });
   } catch (err) {
-    // NEW — een SKU die StockX niet exact kent is een invoerfout, geen
-    // serverfout. Hiervoor werd de regel gewoon aangemaakt met de SKU
-    // als productnaam en merkte niemand er iets van.
+    // NEW — a SKU that StockX does not know exactly is an input
+    // error, not a server error. Before this the row was simply created
+    // with the SKU as its product name and nobody noticed.
     if (err?.isUnknownSku) {
       return res.status(400).json({
         error: "SKU not recognised",
@@ -7418,7 +7416,7 @@ app.post("/api/consignment/inventory/manual", async (req, res) => {
       });
     }
 
-    // Een storing bij StockX mag geen echte voorraad weigeren.
+    // A StockX outage must not refuse real stock.
     if (err?.isLookupFailure) {
       return res.status(503).json({
         error: "Product lookup temporarily unavailable",
@@ -7570,10 +7568,10 @@ async function updateCsvImportJob(jobId, fields) {
 
   if (!error) return;
 
-  // NEW — skipped_json is een nieuwe kolom:
+  // NEW — skipped_json is a new column:
   //   alter table csv_import_jobs add column if not exists skipped_json jsonb;
-  // Zolang die er niet is, gaat de import gewoon door zonder de lijst
-  // op te slaan in plaats van te falen op een ontbrekende kolom.
+  // Until it exists the import carries on without storing the list, rather
+  // than failing on a missing column.
   if ("skipped_json" in fields) {
     const { skipped_json, ...zonder } = fields;
 
@@ -7642,11 +7640,11 @@ async function processCsvImportJob(job) {
 
   const affectedStockKeys = new Map();
 
-  // NEW — SKU's die StockX niet exact kent. Die krijgen geen regel;
-  // de consignor krijgt ze aan het eind te zien.
+  // NEW — SKUs that StockX does not know exactly. They get no row;
+  // the consignor sees them at the end.
   const skipped = Array.isArray(job.skipped_json) ? [...job.skipped_json] : [];
 
-  // NEW — een SKU wordt een keer opgezocht, niet een keer per maat.
+  // NEW — a SKU is looked up once, not once per size.
   const skuCache = new Map();
 
   function rememberStockKey(sku, size) {
@@ -7704,9 +7702,9 @@ async function processCsvImportJob(job) {
         current_row_number: row.row_number || i + 1
       });
 
-      // NEW — een SKU die StockX niet exact kent levert geen regel op.
-      // Hiervoor werd de SKU als productnaam weggeschreven en stond de
-      // voorraad er gewoon, met een naam die niemand kon plaatsen.
+      // NEW — a SKU that StockX does not know exactly produces no
+      // row. Before this the SKU was written as the product name and the
+      // stock simply sat there under a name nobody could place.
       try {
         if (job.import_type === "replace") {
           await setConsignmentInventoryRow({
@@ -7938,10 +7936,10 @@ app.get("/api/consignment/csv-import/latest", async (req, res) => {
 
     const { data, error } = await supabase
       .from(SUPABASE_CSV_IMPORT_JOBS_TABLE)
-      // GEWIJZIGD — skipped_json erbij. De verwerking vult dat sinds
-      // kort met de SKU's die geen exacte StockX-match hadden, maar
-      // zonder dit veld kon de voorkant er niet bij en zag de
-      // consignor niet dat er regels waren overgeslagen.
+      // CHANGED — skipped_json added. The worker fills it with the
+      // SKUs that had no exact StockX match, but without this field the
+      // front end could not read it and the consignor never saw that rows
+      // had been skipped.
       .select(
         "id, import_type, status, total_rows, processed_rows, " +
         "error_message, created_at, started_at, completed_at, " +
@@ -8425,22 +8423,22 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
 // stock level, and runs the normal refresh for each — which upserts the
 // Supabase row AND syncs it to Airtable, so there is no second
 // implementation of that logic here.
-// NEW — een SKU opzoeken voor andere diensten.
+// NEW — resolve a SKU for other services.
 //
-// De Shopify-productsync deed dit zelf, met searchRetailed() en dan
-// results[0] zonder enige controle. Retailed geeft op een zoekterm die hij
-// niet kan plaatsen een pagina losjes verwante schoenen terug, dus dat
-// eerste resultaat is regelmatig een ander model. Dat kwam als waarheid in
-// store_listings terecht, met match_risk_level "Low", want dat veld keek
-// alleen of er een SKU ingevuld was.
+// The Shopify product sync did this itself, calling searchRetailed() and
+// taking results[0] without any check. For a query it cannot place, Retailed
+// returns a page of loosely related shoes, so that first result is regularly
+// a different model. That landed in store_listings as fact, at
+// match_risk_level "Low", because that field only looked at whether a SKU
+// was filled in.
 //
-// Hier loopt het door dezelfde resolver als de consignment-intake:
-// identiteit uit StockX op een exacte match, foto uit Retailed maar alleen
-// als de slug klopt, en een SKU Master-record uitsluitend bij een match.
+// Here it goes through the same resolver as the consignment intake:
+// identity from StockX on an exact match, picture from Retailed but only
+// when the slug agrees, and a SKU Master record only on a match.
 //
-// Neemt een enkele sku of een lijst. De lijst is er voor de sync, die per
-// ronde duizenden producten langsloopt; per stuk aanroepen zou evenveel
-// http-verkeer opleveren als het bespaart.
+// Takes a single sku or a list. The list is for the sync, which walks
+// thousands of products per run; calling per product would cost as much
+// HTTP traffic as it saves.
 app.post("/api/internal/resolve-sku", async (req, res) => {
   try {
     const secret = asText(req.headers["x-kc-secret"]);
@@ -8467,8 +8465,8 @@ app.post("/api/internal/resolve-sku", async (req, res) => {
       return res.status(400).json({ error: "Missing sku or skus" });
     }
 
-    // Meer dan dit per aanroep loopt tegen de tijdslimiet van de proxy aan,
-    // en een halve uitkomst is lastiger op te vangen dan een nette 400.
+    // More than this per call runs into the proxy's time limit, and half an
+    // answer is harder to handle than a clean 400.
     if (gevraagd.length > 50) {
       return res.status(400).json({
         error: "Too many SKUs",
@@ -8496,9 +8494,9 @@ app.post("/api/internal/resolve-sku", async (req, res) => {
               reason: uitkomst.reason || "not_found"
             };
       } catch (err) {
-        // Een storing is niet hetzelfde als "bestaat niet". De aanroeper
-        // moet die twee uit elkaar kunnen houden, anders markeert hij bij
-        // de eerste hapering zijn halve catalogus als onbekend.
+        // An outage is not the same as "does not exist". The caller has to
+        // be able to tell them apart, otherwise the first hiccup marks half
+        // its catalog as unknown.
         console.error("resolve-sku failed:", { sku, error: err.message });
 
         results[sku] = { ok: false, reason: "lookup_failed" };
@@ -8770,7 +8768,7 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     });
 
     console.log(
-      `✅ Consignment auto-offer for ${orderRecordId}: €${best.sellerPrice} ${best.row.vat_type} ` +
+      `✅ Consignment auto-offer for ${orderRecordId}: ${moneySmartValue(best.sellerPrice)} ${best.row.vat_type} ` +
         `from ${best.row.seller_id} (inventory ${best.row.id}) → Seller Offer ${createdOffer.id}` +
         (holdFromStore ? " [held from store]" : "")
     );
@@ -8840,8 +8838,8 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         if (Number.isFinite(storeOfferForCeiling) && storeOfferForCeiling > ceiling) {
           console.log(
             `⏭️ Consignment auto-offer skipped for ${orderRecordId}: store price ` +
-              `€${storeOfferForCeiling} ${storeOfferVatType} exceeds the store's Selling Price ` +
-              `€${sellingPrice} (ceiling €${ceiling.toFixed(2)} on that scale).`
+              `${moneySmartValue(storeOfferForCeiling)} ${storeOfferVatType} exceeds the store's Selling Price ` +
+              `${moneySmartValue(sellingPrice)} (ceiling ${moneySmartValue(ceiling.toFixed(2))} on that scale).`
           );
 
           // The Seller Offer stays, held, so the consignor's price still
@@ -8978,8 +8976,8 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       counterRoundId = createdRound.id;
 
       console.log(
-        `✅ Consignment round 1 for ${orderRecordId}: store ceiling €${maximumBuyingPrice} → ` +
-          `payout €${counterPayout} ${best.row.vat_type} (Counter Offer ${createdRound.id})`
+        `✅ Consignment round 1 for ${orderRecordId}: store ceiling ${moneySmartValue(maximumBuyingPrice)} → ` +
+          `payout ${moneySmartValue(counterPayout)} ${best.row.vat_type} (Counter Offer ${createdRound.id})`
       );
 
       // The consignor gets the SAME embed a regular seller gets when the
@@ -9803,7 +9801,7 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
         Number.isFinite(crossSellerCeilingRaw)
       ) {
         return res.status(400).json({
-          error: `Another seller already offers a better price for this order — at most €${crossSellerCeilingRaw.toFixed(2)} (${sellerVatType}) to beat it — and the gap between that and the store's current position is too small for another step. Please accept or deny.`,
+          error: `Another seller already offers a better price for this order — at most ${moneySmartValue(crossSellerCeilingRaw.toFixed(2))} (${sellerVatType}) to beat it — and the gap between that and the store's current position is too small for another step. Please accept or deny.`,
           band: validation.band
         });
       }
@@ -10125,7 +10123,7 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
     const buyerHighestEver = await getBuyerHighestEverPosition("Seller Offer", linkedOrderIdForBand);
     if (Number.isFinite(buyerHighestEver) && proposedPrice < buyerHighestEver) {
       return res.status(400).json({
-        error: `Your counter can't be lower than €${buyerHighestEver.toFixed(2)}, which you've already offered on this order.`
+        error: `Your counter can't be lower than ${moneySmartValue(buyerHighestEver.toFixed(2))}, which you've already offered on this order.`
       });
     }
 
@@ -10722,7 +10720,7 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
 
       console.log(
         `✅ Negotiated consignment deal on ${linkedOrderId} finalised in the portal ` +
-          `(payout €${acceptedSellerPayout} ${sellerVatTypeForAccept}, store €${acceptedStorePrice}).`
+          `(payout ${moneySmartValue(acceptedSellerPayout)} ${sellerVatTypeForAccept}, store ${moneySmartValue(acceptedStorePrice)}).`
       );
 
       return res.json({
@@ -11972,7 +11970,7 @@ app.post("/api/consignment/offers/:id/counter", async (req, res) => {
     
     if (counterPrice <= currentOfferPrice) {
       return res.status(400).json({
-        error: `Counter must be higher than the current offer (€${currentOfferPrice.toFixed(2)}).`
+        error: `Counter must be higher than the current offer (${moneySmartValue(currentOfferPrice.toFixed(2))}).`
       });
     }
     
@@ -12069,7 +12067,7 @@ app.post("/api/consignment/offers/:id/counter", async (req, res) => {
       await disableConsignmentDiscordButtons(
         offer.discord_channel_id,
         offer.discord_message_id,
-        `🔁 Counter offer sent to store: €${counterPrice.toFixed(2)} (${offer.vat_type}).`
+        `🔁 Counter offer sent to store: ${moneySmartValue(counterPrice.toFixed(2))} (${offer.vat_type}).`
       ).catch(() => {});
     }
 
@@ -12186,7 +12184,7 @@ app.post("/api/consignment/offers/:id/store-counter", async (req, res) => {
           ? { ok: true, band: [1, Math.floor(consignorCounterInStoreTerms - MIN_COUNTER_STEP)] }
           : {
               ok: false,
-              reason: `Your counter must be lower than the consignor's offer (€${fmtEuroAmount(consignorCounterInStoreTerms)}) — maximum €${Math.floor(consignorCounterInStoreTerms - MIN_COUNTER_STEP)}.`,
+              reason: `Your counter must be lower than the consignor's offer (${moneySmartValue(consignorCounterInStoreTerms)}) — maximum ${moneySmartValue(Math.floor(consignorCounterInStoreTerms - MIN_COUNTER_STEP))}.`,
               band: [1, Math.floor(consignorCounterInStoreTerms - MIN_COUNTER_STEP)]
             });
     if (!validation.ok) {
@@ -12533,7 +12531,7 @@ app.post("/api/consignment/offers/:id/consignor-retry", async (req, res) => {
 
     if (Number.isFinite(deniedPrice) && retryPrice < deniedPrice + MIN_COUNTER_STEP) {
       return res.status(400).json({
-        error: `Your new counter must be at least €${MIN_COUNTER_STEP.toFixed(2)} higher than the denied €${deniedPrice.toFixed(2)}.`
+        error: `Your new counter must be at least ${moneySmartValue(MIN_COUNTER_STEP.toFixed(2))} higher than the denied ${moneySmartValue(deniedPrice.toFixed(2))}.`
       });
     }
 
@@ -13384,10 +13382,17 @@ const MIN_COUNTER_STEP = 2.5;
 // Shows 2 decimals only when the value actually has a fractional part,
 // so a store's VAT0-scale figure reads €181.82 (not €181.8181818…) but
 // a whole-euro figure still reads €185 (not €185.00).
+// CHANGED - returned "102.10" with a dot. Same rule as moneySmartValue but
+// without the euro sign, because this one is used inside sentences that
+// already carry it.
 function fmtEuroAmount(value) {
   const n = Number(value);
+
   if (!Number.isFinite(n)) return String(value);
-  return Number.isInteger(n) ? String(n) : n.toFixed(2);
+
+  const isWhole = Math.abs(n - Math.round(n)) < 0.005;
+
+  return isWhole ? String(Math.round(n)) : n.toFixed(2).replace(".", ",");
 }
 
 function validateNextCounterPrice(ownReferencePrice, counterpartPrice, proposed, options = {}) {
@@ -13434,8 +13439,8 @@ function validateNextCounterPrice(ownReferencePrice, counterpartPrice, proposed,
     // noise. State only the bound that's actually relevant to which
     // direction this mover is going.
     const reason = movingDown
-      ? `Your counter must be lower than your previous €${fmtEuroAmount(ownReferencePrice)} — maximum €${fmtEuroAmount(maxAllowed)}.`
-      : `Your counter must be higher than your previous €${fmtEuroAmount(ownReferencePrice)} — minimum €${fmtEuroAmount(minAllowed)}.`;
+      ? `Your counter must be lower than your previous ${moneySmartValue(ownReferencePrice)} — maximum ${moneySmartValue(maxAllowed)}.`
+      : `Your counter must be higher than your previous ${moneySmartValue(ownReferencePrice)} — minimum ${moneySmartValue(minAllowed)}.`;
     return {
       ok: false,
       reason,
@@ -13537,11 +13542,11 @@ function validateNextCounterPriceWithCrossSellerCeiling(ownReferencePrice, count
       // using the actual reference price when given (avoids rounding
       // artifacts from reconstructing it off the computed ceiling).
       const displayPrice = Number.isFinite(crossSellerReferencePrice) ? crossSellerReferencePrice : (crossSellerCeiling + MIN_COUNTER_STEP);
-      reason = `Your counter must be lower than the current lowest offer of €${fmtEuroAmount(displayPrice)} — maximum €${fmtEuroAmount(maxAllowed)}.`;
+      reason = `Your counter must be lower than the current lowest offer of ${moneySmartValue(displayPrice)} — maximum ${moneySmartValue(maxAllowed)}.`;
     } else {
       reason = movingDown
-        ? `Your counter must be lower than your previous €${fmtEuroAmount(ownReferencePrice)} — maximum €${fmtEuroAmount(maxAllowed)}.`
-        : `Your counter must be higher than your previous €${fmtEuroAmount(ownReferencePrice)} — minimum €${fmtEuroAmount(minAllowed)}.`;
+        ? `Your counter must be lower than your previous ${moneySmartValue(ownReferencePrice)} — maximum ${moneySmartValue(maxAllowed)}.`
+        : `Your counter must be higher than your previous ${moneySmartValue(ownReferencePrice)} — minimum ${moneySmartValue(minAllowed)}.`;
     }
     return { ok: false, reason, band: [minAllowed, maxAllowed] };
   }
@@ -13549,28 +13554,21 @@ function validateNextCounterPriceWithCrossSellerCeiling(ownReferencePrice, count
   return { ok: true, band: [minAllowed, maxAllowed] };
 }
 
+// CHANGED - this always showed two decimals, so a round amount read as
+// "80,00". Delegates to moneySmartValue now, which is the one rule: whole
+// numbers clean, decimals only when the number really has them. Kept as a
+// name so its 17 call sites did not have to be touched.
 function moneyValue(value) {
-  const n = numberValue(value);
-
-  if (!n) return "";
-
-  return new Intl.NumberFormat("nl-NL", {
-    style: "currency",
-    currency: "EUR"
-  }).format(n);
+  return moneySmartValue(value);
 }
 
+// CHANGED - this rounded DOWN. moneySmartValue's own comment already
+// flagged that: a VAT conversion landing on 102,10 became "102", a real
+// ten-cent difference from what was agreed. Rounding to steps of 2.50 is a
+// rule on the value, not on how it is shown, so the display no longer
+// rounds at all. Call sites that floor on purpose still do so themselves.
 function moneyWholeValue(value) {
-  const n = numberValue(value);
-
-  if (!n) return "";
-
-  return new Intl.NumberFormat("nl-NL", {
-    style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: 0,
-    minimumFractionDigits: 0
-  }).format(Math.floor(n));
+  return moneySmartValue(value);
 }
 
 // NEW — additive only: his preference — sellers always enter whole
@@ -13749,12 +13747,12 @@ async function sendCounterOfferDiscordDM({
 
   const lastOfferText =
     effectiveLastOffer !== undefined && effectiveLastOffer !== null && effectiveLastOffer !== ""
-      ? `€${Number(effectiveLastOffer).toFixed(2)} · ${sellerOriginalVatType || "—"}`
+      ? `${moneySmartValue(Number(effectiveLastOffer).toFixed(2))} · ${sellerOriginalVatType || "—"}`
       : null;
 
   const diffText =
     lastOfferText && Number.isFinite(Number(effectiveLastOffer)) && Number.isFinite(Number(payout))
-      ? ` (${Number(payout) - Number(effectiveLastOffer) >= 0 ? "+" : ""}€${(Number(payout) - Number(effectiveLastOffer)).toFixed(2)})`
+      ? ` (${Number(payout) - Number(effectiveLastOffer) >= 0 ? "+" : ""}${moneySmartValue((Number(payout) - Number(effectiveLastOffer)).toFixed(2))})`
       : "";
 
   // NEW — when there's no valid step left for either side, say so
@@ -13802,7 +13800,7 @@ async function sendCounterOfferDiscordDM({
           "",
           ...(lastOfferText ? [`**Your last offer**`, lastOfferText, ""] : []),
           `**Counter payout**`,
-          `€${Number(payout).toFixed(2)} · ${vatType || "—"}${diffText}`,
+          `${moneySmartValue(Number(payout).toFixed(2))} · ${vatType || "—"}${diffText}`,
           "",
           closingLine
         ].join("\n"),
@@ -13811,7 +13809,7 @@ async function sendCounterOfferDiscordDM({
     ],
     components: (() => {
       const isDenial = deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "";
-      const acceptBtn = { type: 2, style: 3, label: `Accept €${Number(payout)}`, custom_id: `counter_offer_accept:${counterOfferRecordId}` };
+      const acceptBtn = { type: 2, style: 3, label: `Accept ${moneySmartValue(Number(payout))}`, custom_id: `counter_offer_accept:${counterOfferRecordId}` };
       const counterBtn = { type: 2, style: 1, label: "Counter", custom_id: `counter_offer_counter:${counterOfferRecordId}` };
       const denyBtn = { type: 2, style: 4, label: "Deny", custom_id: `counter_offer_deny:${counterOfferRecordId}` };
       // FIXED — Counter is ALWAYS shown (even with no room left): the
@@ -13889,12 +13887,12 @@ async function sendMemberWtbCounterOfferDiscordDM({
 
   const lastOfferText =
     effectiveLastOffer !== undefined && effectiveLastOffer !== null && effectiveLastOffer !== ""
-      ? `€${Number(effectiveLastOffer).toFixed(2)} · ${sellerOriginalVatType || "—"}`
+      ? `${moneySmartValue(Number(effectiveLastOffer).toFixed(2))} · ${sellerOriginalVatType || "—"}`
       : null;
 
   const diffText =
     lastOfferText && Number.isFinite(Number(effectiveLastOffer)) && Number.isFinite(Number(payout))
-      ? ` (${Number(payout) - Number(effectiveLastOffer) >= 0 ? "+" : ""}€${(Number(payout) - Number(effectiveLastOffer)).toFixed(2)})`
+      ? ` (${Number(payout) - Number(effectiveLastOffer) >= 0 ? "+" : ""}${moneySmartValue((Number(payout) - Number(effectiveLastOffer)).toFixed(2))})`
       : "";
 
   const closingLine = noRoomToCounter
@@ -13934,7 +13932,7 @@ async function sendMemberWtbCounterOfferDiscordDM({
           "",
           ...(lastOfferText ? [`**Your last offer**`, lastOfferText, ""] : []),
           `**Counter payout**`,
-          `€${Number(payout).toFixed(2)} · ${vatType || "—"}${diffText}`,
+          `${moneySmartValue(Number(payout).toFixed(2))} · ${vatType || "—"}${diffText}`,
           "",
           closingLine
         ].join("\n"),
@@ -13943,7 +13941,7 @@ async function sendMemberWtbCounterOfferDiscordDM({
     ],
     components: (() => {
       const isDenial = deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "";
-      const acceptBtn = { type: 2, style: 3, label: `Accept €${Number(payout)}`, custom_id: `member_wtb_counter_accept:${counterOfferRecordId}` };
+      const acceptBtn = { type: 2, style: 3, label: `Accept ${moneySmartValue(Number(payout))}`, custom_id: `member_wtb_counter_accept:${counterOfferRecordId}` };
       const counterBtn = { type: 2, style: 1, label: isDenial ? "Retry" : "Counter", custom_id: `member_wtb_counter_counter:${counterOfferRecordId}` };
       const denyBtn = { type: 2, style: 4, label: "Deny", custom_id: `member_wtb_counter_deny:${counterOfferRecordId}` };
       // FIXED — Counter is ALWAYS shown (even with no room left): the
@@ -14017,7 +14015,7 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
     deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== "";
 
   const deniedNote = isDeny
-    ? [`❌ Your counter of €${Number(deniedAmount).toFixed(2)} was denied by the seller.`, ""]
+    ? [`❌ Your counter of ${moneySmartValue(Number(deniedAmount).toFixed(2))} was denied by the seller.`, ""]
     : [];
 
   const positionLabel = isDeny ? "**Seller's Standing Position**" : "**New Counter**";
@@ -14044,10 +14042,10 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
           middleLine,
           "",
           `**Your Previous Counter**`,
-          `€${Number(yourPreviousCounter).toFixed(2)}${vatLabel ? ` ${vatLabel}` : ""}`,
+          `${moneySmartValue(Number(yourPreviousCounter).toFixed(2))}${vatLabel ? ` ${vatLabel}` : ""}`,
           "",
           positionLabel,
-          `€${Number(newPrice).toFixed(2)}${vatLabel ? ` ${vatLabel}` : ""}`,
+          `${moneySmartValue(Number(newPrice).toFixed(2))}${vatLabel ? ` ${vatLabel}` : ""}`,
           "",
           denyClosingLine
         ].join("\n"),
@@ -14062,7 +14060,7 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
               {
                 type: 2,
                 style: 3,
-                label: `Accept €${Number(newPrice)}`,
+                label: `Accept ${moneySmartValue(Number(newPrice))}`,
                 custom_id: `member_wtb_buyer_counter_accept:${counterOfferRecordId}`
               },
               {
@@ -14077,7 +14075,7 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
               {
                 type: 2,
                 style: 3,
-                label: `Accept €${Number(newPrice)}`,
+                label: `Accept ${moneySmartValue(Number(newPrice))}`,
                 custom_id: `member_wtb_buyer_counter_accept:${counterOfferRecordId}`
               },
               {
@@ -14091,7 +14089,7 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
               {
                 type: 2,
                 style: 3,
-                label: `Accept €${Number(newPrice)}`,
+                label: `Accept ${moneySmartValue(Number(newPrice))}`,
                 custom_id: `member_wtb_buyer_counter_accept:${counterOfferRecordId}`
               },
               {
@@ -14154,7 +14152,7 @@ async function sendOfferDeniedDiscordDM({
 
   const amountText =
     deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== ""
-      ? `€${Number(deniedAmount).toFixed(2)}`
+      ? `${moneySmartValue(Number(deniedAmount).toFixed(2))}`
       : "—";
 
   const sentDeniedMsg = await dm.send({
@@ -14392,7 +14390,7 @@ async function validateAndSyncConsignorPriceAgainstLowestOffer({
   if (Number.isFinite(currentOfferToStore) && currentOfferToStore > 0 && computedStoreOfferPrice >= currentOfferToStore) {
     return {
       ok: false,
-      error: `Your counter isn't low enough — there's currently a better offer available to the store (€${currentOfferToStore.toFixed(2)}). You'll need to go lower than that.`
+      error: `Your counter isn't low enough — there's currently a better offer available to the store (${moneySmartValue(currentOfferToStore.toFixed(2))}). You'll need to go lower than that.`
     };
   }
 
@@ -14911,14 +14909,13 @@ async function lookupSkuMasterProduct(sku) {
   });
 
   if (!stockxProduct || !stockxProduct.is_exact_sku_match) {
-    // GEWIJZIGD — gaf hier de SKU terug als productnaam. Dat is de
-    // bron van elke regel met een SKU als naam: onherkenbaar van een
-    // echte naam, en niets probeerde het ooit opnieuw.
+    // CHANGED — this returned the SKU as the product name. That is
+    // the source of every row with a SKU for a name: indistinguishable from
+    // a real name, and nothing ever tried again.
     //
-    // De consignment-intake loopt inmiddels via
-    // resolveConsignmentProduct en komt hier niet meer langs. Voor
-    // wat er nog wel langskomt: een lege naam, zodat een aanroeper
-    // het verschil ziet tussen gevonden en niet gevonden.
+    // The consignment intake now goes through resolveConsignmentProduct and
+    // no longer passes here. For whatever still does: an empty name, so a
+    // caller can tell found from not found.
     return {
       product_name: "",
       brand: ""
@@ -16575,8 +16572,8 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
 
         console.log(
           `✅ Consignor accepted previous round ${acceptTargetId} on ${linkedOrderId} — ` +
-            `finalised in the portal (payout €${numberValue(f["Counter Payout"])} ${previousVatType}, ` +
-            `store €${previousStorePrice}).`
+            `finalised in the portal (payout ${moneySmartValue(numberValue(f["Counter Payout"]))} ${previousVatType}, ` +
+            `store ${moneySmartValue(previousStorePrice)}).`
         );
 
         return res.json({
@@ -16739,7 +16736,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
       if (!mwValidation.ok) {
         if (mwValidation.reason.startsWith("No room left") && Number.isFinite(mwCeilingRaw)) {
           return res.status(400).json({
-            error: `Another seller already offers a better price for this WTB — at most €${mwCeilingRaw.toFixed(2)} (${mwSellerVatType}) to beat it — and the gap is too small for another step. Please accept or deny.`,
+            error: `Another seller already offers a better price for this WTB — at most ${moneySmartValue(mwCeilingRaw.toFixed(2))} (${mwSellerVatType}) to beat it — and the gap is too small for another step. Please accept or deny.`,
             band: mwValidation.band
           });
         }
@@ -16856,7 +16853,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
       if (!validationFresh.ok) {
         if (validationFresh.reason.startsWith("No room left") && Number.isFinite(crossSellerCeilingRaw)) {
           return res.status(400).json({
-            error: `Another seller already offers a better price for this order — at most €${crossSellerCeilingRaw.toFixed(2)} (${sellerVatType}) to beat it — and the gap is too small for another step. Please accept or deny.`,
+            error: `Another seller already offers a better price for this order — at most ${moneySmartValue(crossSellerCeilingRaw.toFixed(2))} (${sellerVatType}) to beat it — and the gap is too small for another step. Please accept or deny.`,
             band: validationFresh.band
           });
         }
@@ -17021,7 +17018,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
     if (!validation.ok) {
       if (validation.reason.startsWith("No room left") && Number.isFinite(crossSellerCeilingRawPrior)) {
         return res.status(400).json({
-          error: `Another seller already offers a better price for this order — at most €${crossSellerCeilingRawPrior.toFixed(2)} (${sellerVatType}) to beat it — and the gap is too small for another step. Please accept or deny.`,
+          error: `Another seller already offers a better price for this order — at most ${moneySmartValue(crossSellerCeilingRawPrior.toFixed(2))} (${sellerVatType}) to beat it — and the gap is too small for another step. Please accept or deny.`,
           band: validation.band
         });
       }
@@ -18844,8 +18841,8 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-accept", async (req,
 
         console.log(
           `✅ Consignor accepted round ${counterOfferRecordId} on ${linkedOrderId} — ` +
-            `finalised in the portal (payout €${numberValue(f["Counter Payout"])} ${acceptedVatType}, ` +
-            `store €${acceptedStorePriceForConsignment}).`
+            `finalised in the portal (payout ${moneySmartValue(numberValue(f["Counter Payout"]))} ${acceptedVatType}, ` +
+            `store ${moneySmartValue(acceptedStorePriceForConsignment)}).`
         );
 
         return res.json({
@@ -25187,12 +25184,12 @@ app.post("/api/seller-offers/:offerId/edit-after-denial", async (req, res) => {
 
     if (crossBinds && offerAmount > crossMax) {
       return res.status(400).json({
-        error: `Another seller already offers a better price. To be the lowest you'd need at most €${crossMax} (${vatType}).`
+        error: `Another seller already offers a better price. To be the lowest you'd need at most ${moneySmartValue(crossMax)} (${vatType}).`
       });
     }
     if (Number.isFinite(ownMax) && offerAmount > ownMax) {
       return res.status(400).json({
-        error: `Your new offer must be a whole number at least €2.50 lower than your denied offer (€${previousDeniedAmount.toFixed(2)}). Maximum allowed: €${ownMax}.`
+        error: `Your new offer must be a whole number at least €2.50 lower than your denied offer (${moneySmartValue(previousDeniedAmount.toFixed(2))}). Maximum allowed: ${moneySmartValue(ownMax)}.`
       });
     }
 
@@ -25734,17 +25731,11 @@ app.get("/api/deals", async (req, res) => {
   }
 });
 
+// CHANGED - this rounded UP. Every call site feeds a *_display field or a
+// Discord line, so it was display-only rounding, and 102,10 came out as
+// "103". Same rule as everywhere else now.
 function buyingMoneyValue(value) {
-  const n = Number(value);
-
-  if (!Number.isFinite(n) || n <= 0) return "";
-
-  return new Intl.NumberFormat("nl-NL", {
-    style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: 0,
-    minimumFractionDigits: 0
-  }).format(Math.ceil(n));
+  return moneySmartValue(value);
 }
 
 function getBuyingProductKey(source) {
@@ -26565,7 +26556,7 @@ async function sendBuyingKcConfirmationRequest({ memberWtbRecordId, fields }) {
         `**SKU:** ${asText(fields["SKU"]) || "—"}`,
         `**Size:** ${asText(fields["Size"]) || "—"}`,
         `**Brand:** ${asText(fields["Brand"]) || "—"}`,
-        `**Buy Now Price:** €${maxPrice.toFixed(2)}`,
+        `**Buy Now Price:** ${moneySmartValue(maxPrice.toFixed(2))}`,
         "",
         "Confirm only if KC stock is still available."
       ].join("\n"),
@@ -26687,7 +26678,7 @@ async function sendBuyingKcOfferRequest({ memberWtbRecordId, fields }) {
     : "";
 
   const weReceiveLine = buyerPays
-    ? `**We receive:** €${buyerPays.toFixed(2)} (${buyerVatLabel})`
+    ? `**We receive:** ${moneySmartValue(buyerPays.toFixed(2))} (${buyerVatLabel})`
     : `**We receive:** — (no available KC unit found)`;
 
   const message = await channel.send({
@@ -26699,7 +26690,7 @@ async function sendBuyingKcOfferRequest({ memberWtbRecordId, fields }) {
         `**SKU:** ${asText(fields["SKU"]) || "—"}`,
         `**Size:** ${asText(fields["Size"]) || "—"}`,
         `**Brand:** ${asText(fields["Brand"]) || "—"}`,
-        `**Buyer Offer:** €${maxPrice.toFixed(2)}`,
+        `**Buyer Offer:** ${moneySmartValue(maxPrice.toFixed(2))}`,
         weReceiveLine,
         `**Inventory Filter:** ${asText(fields["Buying Inventory Filter"]) || "—"}`,
         "",
@@ -26717,7 +26708,7 @@ async function sendBuyingKcOfferRequest({ memberWtbRecordId, fields }) {
         {
           type: 2,
           style: 3,
-          label: `Accept €${Number(maxPrice)}`,
+          label: `Accept ${moneySmartValue(Number(maxPrice))}`,
           custom_id: `accept_member_wtb_kc_offer:${memberWtbRecordId}`
         },
         {
@@ -27197,7 +27188,7 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       'Type': 'Custom',
       'Source': 'Outsourced',
       'Verification Status': 'Verified',
-      'Payment Note': `€${purchasePrice.toFixed(2)}`,
+      'Payment Note': `${moneySmartValue(purchasePrice.toFixed(2))}`,
       'Payment Status': 'To Pay',
       'Availability Status': 'Sold',
       'Selling Price': finalBuyingPrice,
@@ -27332,7 +27323,7 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
         .filter((n) => Number.isFinite(n) && n > 0)
         .sort((a, b) => b - a)[0];
       if (Number.isFinite(buyerPos) && buyerPos > 0) {
-        buyerCurrentPositionLine = `**Your Current Position:** €${Math.round(buyerPos)}${offerVatLabel ? ` ${offerVatLabel}` : ""}`;
+        buyerCurrentPositionLine = `**Your Current Position:** ${moneySmartValue(Math.round(buyerPos))}${offerVatLabel ? ` ${offerVatLabel}` : ""}`;
       }
     } catch (_) {}
 
@@ -27344,7 +27335,7 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
         `SKU: ${asText(f["SKU"]) || "—"}`,
         `Size: ${asText(f["Size"]) || "—"}`,
         "",
-        `**Offer:** €${offerToBuyer.toFixed(2)}${offerVatLabel ? ` ${offerVatLabel}` : ""}`,
+        `**Offer:** ${moneySmartValue(offerToBuyer.toFixed(2))}${offerVatLabel ? ` ${offerVatLabel}` : ""}`,
         ...(buyerCurrentPositionLine ? [buyerCurrentPositionLine] : []),
         "",
         "Accept, Counter or Deny on this offer below."
@@ -27370,7 +27361,7 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
             {
               type: 2,
               style: 3,
-              label: `Accept €${Number(offerToBuyer)}`,
+              label: `Accept ${moneySmartValue(Number(offerToBuyer))}`,
               custom_id: `accept_member_wtb_buyer_offer:${memberWtbRecordId}:${currentSellerOfferId}`
             },
             {
@@ -27495,7 +27486,7 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
 
     if (!Number.isFinite(sellerAskInBuyerTerms) || buyerCounterPrice >= sellerAskInBuyerTerms) {
       return res.status(400).json({
-        error: `Your counter must be lower than the current offer (€${Number(sellerAskInBuyerTerms).toFixed(2)}).`
+        error: `Your counter must be lower than the current offer (${moneySmartValue(Number(sellerAskInBuyerTerms).toFixed(2))}).`
       });
     }
 
@@ -27531,7 +27522,7 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
 
       if (Number.isFinite(deniedPriceForThisSeller) && deniedPriceForThisSeller > 0 && buyerCounterPrice < minAllowedRetry) {
         return res.status(400).json({
-          error: `This seller already denied €${deniedPriceForThisSeller.toFixed(2)} — your retry must be at least €${minAllowedRetry.toFixed(2)}.`
+          error: `This seller already denied ${moneySmartValue(deniedPriceForThisSeller.toFixed(2))} — your retry must be at least ${moneySmartValue(minAllowedRetry.toFixed(2))}.`
         });
       }
     }
@@ -27569,7 +27560,7 @@ app.post("/api/member-wtb-counter-offers/create", async (req, res) => {
 
     if (Number.isFinite(buyerHighestEver) && buyerCounterPrice < buyerHighestEver) {
       return res.status(400).json({
-        error: `Your counter can't be lower than €${buyerHighestEver.toFixed(2)}, which you've already offered on this WTB.`
+        error: `Your counter can't be lower than ${moneySmartValue(buyerHighestEver.toFixed(2))}, which you've already offered on this WTB.`
       });
     }
 
@@ -28007,7 +27998,7 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
         Number.isFinite(crossSellerCeilingRaw)
       ) {
         return res.status(400).json({
-          error: `Another seller already offers a better price for this WTB — at most €${crossSellerCeilingRaw.toFixed(2)} (${sellerVatType}) to beat it — and the gap between that and the buyer's current position is too small for another step. Please accept or deny.`,
+          error: `Another seller already offers a better price for this WTB — at most ${moneySmartValue(crossSellerCeilingRaw.toFixed(2))} (${sellerVatType}) to beat it — and the gap between that and the buyer's current position is too small for another step. Please accept or deny.`,
           band: validation.band
         });
       }
@@ -28208,7 +28199,7 @@ app.post("/api/member-wtb-counter-offers/:id/buyer-counter", async (req, res) =>
     const buyerHighestEver = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
     if (Number.isFinite(buyerHighestEver) && proposedPrice < buyerHighestEver) {
       return res.status(400).json({
-        error: `Your counter can't be lower than €${buyerHighestEver.toFixed(2)}, which you've already offered on this WTB.`
+        error: `Your counter can't be lower than ${moneySmartValue(buyerHighestEver.toFixed(2))}, which you've already offered on this WTB.`
       });
     }
 
@@ -28384,7 +28375,7 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
 
       if (!Number.isFinite(sellerAskInBuyerTerms) || proposedPrice >= sellerAskInBuyerTerms) {
         return res.status(400).json({
-          error: `Your counter must be lower than the current offer (€${Number(sellerAskInBuyerTerms).toFixed(2)}).`
+          error: `Your counter must be lower than the current offer (${moneySmartValue(Number(sellerAskInBuyerTerms).toFixed(2))}).`
         });
       }
 
@@ -28397,7 +28388,7 @@ app.post("/api/member-wtb-counter-offers/:id/edit", async (req, res) => {
       if (Number.isFinite(ownCurrentPositionForFirstRound) && ownCurrentPositionForFirstRound > 0
           && proposedPrice < ownCurrentPositionForFirstRound + MIN_COUNTER_STEP) {
         return res.status(400).json({
-          error: `Your edited counter must be higher than your current €${Math.round(ownCurrentPositionForFirstRound)} — Minimum €${Math.round(ownCurrentPositionForFirstRound + MIN_COUNTER_STEP)}`
+          error: `Your edited counter must be higher than your current ${moneySmartValue(Math.round(ownCurrentPositionForFirstRound))} — Minimum ${moneySmartValue(Math.round(ownCurrentPositionForFirstRound + MIN_COUNTER_STEP))}`
         });
       }
 
