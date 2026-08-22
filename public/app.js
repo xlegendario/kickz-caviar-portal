@@ -1,42 +1,44 @@
 /* ==================================================================
-   NEW — vensters in plaats van de grijze vakjes van de browser.
+   NEW — in-app dialogs, replacing the browser's own grey boxes.
    ==================================================================
 
-   Verving 78 alert(), 18 confirm() en 12 prompt(). Die zien er per
-   telefoon en per browser anders uit, negeren de huisstijl volledig, en
-   bij een prompt krijg je een gewoon tekstveld voor iets waar alleen een
-   bedrag in hoort — dus geen numeriek toetsenbord en geen controle.
+   Replaced 78 alert(), 28 confirm() and 12 prompt() calls. Those look
+   different on every phone and browser, ignore the portal's styling
+   entirely, and for a prompt you get a plain text field for something
+   that can only ever be an amount — so no numeric keyboard and no
+   validation.
 
-   Drie functies, allemaal een belofte, zodat een aanroep leest als de
-   oude:
+   Three functions, all returning a promise, so a call site reads almost
+   like the one it replaced:
 
      alert(x)              ->  showAlert(x)
      if (!confirm(x))      ->  if (!(await showConfirm(x)))
      const y = prompt(x)   ->  const y = await showPrompt(x)
 
-   Eigen klassen in plaats van de vensterklassen van het portal: die
-   verschillen per portal en dan zou hetzelfde venster er op twee plekken
-   anders uitzien.
+   Own class names rather than the portal's existing modal classes: those
+   differ between the two portals, and then the same dialog would behave
+   differently depending on where you opened it. Colours do come from the
+   portal, through a handful of CSS variables.
    ================================================================== */
 
 const kcDialogState = {
   open: 0,
-  vorigeFocus: null
+  previousFocus: null
 };
 
-function kcDialogVergrendel(aan) {
-  kcDialogState.open += aan ? 1 : -1;
+function kcDialogLockScroll(on) {
+  kcDialogState.open += on ? 1 : -1;
 
   if (kcDialogState.open < 0) kcDialogState.open = 0;
 
-  const bezet = kcDialogState.open > 0;
+  const busy = kcDialogState.open > 0;
 
-  document.documentElement.classList.toggle("kc-dialog-open", bezet);
-  document.body.classList.toggle("kc-dialog-open", bezet);
+  document.documentElement.classList.toggle("kc-dialog-open", busy);
+  document.body.classList.toggle("kc-dialog-open", busy);
 }
 
-function kcDialogEscape(v) {
-  return String(v == null ? "" : v)
+function kcDialogEscapeHtml(value) {
+  return String(value == null ? "" : value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -45,190 +47,187 @@ function kcDialogEscape(v) {
 }
 
 /**
- * De kern. De andere drie functies zijn er een laagje omheen.
+ * Default validation for the amount dialogs.
  *
- * soort:  "alert" | "confirm" | "prompt"
- * opties: { title, confirmLabel, cancelLabel, danger, money,
- *           placeholder, value, validate }
+ * The old prompt() accepted anything: an empty line, "abc", a negative
+ * number. That went to the server and came back as an error, or worse, as
+ * an order of zero euros. Caught here instead, next to the field, without
+ * having to start over.
+ *
+ * Comma and dot both work: on a Dutch keyboard you type a comma, and that
+ * should simply be accepted.
  */
-function kcDialog(soort, tekst, opties) {
-  const o = opties || {};
+function kcMoneyCheck(value) {
+  const text = String(value || "").replace(/\s/g, "").replace(",", ".");
 
-  return new Promise((klaar) => {
-    const laag = document.createElement("div");
-    laag.className = "kc-dialog";
-    laag.setAttribute("role", "dialog");
-    laag.setAttribute("aria-modal", "true");
+  if (!text) return "Please enter an amount.";
 
-    const heeftInvoer = soort === "prompt";
-    const heeftAnnuleer = soort !== "alert";
+  const amount = Number(text);
 
-    const titel = o.title || (
-      soort === "confirm" ? "Are you sure?" :
-      soort === "prompt" ? "" : ""
-    );
+  if (!Number.isFinite(amount)) return "That is not a valid amount.";
+  if (amount <= 0) return "The amount must be higher than 0.";
 
-    const bevestigTekst = o.confirmLabel || (
-      soort === "alert" ? "OK" :
-      soort === "confirm" ? "Confirm" : "Confirm"
-    );
+  return "";
+}
 
-    laag.innerHTML =
+/**
+ * The core. The three exported functions are a thin layer around it.
+ *
+ * kind:    "alert" | "confirm" | "prompt"
+ * options: { title, confirmLabel, cancelLabel, danger, money,
+ *            placeholder, value, validate }
+ */
+function kcDialog(kind, message, options) {
+  const opts = options || {};
+
+  return new Promise((done) => {
+    const layer = document.createElement("div");
+    layer.className = "kc-dialog";
+    layer.setAttribute("role", "dialog");
+    layer.setAttribute("aria-modal", "true");
+
+    const hasInput = kind === "prompt";
+    const hasCancel = kind !== "alert";
+
+    const title = opts.title || (kind === "confirm" ? "Are you sure?" : "");
+    const confirmLabel = opts.confirmLabel || (kind === "alert" ? "OK" : "Confirm");
+
+    layer.innerHTML =
       '<div class="kc-dialog-backdrop" data-kc-cancel></div>' +
       '<div class="kc-dialog-card">' +
-        (titel ? '<h3 class="kc-dialog-title">' + kcDialogEscape(titel) + "</h3>" : "") +
-        '<p class="kc-dialog-text">' + kcDialogEscape(tekst) + "</p>" +
-        (heeftInvoer
-          ? '<label class="kc-dialog-field' + (o.money ? " money" : "") + '">' +
-              (o.money ? '<span class="kc-dialog-prefix">&euro;</span>' : "") +
+        (title ? '<h3 class="kc-dialog-title">' + kcDialogEscapeHtml(title) + "</h3>" : "") +
+        '<p class="kc-dialog-text">' + kcDialogEscapeHtml(message) + "</p>" +
+        (hasInput
+          ? '<label class="kc-dialog-field' + (opts.money ? " money" : "") + '">' +
+              (opts.money ? '<span class="kc-dialog-prefix">&euro;</span>' : "") +
               '<input class="kc-dialog-input" type="text"' +
-              (o.money ? ' inputmode="decimal"' : "") +
-              ' placeholder="' + kcDialogEscape(o.placeholder || "") + '"' +
-              ' value="' + kcDialogEscape(o.value || "") + '" />' +
+              (opts.money ? ' inputmode="decimal"' : "") +
+              ' placeholder="' + kcDialogEscapeHtml(opts.placeholder || "") + '"' +
+              ' value="' + kcDialogEscapeHtml(opts.value || "") + '" />' +
             "</label>" +
             '<p class="kc-dialog-error" hidden></p>'
           : "") +
         '<div class="kc-dialog-actions">' +
-          (heeftAnnuleer
+          (hasCancel
             ? '<button type="button" class="kc-dialog-btn cancel" data-kc-cancel>' +
-              kcDialogEscape(o.cancelLabel || "Cancel") + "</button>"
+              kcDialogEscapeHtml(opts.cancelLabel || "Cancel") + "</button>"
             : "") +
           '<button type="button" class="kc-dialog-btn confirm' +
-          (o.danger ? " danger" : "") + '">' + kcDialogEscape(bevestigTekst) + "</button>" +
+          (opts.danger ? " danger" : "") + '">' + kcDialogEscapeHtml(confirmLabel) + "</button>" +
         "</div>" +
       "</div>";
 
-    document.body.appendChild(laag);
-    kcDialogVergrendel(true);
+    document.body.appendChild(layer);
+    kcDialogLockScroll(true);
 
-    // Zodat de focus na het sluiten terugkeert naar de knop waar je vandaan
-    // kwam, in plaats van naar de bovenkant van de pagina.
+    // So focus returns to the button you came from after closing, instead
+    // of jumping to the top of the page.
     if (kcDialogState.open === 1) {
-      kcDialogState.vorigeFocus = document.activeElement;
+      kcDialogState.previousFocus = document.activeElement;
     }
 
-    const invoer = laag.querySelector(".kc-dialog-input");
-    const fout = laag.querySelector(".kc-dialog-error");
-    const bevestigKnop = laag.querySelector(".kc-dialog-btn.confirm");
+    const input = layer.querySelector(".kc-dialog-input");
+    const errorEl = layer.querySelector(".kc-dialog-error");
+    const confirmButton = layer.querySelector(".kc-dialog-btn.confirm");
 
-    function sluit(waarde) {
-      document.removeEventListener("keydown", opToets, true);
-      laag.remove();
-      kcDialogVergrendel(false);
+    function close(result) {
+      document.removeEventListener("keydown", onKeyDown, true);
+      layer.remove();
+      kcDialogLockScroll(false);
 
-      if (kcDialogState.open === 0 && kcDialogState.vorigeFocus) {
-        try { kcDialogState.vorigeFocus.focus(); } catch (e) { /* weggehaald */ }
-        kcDialogState.vorigeFocus = null;
+      if (kcDialogState.open === 0 && kcDialogState.previousFocus) {
+        try {
+          kcDialogState.previousFocus.focus();
+        } catch (err) {
+          /* the element is gone; nothing to focus */
+        }
+
+        kcDialogState.previousFocus = null;
       }
 
-      klaar(waarde);
+      done(result);
     }
 
-    function annuleer() {
-      sluit(soort === "prompt" ? null : soort === "confirm" ? false : undefined);
+    function cancel() {
+      close(kind === "prompt" ? null : kind === "confirm" ? false : undefined);
     }
 
-    function bevestig() {
-      if (!heeftInvoer) {
-        sluit(soort === "confirm" ? true : undefined);
+    function confirm() {
+      if (!hasInput) {
+        close(kind === "confirm" ? true : undefined);
         return;
       }
 
-      const waarde = invoer.value.trim();
+      const value = input.value.trim();
 
-      // De aanroeper mag zelf bepalen wat geldig is; zonder controle laten
-      // we alles door en blijft het gedrag gelijk aan het oude prompt().
-      if (typeof o.validate === "function") {
-        const melding = o.validate(waarde);
+      // The caller decides what counts as valid; without a check anything
+      // goes through and the behaviour matches the old prompt().
+      if (typeof opts.validate === "function") {
+        const problem = opts.validate(value);
 
-        if (melding) {
-          fout.textContent = melding;
-          fout.hidden = false;
-          invoer.focus();
-          invoer.select();
+        if (problem) {
+          errorEl.textContent = problem;
+          errorEl.hidden = false;
+          input.focus();
+          input.select();
           return;
         }
       }
 
-      sluit(waarde);
+      close(value);
     }
 
-    laag.querySelectorAll("[data-kc-cancel]").forEach((el) => {
-      el.addEventListener("click", annuleer);
+    layer.querySelectorAll("[data-kc-cancel]").forEach((el) => {
+      el.addEventListener("click", cancel);
     });
 
-    bevestigKnop.addEventListener("click", bevestig);
+    confirmButton.addEventListener("click", confirm);
 
-    function opToets(gebeurtenis) {
-      // Alleen het bovenste venster reageert, anders sluiten er twee
-      // tegelijk als er eentje bovenop een andere staat.
-      if (laag !== document.querySelector(".kc-dialog:last-of-type")) return;
+    function onKeyDown(event) {
+      // Only the topmost dialog reacts, otherwise two close at once when
+      // one is opened on top of another.
+      if (layer !== document.querySelector(".kc-dialog:last-of-type")) return;
 
-      if (gebeurtenis.key === "Escape") {
-        gebeurtenis.preventDefault();
-        gebeurtenis.stopPropagation();
-        annuleer();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        cancel();
         return;
       }
 
-      if (gebeurtenis.key === "Enter") {
-        // In een tekstveld met meerdere regels hoort Enter een regel te
-        // maken, niet te bevestigen.
-        if (gebeurtenis.target && gebeurtenis.target.tagName === "TEXTAREA") return;
+      if (event.key === "Enter") {
+        // In a multi-line field Enter should add a line, not submit.
+        if (event.target && event.target.tagName === "TEXTAREA") return;
 
-        gebeurtenis.preventDefault();
-        bevestig();
+        event.preventDefault();
+        confirm();
       }
     }
 
-    document.addEventListener("keydown", opToets, true);
+    document.addEventListener("keydown", onKeyDown, true);
 
-    // Een frame wachten zodat de invoer op mobiel het toetsenbord opent.
+    // One frame later, so the input opens the keyboard on mobile.
     requestAnimationFrame(() => {
-      if (invoer) {
-        invoer.focus();
-        invoer.select();
+      if (input) {
+        input.focus();
+        input.select();
       } else {
-        bevestigKnop.focus();
+        confirmButton.focus();
       }
     });
   });
 }
 
-/**
- * Standaardcontrole voor de bedragvensters.
- *
- * Het oude prompt() nam alles aan: een lege regel, "abc", een negatief
- * getal. Dat ging dan naar de server en kwam terug als een foutmelding, of
- * erger, als een order van nul euro. Hier wordt het meteen tegengehouden,
- * naast het veld, zonder dat je opnieuw hoeft te beginnen.
- *
- * Komma en punt allebei goed: op een Nederlands toetsenbord typ je een
- * komma, en dat hoort gewoon te werken.
- */
-function kcMoneyCheck(waarde) {
-  const tekst = String(waarde || "").replace(/\s/g, "").replace(",", ".");
-
-  if (!tekst) return "Please enter an amount.";
-
-  const getal = Number(tekst);
-
-  if (!Number.isFinite(getal)) return "That is not a valid amount.";
-  if (getal <= 0) return "The amount must be higher than 0.";
-
-  return "";
+function showAlert(message, options) {
+  return kcDialog("alert", message, options);
 }
 
-function showAlert(tekst, opties) {
-  return kcDialog("alert", tekst, opties);
+function showConfirm(message, options) {
+  return kcDialog("confirm", message, options);
 }
 
-function showConfirm(tekst, opties) {
-  return kcDialog("confirm", tekst, opties);
-}
-
-function showPrompt(tekst, opties) {
-  return kcDialog("prompt", tekst, opties);
+function showPrompt(message, options) {
+  return kcDialog("prompt", message, options);
 }
 
 const dealsGrid = document.getElementById("dealsGrid");
@@ -1868,52 +1867,52 @@ function showSuccessToast(message) {
   }, 2600);
 }
 
-// NEW — additief: vensters gedroegen zich niet. De achtergrond schoof mee
-// tijdens het scrollen en Escape sloot niets. Beide horen bij het venster
-// zelf, niet bij de plek die hem opent, dus staat het hier op één plek voor
-// alle vensters van dit portal.
+// NEW — additive: dialogs did not behave. The page behind them scrolled
+// along, and Escape closed nothing. Both belong to the dialog itself rather
+// than to whatever opens it, so this sits in one place for every dialog in
+// this portal.
 (function () {
   const VENSTERS = ".modal-backdrop";
   const SLUITKNOPPEN = ".modal-close";
 
-  function openVensters() {
+  function openDialogs() {
     return Array.from(document.querySelectorAll(VENSTERS))
       .filter((v) => getComputedStyle(v).display !== "none" && !v.classList.contains("hidden"));
   }
 
-  function bijwerken() {
-    const open = openVensters().length > 0;
-    document.documentElement.classList.toggle("venster-open", open);
-    document.body.classList.toggle("venster-open", open);
+  function syncOpenState() {
+    const open = openDialogs().length > 0;
+    document.documentElement.classList.toggle("modal-open", open);
+    document.body.classList.toggle("modal-open", open);
   }
 
-  // Alleen de vensters zelf in de gaten houden, niet de hele pagina: de
-  // tabellen wisselen voortdurend van klasse en dat hoeft hier niets te doen.
-  const waarnemer = new MutationObserver(bijwerken);
+  // Watch only the dialogs, not the whole page: the tables change classes
+  // constantly and none of that needs to trigger anything here.
+  const observer = new MutationObserver(syncOpenState);
   document.querySelectorAll(VENSTERS).forEach((v) => {
-    waarnemer.observe(v, { attributes: true, attributeFilter: ["class", "style"] });
+    observer.observe(v, { attributes: true, attributeFilter: ["class", "style"] });
   });
 
-  document.addEventListener("keydown", (gebeurtenis) => {
-    if (gebeurtenis.key !== "Escape") return;
+  document.addEventListener("keydown", (evt) => {
+    if (evt.key !== "Escape") return;
 
-    const open = openVensters();
+    const open = openDialogs();
     if (!open.length) return;
 
-    // Het bovenste venster sluiten via zijn eigen sluitknop, zodat de
-    // opruimcode die daaraan hangt gewoon loopt.
-    const bovenste = open[open.length - 1];
-    const knop = bovenste.querySelector(SLUITKNOPPEN);
+    // Close the topmost dialog through its own close button, so whatever
+    // cleanup is attached to it still runs.
+    const topDialog = open[open.length - 1];
+    const btnEl = topDialog.querySelector(SLUITKNOPPEN);
 
-    if (knop) {
-      knop.click();
+    if (btnEl) {
+      btnEl.click();
     } else {
-      bovenste.classList.add("hidden");
-      bovenste.style.display = "none";
+      topDialog.classList.add("hidden");
+      topDialog.style.display = "none";
     }
 
-    bijwerken();
+    syncOpenState();
   });
 
-  bijwerken();
+  syncOpenState();
 })();
