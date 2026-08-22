@@ -697,6 +697,21 @@ dealsGrid.addEventListener("click", (event) => {
     loadBuyingProducts({ force: true });
     return;
   }
+  // NEW - the Selling card's buttons. They used to carry an inline
+  // onclick; both cards render into this same grid, so one listener covers
+  // them.
+  const dealButton = event.target.closest("[data-deal-action]");
+
+  if (dealButton) {
+    const dealId = dealButton.dataset.dealId;
+    if (!dealId) return;
+
+    if (dealButton.dataset.dealAction === "claim") openClaimModal(dealId);
+    else openOfferFlow(dealId);
+
+    return;
+  }
+
   const button = event.target.closest(".buying-view-sizes-btn");
   if (!button) return;
   openBuyingProductModal(button.dataset.productKey);
@@ -1131,13 +1146,13 @@ function renderDealCard(deal) {
         <div class="payout-box">
           <span class="payout-label">Current</span>
           <span class="payout-value">
-            ${priceView === "vat0" ? deal.current_payout_vat0 || "-" : deal.current_payout_margin || "-"}
+            ${escapeHtml(priceView === "vat0" ? deal.current_payout_vat0 || "-" : deal.current_payout_margin || "-")}
           </span>
         </div>
         <div class="payout-box">
           <span class="payout-label">Max</span>
           <span class="payout-value">
-            ${priceView === "vat0" ? deal.max_payout_vat0 || "-" : deal.max_payout_margin || "-"}
+            ${escapeHtml(priceView === "vat0" ? deal.max_payout_vat0 || "-" : deal.max_payout_margin || "-")}
           </span>
         </div>
       </div>
@@ -1147,7 +1162,7 @@ function renderDealCard(deal) {
         <div class="payout-box">
           <span class="payout-label">Current Offer</span>
           <span class="payout-value">
-            ${priceView === "vat0" ? deal.current_offer_vat0 || "No offer yet" : deal.current_offer_margin || "No offer yet"}
+            ${escapeHtml(priceView === "vat0" ? deal.current_offer_vat0 || "No offer yet" : deal.current_offer_margin || "No offer yet")}
           </span>
         </div>
       </div>
@@ -1159,7 +1174,7 @@ function renderDealCard(deal) {
           deal.image_url
             ? `
               <img
-                src="${deal.image_url}"
+                src="${escapeHtml(deal.image_url)}"
                 class="deal-image"
               />
             `
@@ -1176,21 +1191,30 @@ function renderDealCard(deal) {
             ${isQuick ? "Quick Deal" : "Want To Buy"}
           </span>
           <span class="deal-time">
-            ${isQuick ? deal.time_to_max : "Offer Eligible"}
+            <!-- FIXED (A5) - no fallback here, so a missing time_to_max put
+                 the literal word "undefined" on the card. The Buying card
+                 right next to it guards every field with || "-". -->
+            ${isQuick ? escapeHtml(deal.time_to_max || "-") : "Offer Eligible"}
           </span>
         </div>
         <h3 class="deal-title">
-          ${deal.product || "-"}
+          ${escapeHtml(deal.product || "-")}
         </h3>
         <div class="deal-meta">
-          ${deal.sku || "-"} • ${deal.size || "-"}
+          ${escapeHtml(deal.sku || "-")} • ${escapeHtml(deal.size || "-")}
         </div>
         ${payoutHtml}
+        <!-- CHANGED (C1) - the id went straight into an inline onclick, so
+             an apostrophe in it broke out of the attribute and took the
+             handler with it. The Buying card in this same file already uses
+             a data attribute plus one delegated listener; this now does the
+             same. -->
         <button
           class="deal-btn ${!isQuick ? "offer-btn" : ""} ${isClaimProcessing ? "disabled-btn" : ""}"
           type="button"
           ${isClaimProcessing ? "disabled" : ""}
-          onclick="${isClaimProcessing ? "" : isQuick ? `openClaimModal('${deal.id}')` : `openOfferFlow('${deal.id}')`}"
+          data-deal-id="${escapeHtml(deal.id || "")}"
+          data-deal-action="${isQuick ? "claim" : "offer"}"
         >
           ${isClaimProcessing ? "Claim in Progress..." : isQuick ? "Claim Deal" : "Make Offer"}
         </button>
