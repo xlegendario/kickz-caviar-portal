@@ -1273,14 +1273,15 @@ body.modal-open {
   height: 100%;
 }
 
+/* CHANGED - this was what set the width of the whole sidebar. */
 .dashboard-brand-logo {
-  width: 178px;
+  width: 146px;
   height: auto;
   display: block;
 }
 
 .dashboard-brand {
-  padding-bottom: 30px;
+  padding: 0 4px 18px;
 }
 
 @media (max-width: 620px) {
