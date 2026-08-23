@@ -25399,6 +25399,11 @@ const SELLER_WELCOME_DM =
   String(process.env.SELLER_WELCOME_DM ?? "true").toLowerCase() === "true";
 const DISCORD_INVITE_URL = process.env.DISCORD_INVITE_URL || "";
 
+// De knop onder de Seller ID-DM. Zet hier dezelfde verkorte link in die de
+// hub-berichten van de deal-bot gebruiken; leeg laten kan ook, dan wijst hij
+// naar de homepage.
+const WTBS_WEBSITE_URL = process.env.WTBS_WEBSITE_URL || "";
+
 function signupUrl() {
   return portalUrl("/signup");
 }
@@ -26247,11 +26252,19 @@ app.get("/auth/discord/callback", async (req, res) => {
     // dit vlak na het aanmaken van het record; in de portal bestaat het record
     // al vóór de koppeling, dus we wachten tot hier — anders krijgt Make een
     // lege discordId en discordTag.
+    // Succes logde niets, dus bij een uitblijvende DM was niet te zien of de
+    // stap was overgeslagen of stilletjes mislukt. Nu allebei zichtbaar.
     if (claim.fresh) {
+      console.log(`Verse registratie ${claim.rid}: agreement-webhook en Seller ID-DM volgen`);
+
       const freshRecord = await airtable(SELLERS_TABLE).find(claim.rid);
 
       await sendAgreementWebhook({ sellerRecord: freshRecord, discordUser });
       await sendSellerIdDm({ sellerRecord: freshRecord, discordUser });
+    } else {
+      console.log(
+        `Koppeling ${claim.rid} zonder new=1 — geen agreement-webhook en geen Seller ID-DM`
+      );
     }
 
     const back = safeReturnPath(claim.rt) || "/dashboard";
@@ -26289,6 +26302,8 @@ async function sendSellerIdDm({ sellerRecord, discordUser }) {
 
     // Een knop in plaats van een URL in de tekst: gemaskeerde links renderen
     // niet in een gewoon DM-bericht, maar componenten wel.
+    console.log(`Seller ID-DM versturen naar ${discordUser.id}`);
+
     await user.send({
       embeds: [
         {
@@ -26312,6 +26327,7 @@ async function sendSellerIdDm({ sellerRecord, discordUser }) {
         }
       ]
     });
+    console.log(`Seller ID-DM verstuurd naar ${discordUser.id}`);
   } catch (err) {
     // Iemand met DM's uit mag de registratie niet laten stranden; het Seller ID
     // staat ook gewoon op zijn dashboard.
