@@ -284,11 +284,28 @@ let buyingInventoryType = localStorage.getItem("kc_buying_inventory_type") || "a
 if (!["all", "b2b", "private"].includes(buyingInventoryType)) {
   buyingInventoryType = "all";
 }
-let currentType = localStorage.getItem("kc_market_type") || "quick";
+// Deep-link naar een tab: /?tab=wtb of /?tab=quick. Zonder dit opent de site
+// altijd op wat er in localStorage staat, en kon je vanuit Discord dus niet
+// rechtstreeks naar de WTB's linken.
+const kcTabParam = new URLSearchParams(window.location.search).get("tab");
+
+let currentType =
+  kcTabParam === "wtb" || kcTabParam === "quick"
+    ? kcTabParam
+    : localStorage.getItem("kc_market_type") || "quick";
+
 let priceView = localStorage.getItem("kc_price_view") || "margin";
 let layoutView = localStorage.getItem("kc_layout_view") || "cards";
 if (!["quick", "wtb"].includes(currentType)) {
   currentType = "quick";
+}
+
+// Een deep-link naar de WTB's moet ook de Selling-sectie openen; anders sta je
+// in Buying en zie je de tab niet eens.
+if (kcTabParam === "wtb" || kcTabParam === "quick") {
+  currentMainMode = "selling";
+  localStorage.setItem("kc_main_mode", "selling");
+  localStorage.setItem("kc_market_type", currentType);
 }
 if (!["margin", "vat0"].includes(priceView)) {
   priceView = "margin";

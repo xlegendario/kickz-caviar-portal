@@ -44,7 +44,7 @@
         <div id="panelSignedOut" class="offer-panel hidden">
           <p>Create your seller profile to place an offer on this order. It takes one form.</p>
           <a class="offer-action" id="signupLink" href="/signup">Create profile &amp; offer</a>
-          <button type="button" class="offer-secondary" id="showLoginBtn">I already have a profile</button>
+          <button type="button" class="offer-secondary" id="showLoginBtn">Log in</button>
 
           <form id="loginForm" class="dashboard-login-form offer-login hidden">
             <label>
@@ -89,7 +89,11 @@
           <div class="offer-done-icon">&check;</div>
           <h3 class="offer-done-title">Offer placed</h3>
           <p id="doneMessage"></p>
-          <a class="offer-action" href="/dashboard">Manage my offers</a>
+
+          <!-- Goud gaat naar de volgende deal, niet naar administratie: nog een
+               offer is meer waard dan het beheren van deze. -->
+          <a class="offer-action" href="/?tab=wtb">Browse WTBs</a>
+          <a class="offer-secondary" href="/dashboard">Manage my offers</a>
         </div>
       </div>
     </div>

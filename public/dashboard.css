@@ -5025,3 +5025,12 @@ body.kc-dialog-open {
   font-weight: 900;
   letter-spacing: -0.4px;
 }
+
+/* .offer-secondary was alleen als <button> gestyled; als link had hij geen
+   uitlijning en wel een onderstreping. */
+a.offer-secondary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
