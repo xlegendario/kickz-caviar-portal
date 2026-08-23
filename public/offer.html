@@ -87,8 +87,9 @@
 
         <div id="panelDone" class="offer-panel hidden">
           <div class="offer-done-icon">&check;</div>
+          <h3 class="offer-done-title">Offer placed</h3>
           <p id="doneMessage"></p>
-          <a class="offer-action" href="/dashboard">Go to your dashboard</a>
+          <a class="offer-action" href="/dashboard">Manage my offers</a>
         </div>
       </div>
     </div>
@@ -356,9 +357,14 @@
           return;
         }
 
-        el("doneMessage").textContent =
-          "Your offer of EUR " + amount + " (" + selectedVatType + ") has been placed. " +
-          "We will let you know in Discord as soon as there is news.";
+        // Wijst naar wat ze nu kunnen doen in plaats van naar wachten. Het
+        // dashboard laat een open offer aanpassen of intrekken, dus dat is de
+        // logische volgende stap.
+        el("doneMessage").innerHTML =
+          "Your offer of <strong>&euro;" + amount + "</strong> (" + selectedVatType +
+          ") is in.<br /><br />Track it from your dashboard — you can change or withdraw it " +
+          "there or respond to buyer decisions. You'll receive notifications through " +
+          "Discord whenever we get an update on your offer.";
 
         showPanel("panelDone");
       } catch (err) {
