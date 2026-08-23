@@ -24045,8 +24045,15 @@ app.get("/api/dashboard/counts", async (req, res) => {
         delivered: quickDelivered
       },
       wtb: {
-        open_offers: wtbOpenOffers,
-        counter_offers: wtbCounterOffers,
+        // CHANGED - the tab is keyed "offers", so "open_offers" was read
+        // as undefined and the badge stayed empty while the list held
+        // rows. The two keys also both fed the section total, which is
+        // why Want To Buys said 4 while its tabs added up to 2.
+        //
+        // A seller's own pending counter sits in the same tab as a fresh
+        // offer - that is what the merged list shows - so they are one
+        // number here too.
+        offers: wtbOpenOffers + wtbCounterOffers,
         accepted: wtbAccepted,
         confirmed: wtbConfirmed,
         label_requested: wtbLabelRequested,
