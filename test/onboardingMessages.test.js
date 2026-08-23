@@ -20,7 +20,7 @@ test("de welkomst-DM linkt naar de deals en naar registratie", () => {
 
   assert.match(description, /legendario/);
   assert.ok(description.includes(SIGNUP), "signup-link ontbreekt");
-  assert.match(description, /buying right now/);
+  assert.match(description, /See what we.re buying/);
 
   // Het Seller ID is geen drempel meer die je vooraf moet regelen: de bots
   // zoeken je voortaan op via je Discord ID.
@@ -28,7 +28,7 @@ test("de welkomst-DM linkt naar de deals en naar registratie", () => {
 });
 
 test("bestaande seller krijgt zijn Seller ID en de optionele velden alleen als ze er zijn", () => {
-  const volledig = buildExistingSellerMessage({
+  const { description: volledig } = buildExistingSellerMessage({
     username: "jan",
     sellerId: "SE-00044",
     email: "jan@example.com",
@@ -41,7 +41,7 @@ test("bestaande seller krijgt zijn Seller ID en de optionele velden alleen als z
   assert.match(volledig, /ORD-1/);
   assert.match(volledig, /discord\.gg\/x/);
 
-  const kaal = buildExistingSellerMessage({ username: "jan", sellerId: "SE-00044" });
+  const { description: kaal } = buildExistingSellerMessage({ username: "jan", sellerId: "SE-00044" });
 
   assert.match(kaal, /SE-00044/);
   assert.doesNotMatch(kaal, /registered on/);
@@ -50,7 +50,7 @@ test("bestaande seller krijgt zijn Seller ID en de optionele velden alleen als z
 });
 
 test("dealbevestiging toont alleen de regels die gevuld zijn", () => {
-  const volledig = buildDealConfirmationMessage({
+  const { description: volledig } = buildDealConfirmationMessage({
     name: "Jan",
     sellerId: "SE-1",
     orderId: "ORD-9",
@@ -64,14 +64,14 @@ test("dealbevestiging toont alleen de regels die gevuld zijn", () => {
   assert.match(volledig, /FZ8117-204/);
   assert.match(volledig, /€250/);
 
-  const kaal = buildDealConfirmationMessage({ name: "Jan", sellerId: "SE-1" });
+  const { description: kaal } = buildDealConfirmationMessage({ name: "Jan", sellerId: "SE-1" });
 
   assert.doesNotMatch(kaal, /Deal Summary/);
   assert.match(kaal, /SE-1/);
 });
 
 test("een payout van 0 wordt niet als regel getoond", () => {
-  const bericht = buildDealConfirmationMessage({ name: "Jan", sellerId: "SE-1", payout: 0 });
+  const { description: bericht } = buildDealConfirmationMessage({ name: "Jan", sellerId: "SE-1", payout: 0 });
 
   // Niet op /Payout/ matchen: "Payout by Kickz Caviar" is de merknaam en
   // staat altijd in de begroeting. Het gaat om de samenvattingsregel.
@@ -93,10 +93,10 @@ test("het kanaal-embed linkt naar de deals en naar registratie", () => {
   assert.doesNotMatch(description, /you need a Seller ID/i);
 });
 
-test("de Seller ID-DM noemt het ID en verwijst naar Seller ID Check", () => {
-  const bericht = buildSellerIdMessage({ sellerId: "SE-00856" });
+test("de Seller ID-DM noemt het ID en waarom je het bewaart", () => {
+  const { description: bericht } = buildSellerIdMessage({ sellerId: "SE-00856" });
 
   assert.match(bericht, /SE-00856/);
-  assert.match(bericht, /Seller ID Check/);
-  assert.match(bericht, /Welcome aboard/);
+  assert.match(bericht, /support will ask for it/);
+  assert.match(bericht, /Go make some deals/);
 });

@@ -4913,3 +4913,73 @@ body.kc-dialog-open {
 }
 
 .discord-banner-close:hover { opacity: 1; }
+
+/* ---- Registratieformulier compacter ---- */
+
+/* Twee velden naast elkaar. Op een smal scherm vallen ze terug op elkaar. */
+.signup-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 26rem) {
+  .signup-row { grid-template-columns: 1fr; }
+}
+
+/* Het formulier telt dertien velden; met de hoogte van het inlogscherm werd
+   dat een pagina die niemand in één keer overziet. */
+.dashboard-signup-card .dashboard-login-form {
+  gap: 9px;
+}
+
+/* :not() om de akkoord-checkbox erbuiten te houden: zonder dat wint deze
+   regel op specificiteit van .signup-terms input[type=checkbox] en werd het
+   vinkje 42px hoog en volle breedte, waardoor het uit de regel viel. */
+.dashboard-signup-card .dashboard-login-form input:not([type="checkbox"]) {
+  height: 42px;
+  border-radius: 11px;
+  box-shadow: none;
+}
+
+.dashboard-signup-card .dashboard-login-form select {
+  height: 42px;
+  border-radius: 11px;
+  box-shadow: none;
+}
+
+.dashboard-signup-card .dashboard-login-form label {
+  font-size: 12px;
+}
+
+.dashboard-signup-card .signup-hint {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.dashboard-signup-card .dashboard-login-form button {
+  height: 48px;
+  font-size: 16px;
+  margin-top: 4px;
+}
+
+/* De productfoto stond niet in lijn met merk en productnaam en had scherpere
+   hoeken dan de rest van de kaart. */
+.offer-product {
+  align-items: center;
+}
+
+.offer-product-image {
+  border-radius: 18px;
+}
+
+/* De titel van 44px kostte op dit formulier meer hoogte dan hij waard was. */
+.dashboard-signup-card h2 {
+  font-size: 30px;
+  line-height: 1.05;
+  margin: 6px 0 10px;
+}
+
+.dashboard-signup-card > p {
+  font-size: 14px;
+}

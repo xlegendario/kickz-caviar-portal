@@ -25616,15 +25616,20 @@ app.post("/notify-existing-seller", async (req, res) => {
 
     const user = await kickzDealDiscordClient.users.fetch(asText(discordId));
 
-    await user.send(
-      buildExistingSellerMessage({
-        username: user.username,
-        sellerId: asText(sellerId),
-        email: asText(email),
-        orderId: asText(orderId),
-        inviteUrl: DISCORD_INVITE_URL
-      })
-    );
+    await user.send({
+      embeds: [
+        {
+          ...buildExistingSellerMessage({
+            username: user.username,
+            sellerId: asText(sellerId),
+            email: asText(email),
+            orderId: asText(orderId),
+            inviteUrl: DISCORD_INVITE_URL
+          }),
+          color: 0xffd300
+        }
+      ]
+    });
 
     res.json({ success: true });
   } catch (err) {
@@ -25652,18 +25657,23 @@ app.post("/notify-deal-confirmation", async (req, res) => {
 
     const user = await kickzDealDiscordClient.users.fetch(asText(discordId));
 
-    await user.send(
-      buildDealConfirmationMessage({
-        name: asText(fullName) || user.username,
-        sellerId: asText(sellerId),
-        orderId: asText(orderId),
-        sku: asText(sku),
-        size: asText(size),
-        payout,
-        orderDate: asText(orderDate),
-        inviteUrl: DISCORD_INVITE_URL
-      })
-    );
+    await user.send({
+      embeds: [
+        {
+          ...buildDealConfirmationMessage({
+            name: asText(fullName) || user.username,
+            sellerId: asText(sellerId),
+            orderId: asText(orderId),
+            sku: asText(sku),
+            size: asText(size),
+            payout,
+            orderDate: asText(orderDate),
+            inviteUrl: DISCORD_INVITE_URL
+          }),
+          color: 0xffd300
+        }
+      ]
+    });
 
     res.json({ success: true });
   } catch (err) {
@@ -25896,6 +25906,10 @@ app.post("/api/internal/claim/confirm", async (req, res) => {
       "Discord ID": discordId,
       "Discord": discordTag || asText(record.fields?.["Discord"]),
       "Discord Linked At": new Date().toISOString(),
+      // Claimen gebeurt door op een knop in de server te klikken, dus deze
+      // seller zit er per definitie in. Zonder deze regel bleef het veld leeg
+      // en week het seller-record af van de Discord Members-rij.
+      "Discord In Server?": true,
       "Claim Code Hash": "",
       "Claim Code Expires At": null,
       "Claim Discord ID": ""
@@ -26273,9 +26287,31 @@ async function sendSellerIdDm({ sellerRecord, discordUser }) {
 
     const user = await kickzDealDiscordClient.users.fetch(discordUser.id);
 
-    await user.send(
-      buildSellerIdMessage({ sellerId: displayValue(sellerRecord.fields?.["Seller ID"]) })
-    );
+    // Een knop in plaats van een URL in de tekst: gemaskeerde links renderen
+    // niet in een gewoon DM-bericht, maar componenten wel.
+    await user.send({
+      embeds: [
+        {
+          ...buildSellerIdMessage({
+            sellerId: displayValue(sellerRecord.fields?.["Seller ID"])
+          }),
+          color: 0xffd300
+        }
+      ],
+      components: [
+        {
+          type: 1,
+          components: [
+            {
+              type: 2,
+              style: 5,
+              label: "See all WTBs",
+              url: WTBS_WEBSITE_URL || portalUrl("/")
+            }
+          ]
+        }
+      ]
+    });
   } catch (err) {
     // Iemand met DM's uit mag de registratie niet laten stranden; het Seller ID
     // staat ook gewoon op zijn dashboard.

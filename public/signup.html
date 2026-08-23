@@ -33,18 +33,24 @@
           <input name="email" type="email" autocomplete="email" required />
         </label>
 
-        <label>
-          Company name <span class="signup-optional">optional</span>
-          <input name="company_name" type="text" autocomplete="organization" />
-        </label>
+        <!-- Allebei optioneel en allebei kort; naast elkaar scheelt een regel.
+             De uitleg staat eronder over de volle breedte, anders wordt die ene
+             kolom onnodig hoog. -->
+        <div class="signup-row">
+          <label>
+            Company name <span class="signup-optional">optional</span>
+            <input name="company_name" type="text" autocomplete="organization" />
+          </label>
 
-        <label>
-          VAT ID <span class="signup-optional">optional</span>
-          <input name="vat_id" type="text" />
-          <small class="signup-hint" id="vatHint">
-            Without a VAT ID you can only sell under the Margin scheme.
-          </small>
-        </label>
+          <label>
+            VAT ID <span class="signup-optional">optional</span>
+            <input name="vat_id" type="text" />
+          </label>
+        </div>
+
+        <small class="signup-hint" id="vatHint">
+          Without a VAT ID you can only sell under the Margin scheme.
+        </small>
 
         <label>
           Address
@@ -56,15 +62,19 @@
           <input name="address_line_2" type="text" autocomplete="address-line2" />
         </label>
 
-        <label>
-          Zipcode
-          <input name="zipcode" type="text" autocomplete="postal-code" required />
-        </label>
+        <!-- Postcode en plaats naast elkaar: samen passen ze op een regel en
+             dat scheelt hoogte op een formulier dat anders niet op een scherm past. -->
+        <div class="signup-row">
+          <label>
+            Zipcode
+            <input name="zipcode" type="text" autocomplete="postal-code" required />
+          </label>
 
-        <label>
-          City
-          <input name="city" type="text" autocomplete="address-level2" required />
-        </label>
+          <label>
+            City
+            <input name="city" type="text" autocomplete="address-level2" required />
+          </label>
+        </div>
 
         <label>
           Country
@@ -78,16 +88,19 @@
           <input name="payout_info" type="text" required />
         </label>
 
-        <label>
-          Password
-          <input name="password" type="password" autocomplete="new-password" required />
-        </label>
+        <div class="signup-row">
+          <label>
+            Password
+            <input name="password" type="password" autocomplete="new-password" required />
+          </label>
 
-        <label>
-          Confirm password
-          <input name="password_confirm" type="password" autocomplete="new-password" required />
-          <small class="signup-match" id="passwordMatch"></small>
-        </label>
+          <label>
+            Confirm password
+            <input name="password_confirm" type="password" autocomplete="new-password" required />
+          </label>
+        </div>
+
+        <small class="signup-match" id="passwordMatch"></small>
 
         <label class="signup-terms">
           <input name="accept_terms" type="checkbox" required />
