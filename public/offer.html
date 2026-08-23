@@ -10,7 +10,7 @@
 <body class="dashboard-body">
   <section class="dashboard-login-panel">
     <div class="dashboard-login-card offer-card">
-      <div class="dashboard-eyebrow">Kickz Caviar</div>
+      <img class="offer-logo" src="https://i.imgur.com/gRmfHif.png" alt="Kickz Caviar" />
 
       <div id="offerLoading" class="offer-loading">Loading this order...</div>
 
@@ -20,13 +20,17 @@
           <div class="offer-product-info">
             <div id="offerBrand" class="offer-product-brand"></div>
             <h2 id="offerProduct"></h2>
-            <div class="offer-product-meta">
-              <span id="offerSku"></span>
-              <span id="offerSize"></span>
-            </div>
-            <div id="offerOrderId" class="offer-product-order"></div>
           </div>
         </div>
+
+        <!-- SKU en maat als eigen regels met een label ervoor. In één compacte
+             regel onder de productnaam liepen ze visueel mee met de titel en
+             moest je zoeken welk getal de maat was. -->
+        <dl class="offer-specs">
+          <div class="offer-spec"><dt>SKU</dt><dd id="offerSku">—</dd></div>
+          <div class="offer-spec"><dt>Size</dt><dd id="offerSize">—</dd></div>
+          <div class="offer-spec"><dt>Order</dt><dd id="offerOrderId">—</dd></div>
+        </dl>
 
         <div id="offerLowest" class="offer-lowest hidden"></div>
 
@@ -66,18 +70,17 @@
         </div>
 
         <div id="panelOffer" class="offer-panel hidden">
-          <form id="offerForm" class="dashboard-login-form">
-            <label>
-              Your offer (EUR)
-              <input id="offerAmount" name="offerAmount" type="text" inputmode="numeric" required />
-            </label>
+          <form id="offerForm">
+            <label class="offer-field-label" for="offerAmount">Your offer (EUR)</label>
+            <input id="offerAmount" class="offer-amount" name="offerAmount" type="text"
+                   inputmode="numeric" placeholder="Enter your offer" required />
 
-            <div class="offer-vat-group">
-              <span class="offer-vat-label">VAT type</span>
-              <div id="offerVatOptions" class="offer-vat-options"></div>
-            </div>
+            <div class="vat-label">SELECT VAT TYPE</div>
+            <div class="vat-options offer-vat-stack" id="offerVatOptions"></div>
 
-            <button type="submit" id="offerSubmit">Submit offer</button>
+            <p class="offer-vat-note" id="offerVatNote"></p>
+
+            <button type="submit" id="offerSubmit" class="offer-action offer-submit">Submit offer</button>
             <div class="dashboard-form-error" id="offerError"></div>
           </form>
         </div>
@@ -92,9 +95,9 @@
   </section>
 
   <script>
-    const params = window.location.pathname.split("/").filter(Boolean);
-    const sourceType = params[1] || "";
-    const recordId = params[2] || "";
+    const pathParts = window.location.pathname.split("/").filter(Boolean);
+    const sourceType = pathParts[1] || "";
+    const recordId = pathParts[2] || "";
     const here = window.location.pathname;
 
     // Kwam deze link van een member met een eigen ref-code, dan reist die mee
@@ -111,6 +114,10 @@
     const show = (id) => el(id).classList.remove("hidden");
     const hide = (id) => el(id).classList.add("hidden");
 
+    // Alle drie worden altijd getoond. Wat de seller niet mag kiezen staat
+    // uitgeschakeld met de reden erbij — dat is duidelijker dan een optie
+    // weglaten, want dan vraagt hij zich af waarom hij er maar één ziet.
+    const ALL_VAT_TYPES = ["Margin", "VAT21", "VAT0"];
     let selectedVatType = "";
 
     function showPanel(id) {
@@ -123,9 +130,9 @@
     function renderOrder(order) {
       el("offerBrand").textContent = order.brand || "";
       el("offerProduct").textContent = order.product || "Unknown product";
-      el("offerSku").textContent = order.sku || "";
-      el("offerSize").textContent = order.size ? "Size " + order.size : "";
-      el("offerOrderId").textContent = order.order_id ? "Order " + order.order_id : "";
+      el("offerSku").textContent = order.sku || "—";
+      el("offerSize").textContent = order.size || "—";
+      el("offerOrderId").textContent = order.order_id || "—";
 
       if (order.image_url) {
         el("offerImage").src = order.image_url;
@@ -134,34 +141,47 @@
 
       // Het laagste huidige bod staat ook op de Want To Buys-pagina, dus dit
       // verraadt niets nieuws. Het inkoopplafond komt hier bewust niet in.
-      const lowest = order.current_offer_margin;
-
-      if (lowest) {
-        el("offerLowest").textContent = "Current lowest offer: " + lowest;
+      if (order.current_offer_margin) {
+        el("offerLowest").textContent = "Current lowest offer: " + order.current_offer_margin;
         show("offerLowest");
       }
     }
 
-    function renderVatOptions(types) {
+    function renderVatOptions(allowed) {
       const wrap = el("offerVatOptions");
       wrap.innerHTML = "";
-      selectedVatType = types[0] || "";
+      selectedVatType = allowed[0] || "";
 
-      for (const type of types) {
+      for (const type of ALL_VAT_TYPES) {
+        const usable = allowed.includes(type);
+
         const button = document.createElement("button");
         button.type = "button";
-        button.className = "offer-vat-option" + (type === selectedVatType ? " is-active" : "");
+        button.className = "vat-option" + (type === selectedVatType ? " active" : "");
         button.textContent = type;
+        button.disabled = !usable;
+
+        if (!usable) {
+          button.title =
+            type === "Margin"
+              ? "This buyer does not accept Margin for this order."
+              : "Your profile is not registered as a company that can sell " + type + ".";
+        }
 
         button.addEventListener("click", () => {
+          if (!usable) return;
           selectedVatType = type;
-          for (const other of wrap.children) {
-            other.classList.toggle("is-active", other === button);
-          }
+          for (const other of wrap.children) other.classList.toggle("active", other === button);
         });
 
         wrap.appendChild(button);
       }
+
+      const blocked = ALL_VAT_TYPES.filter((t) => !allowed.includes(t));
+
+      el("offerVatNote").textContent = blocked.length
+        ? "Greyed out options do not match your VAT ID and country."
+        : "";
     }
 
     async function load() {
@@ -198,8 +218,8 @@
         }
 
         // Zonder gekoppelde Discord kan er bij een geaccepteerde deal geen
-        // channel met deze seller worden aangemaakt, dus dit gaat vóór de
-        // offer-vorm.
+        // channel met deze seller worden aangemaakt, dus dit gaat vóór het
+        // offerformulier.
         if (!viewer.discord_linked || !viewer.discord_in_server) {
           el("discordReason").textContent = viewer.discord_linked
             ? "You are no longer in the Kickz Caviar Discord server. Rejoin to place your offer — every deal gets its own channel there."
@@ -252,9 +272,7 @@
 
         const data = await response.json();
 
-        if (!response.ok) {
-          throw new Error(data.error || "Login failed");
-        }
+        if (!response.ok) throw new Error(data.error || "Login failed");
 
         localStorage.setItem("kc_seller", JSON.stringify(data.seller));
 
@@ -282,6 +300,11 @@
 
       if (!Number.isInteger(amount) || amount <= 0) {
         el("offerError").textContent = "Enter a whole euro amount.";
+        return;
+      }
+
+      if (!selectedVatType) {
+        el("offerError").textContent = "Select a VAT type.";
         return;
       }
 
