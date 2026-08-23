@@ -79,14 +79,12 @@ test("een payout van 0 wordt niet als regel getoond", () => {
 });
 
 test("het kanaal-embed linkt naar de deals en naar registratie", () => {
-  const { title, description } = buildRegistrationChannelMessage({
-    signupUrl: SIGNUP,
-    dealsUrl: "https://kickzcaviar.com/"
-  });
+  const { title, description } = buildRegistrationChannelMessage({ signupUrl: SIGNUP });
 
   assert.match(title, /Become a Seller/);
   assert.ok(description.includes(SIGNUP), "signup-link ontbreekt");
-  assert.match(description, /buying right now/);
+  // Geen deals-link meer in dit kanaal; die staat in de welkomst-DM.
+  assert.doesNotMatch(description, /buying right now/);
 
   // "Seller ID Check" staat op de knop, niet meer in de tekst: je hebt het ID
   // niet langer nodig om te dealen, dus het hoort niet in de uitleg thuis.
