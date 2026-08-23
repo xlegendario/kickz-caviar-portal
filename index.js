@@ -25578,10 +25578,7 @@ app.post("/api/internal/post-registration-embed", async (req, res) => {
     await initKickzDealDiscord();
 
     const channel = await kickzDealDiscordClient.channels.fetch(channelId);
-    const { title, description } = buildRegistrationChannelMessage({
-      signupUrl: signupUrl(),
-      dealsUrl: portalUrl("/")
-    });
+    const { title, description } = buildRegistrationChannelMessage({ signupUrl: signupUrl() });
 
     const message = await channel.send({
       embeds: [{ title, description, color: 0xffd300 }],
