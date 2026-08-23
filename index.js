@@ -45,14 +45,26 @@ import { validateRegistration } from "./lib/registration.js";
 import {
   isOpenForOffers,
   normalizeSourceType,
-  offerableVatTypes
+  offerableVatTypes,
+  vatTypesForSeller
 } from "./lib/offerRules.js";
+import {
+  CLAIM_CODE_TTL_MS,
+  MAX_CLAIM_ATTEMPTS,
+  canStartClaim,
+  claimCodeMatches,
+  generateClaimCode,
+  hashClaimCode,
+  isClaimCodeUsable,
+  normalizeEmail
+} from "./lib/sellerClaim.js";
 import { isReconcileSafe, planMembershipChanges } from "./lib/membership.js";
 import { normalizeRefCode, planQualifications, shouldAttribute } from "./lib/referral.js";
 import {
   buildDealConfirmationMessage,
   buildExistingSellerMessage,
   buildRegistrationChannelMessage,
+  buildSellerIdMessage,
   buildWelcomeMessage
 } from "./lib/onboardingMessages.js";
 import { buildAgreementPayload } from "./lib/agreementWebhook.js";
@@ -25658,6 +25670,252 @@ app.post("/notify-deal-confirmation", async (req, res) => {
   }
 });
 
+/* ------------------------------------------------------------------ *
+ * Een bestaand seller-profiel claimen vanuit Discord.
+ *
+ * De bots vragen niet langer om een Seller ID bij elke offer — ze zoeken de
+ * seller op via zijn Discord ID. Werkt dat niet, dan claimt hij zijn profiel
+ * één keer met Seller ID + e-mail + een code die naar dat e-mailadres gaat.
+ * Daarna is hij voorgoed bekend.
+ *
+ * De mail loopt via de portal omdat SendGrid hier al staat; de bots roepen
+ * deze twee endpoints aan achter het bestaande x-kc-secret.
+ * ------------------------------------------------------------------ */
+
+// Pogingen per Discord-gebruiker, in geheugen. Bewust niet in Airtable: het
+// hoeft een herstart niet te overleven, en zo blijft het aantal velden beperkt.
+const claimAttempts = new Map();
+
+function bumpClaimAttempts(discordId) {
+  const count = (claimAttempts.get(discordId) || 0) + 1;
+  claimAttempts.set(discordId, count);
+  return count;
+}
+
+function requireServiceSecret(req, res) {
+  const secret = asText(req.headers["x-kc-secret"]);
+
+  if (!process.env.KC_PORTAL_SECRET || secret !== process.env.KC_PORTAL_SECRET) {
+    res.status(401).json({ error: "Unauthorized" });
+    return false;
+  }
+
+  return true;
+}
+
+// Zoekt de seller die bij dit Discord ID hoort. Dit is wat de bots straks als
+// eerste doen, zodat niemand zijn Seller ID nog hoeft over te typen.
+app.post("/api/internal/seller-by-discord", async (req, res) => {
+  if (!requireServiceSecret(req, res)) return;
+
+  const discordId = asText(req.body?.discord_id);
+
+  if (!discordId) return res.status(400).json({ error: "Missing discord_id" });
+
+  try {
+    const rows = await airtable(SELLERS_TABLE)
+      .select({
+        filterByFormula: `{Discord ID} = '${escapeFormulaValue(discordId)}'`,
+        maxRecords: 1
+      })
+      .firstPage();
+
+    if (!rows.length) return res.json({ found: false });
+
+    const seller = normalizeSeller(rows[0]);
+
+    res.json({
+      found: true,
+      seller_record_id: seller.id,
+      seller_id: seller.seller_id,
+      vat_types: vatTypesForSeller({
+        vatId: rows[0].fields?.["VAT ID"],
+        country: rows[0].fields?.["Country"]
+      })
+    });
+  } catch (err) {
+    console.error("seller-by-discord failed:", err);
+    res.status(500).json({ error: "Lookup failed" });
+  }
+});
+
+app.post("/api/internal/claim/start", async (req, res) => {
+  if (!requireServiceSecret(req, res)) return;
+
+  const discordId = asText(req.body?.discord_id);
+  const sellerIdInput = asText(req.body?.seller_id);
+  const emailInput = normalizeEmail(req.body?.email);
+
+  if (!discordId || !sellerIdInput || !emailInput) {
+    return res.status(400).json({ error: "Missing discord_id, seller_id or email" });
+  }
+
+  // Eén tekst voor elke afwijzing. Verschillende meldingen zouden verklappen
+  // of een Seller ID of e-mailadres bestaat, en Seller ID's zijn te raden.
+  const vaag = {
+    ok: false,
+    error:
+      "We could not match that Seller ID and email. Please check both, or open a support ticket."
+  };
+
+  if (bumpClaimAttempts(discordId) > MAX_CLAIM_ATTEMPTS) {
+    return res.status(429).json({
+      ok: false,
+      error: "Too many attempts. Please open a support ticket."
+    });
+  }
+
+  try {
+    const rows = await airtable(SELLERS_TABLE)
+      .select({
+        filterByFormula: `LOWER(TRIM({Email} & '')) = '${escapeFormulaValue(emailInput)}'`,
+        maxRecords: 1
+      })
+      .firstPage();
+
+    const record = rows[0] || null;
+    const check = canStartClaim({ record, sellerIdInput, emailInput });
+
+    if (!check.ok) {
+      console.warn(`Claim geweigerd voor Discord ${discordId}: ${check.reason}`);
+
+      // Een al gekoppeld profiel is een echt supportgeval, geen typefout —
+      // dat mag de seller weten zodat hij niet blijft proberen.
+      if (check.reason === "already_linked") {
+        return res.json({
+          ok: false,
+          code: "already_linked",
+          error:
+            "That profile is already linked to a Discord account. Please open a support ticket."
+        });
+      }
+
+      return res.json(vaag);
+    }
+
+    const code = generateClaimCode();
+
+    await airtable(SELLERS_TABLE).update(record.id, {
+      "Claim Code Hash": hashClaimCode(code),
+      "Claim Code Expires At": new Date(Date.now() + CLAIM_CODE_TTL_MS).toISOString(),
+      "Claim Discord ID": discordId
+    });
+
+    await sgMail.send({
+      to: emailInput,
+      from: RESET_EMAIL_FROM,
+      subject: `Your Kickz Caviar verification code: ${code}`,
+      html: `
+        <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;background:#f5f5f5;padding:28px;">
+          <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:18px;padding:30px;text-align:center;">
+            <img src="https://i.imgur.com/gRmfHif.png" alt="Kickz Caviar"
+                 style="width:120px;height:auto;margin:0 auto 22px;display:block;" />
+            <h2 style="margin:0 0 12px;font-size:28px;line-height:1.1;color:#111;">
+              Link your Discord
+            </h2>
+            <p style="margin:0 0 24px;color:#555;font-size:15px;">
+              Enter this code in Discord to connect your seller profile.
+            </p>
+            <div style="font-size:38px;font-weight:900;letter-spacing:10px;color:#111;margin:0 0 24px;">
+              ${code}
+            </div>
+            <p style="margin:0;color:#555;font-size:14px;">This code expires in 15 minutes.</p>
+            <p style="margin:18px 0 0;color:#999;font-size:12px;">
+              If you did not request this, you can ignore this email — nothing has changed.
+            </p>
+          </div>
+        </div>
+      `
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("claim/start failed:", err);
+    res.status(500).json({ ok: false, error: "Could not send the code. Please try again." });
+  }
+});
+
+app.post("/api/internal/claim/confirm", async (req, res) => {
+  if (!requireServiceSecret(req, res)) return;
+
+  const discordId = asText(req.body?.discord_id);
+  const discordTag = asText(req.body?.discord_tag);
+  const code = asText(req.body?.code).replace(/\D/g, "");
+
+  if (!discordId || !code) {
+    return res.status(400).json({ error: "Missing discord_id or code" });
+  }
+
+  try {
+    const rows = await airtable(SELLERS_TABLE)
+      .select({
+        filterByFormula: `{Claim Discord ID} = '${escapeFormulaValue(discordId)}'`,
+        maxRecords: 1
+      })
+      .firstPage();
+
+    const record = rows[0] || null;
+
+    if (!record) {
+      return res.json({
+        ok: false,
+        error: "No pending verification found. Please start again."
+      });
+    }
+
+    const usable = isClaimCodeUsable({
+      storedHash: asText(record.fields?.["Claim Code Hash"]),
+      expiresAt: record.fields?.["Claim Code Expires At"],
+      attempts: claimAttempts.get(discordId) || 0
+    });
+
+    if (!usable.usable) {
+      return res.json({
+        ok: false,
+        error:
+          usable.reason === "expired"
+            ? "That code expired. Please start again."
+            : "Too many attempts. Please open a support ticket."
+      });
+    }
+
+    if (!claimCodeMatches(code, asText(record.fields?.["Claim Code Hash"]))) {
+      bumpClaimAttempts(discordId);
+      return res.json({ ok: false, error: "That code is not correct." });
+    }
+
+    // Vanaf hier is het profiel van hem. Het claim-spoor wissen, anders blijft
+    // een gebruikte code staan en is hij later opnieuw in te wisselen.
+    await airtable(SELLERS_TABLE).update(record.id, {
+      "Discord ID": discordId,
+      "Discord": discordTag || asText(record.fields?.["Discord"]),
+      "Discord Linked At": new Date().toISOString(),
+      "Claim Code Hash": "",
+      "Claim Code Expires At": null,
+      "Claim Discord ID": ""
+    });
+
+    claimAttempts.delete(discordId);
+
+    const seller = normalizeSeller(record);
+
+    console.log(`Profiel geclaimd: ${seller.seller_id} -> Discord ${discordId}`);
+
+    res.json({
+      ok: true,
+      seller_record_id: record.id,
+      seller_id: seller.seller_id,
+      vat_types: vatTypesForSeller({
+        vatId: record.fields?.["VAT ID"],
+        country: record.fields?.["Country"]
+      })
+    });
+  } catch (err) {
+    console.error("claim/confirm failed:", err);
+    res.status(500).json({ ok: false, error: "Something went wrong. Please try again." });
+  }
+});
+
 app.get("/api/countries", (_req, res) => {
   res.json({ countries: COUNTRY_NAMES });
 });
@@ -25958,10 +26216,10 @@ app.get("/auth/discord/callback", async (req, res) => {
     // al vóór de koppeling, dus we wachten tot hier — anders krijgt Make een
     // lege discordId en discordTag.
     if (claim.fresh) {
-      await sendAgreementWebhook({
-        sellerRecord: await airtable(SELLERS_TABLE).find(claim.rid),
-        discordUser
-      });
+      const freshRecord = await airtable(SELLERS_TABLE).find(claim.rid);
+
+      await sendAgreementWebhook({ sellerRecord: freshRecord, discordUser });
+      await sendSellerIdDm({ sellerRecord: freshRecord, discordUser });
     }
 
     const back = safeReturnPath(claim.rt) || "/dashboard";
@@ -25987,6 +26245,26 @@ app.get("/auth/discord/callback", async (req, res) => {
 
 // Houdt de Discord Members-tabel in lijn, zodat de controle "zit deze seller
 // nog in de server?" één bron heeft.
+// De DM met het Seller ID, vanuit onze eigen bot. Dit deed het Make-scenario,
+// waardoor het bericht van Make's Discord-app ("Integromat") kwam in plaats van
+// van Kickz Caviar. Verwijder de Discord-module uit dat scenario, anders krijgt
+// de seller het bericht twee keer.
+async function sendSellerIdDm({ sellerRecord, discordUser }) {
+  try {
+    await initKickzDealDiscord();
+
+    const user = await kickzDealDiscordClient.users.fetch(discordUser.id);
+
+    await user.send(
+      buildSellerIdMessage({ sellerId: displayValue(sellerRecord.fields?.["Seller ID"]) })
+    );
+  } catch (err) {
+    // Iemand met DM's uit mag de registratie niet laten stranden; het Seller ID
+    // staat ook gewoon op zijn dashboard.
+    console.warn(`Could not DM Seller ID to ${discordUser.id}: ${err.message}`);
+  }
+}
+
 // Vuurt het Make-scenario af dat de Sales Agreement PDF genereert en in het
 // veld "Agreement PDF" zet. Zonder MAKE_PDF_WEBHOOK_URL gebeurt er niets, dan
 // blijft dat veld gewoon leeg.
