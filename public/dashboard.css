@@ -4983,3 +4983,38 @@ body.kc-dialog-open {
 .dashboard-signup-card > p {
   font-size: 14px;
 }
+
+/* ---- Koppelknop naar Discord ---- */
+
+.discord-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 15px 20px;
+  border-radius: 14px;
+  background: #5865f2;
+  color: #ffffff;
+  font-weight: 900;
+  font-size: 15px;
+  text-decoration: none;
+}
+
+.discord-btn:hover {
+  background: #4752c4;
+}
+
+.discord-btn svg {
+  width: 22px;
+  height: auto;
+  flex: 0 0 auto;
+}
+
+/* ---- Productfoto: lucht tussen schoen en kader ---- */
+
+.offer-product-image {
+  width: 88px;
+  height: 88px;
+  padding: 11px;
+  box-sizing: border-box;
+}
