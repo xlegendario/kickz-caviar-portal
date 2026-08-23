@@ -36,14 +36,18 @@
   /* CHANGED - was 280px. The longest item is "Label Requested" plus its
      counter, which needs about 178px, so this was 70px of air. On a half
      screen that is most of a column. */
-  grid-template-columns: 210px minmax(0, 1fr);
+  /* CHANGED - 210 px was dictated by the 178 px logo, not by the
+     navigation. The logo is smaller now, so the column can follow the
+     text instead of the image. That is 34 px back for the table, with
+     room to spare on the longest label. */
+  grid-template-columns: 176px minmax(0, 1fr);
 }
 
 .dashboard-sidebar {
   position: sticky;
   top: 0;
   height: 100vh;
-  padding: 22px 16px;
+  padding: 16px 10px;
   background: #050505;
   border-right: 1px solid #1a1a1a;
   overflow-y: auto;
@@ -95,11 +99,11 @@
 }
 
 .dashboard-nav-section {
-  margin-bottom: 16px;
+  margin-bottom: 2px;
 }
 
-.dashboard-nav-header,
-.dashboard-subnav-btn,
+/* CHANGED - the nav rows left this group. A list of five sections does
+   not need five bordered cards; the buttons below it still do. */
 .dashboard-logout-btn,
 .dashboard-refresh-btn,
 .dashboard-back-link,
@@ -112,16 +116,37 @@
   transition: 0.18s ease;
 }
 
+/* The arrow now sits in front of the label, so the row is
+   arrow / label / count and the count no longer shares the right edge
+   with anything. The label takes what is left and truncates rather
+   than wrapping to a second line. */
 .dashboard-nav-header {
   width: 100%;
-  min-height: 46px;
-  padding: 0 14px;
+  min-height: 32px;
+  padding: 0 8px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  font-size: 13px;
-  font-weight: 900;
+  gap: 7px;
+
+  border: none;
+  border-radius: 8px;
+  background: none;
+  box-shadow: none;
+
+  color: #cfcfcf;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   cursor: pointer;
+}
+
+.dashboard-nav-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
 }
 
 .dashboard-nav-header:hover,
@@ -133,11 +158,13 @@
   background: #181818;
 }
 
+/* A solid yellow block was fine on a 46 px card but shouts at 32 px.
+   Same signal, quieter: a tinted row with the brand colour as a rail. */
 .dashboard-nav-header.active {
-  background: linear-gradient(180deg, #fff27a, #f0a500);
-  color: black;
+  background: rgba(255, 204, 0, 0.12);
+  color: #ffffff;
   border-color: transparent;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), 0 4px 14px rgba(0,0,0,0.35);
+  box-shadow: inset 2px 0 0 #ffcc00;
 }
 
 .dashboard-nav-header.locked {
@@ -165,15 +192,17 @@
   color: black;
 }
 
+/* A panel inside a panel. The left rule alone already says these rows
+   belong to the section above them. */
 .dashboard-subnav {
   display: none;
   flex-direction: column;
-  gap: 4px;
-  margin: 7px 0 10px 7px;
-  padding: 6px;
-  border-left: 1px solid rgba(255,255,255,0.08);
-  background: rgba(255,255,255,0.015);
-  border-radius: 12px;
+  gap: 0;
+  margin: 2px 0 8px 12px;
+  padding: 1px 0 1px 6px;
+  border-left: 1px solid rgba(255,255,255,0.09);
+  background: none;
+  border-radius: 0;
 }
 
 .dashboard-subnav-btn {
@@ -731,41 +760,43 @@
 
 /* Sidebar refinement: StockX/client-portal structure in Kickz Caviar styling */
 .dashboard-nav-section {
-  margin-bottom: 8px;
+  margin-bottom: 2px;
 }
 
+/* CHANGED - this second block is the one that actually rendered; the rule
+   further up was being overridden by it, which is why the sidebar looked
+   nothing like the first rule described. A bordered card of 50 px per
+   section, in uppercase, was most of the sidebar's width and weight. */
 .dashboard-nav-header {
-  min-height: 50px;
-  padding: 0 14px;
-  border-radius: 14px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
 
-  background: linear-gradient(180deg, #171717, #101010);
+  background: none;
+  border: none;
+  box-shadow: none;
 
-  border: 1px solid rgba(255, 204, 0, 0.22);
+  color: #cfcfcf;
 
-  color: #ffcc00;
-
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.03),
-    0 4px 18px rgba(0,0,0,0.25);
-
-  text-transform: uppercase;
-  letter-spacing: 0.2px;
+  text-transform: none;
+  letter-spacing: 0.02em;
 }
 
-.dashboard-nav-header:hover,
+.dashboard-nav-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: none;
+}
+
+/* Open and active were one rule and stay one rule - the section you are
+   looking at is the one that is expanded. */
 .dashboard-nav-header.open,
 .dashboard-nav-header.active {
-  background: linear-gradient(180deg, #1b1b1b, #121212);
-
-  border-color: rgba(255, 204, 0, 0.32);
-
-  color: #ffcc00;
-
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.03),
-    0 0 0 1px rgba(255,204,0,0.04),
-    0 4px 18px rgba(0,0,0,0.25);
+  background: rgba(255, 204, 0, 0.10);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: inset 2px 0 0 #ffcc00;
 }
 
 .dashboard-nav-right {
@@ -775,10 +806,13 @@
 }
 
 .dashboard-nav-arrow {
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
+  width: 9px;
+  font-size: 10px;
+  opacity: 0.5;
   color: rgba(255,255,255,0.78);
   font-size: 22px;
   font-weight: 900;
@@ -790,30 +824,36 @@
   transform: rotate(90deg);
 }
 
+/* CHANGED - a pill per row was 24 px of chrome around one or two
+   digits, twelve times over. As plain text the number still reads and
+   the width goes back to the label. */
 .dashboard-nav-count,
-.dashboard-nav-header.active .dashboard-nav-count {
-  min-width: 24px;
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 999px;
+.dashboard-subnav-count {
+  flex: none;
+  min-width: 0;
+  height: auto;
+  padding: 0 2px;
+  border-radius: 0;
+  background: none;
 
-  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.42);
 
-  color: rgba(255,255,255,0.78);
-
-  font-size: 12px;
-  font-weight: 900;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
-.dashboard-subnav-count {
-  min-width: 24px;
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.08);
-  color: rgba(255,255,255,0.78);
-  font-size: 12px;
-  font-weight: 900;
+.dashboard-nav-header.active .dashboard-nav-count,
+.dashboard-subnav-btn.active .dashboard-subnav-count {
+  color: #ffffff;
+  background: none;
+}
+
+/* Zero is not news. It was costing width in every row that had
+   nothing to report. */
+.dashboard-nav-count.zero,
+.dashboard-subnav-count.zero {
+  display: none;
 }
 
 .dashboard-subnav.open {
@@ -822,32 +862,36 @@
 
 .dashboard-subnav-btn {
   position: relative;
-  min-height: 42px;
-  padding: 0 12px 0 14px;
+  min-height: 27px;
+  padding: 0 6px;
+  gap: 5px;
   border: none;
-  border-left: 3px solid transparent;
-  border-radius: 12px;
+  border-radius: 7px;
   background: transparent;
   box-shadow: none;
-  color: #999999;
-  font-size: 13px;
-  font-weight: 800;
+  color: #a8a8a8;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.dashboard-subnav-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dashboard-subnav-btn:hover,
 .dashboard-subnav-btn.active {
-  border-left-color: #ffcc00;
-  background: linear-gradient(
-    90deg,
-    rgba(255,204,0,0.18),
-    rgba(255,204,0,0.055)
-  );
+  background: rgba(255, 204, 0, 0.10);
   color: #ffffff;
-  box-shadow: inset 0 0 0 1px rgba(255,204,0,0.06);
+  font-weight: 700;
+  box-shadow: none;
 }
 
+/* handled with the counts above, kept as a no-op anchor */
 .dashboard-subnav-btn.active .dashboard-subnav-count {
-  background: rgba(255,255,255,0.16);
   color: #ffffff;
 }
 
@@ -3192,14 +3236,31 @@ body.modal-open {
 }
 
 .dashboard-subnav-meta {
+  flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
+/* CHANGED - this was brand yellow on a yellow-accented sidebar, so it
+   disappeared into the theme. Amber reads as "look at this" without
+   the alarm that red carries, and a filled badge holds its shape at
+   this size where the warning glyph did not. */
 .dashboard-subnav-warning {
-  color: #ffd21f;
-  font-size: 13px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+
+  background: rgba(255, 154, 60, 0.18);
+  color: #ff9a3c;
+
+  font-size: 10px;
+  font-weight: 900;
   line-height: 1;
 }
 
@@ -4239,6 +4300,10 @@ body.kc-dialog-open {
 .dashboard-action-row .action-accept {
   grid-column: 1;
   grid-row: 1 / span 2;
+
+  /* A button does not stretch by itself, so the block came out 48 px
+     against 62 px beside it and sat crooked in the row. */
+  align-self: stretch;
 
   display: flex;
   flex-direction: column;
