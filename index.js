@@ -22,6 +22,42 @@ import {
 } from "discord.js";
 
 import {
+  clearSessionCookie,
+  hashPassword,
+  readSession,
+  requireSeller,
+  sellerIdentityGuard,
+  setSessionCookie,
+  signSession,
+  verifyPassword,
+  verifySession
+} from "./lib/auth.js";
+
+import {
+  buildAuthorizeUrl,
+  exchangeCode,
+  fetchDiscordUser,
+  joinGuild
+} from "./lib/discordOauth.js";
+
+import { COUNTRY_NAMES } from "./lib/countries.js";
+import { validateRegistration } from "./lib/registration.js";
+import {
+  isOpenForOffers,
+  normalizeSourceType,
+  offerableVatTypes
+} from "./lib/offerRules.js";
+import { isReconcileSafe, planMembershipChanges } from "./lib/membership.js";
+import { normalizeRefCode, planQualifications, shouldAttribute } from "./lib/referral.js";
+import {
+  buildDealConfirmationMessage,
+  buildExistingSellerMessage,
+  buildRegistrationChannelMessage,
+  buildWelcomeMessage
+} from "./lib/onboardingMessages.js";
+import { buildAgreementPayload } from "./lib/agreementWebhook.js";
+
+import {
   asText,
   memberWtbBuyerInvoiceAmount,
   calculateCounterPayoutForVatType,
@@ -86,6 +122,8 @@ const AIRTABLE_INVENTORY_UNITS_TABLE = "Inventory Units";
 const AIRTABLE_CONSIGNMENT_APPLICATIONS_TABLE = "Consignment Applications";
 const ORDERS_TABLE = process.env.AIRTABLE_ORDERS_TABLE || "Unfulfilled Orders Log";
 const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
+const DISCORD_MEMBERS_TABLE =
+  process.env.AIRTABLE_DISCORD_MEMBERS_TABLE || "Discord Members";
 const DISCORD_SERVER_ID = "922818998163361792";
 const KICKZ_DEAL_SERVER_ID = "922818998163361792";
 const CONSIGNMENT_DEAL_CATEGORY_ID = "1339532824000335883";
@@ -236,13 +274,18 @@ const kickzDealDiscordClient = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    // Nodig voor GuildMemberAdd/Remove en voor guild.members.fetch(). Vereist
+    // dat "Server Members Intent" aan staat in de Discord Developer Portal.
+    GatewayIntentBits.GuildMembers
   ]
 });
 
 let discordReady = false;
 let kickzDealDiscordReady = false;
 let consignmentButtonsBound = false;
+let membershipEventsBound = false;
+let sellerOnboardingBound = false;
 let kickzDealButtonsBound = false;
 let memberWtbCreationBound = false;
 let memberWtbCsvUploadsBound = false;
@@ -6562,6 +6605,31 @@ app.use(express.urlencoded({
   limit: "25mb"
 }));
 
+// Sessie- en identiteitslaag. Moet ná express.json() staan (de guard leest
+// req.body) en vóór alle routes. Zie lib/auth.js voor het waarom.
+const SESSION_SECRET = process.env.SESSION_SECRET || "";
+const AUTH_ENFORCE = (process.env.AUTH_ENFORCE || "warn").toLowerCase();
+const KC_SERVICE_SECRETS = [
+  process.env.KC_PORTAL_SECRET,
+  process.env.COUNTER_OFFERS_SECRET,
+  process.env.AIRTABLE_WEBHOOK_SECRET
+];
+const COOKIE_SECURE = (process.env.NODE_ENV || "") === "production";
+
+if (!SESSION_SECRET) {
+  throw new Error("Missing SESSION_SECRET");
+}
+
+app.use(
+  sellerIdentityGuard({
+    secret: SESSION_SECRET,
+    mode: AUTH_ENFORCE,
+    serviceSecrets: KC_SERVICE_SECRETS,
+    // Door Make en de bots aangeroepen, niet door een ingelogde browser.
+    allowPaths: ["/api/make/", "/api/internal/"]
+  })
+);
+
 app.use(express.static(path.join(__dirname, "public")));
 
 app.get("/", (_req, res) => {
@@ -6570,6 +6638,10 @@ app.get("/", (_req, res) => {
 
 app.get("/dashboard", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "dashboard.html"));
+});
+
+app.get("/signup", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "signup.html"));
 });
 
 app.get("/reset-password", (_req, res) => {
@@ -13337,6 +13409,7 @@ function normalizeSeller(record) {
     discord_id: displayValue(f["Discord ID"]),
     portal_password: displayValue(f["Portal Password"]),
     portal_enabled: f["Portal Enabled"] !== false,
+    discord_in_server: f["Discord In Server?"] !== false,
     consignor: f["Consignor?"] === true,
     deal_updates_channel_id: displayValue(f["Deal Updates Channel ID"]),
     consignment_offer_channel_id: displayValue(f["Consignment Offer Channel ID"]),
@@ -15200,8 +15273,12 @@ async function normalizeDeal(record, dealType) {
     max_payout_vat0: moneyValue(f["Final Outsource Buying Price (VAT 0%)"]),
 
     current_offer_margin: currentOfferMargin,
-    current_offer_vat0: currentOfferVat0,
-    maximum_buying_price: numberValue(f["Maximum Buying Price"])
+    current_offer_vat0: currentOfferVat0
+
+    // VERWIJDERD: maximum_buying_price. /api/deals is publiek en had geen
+    // auth, dus dit gaf iedereen met de netwerk-tab je inkoopplafond per
+    // order — precies het getal waar een seller net onder wil gaan zitten.
+    // Geen enkele frontend las het veld, dus er breekt niets.
   };
 }
 
@@ -15251,7 +15328,8 @@ async function normalizeMemberWtbDeal(record) {
 
     current_offer_vat0: memberWtbOfferVat0,
 
-    maximum_buying_price: numberValue(f["Max Price"]),
+    // VERWIJDERD: maximum_buying_price (hier het "Max Price" van de koper).
+    // Zelfde reden als bij normalizeDeal hierboven.
     raw_date: f["Date"] || f["Created At"] || ""
   };
 }
@@ -24778,11 +24856,34 @@ app.post("/api/login", async (req, res) => {
       });
     }
 
-    if (seller.portal_password !== password) {
+    // FIXED — was een kale === op een plain-text wachtwoord uit Airtable.
+    // verifyPassword accepteert nog steeds het oude formaat, maar meldt via
+    // needsRehash dat het record gemigreerd moet worden. Zo migreert iedereen
+    // vanzelf bij zijn eerstvolgende login, zonder mass-reset.
+    const { ok, needsRehash } = verifyPassword(password, seller.portal_password);
+
+    if (!ok) {
       return res.status(401).json({
         error: "Invalid login"
       });
     }
+
+    if (needsRehash) {
+      try {
+        await airtable(SELLERS_TABLE).update(seller.id, {
+          "Portal Password": hashPassword(password)
+        });
+      } catch (rehashErr) {
+        // Migratie mag een geslaagde login nooit blokkeren.
+        console.error("Password rehash failed:", rehashErr);
+      }
+    }
+
+    setSessionCookie(
+      res,
+      { rid: seller.id, sid: seller.seller_id },
+      { secret: SESSION_SECRET, secure: COOKIE_SECURE }
+    );
 
     res.json({
       seller: {
@@ -24791,6 +24892,7 @@ app.post("/api/login", async (req, res) => {
         email: seller.email,
         discord: seller.discord,
         discord_id: seller.discord_id,
+        discord_in_server: seller.discord_in_server,
         consignor: seller.consignor
       }
     });
@@ -24803,6 +24905,1151 @@ app.post("/api/login", async (req, res) => {
     });
   }
 });
+
+/* ------------------------------------------------------------------ *
+ * Registratie in de portal.
+ *
+ * Verving de registratie via de Discord-bot. Dit is nu de enige plek waar
+ * seller-records ontstaan, en het is met opzet één stap: alle velden in één
+ * formulier, en daarna meteen door naar de verplichte Discord-koppeling.
+ * Een seller zonder Discord ID kan namelijk geen deal-channel krijgen.
+ * ------------------------------------------------------------------ */
+
+// De dropdown haalt de lijst hiervandaan in plaats van hem in de HTML te
+// herhalen, zodat er maar één plek is waar landen staan.
+/* ------------------------------------------------------------------ *
+ * Offer-pagina per order.
+ *
+ * Airtable genereert per record een vaste URL (formuleveld), die de partner
+ * in zijn DM plakt. De seller landt daarmee direct op het order waar het om
+ * gaat en kan daar bieden, in plaats van eerst de hele Want To Buys-lijst
+ * door te moeten.
+ *
+ * Deze endpoint is bewust publiek: de link moet werken vóórdat iemand een
+ * account heeft. Daarom staat hieronder expliciet welke velden eruit gaan.
+ * Wat er NIET in mag: "Maximum Buying Price" / "Max Price" (het inkoop-
+ * plafond), "Invoice Price", en de identiteit van de koper. Een seller die
+ * het plafond kent, biedt daar net onder.
+ * ------------------------------------------------------------------ */
+
+app.get("/offer/:sourceType/:recordId", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "offer.html"));
+});
+
+app.get("/api/offer-page/:sourceType/:recordId", async (req, res) => {
+  try {
+    const sourceType = normalizeSourceType(req.params.sourceType);
+    const recordId = asText(req.params.recordId);
+
+    if (!sourceType) {
+      return res.status(400).json({ error: "Unknown order type" });
+    }
+
+    if (!/^rec[A-Za-z0-9]{14}$/.test(recordId)) {
+      return res.status(400).json({ error: "Invalid order link" });
+    }
+
+    const table = sourceType === "order" ? ORDERS_TABLE : MEMBER_WTBS_TABLE;
+    const record = await airtable(table).find(recordId).catch(() => null);
+
+    if (!record) {
+      return res.status(404).json({ error: "This order link is no longer valid." });
+    }
+
+    const f = record.fields || {};
+    const status = displayValue(f["Fulfillment Status"]);
+    const openState = isOpenForOffers({ sourceType, fulfillmentStatus: status });
+
+    // Het laagste huidige bod komt uit dezelfde rollups die de Want To
+    // Buys-pagina gebruikt, dus hier komt niets naar buiten wat daar niet al
+    // te zien is.
+    let currentOfferMargin = "";
+    let currentOfferVat0 = "";
+
+    if (sourceType === "order") {
+      currentOfferMargin = moneyWholeValue(Math.floor(numberValue(f["Current Lowest (Normalized)"])));
+      currentOfferVat0 = moneyWholeValue(Math.floor(numberValue(f["Current Lowest (VAT0)"])));
+    } else {
+      const normalized =
+        numberValue(f["Current Lowest Normalized"]) ||
+        numberValue(f["Current Lowest Offer"]) ||
+        numberValue(f["Lowest Offer"]);
+
+      if (normalized > 0) {
+        currentOfferMargin = moneyWholeValue(Math.floor(normalized));
+        currentOfferVat0 = moneyWholeValue(Math.floor(normalized / 1.21));
+      }
+    }
+
+    const order = {
+      id: record.id,
+      source_type: sourceType,
+      order_id:
+        sourceType === "order"
+          ? displayValue(f["Order ID"])
+          : displayValue(f["Member WTB ID"]) || record.id,
+      product: displayValue(f["Product Name"]),
+      sku: displayValue(f["SKU"]),
+      size: displayValue(f["Size"]),
+      brand: displayValue(f["Brand"]),
+      image_url: getImageUrl(f["Picture"]),
+      is_open: openState.open,
+      closed_reason: openState.reason,
+      current_offer_margin: currentOfferMargin,
+      current_offer_vat0: currentOfferVat0
+    };
+
+    // De bezoeker is niet per se ingelogd — dat is het hele punt van deze
+    // pagina. Wat we teruggeven bepaalt welk scherm hij krijgt: registreren,
+    // Discord koppelen, of gewoon bieden.
+    const session = readSession(req, SESSION_SECRET);
+
+    if (!session?.rid) {
+      return res.json({ order, viewer: { signed_in: false } });
+    }
+
+    const sellerRecord = await airtable(SELLERS_TABLE).find(session.rid).catch(() => null);
+
+    if (!sellerRecord) {
+      return res.json({ order, viewer: { signed_in: false } });
+    }
+
+    const seller = normalizeSeller(sellerRecord);
+
+    const vatTypes = offerableVatTypes({
+      sourceType,
+      buyingInventoryFilter: displayValue(f["Buying Inventory Filter"]),
+      vatId: sellerRecord.fields?.["VAT ID"],
+      country: sellerRecord.fields?.["Country"]
+    });
+
+    res.json({
+      order,
+      viewer: {
+        signed_in: true,
+        seller_id: seller.seller_id,
+        discord_linked: !!seller.discord_id,
+        discord_in_server: seller.discord_in_server !== false,
+        offerable_vat_types: vatTypes,
+        // Leeg betekent: deze seller kan hier fiscaal niets bieden. Dat is
+        // geen fout maar een feit, en het is eerlijker om dat te zeggen dan
+        // hem een offer te laten insturen die de bot toch weigert.
+        no_vat_types_reason: vatTypes.length
+          ? ""
+          : "This buyer only accepts VAT invoices, and your profile is not registered as a company."
+      }
+    });
+  } catch (err) {
+    console.error("Failed to load offer page:", err);
+
+    res.status(500).json({
+      error: "Could not load this order",
+      details: err.message
+    });
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * Wie zit er nog in de Discord-server?
+ *
+ * De offer-flow weigert sellers die de server verlaten hebben, want een
+ * geaccepteerde deal maakt een channel met de seller erin en dat mislukt
+ * stil als hij er niet meer is. Hieronder wordt "Discord In Server?"
+ * waarheidsgetrouw gehouden, uit twee bronnen:
+ *
+ *  1. Gateway-events — direct, maar gemist zolang de service down is.
+ *  2. Een periodieke reconcile tegen de volledige ledenlijst, die inhaalt
+ *     wat de gateway miste.
+ * ------------------------------------------------------------------ */
+
+const MEMBERSHIP_RECONCILE_INTERVAL_MS =
+  Number(process.env.MEMBERSHIP_RECONCILE_INTERVAL_MS) || 6 * 60 * 60 * 1000;
+
+async function setMembershipState(discordUserId, { inServer }) {
+  const id = asText(discordUserId);
+
+  if (!id) return;
+
+  const rows = await airtable(DISCORD_MEMBERS_TABLE)
+    .select({
+      filterByFormula: `{Discord User ID} = '${escapeFormulaValue(id)}'`,
+      maxRecords: 1
+    })
+    .firstPage()
+    .catch(() => []);
+
+  if (!rows.length) return;
+
+  const row = rows[0];
+
+  await airtable(DISCORD_MEMBERS_TABLE).update(row.id, {
+    "In Server?": inServer,
+    // Bij een rejoin wordt de vertrekdatum gewist, zodat het veld altijd de
+    // huidige situatie beschrijft in plaats van een oud vertrek.
+    "Left Server At": inServer ? null : new Date().toISOString()
+  });
+
+  // Het seller-record is wat de offer-flow leest; zonder deze stap verandert
+  // er functioneel niets.
+  const sellerRecordId = firstLinkedRecordId(row.fields?.["Linked Seller"]);
+
+  if (!sellerRecordId) return;
+
+  await airtable(SELLERS_TABLE)
+    .update(sellerRecordId, { "Discord In Server?": inServer })
+    .catch((err) => {
+      console.error(`Failed to update Discord In Server? for ${sellerRecordId}:`, err);
+    });
+}
+
+async function reconcileGuildMembership() {
+  try {
+    await initKickzDealDiscord();
+
+    const guild = await kickzDealDiscordClient.guilds.fetch(KICKZ_DEAL_SERVER_ID);
+    const members = await guild.members.fetch();
+    const guildMemberIds = [...members.keys()];
+
+    const airtableRows = [];
+
+    await airtable(DISCORD_MEMBERS_TABLE)
+      .select({ fields: ["Discord User ID", "In Server?", "Linked Seller"] })
+      .eachPage((records, next) => {
+        for (const record of records) {
+          airtableRows.push({
+            id: record.id,
+            discordUserId: asText(record.fields?.["Discord User ID"]),
+            inServer: record.fields?.["In Server?"],
+            sellerRecordId: firstLinkedRecordId(record.fields?.["Linked Seller"])
+          });
+        }
+        next();
+      });
+
+    const knownInServerCount = airtableRows.filter((r) => r.inServer !== false).length;
+    const safety = isReconcileSafe({
+      fetchedCount: guildMemberIds.length,
+      knownInServerCount
+    });
+
+    if (!safety.safe) {
+      console.warn(`Membership reconcile skipped: ${safety.reason}`);
+      return { skipped: true, reason: safety.reason };
+    }
+
+    const { toMarkLeft, toMarkRejoined } = planMembershipChanges({
+      guildMemberIds,
+      airtableRows
+    });
+
+    for (const row of toMarkLeft) {
+      await setMembershipState(row.discordUserId, { inServer: false });
+    }
+
+    for (const row of toMarkRejoined) {
+      await setMembershipState(row.discordUserId, { inServer: true });
+    }
+
+    if (toMarkLeft.length || toMarkRejoined.length) {
+      console.log(
+        `Membership reconcile: ${toMarkLeft.length} left, ${toMarkRejoined.length} rejoined ` +
+          `(${guildMemberIds.length} members in guild)`
+      );
+    }
+
+    return {
+      skipped: false,
+      guildMembers: guildMemberIds.length,
+      markedLeft: toMarkLeft.length,
+      markedRejoined: toMarkRejoined.length
+    };
+  } catch (err) {
+    console.error("Membership reconcile failed:", err);
+    return { skipped: true, reason: err.message };
+  }
+}
+
+function bindMembershipEvents() {
+  if (membershipEventsBound) return;
+  membershipEventsBound = true;
+
+  kickzDealDiscordClient.on(Events.GuildMemberRemove, async (member) => {
+    if (member.guild?.id !== KICKZ_DEAL_SERVER_ID) return;
+
+    try {
+      await setMembershipState(member.id, { inServer: false });
+      console.log(`Discord member left: ${member.user?.tag || member.id}`);
+    } catch (err) {
+      console.error("Failed to handle GuildMemberRemove:", err);
+    }
+  });
+
+  kickzDealDiscordClient.on(Events.GuildMemberAdd, async (member) => {
+    if (member.guild?.id !== KICKZ_DEAL_SERVER_ID) return;
+
+    try {
+      await setMembershipState(member.id, { inServer: true });
+    } catch (err) {
+      console.error("Failed to handle GuildMemberAdd:", err);
+    }
+  });
+}
+
+// Handmatig aftrappen, voor als je niet op de volgende ronde wil wachten.
+// Achter het bestaande service-secret, want dit doet een volledige ledenfetch.
+app.post("/api/internal/reconcile-membership", async (req, res) => {
+  const secret = asText(req.headers["x-kc-secret"]);
+
+  if (!process.env.KC_PORTAL_SECRET || secret !== process.env.KC_PORTAL_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const membership = await reconcileGuildMembership();
+  const referrals = await qualifyReferrals();
+
+  res.json({ membership, referrals });
+});
+
+/* ------------------------------------------------------------------ *
+ * Affiliate-attributie voor de portal-route.
+ *
+ * discord-deal-bot leidt af wie iemand uitnodigde door invite-tellers te
+ * vergelijken. Bij een OAuth-join wordt er geen invite verbruikt, dus die
+ * route ziet zo'n join helemaal niet. Hieronder wordt de referral expliciet
+ * meegedragen in de URL en vastgelegd — dezelfde velden, dezelfde regels,
+ * andere ingang.
+ * ------------------------------------------------------------------ */
+
+const INVITES_LOG_TABLE = process.env.AIRTABLE_INVITES_LOG_TABLE || "Invites Log";
+
+async function attributeReferral({ discordUser, refCode }) {
+  const code = normalizeRefCode(refCode);
+
+  if (!code) return;
+
+  try {
+    const inviterRows = await airtable(DISCORD_MEMBERS_TABLE)
+      .select({
+        filterByFormula: `{Invite Code} = '${escapeFormulaValue(code)}'`,
+        maxRecords: 1
+      })
+      .firstPage();
+
+    const inviter = inviterRows[0] || null;
+
+    const inviteeRows = await airtable(DISCORD_MEMBERS_TABLE)
+      .select({
+        filterByFormula: `{Discord User ID} = '${escapeFormulaValue(discordUser.id)}'`,
+        maxRecords: 1
+      })
+      .firstPage();
+
+    const invitee = inviteeRows[0] || null;
+
+    if (!invitee) return;
+
+    const decision = shouldAttribute({
+      inviteeDiscordId: discordUser.id,
+      inviterDiscordId: asText(inviter?.fields?.["Discord User ID"]),
+      existingInviterId: asText(invitee.fields?.["Invited By Discord User ID"])
+    });
+
+    if (!decision.attribute) {
+      console.log(`Referral ${code} niet toegekend: ${decision.reason}`);
+      return;
+    }
+
+    await airtable(DISCORD_MEMBERS_TABLE).update(invitee.id, {
+      "Invited By Discord User ID": asText(inviter.fields["Discord User ID"]),
+      "Invite Code Used": code,
+      "Invited By Member": [inviter.id]
+    });
+
+    await airtable(INVITES_LOG_TABLE).create({
+      "Invitee Discord User ID": discordUser.id,
+      "Invitee": [invitee.id],
+      "Inviter Discord User ID": asText(inviter.fields["Discord User ID"]),
+      "Inviter": [inviter.id],
+      "Invite Code Used": code,
+      "Joined At": new Date().toISOString()
+    });
+
+    console.log(
+      `Referral vastgelegd: ${asText(inviter.fields["Discord User ID"])} -> ${discordUser.id} (${code})`
+    );
+  } catch (err) {
+    // De Discord-koppeling zelf is op dit punt al gelukt; affiliate-
+    // administratie mag die nooit terugdraaien.
+    console.error("Failed to attribute referral:", err);
+  }
+}
+
+// Zet "Referral Qualified" aan zodra er een Inventory Unit op de Seller ID van
+// de uitgenodigde staat. Dat is het eerste harde bewijs dat er echt een deal
+// was — een aanmelding met gekoppelde Discord is dat nog niet.
+//
+// Bewust een periodieke sweep en geen haakje op het aanmaken van een unit:
+// units ontstaan op meerdere plekken (portal, Make, bots), en een sweep werkt
+// ongeacht welke dat was. Ook idempotent, dus dubbel draaien kan geen kwaad.
+async function qualifyReferrals() {
+  try {
+    const openLogs = [];
+
+    await airtable(INVITES_LOG_TABLE)
+      .select({
+        filterByFormula: "NOT({Referral Qualified})",
+        fields: ["Invitee Discord User ID", "Referral Qualified"]
+      })
+      .eachPage((records, next) => {
+        for (const record of records) {
+          openLogs.push({
+            logId: record.id,
+            discordUserId: asText(record.fields?.["Invitee Discord User ID"]),
+            qualified: record.fields?.["Referral Qualified"] === true
+          });
+        }
+        next();
+      });
+
+    if (!openLogs.length) return { qualified: 0 };
+
+    // Twee volledige uitlezingen in plaats van een lookup per rij: bij een paar
+    // honderd openstaande referrals scheelt dat honderden API-calls.
+    const sellerByDiscordId = new Map();
+
+    await airtable(DISCORD_MEMBERS_TABLE)
+      .select({ fields: ["Discord User ID", "Linked Seller"] })
+      .eachPage((records, next) => {
+        for (const record of records) {
+          const discordId = asText(record.fields?.["Discord User ID"]);
+          const sellerId = firstLinkedRecordId(record.fields?.["Linked Seller"]);
+
+          if (discordId && sellerId) sellerByDiscordId.set(discordId, sellerId);
+        }
+        next();
+      });
+
+    const sellersWithUnits = new Set();
+
+    await airtable(SELLERS_TABLE)
+      .select({ fields: ["Inventory Units"] })
+      .eachPage((records, next) => {
+        for (const record of records) {
+          const units = record.fields?.["Inventory Units"];
+
+          if (Array.isArray(units) && units.length) sellersWithUnits.add(record.id);
+        }
+        next();
+      });
+
+    const rows = openLogs.map((log) => ({
+      logId: log.logId,
+      qualified: log.qualified,
+      hasInventoryUnit: sellersWithUnits.has(sellerByDiscordId.get(log.discordUserId))
+    }));
+
+    const toQualify = planQualifications(rows);
+
+    for (let i = 0; i < toQualify.length; i += 10) {
+      const chunk = toQualify.slice(i, i + 10);
+
+      await airtable(INVITES_LOG_TABLE)
+        .update(chunk.map((id) => ({ id, fields: { "Referral Qualified": true } })))
+        .catch((err) => {
+          console.error("Failed to qualify referral chunk:", err);
+        });
+    }
+
+    if (toQualify.length) {
+      console.log(`Referrals gekwalificeerd: ${toQualify.length} van ${openLogs.length} openstaand`);
+    }
+
+    return { qualified: toQualify.length, pending: openLogs.length - toQualify.length };
+  } catch (err) {
+    console.error("Failed to qualify referrals:", err);
+    return { qualified: 0, error: err.message };
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Seller-onboarding, overgenomen van de losse seller-registration bot.
+ *
+ * Die service kan uit. Registreren gebeurt nu op /signup, dus de reeks
+ * Discord-modals is vervallen. Wat wél moest blijven draait hieronder mee in
+ * de portal, die al een Discord-client heeft:
+ *
+ *  - de welkomst-DM bij het joinen, nu met een link naar de portal
+ *  - Seller ID Check, voor wie zijn ID kwijt is
+ *  - de twee endpoints die Make aanroept
+ * ------------------------------------------------------------------ */
+
+const SELLER_WELCOME_DM =
+  String(process.env.SELLER_WELCOME_DM ?? "true").toLowerCase() === "true";
+const DISCORD_INVITE_URL = process.env.DISCORD_INVITE_URL || "";
+
+function signupUrl() {
+  return portalUrl("/signup");
+}
+
+// Zoekt het seller-record bij een Discord-gebruiker.
+//
+// Eerst op Discord ID, want dat is de betrouwbare match. Lukt dat niet, dan
+// zoeken we op naam in het tekstveld "Discord" — precies zoals de oude
+// registratie-bot deed. Dat is geen overbodige luxe: ruim de helft van de
+// sellers heeft (nog) geen Discord ID, en voor hen is dit de enige manier
+// waarop Seller ID Check iets vindt.
+async function findSellerForDiscordUser(interaction) {
+  const discordId = asText(interaction.user.id);
+
+  const byId = await airtable(SELLERS_TABLE)
+    .select({
+      filterByFormula: `{Discord ID} = '${escapeFormulaValue(discordId)}'`,
+      maxRecords: 1
+    })
+    .firstPage()
+    .catch(() => []);
+
+  if (byId.length) return byId[0];
+
+  const namen = new Set();
+
+  for (const naam of [
+    interaction.user.username,
+    interaction.user.globalName,
+    interaction.member?.nickname,
+    interaction.member?.displayName
+  ]) {
+    const clean = asText(naam);
+    if (clean) namen.add(clean);
+  }
+
+  // In een DM heeft de interaction geen member, dus halen we de servernaam
+  // alsnog op — daar staat vaak de naam onder die in Airtable is ingevuld.
+  if (!interaction.member) {
+    try {
+      const guild = await kickzDealDiscordClient.guilds.fetch(KICKZ_DEAL_SERVER_ID);
+      const member = await guild.members.fetch(discordId);
+
+      if (member?.displayName) namen.add(member.displayName);
+    } catch {
+      // Niet in de server, of geen toegang. Dan blijft het bij de namen hierboven.
+    }
+  }
+
+  if (!namen.size) return null;
+
+  // SEARCH in plaats van gelijkheid, zodat "Legendario" ook "Legendario#4880" vindt.
+  const condities = [...namen]
+    .map((naam) => `SEARCH('${escapeFormulaValue(naam)}', {Discord} & '') > 0`)
+    .join(", ");
+
+  const byName = await airtable(SELLERS_TABLE)
+    .select({ filterByFormula: `OR(${condities})`, maxRecords: 1 })
+    .firstPage()
+    .catch(() => []);
+
+  return byName[0] || null;
+}
+
+function bindSellerOnboarding() {
+  if (sellerOnboardingBound) return;
+  sellerOnboardingBound = true;
+
+  kickzDealDiscordClient.on(Events.GuildMemberAdd, async (member) => {
+    if (!SELLER_WELCOME_DM) return;
+    if (member.user?.bot) return;
+    if (member.guild?.id !== KICKZ_DEAL_SERVER_ID) return;
+
+    try {
+      const { title, description } = buildWelcomeMessage({
+        username: member.user.username,
+        signupUrl: signupUrl()
+      });
+
+      // Raw component-objecten, geen EmbedBuilder/ButtonBuilder: die classes
+      // worden in dit bestand nergens geïmporteerd en veroorzaakten eerder een
+      // ReferenceError die het hele proces omlegde.
+      await member.send({
+        embeds: [{ title, description, color: 0xffd300 }],
+        components: [
+          {
+            type: 1,
+            components: [
+              { type: 2, style: 2, label: "Seller ID Check", custom_id: "seller_id_check" }
+            ]
+          }
+        ]
+      });
+    } catch (err) {
+      // Mensen met DM's uit zijn geen fout om over te loggen als probleem.
+      console.warn(`Could not DM new member ${member.user?.tag || member.id}: ${err.message}`);
+    }
+  });
+
+  // Eigen listener naast de bestaande deal-knoppen. Die handler filtert op
+  // zijn eigen customId-prefixen en negeert alles daarbuiten, dus de twee
+  // zitten elkaar niet in de weg.
+  kickzDealDiscordClient.on(Events.InteractionCreate, async (interaction) => {
+    if (!interaction.isButton() || interaction.customId !== "seller_id_check") return;
+
+    const ephemeral = !!interaction.guildId;
+
+    try {
+      const record = await findSellerForDiscordUser(interaction);
+
+      if (!record) {
+        await interaction.reply({
+          content: [
+            "❌ I could not find a seller profile linked to this Discord.",
+            "",
+            `If you have never registered, create your profile here: ${signupUrl()}`,
+            "",
+            "Sold with us before through a form? Use the same page and log in with the email your Seller ID was sent to."
+          ].join("\n"),
+          ephemeral
+        });
+        return;
+      }
+
+      const seller = normalizeSeller(record);
+
+      await interaction.reply({
+        content: [
+          "✅ I found a seller profile linked to your Discord.",
+          "",
+          `Your **Seller ID** is: \`${seller.seller_id}\`.`,
+          seller.email ? `This profile is registered on: \`${seller.email}\`` : ""
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        ephemeral
+      });
+    } catch (err) {
+      console.error("Seller ID Check failed:", err);
+
+      await interaction
+        .reply({
+          content: "⚠️ Something went wrong while checking your Seller ID. Please try again later.",
+          ephemeral
+        })
+        .catch(() => {});
+    }
+  });
+}
+
+// Plaatst het registratie-embed in een kanaal. Bewust geen slash command:
+// die zou via guild.commands.set() geregistreerd moeten worden, en dat
+// vervangt ALLE commands van deze applicatie in de guild — inclusief
+// /mystats van de deal-bot. Dit endpoint roep je één keer aan.
+app.post("/api/internal/post-registration-embed", async (req, res) => {
+  const secret = asText(req.headers["x-kc-secret"]);
+
+  if (!process.env.KC_PORTAL_SECRET || secret !== process.env.KC_PORTAL_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const channelId = asText(req.body?.channel_id);
+
+  if (!channelId) {
+    return res.status(400).json({ error: "Missing channel_id" });
+  }
+
+  try {
+    await initKickzDealDiscord();
+
+    const channel = await kickzDealDiscordClient.channels.fetch(channelId);
+    const { title, description } = buildRegistrationChannelMessage({ signupUrl: signupUrl() });
+
+    const message = await channel.send({
+      embeds: [{ title, description, color: 0xffd300 }],
+      components: [
+        {
+          type: 1,
+          components: [
+            // style 5 = link-knop; die draagt een url in plaats van een custom_id.
+            { type: 2, style: 5, label: "Create your seller profile", url: signupUrl() },
+            { type: 2, style: 2, label: "Seller ID Check", custom_id: "seller_id_check" }
+          ]
+        }
+      ]
+    });
+
+    res.json({ ok: true, message_id: message.id });
+  } catch (err) {
+    console.error("Failed to post registration embed:", err);
+    res.status(500).json({ error: "Failed to post embed", details: err.message });
+  }
+});
+
+/* ---- de twee endpoints die Make aanroept ---- */
+
+app.post("/notify-existing-seller", async (req, res) => {
+  const { discordId, sellerId, orderId, email } = req.body || {};
+
+  if (!discordId || !sellerId) {
+    return res.status(400).json({
+      success: false,
+      error: "discordId and sellerId are required in the request body."
+    });
+  }
+
+  try {
+    await initKickzDealDiscord();
+
+    const user = await kickzDealDiscordClient.users.fetch(asText(discordId));
+
+    await user.send(
+      buildExistingSellerMessage({
+        username: user.username,
+        sellerId: asText(sellerId),
+        email: asText(email),
+        orderId: asText(orderId),
+        inviteUrl: DISCORD_INVITE_URL
+      })
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error sending existing-seller DM:", err);
+
+    res.status(500).json({
+      success: false,
+      error: "Failed to send DM. The user may have DMs disabled or the bot has no access."
+    });
+  }
+});
+
+app.post("/notify-deal-confirmation", async (req, res) => {
+  const { discordId, sellerId, fullName, orderId, sku, size, payout, orderDate } = req.body || {};
+
+  if (!discordId || !sellerId) {
+    return res.status(400).json({
+      success: false,
+      error: "discordId and sellerId are required in the request body."
+    });
+  }
+
+  try {
+    await initKickzDealDiscord();
+
+    const user = await kickzDealDiscordClient.users.fetch(asText(discordId));
+
+    await user.send(
+      buildDealConfirmationMessage({
+        name: asText(fullName) || user.username,
+        sellerId: asText(sellerId),
+        orderId: asText(orderId),
+        sku: asText(sku),
+        size: asText(size),
+        payout,
+        orderDate: asText(orderDate),
+        inviteUrl: DISCORD_INVITE_URL
+      })
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error sending deal-confirmation DM:", err);
+
+    res.status(500).json({
+      success: false,
+      error: "Failed to send DM. The user may have DMs disabled or the bot has no access."
+    });
+  }
+});
+
+app.get("/api/countries", (_req, res) => {
+  res.json({ countries: COUNTRY_NAMES });
+});
+
+app.post("/api/signup", async (req, res) => {
+  try {
+    const returnTo = safeReturnPath(req.body?.return_to);
+    const refCode = normalizeRefCode(req.body?.referral_code);
+    const result = validateRegistration(req.body || {});
+
+    if (!result.ok) {
+      return res.status(400).json({
+        error: "Please check the highlighted fields",
+        fields: result.errors
+      });
+    }
+
+    // Nooit blind aanmaken. Er bestaan seller-records van vóór de portal
+    // (aangemaakt door de Discord-bot of via het oude formulier); een tweede
+    // record voor dezelfde persoon levert een tweede Seller ID op en splitst
+    // zijn dealgeschiedenis in tweeën.
+    const existing = await airtable(SELLERS_TABLE)
+      .select({
+        filterByFormula: `LOWER(TRIM({Email} & '')) = '${escapeFormulaValue(result.email)}'`,
+        maxRecords: 1
+      })
+      .firstPage();
+
+    if (existing.length) {
+      const seller = normalizeSeller(existing[0]);
+
+      // Heeft al een wachtwoord: gewoon inloggen.
+      if (seller.portal_password) {
+        return res.status(409).json({
+          error: "An account with this email already exists. Please log in instead.",
+          code: "account_exists"
+        });
+      }
+
+      // Bestaand profiel zonder portal-wachtwoord — de seller die ooit via
+      // Discord of het formulier is aangemaakt. Die claimt zijn record via de
+      // reset-mail in plaats van een nieuw record te krijgen.
+      return res.status(409).json({
+        error:
+          "You already have a seller profile with us. Use \"First time login or forgot password\" to set your password.",
+        code: "existing_profile"
+      });
+    }
+
+    const created = await airtable(SELLERS_TABLE).create({
+      ...result.fields,
+      "Portal Password": hashPassword(String(req.body.password))
+    });
+
+    const seller = normalizeSeller(created);
+
+    setSessionCookie(
+      res,
+      { rid: seller.id, sid: seller.seller_id },
+      { secret: SESSION_SECRET, secure: COOKIE_SECURE }
+    );
+
+    res.json({
+      seller: {
+        id: seller.id,
+        seller_id: seller.seller_id,
+        email: seller.email,
+        discord_id: seller.discord_id,
+        consignor: seller.consignor
+      },
+      // De registratie is pas af als Discord gekoppeld is; de frontend stuurt
+      // hier meteen naartoe. Kwam de seller van een offer-link, dan keert hij
+      // na het koppelen daar terug in plaats van op het dashboard.
+      next: buildDiscordLinkPath({ returnTo, refCode, fresh: true })
+    });
+  } catch (err) {
+    console.error("Signup failed:", err);
+
+    res.status(500).json({
+      error: "Could not create your seller profile",
+      details: err.message
+    });
+  }
+});
+
+app.post("/api/logout", (req, res) => {
+  clearSessionCookie(res, { secure: COOKIE_SECURE });
+  res.json({ ok: true });
+});
+
+// Laat de frontend controleren of de cookie nog geldig is. localStorage
+// ("kc_seller") overleeft een verlopen sessie, dus zonder deze check zou de UI
+// ingelogd blijven lijken terwijl elke schrijfactie een 401 krijgt.
+app.get("/api/session", async (req, res) => {
+  const session = readSession(req, SESSION_SECRET);
+
+  if (!session?.rid) {
+    return res.status(401).json({ error: "Not signed in" });
+  }
+
+  try {
+    const record = await airtable(SELLERS_TABLE).find(session.rid);
+    const seller = normalizeSeller(record);
+
+    res.json({
+      seller: {
+        id: seller.id,
+        seller_id: seller.seller_id,
+        email: seller.email,
+        discord: seller.discord,
+        discord_id: seller.discord_id,
+        discord_in_server: seller.discord_in_server,
+        consignor: seller.consignor
+      }
+    });
+  } catch (err) {
+    clearSessionCookie(res, { secure: COOKIE_SECURE });
+    res.status(401).json({ error: "Not signed in" });
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * Discord koppelen.
+ *
+ * Eén klik die twee dingen tegelijk doet: het Discord-account aan het
+ * Sellers Database-record hangen en de seller in de server zetten. Zonder
+ * Discord ID op het record kan er bij een geaccepteerde deal geen channel
+ * met de seller worden aangemaakt, dus dit is geen extraatje maar een
+ * voorwaarde om te mogen bieden.
+ * ------------------------------------------------------------------ */
+
+const DISCORD_OAUTH_CLIENT_ID =
+  process.env.DISCORD_OAUTH_CLIENT_ID || "942785648048353370";
+const DISCORD_OAUTH_CLIENT_SECRET = process.env.DISCORD_OAUTH_CLIENT_SECRET || "";
+
+// Moet letterlijk gelijk zijn aan een Redirect die in de Discord Developer
+// Portal staat, anders weigert Discord de hele flow.
+const DISCORD_OAUTH_REDIRECT_URI =
+  process.env.DISCORD_OAUTH_REDIRECT_URI ||
+  `${String(APP_PUBLIC_BASE_URL).replace(/\/$/, "")}/auth/discord/callback`;
+
+function portalUrl(pathname) {
+  return `${String(APP_PUBLIC_BASE_URL).replace(/\/$/, "")}${pathname}`;
+}
+
+// Alleen een pad binnen de portal mag als terugkeeradres dienen. Zonder deze
+// controle kan iemand een offer-link rondsturen die na het koppelen doorstuurt
+// naar een site die hij zelf beheert.
+function safeReturnPath(input) {
+  const value = String(input || "");
+
+  if (!value.startsWith("/") || value.startsWith("//")) return "";
+
+  return value;
+}
+
+// Bouwt het pad naar de koppelstap met de context die meegedragen moet
+// worden: waar de seller vandaan kwam, en wie hem gestuurd heeft.
+function buildDiscordLinkPath({ returnTo = "", refCode = "", fresh = false } = {}) {
+  const params = new URLSearchParams();
+
+  if (returnTo) params.set("return", returnTo);
+  if (refCode) params.set("ref", refCode);
+  if (fresh) params.set("new", "1");
+
+  const query = params.toString();
+
+  return query ? `/auth/discord?${query}` : "/auth/discord";
+}
+
+function discordLinkRedirect(res, params) {
+  const target = new URL(portalUrl("/dashboard"));
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value) target.searchParams.set(key, String(value));
+  }
+
+  res.redirect(target.toString());
+}
+
+app.get("/auth/discord", (req, res) => {
+  const session = readSession(req, SESSION_SECRET);
+
+  if (!session?.rid) {
+    return res.redirect("/?login=required");
+  }
+
+  if (!DISCORD_OAUTH_CLIENT_SECRET) {
+    console.error("Discord link attempted without DISCORD_OAUTH_CLIENT_SECRET");
+    return discordLinkRedirect(res, { discord_error: "not_configured" });
+  }
+
+  // De state is ondertekend en draagt het seller-record, zodat de callback niet
+  // op een meegestuurde parameter hoeft te vertrouwen. Vervalt na 10 minuten.
+  const state = signSession(
+    {
+      rid: session.rid,
+      rt: safeReturnPath(req.query.return),
+      ref: normalizeRefCode(req.query.ref),
+      fresh: req.query.new === "1",
+      nonce: crypto.randomBytes(8).toString("hex"),
+      exp: Date.now() + 10 * 60 * 1000
+    },
+    SESSION_SECRET
+  );
+
+  res.redirect(
+    buildAuthorizeUrl({
+      clientId: DISCORD_OAUTH_CLIENT_ID,
+      redirectUri: DISCORD_OAUTH_REDIRECT_URI,
+      state
+    })
+  );
+});
+
+app.get("/auth/discord/callback", async (req, res) => {
+  const code = asText(req.query.code);
+  const state = asText(req.query.state);
+
+  // De gebruiker kan op "Cancel" drukken; dan komt hij hier terug zonder code.
+  if (!code) {
+    return discordLinkRedirect(res, { discord_error: "cancelled" });
+  }
+
+  const claim = verifySession(state, SESSION_SECRET);
+
+  if (!claim?.rid) {
+    return discordLinkRedirect(res, { discord_error: "invalid_state" });
+  }
+
+  try {
+    const { accessToken } = await exchangeCode({
+      clientId: DISCORD_OAUTH_CLIENT_ID,
+      clientSecret: DISCORD_OAUTH_CLIENT_SECRET,
+      code,
+      redirectUri: DISCORD_OAUTH_REDIRECT_URI
+    });
+
+    const discordUser = await fetchDiscordUser({ accessToken });
+
+    // Dit Discord-account mag niet al aan een ánder seller-record hangen.
+    // Stil overzetten zou twee sellers door elkaar halen en de deal-channels
+    // naar de verkeerde persoon sturen.
+    const conflicts = await airtable(SELLERS_TABLE)
+      .select({
+        filterByFormula: `{Discord ID} = '${escapeFormulaValue(discordUser.id)}'`,
+        maxRecords: 2
+      })
+      .firstPage();
+
+    const foreign = conflicts.find((r) => r.id !== claim.rid);
+
+    if (foreign) {
+      console.warn(
+        `Discord ${discordUser.id} is al gekoppeld aan seller ${foreign.id}, geweigerd voor ${claim.rid}`
+      );
+      return discordLinkRedirect(res, { discord_error: "already_linked" });
+    }
+
+    const sellerRecord = await airtable(SELLERS_TABLE).find(claim.rid);
+    const existingDiscordId = asText(sellerRecord.fields?.["Discord ID"]);
+
+    if (existingDiscordId && existingDiscordId !== discordUser.id) {
+      console.warn(
+        `Seller ${claim.rid} heeft al Discord ${existingDiscordId}, weigert ${discordUser.id}`
+      );
+      return discordLinkRedirect(res, { discord_error: "seller_has_other_discord" });
+    }
+
+    const join = await joinGuild({
+      botToken: process.env.KICKZ_DEAL_DISCORD_BOT_TOKEN,
+      guildId: KICKZ_DEAL_SERVER_ID,
+      userId: discordUser.id,
+      accessToken
+    });
+
+    await airtable(SELLERS_TABLE).update(claim.rid, {
+      "Discord ID": discordUser.id,
+      "Discord": discordUser.username,
+      "Discord Linked At": new Date().toISOString(),
+      "Discord In Server?": true
+    });
+
+    await upsertDiscordMember({ discordUser, sellerRecordId: claim.rid });
+
+    // Na de upsert, want attributeReferral heeft de Discord Members-rij van
+    // de uitgenodigde nodig.
+    await attributeReferral({ discordUser, refCode: claim.ref });
+
+    // Alleen bij een verse registratie. De oude seller-registration bot vuurde
+    // dit vlak na het aanmaken van het record; in de portal bestaat het record
+    // al vóór de koppeling, dus we wachten tot hier — anders krijgt Make een
+    // lege discordId en discordTag.
+    if (claim.fresh) {
+      await sendAgreementWebhook({
+        sellerRecord: await airtable(SELLERS_TABLE).find(claim.rid),
+        discordUser
+      });
+    }
+
+    const back = safeReturnPath(claim.rt) || "/dashboard";
+    const separator = back.includes("?") ? "&" : "?";
+
+    res.redirect(
+      portalUrl(
+        `${back}${separator}discord=${join.alreadyMember ? "already_member" : "linked"}`
+      )
+    );
+  } catch (err) {
+    console.error("Discord link failed:", err);
+
+    // Een 403 op de join betekent vrijwel altijd dat de bot "Create Invite"
+    // mist; dat is een serverinstelling, geen gebruikersfout.
+    const reason = /Failed to add user to guild \(403/.test(err.message)
+      ? "bot_missing_permission"
+      : "failed";
+
+    discordLinkRedirect(res, { discord_error: reason });
+  }
+});
+
+// Houdt de Discord Members-tabel in lijn, zodat de controle "zit deze seller
+// nog in de server?" één bron heeft.
+// Vuurt het Make-scenario af dat de Sales Agreement PDF genereert en in het
+// veld "Agreement PDF" zet. Zonder MAKE_PDF_WEBHOOK_URL gebeurt er niets, dan
+// blijft dat veld gewoon leeg.
+async function sendAgreementWebhook({ sellerRecord, discordUser }) {
+  const url = process.env.MAKE_PDF_WEBHOOK_URL;
+
+  if (!url) {
+    console.warn("MAKE_PDF_WEBHOOK_URL not set — no Sales Agreement PDF will be generated");
+    return;
+  }
+
+  try {
+    const payload = buildAgreementPayload({
+      airtableRecordId: sellerRecord.id,
+      sellerId: displayValue(sellerRecord.fields?.["Seller ID"]),
+      discordId: discordUser.id,
+      discordTag: discordUser.username,
+      fields: sellerRecord.fields,
+      timestamp: new Date().toISOString()
+    });
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      console.error(`Agreement webhook returned ${response.status}`);
+    }
+  } catch (err) {
+    // Het profiel en de koppeling zijn op dit punt al gelukt; een mislukte
+    // PDF mag die niet terugdraaien.
+    console.error("Failed to call agreement webhook:", err);
+  }
+}
+
+async function upsertDiscordMember({ discordUser, sellerRecordId }) {
+  try {
+    const existing = await airtable(DISCORD_MEMBERS_TABLE)
+      .select({
+        filterByFormula: `{Discord User ID} = '${escapeFormulaValue(discordUser.id)}'`,
+        maxRecords: 1
+      })
+      .firstPage();
+
+    const fields = {
+      "Discord User ID": discordUser.id,
+      "Discord Username": discordUser.username,
+      "Discord Display Name": discordUser.displayName,
+      "Linked Seller": [sellerRecordId],
+      "In Server?": true,
+      "Left Server At": null
+    };
+
+    if (existing.length) {
+      await airtable(DISCORD_MEMBERS_TABLE).update(existing[0].id, fields);
+    } else {
+      await airtable(DISCORD_MEMBERS_TABLE).create({
+        ...fields,
+        "Joined At": new Date().toISOString()
+      });
+    }
+  } catch (err) {
+    // De koppeling op het seller-record is het belangrijke deel en is op dit
+    // punt al geslaagd; deze tabel is administratie en mag de flow niet breken.
+    console.error("Failed to upsert Discord Members record:", err);
+  }
+}
 
 app.post("/api/forgot-password", async (req, res) => {
   try {
@@ -24949,7 +26196,7 @@ app.post("/api/reset-password", async (req, res) => {
     }
 
     await airtable(SELLERS_TABLE).update(seller.id, {
-      "Portal Password": password,
+      "Portal Password": hashPassword(password),
       "Password Reset Token": "",
       "Password Reset Expires At": null
     });
@@ -25017,6 +26264,61 @@ app.post("/api/claim-deal", async (req, res) => {
   }
 });
 
+// Zonder Discord ID op het seller-record kan er bij een geaccepteerde deal
+// geen channel met de seller worden aangemaakt. Dat maakt dit geen nette-
+// gegevens-kwestie maar een harde voorwaarde om te mogen bieden.
+//
+// Registratie via de portal levert altijd een gekoppelde Discord op. Wat
+// overblijft zijn de records van vóór de portal: aangemaakt door de
+// Discord-bot of het oude formulier, soms zonder Discord ID. Die lopen hier
+// tegenaan, met een melding die in één klik op te lossen is in plaats van een
+// supportbericht.
+async function requireLinkedDiscord(sellerRecordId) {
+  if (!sellerRecordId) {
+    return { ok: false, status: 400, body: { error: "Missing sellerRecordId" } };
+  }
+
+  const record = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+
+  if (!record) {
+    return { ok: false, status: 404, body: { error: "Seller not found" } };
+  }
+
+  const seller = normalizeSeller(record);
+
+  if (!seller.discord_id) {
+    return {
+      ok: false,
+      status: 403,
+      body: {
+        error: "Link your Discord account before placing an offer.",
+        details:
+          "Every accepted deal gets its own Discord channel with you in it, so we need your Discord linked first. It takes one click.",
+        code: "discord_not_linked",
+        link_url: "/auth/discord"
+      }
+    };
+  }
+
+  // Wel een Discord ID, maar niet meer in de server. Dezelfde oplossing: de
+  // koppelflow zet hem er via guilds.join weer in.
+  if (seller.discord_in_server === false) {
+    return {
+      ok: false,
+      status: 403,
+      body: {
+        error: "You are no longer in the Kickz Caviar Discord server.",
+        details:
+          "Rejoin to keep making deals — your deal channels live there. It takes one click.",
+        code: "discord_left_server",
+        link_url: "/auth/discord"
+      }
+    };
+  }
+
+  return { ok: true, seller };
+}
+
 app.post("/api/place-offer", async (req, res) => {
   try {
     const {
@@ -25026,6 +26328,12 @@ app.post("/api/place-offer", async (req, res) => {
       vatType,
       sourceType = "order"
     } = req.body || {};
+
+    const gate = await requireLinkedDiscord(sellerRecordId);
+
+    if (!gate.ok) {
+      return res.status(gate.status).json(gate.body);
+    }
 
     const wtbBotBaseUrl = process.env.KICKZ_WTB_BOT_BASE_URL;
 
@@ -30162,7 +31470,22 @@ app.listen(PORT, () => {
     console.error("Failed to init Discord bot on startup:", err);
   });
 
-  initKickzDealDiscord().catch((err) => {
-    console.error("Failed to init Kickz Deal Discord bot on startup:", err);
-  });
+  initKickzDealDiscord()
+    .then(() => {
+      bindMembershipEvents();
+      bindSellerOnboarding();
+
+      // Eén ronde bij het opstarten haalt in wat er tijdens een deploy of
+      // downtime aan join/leave-events is gemist.
+      reconcileGuildMembership();
+      qualifyReferrals();
+
+      setInterval(() => {
+        reconcileGuildMembership();
+        qualifyReferrals();
+      }, MEMBERSHIP_RECONCILE_INTERVAL_MS);
+    })
+    .catch((err) => {
+      console.error("Failed to init Kickz Deal Discord bot on startup:", err);
+    });
 });
