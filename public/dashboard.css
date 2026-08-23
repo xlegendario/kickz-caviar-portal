@@ -768,7 +768,7 @@
    nothing like the first rule described. A bordered card of 50 px per
    section, in uppercase, was most of the sidebar's width and weight. */
 .dashboard-nav-header {
-  min-height: 32px;
+  min-height: 36px;
   padding: 0 8px;
   border-radius: 8px;
 
@@ -789,9 +789,15 @@
   box-shadow: none;
 }
 
-/* Open and active were one rule and stay one rule - the section you are
-   looking at is the one that is expanded. */
-.dashboard-nav-header.open,
+/* Expanded is not the same as selected. Several sections can be open
+   at once now, so only the one you are actually looking at gets the
+   brand rail; the rest just read a little brighter. */
+.dashboard-nav-header.open {
+  color: #ffffff;
+  border-color: transparent;
+  box-shadow: none;
+}
+
 .dashboard-nav-header.active {
   background: rgba(255, 204, 0, 0.10);
   border-color: transparent;
@@ -862,7 +868,7 @@
 
 .dashboard-subnav-btn {
   position: relative;
-  min-height: 27px;
+  min-height: 32px;
   padding: 0 6px;
   gap: 5px;
   border: none;
@@ -4344,4 +4350,57 @@ body.kc-dialog-open {
   > :not(.action-accept) {
   grid-row: 1 / span 2;
   height: auto;
+}
+
+
+/* ---- The sidebar on a phone -----------------------------------------
+   On a phone the sidebar is a 320 px drawer, so none of the width saving
+   above applies there - and the compact rows that buy a table column on a
+   desktop are simply hard to hit with a thumb. Everything goes back to a
+   comfortable size below 1100 px, where a row is at least 44 px.
+   --------------------------------------------------------------------- */
+@media (max-width: 1100px) {
+  .dashboard-sidebar {
+    padding: 18px 14px;
+  }
+
+  .dashboard-brand-logo {
+    width: 178px;
+  }
+
+  .dashboard-nav-header {
+    min-height: 46px;
+    padding: 0 12px;
+    border-radius: 12px;
+    font-size: 14px;
+    gap: 9px;
+  }
+
+  .dashboard-nav-arrow {
+    width: 12px;
+    font-size: 13px;
+  }
+
+  .dashboard-subnav {
+    margin: 4px 0 10px 14px;
+    padding: 2px 0 2px 8px;
+  }
+
+  .dashboard-subnav-btn {
+    min-height: 44px;
+    padding: 0 10px;
+    border-radius: 10px;
+    font-size: 14px;
+  }
+
+  .dashboard-nav-count,
+  .dashboard-subnav-count {
+    font-size: 13px;
+  }
+
+  .dashboard-subnav-warning {
+    width: 17px;
+    height: 17px;
+    font-size: 12px;
+  }
 }
