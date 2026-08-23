@@ -276,7 +276,11 @@ const dashboardConfig = {
       { key: "open_wtbs", label: "Open WTBs" },
       { key: "offers", label: "Offers", statusFilters: ["open", "counter", "denied"] },
       { key: "accepted", label: "Accepted" },
-      { key: "payment_required", label: "Payment Required" },
+      // CHANGED - sidebar label only; the key, the Discord copy and the
+      // Airtable status are untouched. "Payment Required" plus the
+      // attention badge did not fit the narrower sidebar, and this row is
+      // the one that must never be the one that truncates.
+      { key: "payment_required", label: "Payment Due" },
       { key: "confirmed", label: "Confirmed" },
       { key: "label_requested", label: "Label Requested" },
       { key: "ready_to_ship", label: "Ready To Ship" },
@@ -455,10 +459,10 @@ function renderSubnav() {
 
       return `
         <button class="dashboard-subnav-btn" type="button" data-section="${section}" data-tab="${tab.key}">
-          <span>${tab.label}</span>
+          <span class="dashboard-subnav-label">${tab.label}</span>
           <span class="dashboard-subnav-meta">
-            ${showWarning ? `<span class="dashboard-subnav-warning">⚠</span>` : ""}
-            <span class="dashboard-subnav-count" data-count-key="${section}:${tab.key}">${count}</span>
+            ${showWarning ? `<span class="dashboard-subnav-warning" title="Outstanding payment">!</span>` : ""}
+            <span class="dashboard-subnav-count${count ? "" : " zero"}" data-count-key="${section}:${tab.key}">${count}</span>
           </span>
         </button>
       `;
@@ -623,6 +627,18 @@ let dashboardCountsCache = {
 let quickCountsCache = {};
 let statsOpen = false;
 
+// CHANGED - a count of zero is noise, and in a 168 px sidebar it costs the
+// width the label needs. Every place that writes a nav count goes through
+// here, so the rule cannot drift apart between them again.
+function setNavCount(el, value) {
+  if (!el) return;
+
+  const n = Number(value || 0);
+
+  el.textContent = n;
+  el.classList.toggle("zero", n === 0);
+}
+
 function setConsignmentCount(key, value) {
   const count = Number(value || 0);
 
@@ -633,7 +649,7 @@ function setConsignmentCount(key, value) {
 
   document.querySelectorAll(`[data-count-key="consignment:${key}"]`)
     .forEach((el) => {
-      el.textContent = count;
+      setNavCount(el, count);
     });
 
   const total = Object.values(dashboardCountsCache.consignment || {})
@@ -641,7 +657,7 @@ function setConsignmentCount(key, value) {
 
   document.querySelectorAll('[data-count-group="consignment"]')
     .forEach((el) => {
-      el.textContent = total;
+      setNavCount(el, total);
     });
 
   renderStats();
@@ -694,7 +710,7 @@ async function loadDashboardCounts() {
 
     document.querySelectorAll(`[data-count-group="${section}"]`)
       .forEach((el) => {
-        el.textContent = total;
+        setNavCount(el, total);
       });
   });
 
@@ -894,6 +910,17 @@ function fitDashboardColumns() {
 
   if (rowEls.length) {
     const widest = Math.max(...rowEls.map((rowEl) => {
+      // CHANGED - a row with an accept block is a grid: two of its buttons
+      // sit stacked in the second column. Adding all three widths together
+      // then reports the old side-by-side width, so the column stayed wide
+      // and the buttons floated in it with space to spare.
+      //
+      // Such a row is width: fit-content, so it does not stretch and its own
+      // width is the honest answer.
+      if (rowEl.querySelector(".action-accept")) {
+        return rowEl.getBoundingClientRect().width;
+      }
+
       const btnEls = Array.from(rowEl.children).filter((k) => k.getBoundingClientRect().width > 0);
       if (!btnEls.length) return 0;
       const gapWidth = parseFloat(getComputedStyle(rowEl).gap) || 0;
@@ -5086,13 +5113,11 @@ async function loadDashboardData() {
       '[data-count-key="history:completed"]'
     );
   
-    if (countEl) {
-      countEl.textContent = data.count || 0;
-    }
+    setNavCount(countEl, data.count || 0);
 
     document.querySelectorAll('[data-count-group="history"]')
     .forEach((el) => {
-      el.textContent = data.count || 0;
+      setNavCount(el, data.count || 0);
     });
 
     quickCountsCache.completed = data.count || 0;
