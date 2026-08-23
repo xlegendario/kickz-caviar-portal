@@ -5018,3 +5018,10 @@ body.kc-dialog-open {
   padding: 11px;
   box-sizing: border-box;
 }
+
+.offer-done-title {
+  margin: 0 0 12px;
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: -0.4px;
+}
