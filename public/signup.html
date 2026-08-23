@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Become a Seller | Kickz Caviar</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/dashboard.css" />
+</head>
+<body class="dashboard-body">
+  <section class="dashboard-login-panel">
+    <div class="dashboard-login-card dashboard-signup-card">
+      <div class="dashboard-eyebrow">Seller Portal</div>
+      <h2>Create your seller profile</h2>
+      <p>
+        Fill this in once and link your Discord. After that, placing an offer
+        on any deal takes just a few clicks.
+      </p>
+
+      <!--
+        De autocomplete-attributen hieronder zijn geen detail: hiermee vult een
+        telefoon of browser adres en naam in één tik in. Dat is precies wat deze
+        registratie kort genoeg houdt om alle velden te durven vragen.
+      -->
+      <form id="signupForm" class="dashboard-login-form" autocomplete="on">
+        <label>
+          Full name
+          <input name="full_name" type="text" autocomplete="name" required />
+        </label>
+
+        <label>
+          Email
+          <input name="email" type="email" autocomplete="email" required />
+        </label>
+
+        <label>
+          Company name <span class="signup-optional">optional</span>
+          <input name="company_name" type="text" autocomplete="organization" />
+        </label>
+
+        <label>
+          VAT ID <span class="signup-optional">optional</span>
+          <input name="vat_id" type="text" />
+          <small class="signup-hint" id="vatHint">
+            Without a VAT ID you can only sell under the Margin scheme.
+          </small>
+        </label>
+
+        <label>
+          Address
+          <input name="address" type="text" autocomplete="address-line1" required />
+        </label>
+
+        <label>
+          Address line 2 <span class="signup-optional">optional</span>
+          <input name="address_line_2" type="text" autocomplete="address-line2" />
+        </label>
+
+        <label>
+          Zipcode
+          <input name="zipcode" type="text" autocomplete="postal-code" required />
+        </label>
+
+        <label>
+          City
+          <input name="city" type="text" autocomplete="address-level2" required />
+        </label>
+
+        <label>
+          Country
+          <select name="country" id="countrySelect" autocomplete="country-name" required>
+            <option value="">Select your country</option>
+          </select>
+        </label>
+
+        <label>
+          Payout info (IBAN or PayPal)
+          <input name="payout_info" type="text" required />
+        </label>
+
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="new-password" required />
+        </label>
+
+        <label>
+          Confirm password
+          <input name="password_confirm" type="password" autocomplete="new-password" required />
+          <small class="signup-match" id="passwordMatch"></small>
+        </label>
+
+        <label class="signup-terms">
+          <input name="accept_terms" type="checkbox" required />
+          <span>
+            I agree to the
+            <a href="https://bit.ly/kickzcaviar-terms" target="_blank" rel="noopener">Terms &amp; Conditions</a>
+          </span>
+        </label>
+
+        <button type="submit" id="signupSubmit">Create profile</button>
+
+        <div class="dashboard-form-error" id="signupMessage"></div>
+      </form>
+
+      <p class="signup-footer">
+        Already have a profile? <a href="/dashboard" id="loginLink">Log in</a>
+      </p>
+    </div>
+  </section>
+
+  <script>
+    const returnParam = new URLSearchParams(window.location.search).get("return") || "";
+
+    if (returnParam.startsWith("/") && !returnParam.startsWith("//")) {
+      document.getElementById("loginLink").href = returnParam;
+    }
+
+    const signupForm = document.getElementById("signupForm");
+    const signupSubmit = document.getElementById("signupSubmit");
+    const signupMessage = document.getElementById("signupMessage");
+    const countrySelect = document.getElementById("countrySelect");
+    const vatHint = document.getElementById("vatHint");
+
+    // De landenlijst komt van de server (lib/countries.js), zodat hij niet op
+    // twee plekken onderhouden hoeft te worden en nooit uit de pas loopt met
+    // wat Airtable accepteert.
+    (async () => {
+      try {
+        const response = await fetch("/api/countries");
+        const data = await response.json();
+
+        for (const name of data.countries || []) {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          countrySelect.appendChild(option);
+        }
+      } catch (err) {
+        signupMessage.textContent =
+          "Could not load the country list. Please refresh the page.";
+      }
+    })();
+
+    function updateVatHint() {
+      const hasVatId = !!signupForm.elements.vat_id.value.trim();
+      const isNl = countrySelect.value === "Netherlands";
+
+      if (!hasVatId) {
+        vatHint.textContent =
+          "Without a VAT ID you can only sell under the Margin scheme.";
+        return;
+      }
+
+      vatHint.textContent = isNl
+        ? "As a Dutch company you can sell Margin or VAT21."
+        : "As a non-Dutch company you can sell Margin or VAT0.";
+    }
+
+    signupForm.elements.vat_id.addEventListener("input", updateVatHint);
+    countrySelect.addEventListener("change", updateVatHint);
+
+    // De server vergelijkt de twee wachtwoorden ook (lib/registration.js), maar
+    // pas na verzenden. Hier ziet de seller het meteen, zodat hij niet het hele
+    // formulier terugkrijgt voor een tikfout in het laatste veld.
+    const passwordInput = signupForm.elements.password;
+    const passwordConfirmInput = signupForm.elements.password_confirm;
+    const passwordMatch = document.getElementById("passwordMatch");
+
+    function updatePasswordMatch() {
+      const confirm = passwordConfirmInput.value;
+
+      if (!confirm) {
+        passwordMatch.textContent = "";
+        passwordMatch.className = "signup-match";
+        return;
+      }
+
+      const same = passwordInput.value === confirm;
+
+      passwordMatch.textContent = same ? "Passwords match" : "Passwords do not match";
+      passwordMatch.className = "signup-match " + (same ? "is-ok" : "is-off");
+    }
+
+    passwordInput.addEventListener("input", updatePasswordMatch);
+    passwordConfirmInput.addEventListener("input", updatePasswordMatch);
+
+    function clearFieldErrors() {
+      for (const el of signupForm.querySelectorAll(".signup-field-error")) {
+        el.remove();
+      }
+    }
+
+    function showFieldErrors(fields) {
+      for (const [name, message] of Object.entries(fields || {})) {
+        const input = signupForm.elements[name];
+        if (!input) continue;
+
+        const note = document.createElement("small");
+        note.className = "signup-field-error";
+        note.textContent = message;
+        (input.closest("label") || input).appendChild(note);
+      }
+    }
+
+    signupForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      clearFieldErrors();
+      signupMessage.textContent = "";
+      signupMessage.style.color = "#ff7b7b";
+      signupSubmit.disabled = true;
+      signupSubmit.textContent = "Creating profile...";
+
+      const body = Object.fromEntries(new FormData(signupForm).entries());
+      body.accept_terms = signupForm.elements.accept_terms.checked;
+
+      // Kwam de seller via een offer-link binnen, dan moet hij na het
+      // koppelen van Discord daar terugkomen en niet op het dashboard.
+      const search = new URLSearchParams(window.location.search);
+      const returnTo = search.get("return") || "";
+
+      if (returnTo.startsWith("/") && !returnTo.startsWith("//")) {
+        body.return_to = returnTo;
+      }
+
+      // Wie heeft deze seller gestuurd? De code loopt door naar de
+      // Discord-koppeling en wordt daar op zijn Discord Members-rij gezet.
+      const ref = search.get("ref") || "";
+      if (ref) body.referral_code = ref;
+
+      try {
+        const response = await fetch("/api/signup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          showFieldErrors(data.fields);
+
+          if (data.code === "existing_profile" || data.code === "account_exists") {
+            signupMessage.innerHTML =
+              data.error + ' <a href="/dashboard">Go to login</a>';
+          } else {
+            signupMessage.textContent = data.error || "Could not create your profile";
+          }
+
+          return;
+        }
+
+        localStorage.setItem("kc_seller", JSON.stringify(data.seller));
+
+        signupMessage.style.color = "#58d86a";
+        signupMessage.textContent = "Profile created. Taking you to Discord...";
+
+        // De registratie is pas af als Discord gekoppeld is, dus hier geen
+        // tussenscherm met een knop die overgeslagen kan worden.
+        window.location.href = data.next || "/auth/discord";
+      } catch (err) {
+        signupMessage.textContent = err.message || "Something went wrong";
+      } finally {
+        signupSubmit.disabled = false;
+        signupSubmit.textContent = "Create profile";
+      }
+    });
+  </script>
+</body>
+</html>

@@ -4426,3 +4426,319 @@ body.kc-dialog-open {
     font-size: 12px;
   }
 }
+
+/* ---- Registratie (public/signup.html) ---- */
+
+.dashboard-signup-card {
+  max-width: 460px;
+  text-align: left;
+}
+
+.dashboard-signup-card h2,
+.dashboard-signup-card > p {
+  text-align: center;
+}
+
+/* De native <select> erfde niets van .dashboard-login-form input en viel
+   daardoor uit de toon op de donkere kaart. Hier dezelfde maten, rand en
+   focusring, plus een eigen pijl omdat appearance:none de standaardpijl
+   weghaalt. */
+.dashboard-login-form select {
+  width: 100%;
+  height: 50px;
+  border-radius: 14px;
+  border: 1px solid #2a2a2a;
+  background-color: #141414;
+  color: white;
+  padding: 0 44px 0 16px;
+  outline: none;
+  font: inherit;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 4px 18px rgba(0,0,0,0.28);
+
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5l5-5' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 16px center;
+  background-size: 12px 8px;
+}
+
+.dashboard-login-form select:focus {
+  border-color: #ffd21f;
+  box-shadow: 0 0 0 1px rgba(255,210,31,0.15) inset, 0 0 30px rgba(255,210,31,0.08);
+}
+
+.dashboard-login-form select:invalid {
+  color: #777;
+}
+
+/* Zonder dit tekent Windows het uitklaplijstje wit-op-wit. */
+.dashboard-login-form select option {
+  background: #141414;
+  color: white;
+}
+
+.dashboard-login-form select option[value=""] {
+  color: #777;
+}
+
+.signup-optional {
+  color: #8a8a8a;
+  font-weight: 400;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.signup-hint {
+  display: block;
+  margin-top: 6px;
+  color: #9a9a9a;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.signup-field-error {
+  display: block;
+  margin-top: 6px;
+  color: #ff7b7b;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.signup-match {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.signup-match.is-ok { color: #58d86a; }
+.signup-match.is-off { color: #ff7b7b; }
+
+.signup-terms {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.signup-terms input[type="checkbox"] {
+  width: auto;
+  height: auto;
+  margin: 2px 0 0;
+  flex: 0 0 auto;
+  accent-color: #ffd21f;
+}
+
+.signup-terms a {
+  color: #f0a500;
+}
+
+.signup-footer {
+  margin: 18px 0 0;
+  text-align: center;
+  font-size: 13px;
+  color: #9a9a9a;
+}
+
+.signup-footer a {
+  color: #f0a500;
+}
+
+/* ---- Offer-pagina per order (public/offer.html) ---- */
+
+.offer-card {
+  max-width: 460px;
+  text-align: left;
+}
+
+.offer-loading {
+  padding: 30px 0;
+  text-align: center;
+  color: #9a9a9a;
+  font-size: 14px;
+}
+
+.offer-product {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #232323;
+}
+
+.offer-product-image {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #101010;
+  border: 1px solid #232323;
+  flex: 0 0 auto;
+}
+
+.offer-product-info {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.offer-product-brand {
+  color: #f0a500;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.offer-product-info h2 {
+  margin: 6px 0 8px;
+  font-size: 22px;
+  line-height: 1.15;
+  font-weight: 900;
+  letter-spacing: -0.4px;
+}
+
+.offer-product-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: #b9b9b9;
+  font-size: 13px;
+}
+
+.offer-product-order {
+  margin-top: 8px;
+  color: #777;
+  font-size: 12px;
+}
+
+.offer-lowest {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #141414;
+  border: 1px solid #232323;
+  color: #d8d8d8;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.offer-panel {
+  margin-top: 20px;
+}
+
+.offer-panel p {
+  margin: 0 0 16px;
+  color: #c4c4c4;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.offer-action {
+  display: block;
+  padding: 14px 20px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fff27a, #f0a500);
+  color: #050505;
+  font-weight: 900;
+  font-size: 14px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.offer-secondary {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  border-radius: 14px;
+  border: 1px solid #2a2a2a;
+  background: #151515;
+  color: #d8d8d8;
+  font: inherit;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.offer-login {
+  margin-top: 18px;
+}
+
+.offer-vat-group {
+  display: block;
+}
+
+.offer-vat-label {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.offer-vat-options {
+  display: flex;
+  gap: 8px;
+}
+
+.offer-vat-option {
+  flex: 1 1 0;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid #2a2a2a;
+  background: #141414;
+  color: #b9b9b9;
+  font: inherit;
+  font-weight: 900;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.offer-vat-option.is-active {
+  border-color: #ffd21f;
+  background: #1d1a0c;
+  color: #ffd21f;
+}
+
+.offer-done-icon {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(88,216,106,0.12);
+  border: 1px solid rgba(88,216,106,0.4);
+  color: #58d86a;
+  font-size: 26px;
+}
+
+#panelDone {
+  text-align: center;
+}
+
+.offer-error-detail {
+  margin-top: 6px;
+  color: #b9b9b9;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.offer-error-action {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 12px;
+  padding: 10px 18px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fff27a, #f0a500);
+  color: #050505;
+  font-weight: 900;
+  font-size: 13px;
+  text-decoration: none;
+}

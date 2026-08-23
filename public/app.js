@@ -1853,7 +1853,14 @@ confirmOfferBtn.addEventListener("click", async () => {
     });
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.details || data.error || "Offer failed");
+      const failure = new Error(data.error || data.details || "Offer failed");
+      // De Discord-gate stuurt een code en een link mee; zonder deze twee
+      // regels blijft daar alleen kale tekst van over en kan de seller er
+      // niets mee.
+      failure.code = data.code || "";
+      failure.details = data.details || "";
+      failure.linkUrl = data.link_url || "";
+      throw failure;
     }
     closeOfferFlow();
     currentDeals = [];
@@ -1862,7 +1869,29 @@ confirmOfferBtn.addEventListener("click", async () => {
     await loadDeals(currentType);
     showSuccessToast("Offer submitted successfully");
   } catch (err) {
-    offerError.textContent = err.message;
+    if (err.linkUrl) {
+      offerError.innerHTML = "";
+
+      const line = document.createElement("div");
+      line.textContent = err.message;
+      offerError.appendChild(line);
+
+      if (err.details) {
+        const detail = document.createElement("div");
+        detail.className = "offer-error-detail";
+        detail.textContent = err.details;
+        offerError.appendChild(detail);
+      }
+
+      const link = document.createElement("a");
+      link.className = "offer-error-action";
+      link.href = err.linkUrl;
+      link.textContent =
+        err.code === "discord_left_server" ? "Rejoin Discord" : "Link Discord";
+      offerError.appendChild(link);
+    } else {
+      offerError.textContent = err.message;
+    }
   } finally {
     confirmOfferBtn.disabled = false;
     confirmOfferBtn.textContent = "Submit Offer";
@@ -1939,4 +1968,33 @@ function showSuccessToast(message) {
   });
 
   syncOpenState();
+})();
+// Sessie-revalidatie. localStorage ("kc_seller") overleeft het verlopen of
+// wissen van de sessiecookie, waardoor de UI ingelogd bleef lijken terwijl elke
+// schrijfactie een 401 kreeg. Deze check brengt beide weer in lijn.
+(async () => {
+  if (!currentSeller) return;
+
+  try {
+    const response = await fetch("/api/session");
+
+    if (response.status === 401) {
+      localStorage.removeItem("kc_seller");
+      currentSeller = null;
+      updateLoginState();
+      return;
+    }
+
+    if (!response.ok) return;
+
+    const data = await response.json();
+
+    if (data?.seller) {
+      currentSeller = data.seller;
+      localStorage.setItem("kc_seller", JSON.stringify(currentSeller));
+      updateLoginState();
+    }
+  } catch (err) {
+    // Netwerkfout: laat de bestaande staat met rust.
+  }
 })();

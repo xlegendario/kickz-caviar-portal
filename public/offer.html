@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Place an Offer | Kickz Caviar</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/dashboard.css" />
+</head>
+<body class="dashboard-body">
+  <section class="dashboard-login-panel">
+    <div class="dashboard-login-card offer-card">
+      <div class="dashboard-eyebrow">Kickz Caviar</div>
+
+      <div id="offerLoading" class="offer-loading">Loading this order...</div>
+
+      <div id="offerBody" class="hidden">
+        <div class="offer-product">
+          <img id="offerImage" class="offer-product-image hidden" alt="" />
+          <div class="offer-product-info">
+            <div id="offerBrand" class="offer-product-brand"></div>
+            <h2 id="offerProduct"></h2>
+            <div class="offer-product-meta">
+              <span id="offerSku"></span>
+              <span id="offerSize"></span>
+            </div>
+            <div id="offerOrderId" class="offer-product-order"></div>
+          </div>
+        </div>
+
+        <div id="offerLowest" class="offer-lowest hidden"></div>
+
+        <!-- Precies één van deze panelen is zichtbaar; welke hangt af van wat
+             /api/offer-page over de bezoeker teruggeeft. -->
+        <div id="panelClosed" class="offer-panel hidden">
+          <p id="closedReason"></p>
+          <a class="offer-action" href="/">Browse other deals</a>
+        </div>
+
+        <div id="panelSignedOut" class="offer-panel hidden">
+          <p>Create your seller profile to place an offer on this order. It takes one form.</p>
+          <a class="offer-action" id="signupLink" href="/signup">Create profile &amp; offer</a>
+          <button type="button" class="offer-secondary" id="showLoginBtn">I already have a profile</button>
+
+          <form id="loginForm" class="dashboard-login-form offer-login hidden">
+            <label>
+              Email
+              <input name="email" type="email" autocomplete="email" required />
+            </label>
+            <label>
+              Password
+              <input name="password" type="password" autocomplete="current-password" required />
+            </label>
+            <button type="submit">Log in</button>
+            <div class="dashboard-form-error" id="loginError"></div>
+          </form>
+        </div>
+
+        <div id="panelDiscord" class="offer-panel hidden">
+          <p id="discordReason"></p>
+          <a class="offer-action" id="discordLink" href="/auth/discord">Link Discord</a>
+        </div>
+
+        <div id="panelNoVat" class="offer-panel hidden">
+          <p id="noVatReason"></p>
+        </div>
+
+        <div id="panelOffer" class="offer-panel hidden">
+          <form id="offerForm" class="dashboard-login-form">
+            <label>
+              Your offer (EUR)
+              <input id="offerAmount" name="offerAmount" type="text" inputmode="numeric" required />
+            </label>
+
+            <div class="offer-vat-group">
+              <span class="offer-vat-label">VAT type</span>
+              <div id="offerVatOptions" class="offer-vat-options"></div>
+            </div>
+
+            <button type="submit" id="offerSubmit">Submit offer</button>
+            <div class="dashboard-form-error" id="offerError"></div>
+          </form>
+        </div>
+
+        <div id="panelDone" class="offer-panel hidden">
+          <div class="offer-done-icon">&check;</div>
+          <p id="doneMessage"></p>
+          <a class="offer-action" href="/dashboard">Go to your dashboard</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    const params = window.location.pathname.split("/").filter(Boolean);
+    const sourceType = params[1] || "";
+    const recordId = params[2] || "";
+    const here = window.location.pathname;
+
+    // Kwam deze link van een member met een eigen ref-code, dan reist die mee
+    // door registratie en koppeling zodat de uitnodiger zijn credit krijgt.
+    const ref = new URLSearchParams(window.location.search).get("ref") || "";
+
+    function withContext(base) {
+      const params = new URLSearchParams({ return: here });
+      if (ref) params.set("ref", ref);
+      return base + "?" + params.toString();
+    }
+
+    const el = (id) => document.getElementById(id);
+    const show = (id) => el(id).classList.remove("hidden");
+    const hide = (id) => el(id).classList.add("hidden");
+
+    let selectedVatType = "";
+
+    function showPanel(id) {
+      for (const panel of document.querySelectorAll(".offer-panel")) {
+        panel.classList.add("hidden");
+      }
+      if (id) show(id);
+    }
+
+    function renderOrder(order) {
+      el("offerBrand").textContent = order.brand || "";
+      el("offerProduct").textContent = order.product || "Unknown product";
+      el("offerSku").textContent = order.sku || "";
+      el("offerSize").textContent = order.size ? "Size " + order.size : "";
+      el("offerOrderId").textContent = order.order_id ? "Order " + order.order_id : "";
+
+      if (order.image_url) {
+        el("offerImage").src = order.image_url;
+        show("offerImage");
+      }
+
+      // Het laagste huidige bod staat ook op de Want To Buys-pagina, dus dit
+      // verraadt niets nieuws. Het inkoopplafond komt hier bewust niet in.
+      const lowest = order.current_offer_margin;
+
+      if (lowest) {
+        el("offerLowest").textContent = "Current lowest offer: " + lowest;
+        show("offerLowest");
+      }
+    }
+
+    function renderVatOptions(types) {
+      const wrap = el("offerVatOptions");
+      wrap.innerHTML = "";
+      selectedVatType = types[0] || "";
+
+      for (const type of types) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "offer-vat-option" + (type === selectedVatType ? " is-active" : "");
+        button.textContent = type;
+
+        button.addEventListener("click", () => {
+          selectedVatType = type;
+          for (const other of wrap.children) {
+            other.classList.toggle("is-active", other === button);
+          }
+        });
+
+        wrap.appendChild(button);
+      }
+    }
+
+    async function load() {
+      try {
+        const response = await fetch(
+          "/api/offer-page/" + encodeURIComponent(sourceType) + "/" + encodeURIComponent(recordId)
+        );
+        const data = await response.json();
+
+        hide("offerLoading");
+
+        if (!response.ok) {
+          el("offerProduct").textContent = data.error || "This order link is not valid.";
+          show("offerBody");
+          showPanel(null);
+          return;
+        }
+
+        renderOrder(data.order);
+        show("offerBody");
+
+        if (!data.order.is_open) {
+          el("closedReason").textContent = data.order.closed_reason;
+          showPanel("panelClosed");
+          return;
+        }
+
+        const viewer = data.viewer || {};
+
+        if (!viewer.signed_in) {
+          el("signupLink").href = withContext("/signup");
+          showPanel("panelSignedOut");
+          return;
+        }
+
+        // Zonder gekoppelde Discord kan er bij een geaccepteerde deal geen
+        // channel met deze seller worden aangemaakt, dus dit gaat vóór de
+        // offer-vorm.
+        if (!viewer.discord_linked || !viewer.discord_in_server) {
+          el("discordReason").textContent = viewer.discord_linked
+            ? "You are no longer in the Kickz Caviar Discord server. Rejoin to place your offer — every deal gets its own channel there."
+            : "Link your Discord account to place an offer. Every accepted deal gets its own Discord channel with you in it.";
+
+          el("discordLink").textContent = viewer.discord_linked ? "Rejoin Discord" : "Link Discord";
+          el("discordLink").href = withContext("/auth/discord");
+
+          showPanel("panelDiscord");
+          return;
+        }
+
+        const vatTypes = viewer.offerable_vat_types || [];
+
+        if (!vatTypes.length) {
+          el("noVatReason").textContent =
+            viewer.no_vat_types_reason || "You cannot place an offer on this order.";
+          showPanel("panelNoVat");
+          return;
+        }
+
+        renderVatOptions(vatTypes);
+        showPanel("panelOffer");
+      } catch (err) {
+        hide("offerLoading");
+        el("offerProduct").textContent = "Could not load this order. Please try again.";
+        show("offerBody");
+      }
+    }
+
+    el("showLoginBtn").addEventListener("click", () => {
+      el("loginForm").classList.toggle("hidden");
+    });
+
+    el("loginForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const form = event.currentTarget;
+      el("loginError").textContent = "";
+
+      try {
+        const response = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: form.elements.email.value,
+            password: form.elements.password.value
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Login failed");
+        }
+
+        localStorage.setItem("kc_seller", JSON.stringify(data.seller));
+
+        // Opnieuw laden in plaats van de UI bijwerken: de server bepaalt welk
+        // paneel er nu hoort, inclusief de Discord-controle.
+        show("offerLoading");
+        showPanel(null);
+        await load();
+      } catch (err) {
+        el("loginError").textContent = err.message;
+      }
+    });
+
+    el("offerAmount").addEventListener("input", (event) => {
+      event.target.value = event.target.value.replace(/\D/g, "");
+    });
+
+    el("offerForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const amount = Number(el("offerAmount").value);
+      const submit = el("offerSubmit");
+
+      el("offerError").innerHTML = "";
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        el("offerError").textContent = "Enter a whole euro amount.";
+        return;
+      }
+
+      submit.disabled = true;
+      submit.textContent = "Submitting...";
+
+      try {
+        const response = await fetch("/api/place-offer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            orderRecordId: recordId,
+            offerAmount: amount,
+            vatType: selectedVatType,
+            sourceType: sourceType === "member-wtb" ? "member_wtb" : "order"
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          // De Discord-gate stuurt een link mee; die tonen we als knop in
+          // plaats van als kale tekst.
+          if (data.link_url) {
+            const line = document.createElement("div");
+            line.textContent = data.error;
+            el("offerError").appendChild(line);
+
+            const link = document.createElement("a");
+            link.className = "offer-error-action";
+            link.href = withContext(data.link_url);
+            link.textContent =
+              data.code === "discord_left_server" ? "Rejoin Discord" : "Link Discord";
+            el("offerError").appendChild(link);
+            return;
+          }
+
+          const message = document.createElement("div");
+          message.textContent = data.error || "Offer failed";
+          el("offerError").appendChild(message);
+
+          if (data.details) {
+            const detail = document.createElement("div");
+            detail.className = "offer-error-detail";
+            detail.textContent = data.details;
+            el("offerError").appendChild(detail);
+          }
+
+          return;
+        }
+
+        el("doneMessage").textContent =
+          "Your offer of EUR " + amount + " (" + selectedVatType + ") has been placed. " +
+          "We will let you know in Discord as soon as there is news.";
+
+        showPanel("panelDone");
+      } catch (err) {
+        el("offerError").textContent = err.message || "Something went wrong";
+      } finally {
+        submit.disabled = false;
+        submit.textContent = "Submit offer";
+      }
+    });
+
+    load();
+  </script>
+</body>
+</html>
