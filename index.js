@@ -25475,7 +25475,10 @@ function bindSellerOnboarding() {
     try {
       const { title, description } = buildWelcomeMessage({
         username: member.user.username,
-        signupUrl: signupUrl()
+        signupUrl: signupUrl(),
+        // De homepage opent standaard op de Selling-sectie, dus dit is meteen
+        // de lijst met open deals.
+        dealsUrl: portalUrl("/")
       });
 
       // Raw component-objecten, geen EmbedBuilder/ButtonBuilder: die classes
@@ -25570,7 +25573,10 @@ app.post("/api/internal/post-registration-embed", async (req, res) => {
     await initKickzDealDiscord();
 
     const channel = await kickzDealDiscordClient.channels.fetch(channelId);
-    const { title, description } = buildRegistrationChannelMessage({ signupUrl: signupUrl() });
+    const { title, description } = buildRegistrationChannelMessage({
+      signupUrl: signupUrl(),
+      dealsUrl: portalUrl("/")
+    });
 
     const message = await channel.send({
       embeds: [{ title, description, color: 0xffd300 }],
@@ -25896,6 +25902,18 @@ app.post("/api/internal/claim/confirm", async (req, res) => {
     });
 
     claimAttempts.delete(discordId);
+
+    // Ook Discord Members bijwerken, net als de OAuth-koppeling doet. Zonder
+    // dit blijft "Linked Seller" naar het verkeerde record wijzen en houdt de
+    // vertrek-detectie de verkeerde seller bij.
+    await upsertDiscordMember({
+      discordUser: {
+        id: discordId,
+        username: discordTag || discordId,
+        displayName: discordTag || discordId
+      },
+      sellerRecordId: record.id
+    });
 
     const seller = normalizeSeller(record);
 

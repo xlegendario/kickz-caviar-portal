@@ -5,19 +5,26 @@ import {
   buildWelcomeMessage,
   buildExistingSellerMessage,
   buildDealConfirmationMessage,
-  buildRegistrationChannelMessage
+  buildRegistrationChannelMessage,
+  buildSellerIdMessage
 } from "../lib/onboardingMessages.js";
 
 const SIGNUP = "https://kickzcaviar.com/signup";
 
-test("de welkomst-DM stuurt naar de portal, niet naar een Discord-knop", () => {
-  const { description } = buildWelcomeMessage({ username: "legendario", signupUrl: SIGNUP });
+test("de welkomst-DM linkt naar de deals en naar registratie", () => {
+  const { description } = buildWelcomeMessage({
+    username: "legendario",
+    signupUrl: SIGNUP,
+    dealsUrl: "https://kickzcaviar.com/"
+  });
 
   assert.match(description, /legendario/);
-  assert.match(description, new RegExp(SIGNUP.replace(/\//g, "\\/")));
-  // De oude flow ("klik SIGN UP hieronder") bestaat niet meer; als die tekst
-  // terugkomt stuurt hij mensen naar een knop die niemand meer afhandelt.
-  assert.doesNotMatch(description, /SIGN UP below|click \*\*SIGN UP\*\*/i);
+  assert.ok(description.includes(SIGNUP), "signup-link ontbreekt");
+  assert.match(description, /buying right now/);
+
+  // Het Seller ID is geen drempel meer die je vooraf moet regelen: de bots
+  // zoeken je voortaan op via je Discord ID.
+  assert.doesNotMatch(description, /You need a/);
 });
 
 test("bestaande seller krijgt zijn Seller ID en de optionele velden alleen als ze er zijn", () => {
@@ -71,10 +78,25 @@ test("een payout van 0 wordt niet als regel getoond", () => {
   assert.equal(bericht.includes("**Payout:**"), false);
 });
 
-test("het kanaal-embed linkt naar de portal en houdt Seller ID Check", () => {
-  const { title, description } = buildRegistrationChannelMessage({ signupUrl: SIGNUP });
+test("het kanaal-embed linkt naar de deals en naar registratie", () => {
+  const { title, description } = buildRegistrationChannelMessage({
+    signupUrl: SIGNUP,
+    dealsUrl: "https://kickzcaviar.com/"
+  });
 
-  assert.match(title, /Seller Registration/);
-  assert.match(description, new RegExp(SIGNUP.replace(/\//g, "\\/")));
-  assert.match(description, /Seller ID Check/);
+  assert.match(title, /Become a Seller/);
+  assert.ok(description.includes(SIGNUP), "signup-link ontbreekt");
+  assert.match(description, /buying right now/);
+
+  // "Seller ID Check" staat op de knop, niet meer in de tekst: je hebt het ID
+  // niet langer nodig om te dealen, dus het hoort niet in de uitleg thuis.
+  assert.doesNotMatch(description, /you need a Seller ID/i);
+});
+
+test("de Seller ID-DM noemt het ID en verwijst naar Seller ID Check", () => {
+  const bericht = buildSellerIdMessage({ sellerId: "SE-00856" });
+
+  assert.match(bericht, /SE-00856/);
+  assert.match(bericht, /Seller ID Check/);
+  assert.match(bericht, /Welcome aboard/);
 });
