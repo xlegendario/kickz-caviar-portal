@@ -25911,10 +25911,16 @@ app.get("/auth/discord/callback", async (req, res) => {
     const foreign = conflicts.find((r) => r.id !== claim.rid);
 
     if (foreign) {
+      const foreignSellerId = displayValue(foreign.fields?.["Seller ID"]);
+
       console.warn(
         `Discord ${discordUser.id} is al gekoppeld aan seller ${foreign.id}, geweigerd voor ${claim.rid}`
       );
-      return discordLinkRedirect(res, { discord_error: "already_linked" });
+
+      return discordLinkRedirect(res, {
+        discord_error: "already_linked",
+        seller_id: foreignSellerId
+      });
     }
 
     const sellerRecord = await airtable(SELLERS_TABLE).find(claim.rid);
@@ -26323,11 +26329,16 @@ app.post("/api/place-offer", async (req, res) => {
   try {
     const {
       orderRecordId,
-      sellerRecordId,
       offerAmount,
       vatType,
       sourceType = "order"
     } = req.body || {};
+
+    // FIXED — de offer-pagina stuurt bewust geen sellerRecordId mee; de
+    // sessie bepaalt wie er biedt. De guard PINT de body alleen als het veld
+    // er al in staat, dus zonder deze regel kwam hier undefined binnen en
+    // liep elke offer vanaf /offer/... stuk op "Missing sellerRecordId".
+    const sellerRecordId = req.sellerSession?.rid || req.body?.sellerRecordId;
 
     const gate = await requireLinkedDiscord(sellerRecordId);
 
