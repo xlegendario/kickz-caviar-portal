@@ -588,9 +588,20 @@ function syncDashboardUi() {
   document.querySelectorAll("[data-dashboard-section]").forEach((button) => {
     const isActiveSection = button.dataset.dashboardSection === activeSection;
     const subnav = document.querySelector(`[data-subnav="${button.dataset.dashboardSection}"]`);
-  
-    button.classList.toggle("open", isActiveSection);
-    subnav?.classList.toggle("open", isActiveSection);
+
+    // CHANGED - this forced every other section shut on every tab
+    // switch. Opening the section you just navigated into is helpful;
+    // collapsing the ones you deliberately expanded is not. A section
+    // now closes only when you click its own header.
+    if (isActiveSection) {
+      button.classList.add("open");
+      subnav?.classList.add("open");
+    }
+
+    // "open" used to double as the highlight, which only worked because
+    // exactly one section was ever open. Now that several can be, the
+    // highlight needs its own class.
+    button.classList.toggle("active", isActiveSection);
   });
   
   document.querySelectorAll(".dashboard-subnav-btn").forEach((button) => {
@@ -4491,11 +4502,29 @@ async function loadDashboardData() {
         open: count
       };
 
-      // Sidebar total for consignment comes from the Open pill only —
-      // summing all three would double-count the same negotiation.
+      // CHANGED - this ran for consignment only, so the Want To Buys and
+      // Buying badges kept whatever the counts endpoint had guessed and
+      // never agreed with the list on screen. The stat tile reads the
+      // same cache, which is why it showed 0 next to a table with a row
+      // in it.
+      //
+      // The Open pill is the authoritative number for every section;
+      // summing all three pills would count one negotiation twice.
+      dashboardCountsCache[activeSection] = {
+        ...(dashboardCountsCache[activeSection] || {}),
+        offers: count
+      };
+
+      setNavCount(
+        document.querySelector(`[data-count-key="${activeSection}:offers"]`),
+        count
+      );
+
       if (activeSection === "consignment") {
         setConsignmentCount("offers", count);
       }
+
+      renderStats();
 
       document
         .querySelectorAll(`[data-pill-count-key="${pillCacheKey}:open"]`)
