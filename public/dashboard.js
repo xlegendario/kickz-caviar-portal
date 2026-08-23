@@ -7597,3 +7597,68 @@ function showDashboardToast(message, type = "success") {
     // Netwerkfout: laat de bestaande staat met rust.
   }
 })();
+
+// De Discord-koppeling stuurt de seller hier terug met ?discord of
+// ?discord_error. Zonder deze melding landt hij op een dashboard dat er
+// precies hetzelfde uitziet als daarvoor en weet hij niet of het gelukt is.
+(() => {
+  const discordParams = new URLSearchParams(window.location.search);
+  const discordOk = discordParams.get("discord");
+  const discordFout = discordParams.get("discord_error");
+
+  if (!discordOk && !discordFout) return;
+
+  const DISCORD_FOUTEN = {
+    cancelled: "You cancelled the Discord link. You can try again whenever you want.",
+    invalid_state: "That link expired. Start the Discord link again from your dashboard.",
+    not_configured: "Discord linking is not configured yet. Please contact support.",
+    bot_missing_permission:
+      "We could not add you to the server. Please contact support — this is on our side, not yours.",
+    seller_has_other_discord:
+      "Your profile is already linked to a different Discord account. Contact support if that is wrong.",
+    failed: "Something went wrong while linking Discord. Please try again."
+  };
+
+  let bericht;
+  let geslaagd = false;
+
+  if (discordOk === "linked") {
+    bericht = "Discord linked. You have been added to the Kickz Caviar server.";
+    geslaagd = true;
+  } else if (discordOk === "already_member") {
+    bericht = "Discord linked. You were already in the server.";
+    geslaagd = true;
+  } else if (discordFout === "already_linked") {
+    // Het Seller ID erbij, zodat de seller weet met welk profiel hij moet
+    // inloggen in plaats van alleen te horen dát het misging.
+    const bestaandSellerId = discordParams.get("seller_id");
+
+    bericht = bestaandSellerId
+      ? "That Discord account is already linked to seller " + bestaandSellerId +
+        ". Log in with that profile instead — you do not need a second one."
+      : "That Discord account is already linked to another seller profile. Log in with that profile instead.";
+  } else {
+    bericht = DISCORD_FOUTEN[discordFout] || "Something went wrong while linking Discord.";
+  }
+
+  const balk = document.createElement("div");
+  balk.className = "discord-banner " + (geslaagd ? "is-ok" : "is-off");
+  balk.textContent = bericht;
+
+  const sluit = document.createElement("button");
+  sluit.type = "button";
+  sluit.className = "discord-banner-close";
+  sluit.setAttribute("aria-label", "Dismiss");
+  sluit.textContent = "×";
+  sluit.addEventListener("click", () => balk.remove());
+  balk.appendChild(sluit);
+
+  document.body.prepend(balk);
+
+  // De parameters uit de URL halen, anders komt de melding bij elke refresh
+  // terug alsof er opnieuw iets gebeurd is.
+  for (const key of ["discord", "discord_error", "seller_id"]) discordParams.delete(key);
+
+  const rest = discordParams.toString();
+  window.history.replaceState({}, "", window.location.pathname + (rest ? "?" + rest : ""));
+})();
