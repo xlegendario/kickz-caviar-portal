@@ -705,6 +705,28 @@
     transform: translateX(0);
   }
 
+  /* CHANGED - the drawer scrolled, but once it reached its end the
+     gesture continued into the page behind it. */
+  .dashboard-sidebar {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .dashboard-sidebar-backdrop {
+    overscroll-behavior: contain;
+    touch-action: none;
+  }
+
+  /* The page behind an open drawer must not move at all. */
+  body.sidebar-locked {
+    position: fixed;
+    left: 0;
+    right: 0;
+    width: 100%;
+    overflow: hidden;
+  }
+
   .dashboard-sidebar-backdrop {
     display: none;
     position: fixed;
