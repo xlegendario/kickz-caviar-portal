@@ -10,7 +10,7 @@
 <body class="dashboard-body">
   <section class="dashboard-login-panel">
     <div class="dashboard-login-card dashboard-signup-card">
-      <div class="dashboard-eyebrow">Seller Portal</div>
+      <img class="offer-logo" src="https://i.imgur.com/gRmfHif.png" alt="Kickz Caviar" />
       <h2>Create your seller profile</h2>
       <p>
         Fill this in once and link your Discord. After that, placing an offer
@@ -102,7 +102,19 @@
         <div class="dashboard-form-error" id="signupMessage"></div>
       </form>
 
-      <p class="signup-footer">
+      <div id="signupDone" class="signup-step2 hidden">
+        <div class="signup-step2-check">&check;</div>
+        <h3>Profile created</h3>
+        <p>
+          One step left. Link your Discord and we'll add you to the Kickz Caviar
+          server — every accepted deal gets its own channel there with you in it,
+          so we need it before you can make an offer.
+        </p>
+        <a class="offer-action" id="linkDiscordBtn" href="/auth/discord">Link Discord &amp; finish</a>
+        <p class="signup-step2-note">Takes one click. You stay signed in.</p>
+      </div>
+
+      <p class="signup-footer" id="signupFooter">
         Already have a profile? <a href="/dashboard" id="loginLink">Log in</a>
       </p>
     </div>
@@ -252,12 +264,18 @@
 
         localStorage.setItem("kc_seller", JSON.stringify(data.seller));
 
-        signupMessage.style.color = "#58d86a";
-        signupMessage.textContent = "Profile created. Taking you to Discord...";
-
-        // De registratie is pas af als Discord gekoppeld is, dus hier geen
-        // tussenscherm met een knop die overgeslagen kan worden.
-        window.location.href = data.next || "/auth/discord";
+        // De registratie is pas af als Discord gekoppeld is. Overslaan kan
+        // niet: zonder gekoppelde Discord weigert /api/place-offer elke offer.
+        // Daarom mag dit een zichtbare stap zijn in plaats van een sprong.
+        document.getElementById("linkDiscordBtn").href = data.next || "/auth/discord";
+        signupForm.classList.add("hidden");
+        document.getElementById("signupFooter").classList.add("hidden");
+        document.getElementById("signupDone").classList.remove("hidden");
+        // Ook de titel weg: "Create your seller profile" spreekt "Profile
+        // created" tegen.
+        document.querySelector(".dashboard-signup-card > p").classList.add("hidden");
+        document.querySelector(".dashboard-signup-card > h2").classList.add("hidden");
+        window.scrollTo({ top: 0, behavior: "smooth" });
       } catch (err) {
         signupMessage.textContent = err.message || "Something went wrong";
       } finally {
