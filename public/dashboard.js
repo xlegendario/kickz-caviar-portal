@@ -470,15 +470,51 @@ function renderSubnav() {
   });
 }
 
+// CHANGED - the drawer is position: fixed, so a scroll gesture that ran
+// past its end carried straight on into the page behind it: you dragged the
+// sidebar and watched the background move instead.
+//
+// Locking the body is the only thing that reliably holds on iOS - overflow:
+// hidden alone does not - and position: fixed loses the scroll position, so
+// it has to be stored and put back by hand.
+let sidebarScrollY = 0;
+
+function setSidebarOpen(open) {
+  const locked = document.body.classList.contains("sidebar-locked");
+
+  if (open && !locked) {
+    sidebarScrollY = window.scrollY;
+    document.body.style.top = `-${sidebarScrollY}px`;
+    document.body.classList.add("sidebar-locked");
+  } else if (!open && locked) {
+    document.body.classList.remove("sidebar-locked");
+    document.body.style.top = "";
+    window.scrollTo(0, sidebarScrollY);
+  }
+
+  dashboardSidebar?.classList.toggle("open", open);
+  dashboardSidebarBackdrop?.classList.toggle("open", open);
+}
+
+// Turning the phone while the drawer is open takes the drawer away with
+// the media query but would leave the page locked, which reads as a
+// frozen screen.
+window.addEventListener("resize", () => {
+  if (
+    document.body.classList.contains("sidebar-locked") &&
+    window.matchMedia("(min-width: 1101px)").matches
+  ) {
+    setSidebarOpen(false);
+  }
+});
+
 function bindNavigation() {
     dashboardMobileMenuBtn?.addEventListener("click", () => {
-    dashboardSidebar?.classList.add("open");
-    dashboardSidebarBackdrop?.classList.add("open");
+    setSidebarOpen(true);
   });
 
   dashboardSidebarBackdrop?.addEventListener("click", () => {
-    dashboardSidebar?.classList.remove("open");
-    dashboardSidebarBackdrop?.classList.remove("open");
+    setSidebarOpen(false);
   });
   
   document.querySelectorAll("[data-dashboard-section]").forEach((button) => {
@@ -495,8 +531,7 @@ function bindNavigation() {
     button.addEventListener("click", () => {
       setActiveView(button.dataset.section, button.dataset.tab);
   
-      dashboardSidebar?.classList.remove("open");
-      dashboardSidebarBackdrop?.classList.remove("open");
+      setSidebarOpen(false);
     });
   });
 }
@@ -706,8 +741,7 @@ async function loadDashboardCounts() {
     button.addEventListener("click", () => {
       setActiveView(button.dataset.section, button.dataset.tab);
 
-      dashboardSidebar?.classList.remove("open");
-      dashboardSidebarBackdrop?.classList.remove("open");
+      setSidebarOpen(false);
     });
   });
 
@@ -7347,7 +7381,15 @@ dashboardForgotPasswordBtn.addEventListener("click", async () => {
   }
 });
 
-dashboardLogoutBtn.addEventListener("click", () => {
+dashboardLogoutBtn.addEventListener("click", async () => {
+  // De sessiecookie is httpOnly, dus alleen de server kan hem wissen.
+  // Zonder deze call bleef de seller server-side ingelogd.
+  try {
+    await fetch("/api/logout", { method: "POST" });
+  } catch (err) {
+    console.error("Logout call failed:", err);
+  }
+
   localStorage.removeItem("kc_seller");
   dashboardSeller = null;
   syncAuthUi();
@@ -7526,3 +7568,32 @@ function showDashboardToast(message, type = "success") {
     setTimeout(() => toast.remove(), 250);
   }, 2600);
 }
+// Sessie-revalidatie. localStorage ("kc_seller") overleeft het verlopen of
+// wissen van de sessiecookie, waardoor de UI ingelogd bleef lijken terwijl elke
+// schrijfactie een 401 kreeg. Deze check brengt beide weer in lijn.
+(async () => {
+  if (!dashboardSeller) return;
+
+  try {
+    const response = await fetch("/api/session");
+
+    if (response.status === 401) {
+      localStorage.removeItem("kc_seller");
+      dashboardSeller = null;
+      syncAuthUi();
+      return;
+    }
+
+    if (!response.ok) return;
+
+    const data = await response.json();
+
+    if (data?.seller) {
+      dashboardSeller = data.seller;
+      localStorage.setItem("kc_seller", JSON.stringify(dashboardSeller));
+      syncAuthUi();
+    }
+  } catch (err) {
+    // Netwerkfout: laat de bestaande staat met rust.
+  }
+})();
