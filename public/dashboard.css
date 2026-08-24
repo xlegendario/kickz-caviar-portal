@@ -38,16 +38,17 @@
      screen that is most of a column. */
   /* CHANGED - 210 px was dictated by the 178 px logo, not by the
      navigation. The logo is smaller now, so the column can follow the
-     text instead of the image. That is 34 px back for the table, with
-     room to spare on the longest label. */
-  grid-template-columns: 176px minmax(0, 1fr);
+     text instead of the image. That is 22 px back for the table. It was
+     176 px, which fit every label but only just - and "only just" reads as
+     cramped, so the last 12 px went back into breathing room. */
+  grid-template-columns: 188px minmax(0, 1fr);
 }
 
 .dashboard-sidebar {
   position: sticky;
   top: 0;
   height: 100vh;
-  padding: 16px 10px;
+  padding: 16px 12px;
   background: #050505;
   border-right: 1px solid #1a1a1a;
   overflow-y: auto;
