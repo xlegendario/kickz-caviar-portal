@@ -8787,12 +8787,45 @@ app.post("/api/consignment/stock-levels/repair", async (req, res) => {
 app.post("/api/consignment/auto-offer/create", async (req, res) => {
   try {
     const orderRecordId = asText(req.body?.order_record_id);
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
     const sku = asText(req.body?.sku).toUpperCase();
     const size = asText(req.body?.size);
 
-    if (!orderRecordId) {
-      return res.status(400).json({ error: "Missing order_record_id" });
+    if (!orderRecordId && !memberWtbRecordId) {
+      return res.status(400).json({
+        error: "Missing order_record_id or member_wtb_record_id"
+      });
     }
+
+    if (orderRecordId && memberWtbRecordId) {
+      return res.status(400).json({
+        error: "Pass either order_record_id or member_wtb_record_id, not both"
+      });
+    }
+
+    // A Member WTB runs the SAME route as a store order: a real Seller
+    // Offer, and a real Counter Offers round 1 when the consignor sits
+    // above the ceiling. Everything downstream - his counter, our counter,
+    // the sweeps, the accept - is then the machinery every other seller
+    // already goes through, instead of a second set of rules that drifts.
+    //
+    // Only these four things differ per source. The rest of this endpoint
+    // does not know or care which one it is looking at.
+    const source = memberWtbRecordId
+      ? {
+          kind: "member_wtb",
+          recordId: memberWtbRecordId,
+          table: MEMBER_WTBS_TABLE,
+          offerLink: "Member WTBs",
+          roundLink: "Member WTB"
+        }
+      : {
+          kind: "order",
+          recordId: orderRecordId,
+          table: ORDERS_TABLE,
+          offerLink: "Linked Orders",
+          roundLink: "Order"
+        };
 
     if (!sku) {
       return res.status(400).json({ error: "Missing SKU" });
@@ -8801,6 +8834,18 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     if (!size) {
       return res.status(400).json({ error: "Missing size" });
     }
+
+    // The buying filter lives on the Member WTB and has to be known BEFORE
+    // the stock is picked, so that record is read here. The order path is
+    // deliberately left alone: it still reads its own record further down,
+    // exactly where it always did.
+    const sourceRecord = source.kind === "member_wtb"
+      ? await airtable(MEMBER_WTBS_TABLE).find(source.recordId)
+      : null;
+
+    const allowedVatTypes = source.kind === "member_wtb"
+      ? consignmentVatTypesForBuyingFilter(sourceRecord.fields?.["Buying Inventory Filter"])
+      : null;
 
     const { data: inventoryRows, error: inventoryError } = await supabase
       .from("consignment_inventory")
@@ -8843,7 +8888,10 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         (item) =>
           Number.isFinite(item.sellerPrice) &&
           item.sellerPrice > 0 &&
-          Number.isFinite(item.sellerComparePrice)
+          Number.isFinite(item.sellerComparePrice) &&
+          // Null means "no restriction", which is every store order and a
+          // Member WTB set to All Inventory.
+          (!allowedVatTypes || allowedVatTypes.includes(asText(item.row.vat_type)))
       )
       .sort((a, b) => a.sellerComparePrice - b.sellerComparePrice)[0];
 
@@ -8875,12 +8923,12 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
           NOT({Withdrawn?}),
           NOT({Denied?})
         )`,
-        fields: ["Consignment Inventory ID", "Linked Orders"]
+        fields: ["Consignment Inventory ID", source.offerLink]
       })
       .all();
 
     const alreadyOffered = sameStockOffers.find((record) =>
-      (record.fields?.["Linked Orders"] || []).includes(orderRecordId)
+      (record.fields?.[source.offerLink] || []).includes(source.recordId)
     );
 
     if (alreadyOffered) {
@@ -8908,7 +8956,7 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
 
     const createdOffer = await airtable(SELLER_OFFERS_TABLE).create({
       "Seller ID": [best.row.seller_record_id],
-      "Linked Orders": [orderRecordId],
+      [source.offerLink]: [source.recordId],
       "Seller Offer": best.sellerPrice,
       "Offer VAT Type": best.row.vat_type,
       "Offer Cost (Normalized)": best.sellerComparePrice,
@@ -8940,7 +8988,8 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       offer_cost_normalized: best.sellerComparePrice
     };
 
-    const orderRecordForOffer = await airtable(ORDERS_TABLE).find(orderRecordId);
+    const orderRecordForOffer = sourceRecord
+      || await airtable(ORDERS_TABLE).find(orderRecordId);
     const orderFieldsForOffer = orderRecordForOffer.fields || {};
 
     // Route A stops here: the offer is live, computeAndPushLowestOffer
@@ -8953,7 +9002,10 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     // Seen live on 20-08-2026: a consignor at €200 VAT21 produced a €177,50
     // VAT0 offer to an Italian store, which is €216,55 including their VAT,
     // against a Selling Price of €164.
-    if (!holdFromStore) {
+    // Order-only. A Member WTB has no Selling Price to overshoot: its
+    // ceiling IS Max Price, and the offer below is derived from it, so the
+    // same protection is already built into the number itself.
+    if (!holdFromStore && source.kind === "order") {
       const sellingPrice = numberValue(orderFieldsForOffer["Selling Price"]);
 
       if (sellingPrice > 0) {
@@ -9033,10 +9085,19 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     const orderRecord = orderRecordForOffer;
     const orderFields = orderFieldsForOffer;
 
-    const calculatedOfferPrice = calculateConsignmentOfferPrice(
-      maximumBuyingPrice,
-      orderFields
-    );
+    // A Member WTB carries no "Offer Method" and no "Offer Percentage", so
+    // calculateConsignmentOfferPrice would drop into its percentage branch
+    // and return null for every single one - a 400 on every Member WTB.
+    //
+    // Its shape is the Firm Range shape: the buyer's maximum minus our
+    // margin. That is exactly the ceiling the Discord bot already enforces
+    // on sellers for the same record, so both sides agree on the number.
+    // getMemberWtbMargin falls back to 10 when the field is blank or 0.
+    const calculatedOfferPrice = source.kind === "member_wtb"
+      ? (Number.isFinite(maximumBuyingPrice) && maximumBuyingPrice > 0
+          ? Math.max(0, maximumBuyingPrice - getMemberWtbMargin(orderFields))
+          : null)
+      : calculateConsignmentOfferPrice(maximumBuyingPrice, orderFields);
 
     if (calculatedOfferPrice === null) {
       return res.status(400).json({
@@ -9072,8 +9133,15 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         offer: {
           id: createdOffer.id,
           order_record_id: orderRecordId,
-          order_id: asText(orderFields["Order ID"]),
-          source_type: "order",
+          member_wtb_record_id: memberWtbRecordId || undefined,
+          // sendConsignmentOfferDiscordMessage already branches on this
+          // (isMemberWtbOffer); it was simply never given anything else.
+          order_id: asText(
+            source.kind === "member_wtb"
+              ? orderFields["Member WTB ID"]
+              : orderFields["Order ID"]
+          ),
+          source_type: source.kind,
           seller_record_id: best.row.seller_record_id,
           seller_id: best.row.seller_id,
           product_name: best.row.product_name,
@@ -9106,7 +9174,7 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       );
 
       const createdRound = await airtable(COUNTER_OFFERS_TABLE).create({
-        "Order": [orderRecordId],
+        [source.roundLink]: [source.recordId],
         "Seller ID": [best.row.seller_record_id],
         "Source Type": "Seller Offer",
         "Seller Offer Record ID": createdOffer.id,
@@ -28029,6 +28097,29 @@ function normalizeBuyingInventoryType(value) {
   if (clean === "b2b") return "b2b";
   if (clean === "private") return "private";
   return "all";
+}
+
+// Which consignment VAT types a Member WTB is willing to buy from.
+//
+// "Margin Only" means exactly that. "B2B Only" means the invoiced types,
+// which on the consignment side are VAT21 and VAT0. Anything else places
+// no restriction at all - and null, not a list of everything, so a stock
+// row with an unexpected vat_type is never silently excluded.
+//
+// Matched as a substring on the stored LABEL, the way
+// getMemberWtbNetSalePrice already reads this same field. The field is
+// written by getBuyingInventoryFilterLabel, so it holds "Margin Only" /
+// "B2B Only" / "All Inventory" - not the internal "private" / "b2b" values
+// that normalizeBuyingInventoryType expects. Running it through that
+// function instead would quietly resolve every label to "all" and let a
+// Margin Only buyer be matched against B2B stock.
+function consignmentVatTypesForBuyingFilter(value) {
+  const label = asText(value).toLowerCase();
+
+  if (label.includes("b2b")) return ["VAT21", "VAT0"];
+  if (label.includes("margin") || label.includes("private")) return ["Margin"];
+
+  return null;
 }
 
 function getBuyingInventoryFilterLabel(value) {
