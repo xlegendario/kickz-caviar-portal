@@ -7530,6 +7530,10 @@ app.post("/api/consignment/inventory/manual", async (req, res) => {
       return res.status(400).json({ error: "VAT Type must be Margin, VAT0 or VAT21" });
     }
 
+    if (await refuseIneligibleConsignmentVat(sellerRecordId, [{ vat_type: vatType }], res)) {
+      return;
+    }
+
     if (!Number.isFinite(sellingPriceSuggested) || sellingPriceSuggested <= 0) {
       return res.status(400).json({ error: "Selling Price must be higher than 0" });
     }
@@ -7978,6 +7982,10 @@ app.post("/api/consignment/inventory/csv-add", async (req, res) => {
       return res.status(400).json({ error: validationError.message });
     }
 
+    if (await refuseIneligibleConsignmentVat(sellerRecordId, normalizedRows, res)) {
+      return;
+    }
+
     const result = await createCsvImportJob({
       sellerRecordId,
       sellerId,
@@ -8036,6 +8044,10 @@ app.post("/api/consignment/inventory/csv-replace", async (req, res) => {
       validateConsignmentCsvReplaceRows(normalizedRows);
     } catch (validationError) {
       return res.status(400).json({ error: validationError.message });
+    }
+
+    if (await refuseIneligibleConsignmentVat(sellerRecordId, normalizedRows, res)) {
+      return;
     }
 
     const result = await createCsvImportJob({
@@ -8843,8 +8855,12 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       ? await airtable(MEMBER_WTBS_TABLE).find(source.recordId)
       : null;
 
+    // Same reading of the same field as sendMemberWtbConsignmentRequests,
+    // deliberately: the route being replaced picked stock this way, so this
+    // one picks exactly the same stock. Null for a store order, which has no
+    // such preference and must keep seeing everything.
     const allowedVatTypes = source.kind === "member_wtb"
-      ? consignmentVatTypesForBuyingFilter(sourceRecord.fields?.["Buying Inventory Filter"])
+      ? getAllowedBuyingVatTypesFromLabel(sourceRecord.fields?.["Buying Inventory Filter"])
       : null;
 
     const { data: inventoryRows, error: inventoryError } = await supabase
@@ -13953,6 +13969,58 @@ function getStockCounterKey(sku, size) {
 //   - Has VAT ID + Country = Netherlands → cannot sell VAT0.
 //   - Has VAT ID + Country != Netherlands → cannot sell VAT21.
 // Margin is always allowed for everyone.
+// Blocks a stock upload that carries a VAT type this consignor may not
+// use. The rule itself is validateSellerVatEligibility below - this only
+// puts it in front of the three upload routes, which never asked.
+//
+// It mattered less while every offer still went through the place-offer
+// endpoint, where the same check has always run. The consignment
+// auto-offer changed that: it builds a Seller Offer straight from this
+// inventory, so a wrong VAT type now reaches a real offer unchallenged.
+//
+// Margin is skipped - everyone may sell Margin. An unreadable seller
+// record lets the upload through: blocking a consignor over a lookup
+// hiccup is worse than the situation this replaces, and the check at
+// offer time still stands behind it.
+async function refuseIneligibleConsignmentVat(sellerRecordId, entries, res) {
+  const eersteRegelPerType = new Map();
+
+  for (const entry of entries || []) {
+    const vatType = asText(entry?.vat_type);
+
+    if (!vatType || vatType === "Margin") continue;
+    if (!eersteRegelPerType.has(vatType)) {
+      eersteRegelPerType.set(vatType, entry?.row_number);
+    }
+  }
+
+  if (!eersteRegelPerType.size) return false;
+
+  const seller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+
+  if (!seller) return false;
+
+  for (const [vatType, rowNumber] of eersteRegelPerType) {
+    const message = validateSellerVatEligibility(
+      seller.get("VAT ID"),
+      seller.get("Country"),
+      vatType
+    );
+
+    if (message) {
+      res.status(400).json({
+        error: rowNumber ? `Row ${rowNumber}: ${message}` : message,
+        vat_type: vatType,
+        row_number: rowNumber ?? null
+      });
+
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function validateSellerVatEligibility(sellerVatId, sellerCountry, chosenVatType) {
   const vat = asText(chosenVatType);
   if (vat === "Margin") return null; // always allowed
@@ -28097,29 +28165,6 @@ function normalizeBuyingInventoryType(value) {
   if (clean === "b2b") return "b2b";
   if (clean === "private") return "private";
   return "all";
-}
-
-// Which consignment VAT types a Member WTB is willing to buy from.
-//
-// "Margin Only" means exactly that. "B2B Only" means the invoiced types,
-// which on the consignment side are VAT21 and VAT0. Anything else places
-// no restriction at all - and null, not a list of everything, so a stock
-// row with an unexpected vat_type is never silently excluded.
-//
-// Matched as a substring on the stored LABEL, the way
-// getMemberWtbNetSalePrice already reads this same field. The field is
-// written by getBuyingInventoryFilterLabel, so it holds "Margin Only" /
-// "B2B Only" / "All Inventory" - not the internal "private" / "b2b" values
-// that normalizeBuyingInventoryType expects. Running it through that
-// function instead would quietly resolve every label to "all" and let a
-// Margin Only buyer be matched against B2B stock.
-function consignmentVatTypesForBuyingFilter(value) {
-  const label = asText(value).toLowerCase();
-
-  if (label.includes("b2b")) return ["VAT21", "VAT0"];
-  if (label.includes("margin") || label.includes("private")) return ["Margin"];
-
-  return null;
 }
 
 function getBuyingInventoryFilterLabel(value) {
