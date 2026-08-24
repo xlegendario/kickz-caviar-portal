@@ -1351,6 +1351,46 @@ async function disableOtherSellerRoundEmbedsForOrder({
 // round can't linger in the Open/Countered pill. Accepted/Closed rounds
 // are left untouched. keepRoundId is the just-created round (never close
 // that). Best-effort, non-blocking.
+// =====================================================================
+// Rounds that are really the same counter arriving twice.
+//
+// A seller counter must produce exactly ONE round. It can reach the
+// endpoint more than once: during a deploy Render keeps the old instance
+// alive while the new one boots, both stay attached to the Discord
+// gateway, and a single modal submit is then delivered to each of them.
+//
+// Three values together identify a genuine twin: same parent round, same
+// seller, same price. Two legitimate rounds can never share them - the
+// parent is closed the moment the first round is created, so a second
+// real counter always hangs off a different parent.
+//
+// Seller ID is matched in JS, not in the formula: FIND() over a linked
+// field does not match reliably in this base.
+//
+// Failing to read is treated as "no twin". A hiccup at Airtable must
+// never block a seller's real counter; the worst case is the behaviour
+// this codebase already had.
+// =====================================================================
+async function findDuplicateOpenRounds({ previousRecordId, sellerRecordId, counterPrice }) {
+  if (!previousRecordId) return [];
+
+  const escaped = String(previousRecordId).replace(/"/g, '\\"');
+
+  const rows = await airtable(COUNTER_OFFERS_TABLE)
+    .select({
+      filterByFormula: `AND({Previous Record ID} = "${escaped}", {Status} = "Open")`,
+      fields: ["Previous Record ID", "Status", "Seller ID", "Seller Counter Price", "Created At"]
+    })
+    .all()
+    .catch(() => []);
+
+  return rows.filter(
+    (r) =>
+      firstLinkedRecordId(r.fields?.["Seller ID"]) === sellerRecordId &&
+      Number(r.fields?.["Seller Counter Price"]) === Number(counterPrice)
+  );
+}
+
 async function closeOtherOpenRoundsForSellerOnOrder({
   sellerRecordId,
   orderRecordId,
@@ -9921,6 +9961,30 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
     const orderRecord = await airtable(ORDERS_TABLE).find(linkedOrderId);
     const orderFields = orderRecord.fields || {};
 
+    // The guard higher up only asks whether the PARENT round is still
+    // open, so several copies of the same submit all pass it. Live case
+    // 23-08-2026, ORD-022183: three identical rounds 330ms apart, three
+    // embeds to the store, and each run then closed the other two -
+    // the seller's counter vanished without anyone withdrawing it.
+    const existingTwin = (await findDuplicateOpenRounds({
+      previousRecordId,
+      sellerRecordId: linkedSellerId,
+      counterPrice: proposedPrice
+    }))[0];
+
+    if (existingTwin) {
+      console.warn(
+        `\u26a0\ufe0f Duplicate seller counter ignored: ${existingTwin.id} is already open ` +
+          `for previous ${previousRecordId} at ${proposedPrice}`
+      );
+      return res.json({
+        ok: true,
+        band: validation.band,
+        new_round_id: existingTwin.id,
+        duplicate: true
+      });
+    }
+
     const newRound = await airtable(COUNTER_OFFERS_TABLE).create({
       "Order": [linkedOrderId],
       "Seller ID": linkedSellerId ? [linkedSellerId] : undefined,
@@ -9952,6 +10016,44 @@ app.post("/api/counter-offers/:id/seller-counter", async (req, res) => {
       "Created At": new Date().toISOString(),
       "Status": "Open"
     });
+
+    // Second gate, for the case the first one cannot see: copies that
+    // all looked BEFORE any of them had written. Everyone now reads the
+    // same set and sorts it the same way, so every instance picks the
+    // same winner. The losers close themselves and return here, which
+    // also means they never send their own embed to the store.
+    const twins = await findDuplicateOpenRounds({
+      previousRecordId,
+      sellerRecordId: linkedSellerId,
+      counterPrice: proposedPrice
+    });
+
+    if (twins.length > 1) {
+      const winner = twins.sort((a, b) => {
+        const createdA = asText(a.fields?.["Created At"]);
+        const createdB = asText(b.fields?.["Created At"]);
+        if (createdA !== createdB) return createdA < createdB ? -1 : 1;
+        return a.id < b.id ? -1 : 1;
+      })[0];
+
+      if (winner.id !== newRound.id) {
+        await airtable(COUNTER_OFFERS_TABLE).update(newRound.id, {
+          "Status": "Closed",
+          "Closed At": new Date().toISOString()
+        }).catch(() => {});
+
+        console.warn(
+          `\u26a0\ufe0f Simultaneous seller counter: kept ${winner.id}, closed ${newRound.id}`
+        );
+
+        return res.json({
+          ok: true,
+          band: validation.band,
+          new_round_id: winner.id,
+          duplicate: true
+        });
+      }
+    }
 
     // Close the previous round so it no longer shows as actionable —
     // mirrors the existing "competingCounters" closing pattern used
