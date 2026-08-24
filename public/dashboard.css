@@ -3778,34 +3778,52 @@ body.modal-open {
     table-layout: fixed;
   }
 
+  /* CHANGED - 75px left 39px after padding, and a fractional size like
+     "38 2/3" is 42px. */
   .dashboard-table th.col-short,
   .dashboard-table td.col-short {
-    width: 75px;
+    width: 84px;
   }
 
+  /* CHANGED - "Margin" landed exactly on the edge at 85px, with nothing
+     to spare for a different font or a longer type later. */
   .dashboard-table th.col-type,
   .dashboard-table td.col-type {
-    width: 85px;
+    width: 92px;
   }
 
+  /* CHANGED - a full date like "18-08-2026" is 77px and had 69px, so it
+     ran into the column beside it. Short dates fit; long ones did not. */
   .dashboard-table th.col-date,
   .dashboard-table td.col-date {
-    width: 105px;
+    width: 120px;
   }
 
+  /* CHANGED - fine for three digits, not for four: an amount over a
+     thousand needs 71px and had 64px. */
   .dashboard-table th.col-money,
   .dashboard-table td.col-money {
-    width: 100px;
+    width: 114px;
   }
 
+  /* CHANGED - was 110px. With table-layout: fixed a declared width binds,
+     and text that does not fit escapes the cell instead of wrapping - so
+     "MWTB-000387" (102px of text in 74px of room after padding) ran into
+     the Payout column beside it.
+
+     145px covers the longest value this class carries: order ids, SKUs,
+     WTB ids and brand names. */
   .dashboard-table th.col-code,
   .dashboard-table td.col-code {
-    width: 110px;
+    width: 145px;
   }
 
+  /* CHANGED - this one holds a pill, so it needs its own room: the pill
+     adds 20px of its own padding around the label. "Awaiting Payment"
+     comes to 123px and had 94px, so the pill was cut off. */
   .dashboard-table th.col-status,
   .dashboard-table td.col-status {
-    width: 130px;
+    width: 165px;
   }
 
   /* CHANGED — this was 140. Only the Tracking column uses this size, and
