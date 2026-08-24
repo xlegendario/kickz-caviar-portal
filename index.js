@@ -6069,13 +6069,43 @@ function bindConsignmentDiscordButtons(client) {
 
           const denyingSellerTruePositionForStore = await findSellersTrueLastCounter(counterOfferRecordId);
           const denyingSellerVatTypeForStore = asText(deniedFields["Seller Original VAT Type"]);
-          const denyingSellerOwnNormalizedForStore = Number.isFinite(denyingSellerTruePositionForStore)
-            ? (denyingSellerVatTypeForStore === "VAT0" ? denyingSellerTruePositionForStore * 1.21 : denyingSellerTruePositionForStore)
-            : null;
+
+          // CHANGED - the same fallback the portal deny endpoint already
+          // carries, which was never copied here. A seller who denies a
+          // round-1 counter has never placed a counter of his own, so
+          // findSellersTrueLastCounter returns null - and the gate below
+          // then failed on its own guard, sending the store nothing even
+          // when the denying seller was the cheapest one they had.
+          //
+          // Live case (24-08-2026, ORD-022077): karimlks denied at 72
+          // Margin while andistg stood at 75. 75 >= 72, so the store
+          // should have heard about it; instead the message was dropped
+          // and the store kept looking at an offer nobody was standing
+          // behind any more.
+          //
+          // Without an earlier counter, a seller's position simply is his
+          // original offer.
+          const denyingSellerPositionRawForStore = Number.isFinite(denyingSellerTruePositionForStore)
+            ? denyingSellerTruePositionForStore
+            : numberValue(deniedFields["Seller Original Price"]);
+
+          const denyingSellerOwnNormalizedForStore =
+            (Number.isFinite(denyingSellerPositionRawForStore) && denyingSellerPositionRawForStore > 0)
+              ? (denyingSellerVatTypeForStore === "VAT0"
+                  ? denyingSellerPositionRawForStore * 1.21
+                  : denyingSellerPositionRawForStore)
+              : null;
 
           const shouldNotifyStore =
             !Number.isFinite(otherSellerExistsForStore) ||
             (Number.isFinite(denyingSellerOwnNormalizedForStore) && otherSellerExistsForStore >= denyingSellerOwnNormalizedForStore);
+
+          if (!shouldNotifyStore) {
+            console.log(
+              `ℹ️ Seller deny not forwarded to store for ${deniedOrderId}: ` +
+              `denier at ${denyingSellerOwnNormalizedForStore}, better seller at ${otherSellerExistsForStore}`
+            );
+          }
 
           if (priorRoundId) {
             const priorRound = await airtable(COUNTER_OFFERS_TABLE).find(priorRoundId).catch(() => null);
