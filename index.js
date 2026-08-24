@@ -6005,6 +6005,24 @@ function bindConsignmentDiscordButtons(client) {
       // Delete) throws right here, on the .update() itself. Same dead-
       // round guard as accept above, just wrapped around the write
       // instead of a read.
+      // NEW - the portal's deny endpoint refuses anything that is not
+      // Open. This handler had no status check at all, so an accepted or
+      // cancelled round could still be denied from a stale message -
+      // turning a closed deal back into a refusal.
+      const bestaandeRonde = await airtable(COUNTER_OFFERS_TABLE)
+        .find(counterOfferRecordId)
+        .catch(() => null);
+
+      if (bestaandeRonde && asText(bestaandeRonde.fields?.["Status"]) !== "Open") {
+        await disableCounterOfferDiscordButtons(
+          interaction.channelId,
+          interaction.message.id,
+          "❌ This counter offer is no longer available."
+        );
+
+        return;
+      }
+
       try {
         await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
           "Status": "Denied",
@@ -6232,7 +6250,15 @@ function bindConsignmentDiscordButtons(client) {
       }
       const f = counterOffer.fields || {};
     
-      if (asText(f["Status"]) === "Accepted") {
+      // CHANGED - this only refused a round that was already Accepted, so
+      // a Denied, Cancelled or Closed round could still be accepted from
+      // Discord. The portal endpoint has always required Open; this is the
+      // same rule, on the other way in.
+      //
+      // Not theoretical: the buttons are disabled when a round closes, but
+      // that disable failed today with a 40060 - and then the button is
+      // still sitting there to press.
+      if (asText(f["Status"]) !== "Open") {
         await disableCounterOfferDiscordButtons(
           interaction.channelId,
           interaction.message.id,
