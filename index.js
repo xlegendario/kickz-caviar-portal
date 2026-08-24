@@ -6078,45 +6078,15 @@ function bindConsignmentDiscordButtons(client) {
           // available. Now chain-traces the denying seller's own TRUE
           // last position and only suppresses when another seller is
           // GENUINELY BETTER than that.
-          const denyingSellerIdForStore = firstLinkedRecordId(deniedFields["Seller ID"]);
-          const otherSellerExistsForStore = (await getCurrentGlobalLowestNormalized(
-            "Seller Offer",
-            deniedOrderId,
-            denyingSellerIdForStore
-          )).normalized;
-
-          const denyingSellerTruePositionForStore = await findSellersTrueLastCounter(counterOfferRecordId);
-          const denyingSellerVatTypeForStore = asText(deniedFields["Seller Original VAT Type"]);
-
-          // CHANGED - the same fallback the portal deny endpoint already
-          // carries, which was never copied here. A seller who denies a
-          // round-1 counter has never placed a counter of his own, so
-          // findSellersTrueLastCounter returns null - and the gate below
-          // then failed on its own guard, sending the store nothing even
-          // when the denying seller was the cheapest one they had.
-          //
-          // Live case (24-08-2026, ORD-022077): karimlks denied at 72
-          // Margin while andistg stood at 75. 75 >= 72, so the store
-          // should have heard about it; instead the message was dropped
-          // and the store kept looking at an offer nobody was standing
-          // behind any more.
-          //
-          // Without an earlier counter, a seller's position simply is his
-          // original offer.
-          const denyingSellerPositionRawForStore = Number.isFinite(denyingSellerTruePositionForStore)
-            ? denyingSellerTruePositionForStore
-            : numberValue(deniedFields["Seller Original Price"]);
-
-          const denyingSellerOwnNormalizedForStore =
-            (Number.isFinite(denyingSellerPositionRawForStore) && denyingSellerPositionRawForStore > 0)
-              ? (denyingSellerVatTypeForStore === "VAT0"
-                  ? denyingSellerPositionRawForStore * 1.21
-                  : denyingSellerPositionRawForStore)
-              : null;
-
-          const shouldNotifyStore =
-            !Number.isFinite(otherSellerExistsForStore) ||
-            (Number.isFinite(denyingSellerOwnNormalizedForStore) && otherSellerExistsForStore >= denyingSellerOwnNormalizedForStore);
+          const {
+            notify: shouldNotifyStore,
+            otherSellerBest: otherSellerExistsForStore,
+            ownNormalized: denyingSellerOwnNormalizedForStore
+          } = await beoordeelSellerDenyVoorStore({
+            counterOfferRecordId,
+            deniedFields,
+            deniedOrderId
+          });
 
           if (!shouldNotifyStore) {
             console.log(
@@ -17407,6 +17377,53 @@ async function getBuyerHighestEverPosition(sourceType, recordId) {
 // where THIS seller's Seller Counter Price is genuinely set, or
 // reaches the start of the chain with nothing found (a seller who's
 // never actually countered at all).
+// =====================================================================
+// Does the store need to hear that a seller walked away?
+//
+// Only when that seller was the best they had. If someone else is genuinely
+// cheaper, the store's position has not changed and a message would be noise.
+//
+// This lived twice - once in the Discord handler, once in the portal
+// endpoint - and the two drifted: the fallback below was added on one side
+// only. A store then heard nothing when its cheapest seller denied, because
+// the calculation fell over on its own guard instead of comparing anything.
+// Live case 24-08-2026, ORD-022077.
+// =====================================================================
+async function beoordeelSellerDenyVoorStore({
+  counterOfferRecordId,
+  deniedFields,
+  deniedOrderId
+}) {
+  const denyingSellerId = firstLinkedRecordId(deniedFields["Seller ID"]);
+
+  const otherSellerBest = (await getCurrentGlobalLowestNormalized(
+    "Seller Offer",
+    deniedOrderId,
+    denyingSellerId
+  )).normalized;
+
+  // A seller who denies a round-1 counter never placed a counter of his own,
+  // so there is no "true last counter" to find. His position is then simply
+  // his original offer - without this fallback the comparison below fails on
+  // a null and the store is told nothing at all.
+  const truePosition = await findSellersTrueLastCounter(counterOfferRecordId);
+  const vatType = asText(deniedFields["Seller Original VAT Type"]);
+
+  const positionRaw = Number.isFinite(truePosition)
+    ? truePosition
+    : numberValue(deniedFields["Seller Original Price"]);
+
+  const ownNormalized = (Number.isFinite(positionRaw) && positionRaw > 0)
+    ? (vatType === "VAT0" ? positionRaw * 1.21 : positionRaw)
+    : null;
+
+  const notify =
+    !Number.isFinite(otherSellerBest) ||
+    (Number.isFinite(ownNormalized) && otherSellerBest >= ownNormalized);
+
+  return { notify, otherSellerBest, ownNormalized };
+}
+
 async function findSellersTrueLastCounter(startRoundId, maxHops = 15) {
   let currentId = startRoundId;
   for (let hop = 0; hop < maxHops && currentId; hop++) {
@@ -19238,32 +19255,14 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
       // store-side — the current lowest seller stays active, the store
       // keeps its Countered row and can still Edit. Without this the
       // store gets a denied embed for every non-winning seller's deny.
-      const denyingSellerIdForStore = firstLinkedRecordId(deniedFields["Seller ID"]);
-      const otherSellerExistsForStore = (await getCurrentGlobalLowestNormalized(
-        "Seller Offer",
-        deniedOrderId,
-        denyingSellerIdForStore
-      )).normalized;
-
-      const denyingSellerTruePositionForStore = await findSellersTrueLastCounter(counterOfferRecordId);
-      const denyingSellerVatTypeForStore = asText(deniedFields["Seller Original VAT Type"]);
-      // NEW — additive only: a seller who denied the store's counter
-      // WITHOUT ever placing their own counter has no "true last
-      // counter" (findSellersTrueLastCounter returns null), which left
-      // denyingSellerOwnNormalized null and wrongly failed the gate —
-      // so even the CURRENT LOWEST seller's deny sent no embed. Fall
-      // back to their original offer price on this round, which IS
-      // their position in the cross-seller compare.
-      const denyingSellerPositionRaw = Number.isFinite(denyingSellerTruePositionForStore)
-        ? denyingSellerTruePositionForStore
-        : numberValue(deniedFields["Seller Original Price"]);
-      const denyingSellerOwnNormalizedForStore = (Number.isFinite(denyingSellerPositionRaw) && denyingSellerPositionRaw > 0)
-        ? (denyingSellerVatTypeForStore === "VAT0" ? denyingSellerPositionRaw * 1.21 : denyingSellerPositionRaw)
-        : null;
-
-      const shouldNotifyStore =
-        !Number.isFinite(otherSellerExistsForStore) ||
-        (Number.isFinite(denyingSellerOwnNormalizedForStore) && otherSellerExistsForStore >= denyingSellerOwnNormalizedForStore);
+      const {
+        notify: shouldNotifyStore,
+        otherSellerBest: otherSellerExistsForStore
+      } = await beoordeelSellerDenyVoorStore({
+        counterOfferRecordId,
+        deniedFields,
+        deniedOrderId
+      });
 
       if (!shouldNotifyStore) {
         // Non-lowest seller denied — done. Their own round is already
