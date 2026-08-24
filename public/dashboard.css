@@ -3469,18 +3469,44 @@ body.modal-open {
     width: auto;
     min-width: 0;
 
-    /* CHANGED - the product and action columns freeze against horizontal
-       scrolling on a desktop, which is why they carry their own background
-       and a sticky position. A card does not scroll sideways, so neither
-       applies here.
+    /* CHANGED - the pinned columns freeze against horizontal scrolling on a
+       desktop, which is why they carry their own background and a sticky
+       position. A card does not scroll sideways, so neither applies here.
 
-       The general rule above already sets both back, but these class-based
-       selectors outweigh it - so it has to be said again, on a selector
+       The general rule above already sets both back, but these heavier
+       selectors outweigh it - so it has to be said again, on selectors
        heavy enough to win. It went unnoticed while the card was the same
-       #101010; against a lighter card the two cells stood out as dark
-       bands behind the product name and the button. */
+       #101010; against a lighter card each pinned cell showed up as a dark
+       band. */
     position: static;
     background: none;
+    box-shadow: none;
+  }
+
+  /* The status-dot column is pinned through :first-child rather than a class,
+     so it needs its own rule - it was the dark bar beside the green dot. */
+  .dashboard-table th:first-child:not(.dashboard-product-col),
+  .dashboard-table td:first-child:not(.dashboard-product-col) {
+    position: static;
+    background: none;
+    box-shadow: none;
+    width: auto;
+    min-width: 0;
+    left: auto;
+  }
+
+  .dashboard-table th:first-child:not(.dashboard-product-col) + th.dashboard-product-col,
+  .dashboard-table td:first-child:not(.dashboard-product-col) + td.dashboard-product-col {
+    left: auto;
+  }
+
+  /* The edge shadows that mark "there is more to scroll" sit on the wrapper,
+     which makes them heavier than the rules above. A card has no edge to
+     scroll past. */
+  .dashboard-table-wrap.is-scrolled-x th.dashboard-product-col,
+  .dashboard-table-wrap.is-scrolled-x td.dashboard-product-col,
+  .dashboard-table-wrap:not(.is-at-end) th.dashboard-action-col,
+  .dashboard-table-wrap:not(.is-at-end) td.dashboard-action-col {
     box-shadow: none;
   }
 
