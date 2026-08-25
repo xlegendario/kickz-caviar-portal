@@ -9125,9 +9125,15 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     // margin. That is exactly the ceiling the Discord bot already enforces
     // on sellers for the same record, so both sides agree on the number.
     // getMemberWtbMargin falls back to 10 when the field is blank or 0.
+    //
+    // The margin is net, and this ceiling lives on the VAT-inclusive
+    // normalized scale, so it costs 1.21x that much here - same reason the
+    // shop sticker adds 12.10 to keep 10. Subtracting the bare 10 left us
+    // with 10 / 1.21 = 8.26 while the price the buyer was shown promised a
+    // full 10.
     const calculatedOfferPrice = source.kind === "member_wtb"
       ? (Number.isFinite(maximumBuyingPrice) && maximumBuyingPrice > 0
-          ? Math.max(0, maximumBuyingPrice - getMemberWtbMargin(orderFields))
+          ? Math.max(0, maximumBuyingPrice - getMemberWtbMargin(orderFields) * 1.21)
           : null)
       : calculateConsignmentOfferPrice(maximumBuyingPrice, orderFields);
 
@@ -27908,8 +27914,17 @@ function getBuyingDisplayPrice(price, vatType, inventoryType, sourceType = "", o
     const markup = Number.isFinite(rawMarkup) ? rawMarkup : 10;
 
     if (Number.isFinite(sellerPrice) && sellerPrice > 0) {
+      // CONSIGNMENT_MARKUP is what we want to KEEP, net. Everywhere else
+      // it is added to a net figure (calculateMemberWtbBuyerEquivalent adds
+      // it to price/1.21), so it has to mean the same thing here.
+      //
+      // On a VAT-inclusive selling price that is worth markup x 1.21: our
+      // profit on any consignment pair is (selling price - normalized ask)
+      // / 1.21, so a net 10 needs 12.10 on the sticker. Feeding the gross
+      // figure in as the setting instead would quietly earn us 12.10 net
+      // wherever that other function does the maths.
       if (cleanVatType === "Margin") {
-        return Math.ceil(sellerPrice + markup);
+        return Math.ceil(sellerPrice + markup * 1.21);
       }
 
       const rawRate = Number(options?.buyerVatRate);
@@ -27917,7 +27932,9 @@ function getBuyingDisplayPrice(price, vatType, inventoryType, sourceType = "", o
 
       const normalizedAsk = getConsignmentComparePrice(sellerPrice, cleanVatType);
 
-      return Math.ceil(((normalizedAsk + markup) / 1.21) * (1 + buyerRate));
+      // What the pair costs us net, plus the margin, restated at the rate
+      // of the country that is buying.
+      return Math.ceil((normalizedAsk / 1.21 + markup) * (1 + buyerRate));
     }
   }
 
