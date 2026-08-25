@@ -3715,7 +3715,11 @@ function bindMemberWtbDiscordCreation(
           // matches no stock, which nobody ever answers and nobody ever
           // notices.
           const cleanSku = asText(sku).trim().toUpperCase();
-          const cleanSize = asText(size).trim().replace(/\s+/g, " ");
+          const cleanSize = asText(size)
+            .trim()
+            .replace(/,/g, ".")
+            .replace(/\s+/g, " ")
+            .toUpperCase();
 
           if (!/^[A-Z0-9-]+$/.test(cleanSku)) {
             await interaction.editReply({
@@ -3725,11 +3729,11 @@ function bindMemberWtbDiscordCreation(
             return;
           }
 
-          if (!/^[0-9./ ]+$/.test(cleanSize) || !/[0-9]/.test(cleanSize)) {
+          if (!/^[A-Z0-9./ -]+$/.test(cleanSize) || !/[A-Z0-9]/.test(cleanSize)) {
             await interaction.editReply({
               content:
-                "⚠️ A size can only contain numbers, a dot or a slash. " +
-                "For example 42, 42.5 or 37 1/3."
+                "⚠️ A size can only contain letters, numbers, a dot, " +
+                "a slash or a hyphen."
             });
             return;
           }
@@ -31416,11 +31420,11 @@ function parseMemberWtbCsvText(text) {
         `Row ${row.row_number}: missing Size`
       );
     } else if (
-      !/^[0-9./ ]+$/.test(row.size) ||
-      !/[0-9]/.test(row.size)
+      !/^[A-Z0-9./ -]+$/.test(row.size) ||
+      !/[A-Z0-9]/.test(row.size)
     ) {
       errors.push(
-        `Row ${row.row_number}: a size can only contain numbers, a dot or a slash (42, 42.5, 37 1/3)`
+        `Row ${row.row_number}: a size can only contain letters, numbers, a dot, a slash or a hyphen`
       );
     }
 
