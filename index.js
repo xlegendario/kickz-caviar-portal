@@ -3621,8 +3621,13 @@ function bindMemberWtbDiscordCreation(
                   {
                     type: 4,
                     custom_id: "max_price",
+                    // "Maximum" overstates it: a seller can counter above
+                    // this number and the buyer can still accept, so the
+                    // label promised a ceiling that does not exist. Same
+                    // wording as the Lojiq shop - the Airtable column keeps
+                    // its own name, which nobody outside the base reads.
                     label:
-                      "Maximum Buying Price",
+                      "Your price",
                     style: 1,
                     min_length: 1,
                     max_length: 10,
@@ -25281,16 +25286,16 @@ app.post("/api/login", async (req, res) => {
 /* ------------------------------------------------------------------ *
  * Offer-pagina per order.
  *
- * Airtable genereert per record een vaste URL (formuleveld), die de partner
- * in zijn DM plakt. De seller landt daarmee direct op het order waar het om
- * gaat en kan daar bieden, in plaats van eerst de hele Want To Buys-lijst
- * door te moeten.
+ * Airtable builds a fixed URL per record (a formula field) which the partner
+ * pastes into their DM. The seller lands straight on the order in question
+ * and can bid there, instead of working through the whole Want To Buys list
+ * first.
  *
- * Deze endpoint is bewust publiek: de link moet werken vóórdat iemand een
- * account heeft. Daarom staat hieronder expliciet welke velden eruit gaan.
- * Wat er NIET in mag: "Maximum Buying Price" / "Max Price" (het inkoop-
- * plafond), "Invoice Price", en de identiteit van de koper. Een seller die
- * het plafond kent, biedt daar net onder.
+ * This endpoint is public on purpose: the link has to work before anyone has
+ * an account. That is why the fields it exposes are spelled out below. What
+ * must NEVER go out: "Maximum Buying Price" / "Max Price" (the buying
+ * ceiling), "Invoice Price", and the buyer's identity. A seller who knows
+ * the ceiling simply bids just under it.
  * ------------------------------------------------------------------ */
 
 app.get("/offer/:sourceType/:recordId", (_req, res) => {
@@ -31160,12 +31165,33 @@ async function createOpenMemberWtb({
     );
   }
 
+  // NEW - a Member WTB posted here never asked our own consignment stock
+  // anything. Only the two shop buttons did, so an identical want-to-buy
+  // got an offer within seconds from the shop and nothing at all from
+  // Discord. Same call, same result: a real Seller Offer, and a real
+  // Counter Offers round when the consignor sits above our ceiling.
+  //
+  // Non-blocking on purpose. The WTB itself is the record that matters;
+  // no consignment match must never cost us the want-to-buy.
+  let autoOffer = null;
+
+  try {
+    autoOffer = await createMemberWtbAutoOffer(created.id);
+  } catch (error) {
+    console.error(
+      `Consignment auto-offer skipped for ${created.id} (non-blocking):`,
+      error.message
+    );
+  }
+
   return {
     success: true,
     member_wtb_record_id: created.id,
     purchase_status: "Offers Sent",
     wtb_posted: Boolean(wtbPost),
     wtb_post: wtbPost,
+    auto_offer_sent: Boolean(autoOffer),
+    auto_offer: autoOffer,
     product_name: productName,
     sku,
     size,
@@ -31530,8 +31556,11 @@ app.post(
           inventoryType:
             req.body?.inventory_type,
 
+          // The Lojiq shop posts through here too. Without this every
+          // want-to-buy read "Buying Portal" and there was no way to tell
+          // a manual store's demand from a KC member's.
           createdFrom:
-            "Buying Portal"
+            asText(req.body?.created_from) || "Buying Portal"
         });
 
       return res.json(result);
