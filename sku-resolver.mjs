@@ -45,19 +45,19 @@ import Airtable from "airtable";
 // Retailed against without asking StockX again.
 export const URL_KEY_FIELD = "StockX URL Key";
 
-// De volledige style id zoals StockX hem schrijft, inclusief de schuine
-// streep bij een dubbele code ("315115-112/DD8959-100"). StockX bundelt
-// die twee omdat het dezelfde schoen is, ooit twee keer uitgebracht.
+// The full style id exactly as StockX writes it, including the slash when
+// two codes are bundled ("315115-112/DD8959-100"). StockX groups those
+// because it is the same shoe, released twice under different codes.
 //
-// Bewust NIET in het SKU-veld: daar wordt overal exact op gezocht
-// (readSkuMaster, getSkuMasterImageMap, en SKU Master Link vanuit
-// Make.com). Dit veld ernaast maakt zichtbaar welke van jouw codes
-// dezelfde schoen zijn, zonder een sleutel te verbouwen.
+// Deliberately NOT in the SKU field: everything looks that up by exact
+// match (readSkuMaster, getSkuMasterImageMap, and SKU Master Link from
+// Make.com). Keeping it alongside shows which of our codes are the same
+// shoe without rebuilding a key.
 export const STYLE_ID_FIELD = "StockX Style ID";
 
-// De oorspronkelijke, blijvende url van de foto. Het Picture-veld is een
-// bijlage en levert een adres dat vervalt; dit veld houdt vast waar de
-// afbeelding echt vandaan komt, zodat andere diensten hem kunnen opslaan.
+// The original, durable URL of the picture. The Picture field is an
+// attachment and hands back an address that expires; this field keeps where
+// the image actually came from, so other services can store it.
 export const PICTURE_URL_FIELD = "Picture URL";
 
 /**
@@ -74,6 +74,9 @@ const env = {
   tokenTable: () =>
     process.env.AIRTABLE_STOCKX_ACCESS_TOKEN_TABLE || "StockX Access Token",
   stockxKey: () => process.env.STOCKX_API_KEY,
+  stockxClientId: () => process.env.STOCKX_CLIENT_ID,
+  stockxClientSecret: () => process.env.STOCKX_CLIENT_SECRET,
+  stockxRefreshToken: () => process.env.STOCKX_REFRESH_TOKEN,
   retailedKey: () => process.env.RETAILED_API_KEY,
   retailedUrl: () => process.env.RETAILED_STOCKX_SEARCH_URL
 };
@@ -232,11 +235,64 @@ export function isExactSkuMatch(candidate, wanted) {
 /* StockX — identity                                                   */
 /* ------------------------------------------------------------------ */
 
-// Het token stond in Airtable en werd bij elke opzoeking opnieuw opgehaald.
-// Bij een ronde van duizenden SKU's is dat evenveel extra Airtable-aanroepen
-// voor een waarde die niet verandert. Vijf minuten vasthouden is ruim binnen
-// de levensduur van het token en scheelt het leeuwendeel.
+// The token lives in Airtable and used to be fetched again on every lookup.
+// Over a run of thousands of SKUs that is thousands of extra Airtable calls
+// for a value that does not change. Holding it for five minutes sits well
+// inside the token's lifetime and removes almost all of them.
 let tokenCache = { waarde: "", tot: 0 };
+
+/**
+ * Exchanges the refresh token for a new access token and stores it in
+ * Airtable, the same way index.js does.
+ *
+ * Needed because a long pass outlives the token. A run over 9,230 SKUs hit
+ * its expiry after about three thousand and then failed on every single one
+ * after that: re-reading Airtable gets you the same expired token, so only
+ * an actual refresh helps.
+ *
+ * Returns "" when the refresh credentials are absent, so a caller without
+ * them fails on the 401 as before rather than on a confusing config error.
+ */
+async function refreshStockxAccessToken() {
+  if (!env.stockxClientId() || !env.stockxClientSecret() || !env.stockxRefreshToken()) {
+    return "";
+  }
+
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: env.stockxClientId(),
+    client_secret: env.stockxClientSecret(),
+    audience: "gateway.stockx.com",
+    refresh_token: env.stockxRefreshToken()
+  });
+
+  const response = await fetch("https://accounts.stockx.com/oauth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || !data.access_token) {
+    throw new Error(`StockX token refresh failed: ${response.status}`);
+  }
+
+  const records = await airtable(env.tokenTable())
+    .select({ fields: ["Access Token", "Refreshed At"], maxRecords: 1 })
+    .firstPage();
+
+  if (records[0]) {
+    await airtable(env.tokenTable()).update(records[0].id, {
+      "Access Token": data.access_token,
+      "Refreshed At": new Date().toISOString()
+    });
+  }
+
+  tokenCache = { waarde: data.access_token, tot: Date.now() + 5 * 60 * 1000 };
+
+  return data.access_token;
+}
 
 async function getStockxAccessToken({ ververs = false } = {}) {
   const nu = Date.now();
@@ -308,17 +364,16 @@ function stockxNameOf(item) {
 const slaap = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Zoekt in de StockX-catalogus, met herkansing.
+ * Searches the StockX catalog, with retries.
  *
- * Zonder herkansing kost een korte piek van rate limiting je een handvol
- * SKU's per ronde, en die worden dan als "niet op te zoeken" afgevoerd. Bij
- * een ronde over duizenden SKU's telt dat op. Alleen 429 en 5xx worden
- * opnieuw geprobeerd; een 4xx betekent dat het verzoek zelf niet deugt en
- * daar helpt herhalen niet.
+ * Without retries a short burst of rate limiting costs you a handful of SKUs
+ * per run, and those get written off as "could not look up". Over thousands
+ * of SKUs that adds up. Only 429 and 5xx are retried; a 4xx means the request
+ * itself is wrong and repeating it will not help.
  *
- * Bij een 401 wordt het token opnieuw uit Airtable gehaald: dat is de enige
- * plek waar de server hem ververst, dus een langlopende ronde pikt een
- * nieuw token vanzelf op.
+ * On a 401 the token is re-read from Airtable: that is the only place the
+ * server refreshes it, so a long-running pass picks up a new token by
+ * itself.
  */
 export async function searchStockx(sku, { token, pogingen = 4 } = {}) {
   if (!env.stockxKey()) throw new Error("Missing STOCKX_API_KEY");
@@ -331,8 +386,20 @@ export async function searchStockx(sku, { token, pogingen = 4 } = {}) {
   let laatsteFout = null;
 
   for (let poging = 1; poging <= pogingen; poging++) {
-    const accessToken =
-      token || (await getStockxAccessToken({ ververs: poging > 1 && laatsteFout?.status === 401 }));
+    let accessToken;
+
+    if (token) {
+      accessToken = token;
+    } else if (poging > 1 && laatsteFout?.status === 401) {
+      // Re-reading Airtable hands back the same expired token, so the only
+      // thing that helps is an actual refresh. Falls back to the stored one
+      // when the refresh credentials are not configured.
+      accessToken =
+        (await refreshStockxAccessToken().catch(() => "")) ||
+        (await getStockxAccessToken({ ververs: true }));
+    } else {
+      accessToken = await getStockxAccessToken();
+    }
 
     let response;
 
@@ -346,7 +413,7 @@ export async function searchStockx(sku, { token, pogingen = 4 } = {}) {
         }
       });
     } catch (err) {
-      // Netwerkfout: wel opnieuw proberen.
+      // Network error: worth retrying.
       laatsteFout = err;
 
       if (poging < pogingen) {
@@ -366,17 +433,16 @@ export async function searchStockx(sku, { token, pogingen = 4 } = {}) {
     err.body = data;
     laatsteFout = err;
 
-    // 404 hoort hier ook bij, hoe vreemd dat ook oogt. StockX antwoordt
-    // soms met 404 "No product found for GTIN" op een SKU die bij de
-    // volgende poging gewoon tien resultaten geeft. Zeventien SKU's uit de
-    // eerste SKU Master-ronde waren precies dat, en alle zeventien werden
-    // bij het opnieuw proberen wel gevonden.
+    // 404 belongs in this list too, odd as that looks. StockX sometimes
+    // answers 404 "No product found for GTIN" for a SKU that returns ten
+    // results on the next attempt. Seventeen SKUs from the first SKU Master
+    // pass were exactly that, and all seventeen resolved on a retry.
     //
-    // Een echt niet-bestaande SKU levert geen 404 op maar een 200 met een
-    // lege lijst; die wordt verderop afgehandeld. Blijft het na alle
-    // pogingen 404, dan gaat het als storing terug en niet als "bestaat
-    // niet" — een SKU ten onrechte als niet-bestaand markeren kost echte
-    // voorraad, nog een keer proberen kost een API-aanroep.
+    // A SKU that genuinely does not exist gives a 200 with an empty list,
+    // not a 404; that is handled further down. If it is still a 404 after
+    // every attempt it comes back as a failure rather than "does not
+    // exist" — wrongly marking a SKU as missing costs real stock, whereas
+    // trying again costs one API call.
     const magOpnieuw =
       response.status === 404 ||
       response.status === 429 ||
@@ -544,13 +610,13 @@ function escapeFormulaValue(value) {
 }
 
 /**
- * Airtable levert bijlagen uit op een tijdelijke url die na een paar uur
- * vervalt. Binnen Airtable is dat prima — het veld zelf blijft werken —
- * maar zo'n url doorgeven aan een andere dienst die hem opslaat levert
- * over een dag een dood plaatje op.
+ * Airtable serves attachments from a temporary URL that expires after a few
+ * hours. Inside Airtable that is fine — the field keeps working — but handing
+ * such a URL to another service that stores it leaves you with a dead image
+ * a day later.
  *
- * index.js heeft hier al een controle voor (isUnstableImageUrl) en de
- * fotoketen daar behandelt zulke urls als "geen foto". Dezelfde regel dus.
+ * index.js already has a check for this (isUnstableImageUrl) and its picture
+ * chain treats those URLs as "no picture". Same rule here.
  */
 export function isUnstableImageUrl(value) {
   const url = asText(value).toLowerCase();
@@ -562,19 +628,20 @@ export function isUnstableImageUrl(value) {
   );
 }
 
-/** De bijlage-url. Goed om te zien of er een foto is, niet om door te geven. */
+/** The attachment URL. Fine for checking whether a picture exists, not for
+    handing to anyone else. */
 function pictureUrlOf(fields) {
   const picture = fields?.["Picture"];
   return Array.isArray(picture) && picture[0]?.url ? asText(picture[0].url) : "";
 }
 
 /**
- * De url die je wel mag doorgeven.
+ * The URL that is safe to hand out.
  *
- * Het Picture-veld is een bijlage: Airtable haalt de afbeelding binnen en
- * serveert hem daarna van een eigen adres dat na een paar uur vervalt. Prima
- * binnen Airtable, dodelijk zodra een andere dienst hem opslaat. Daarom
- * bewaren we de oorspronkelijke url er als tekst naast.
+ * The Picture field is an attachment: Airtable downloads the image and then
+ * serves it from an address of its own that expires after a few hours. Fine
+ * inside Airtable, fatal the moment another service stores it. So the
+ * original URL is kept next to it as plain text.
  */
 function stablePictureUrl(fields) {
   const url = asText(fields?.[PICTURE_URL_FIELD]);
@@ -666,11 +733,11 @@ export async function resolve(sku, { write = true, token = null } = {}) {
     // A failed call is not the same as "does not exist". Never let an API
     // outage delete or reject real stock.
     //
-    // FIXED — dit gaf altijd lookup_failed terug, ook als SKU Master de
-    // naam allang wist. Negentien Fear of God-codes bleven daardoor op
-    // "niet op te zoeken" staan terwijl er een prima record lag: StockX
-    // antwoordt op zulke codes met 404 "No product found for GTIN", ook
-    // na herhalen. Wat we al weten is dan het beste dat er is.
+    // FIXED — this always returned lookup_failed, even when SKU Master
+    // already knew the name. Nineteen Fear of God codes stayed stuck on
+    // "could not look up" while a perfectly good record was sitting there:
+    // StockX answers 404 "No product found for GTIN" for those codes, even
+    // after retries. What we already know is then the best there is.
     if (cached?.usable) {
       return {
         ok: true,
@@ -700,7 +767,11 @@ export async function resolve(sku, { write = true, token = null } = {}) {
         record_id: cached.id,
         product_name: cached.product_name,
         brand: cached.brand,
-        image: cached.image
+        image: cached.image,
+        // The other success paths all carry this; without it here a caller
+        // that stores matched_sku would fall back to the raw input on
+        // exactly the rows that came from SKU Master.
+        matched_sku: cached.style_id || cached.sku || cleanSku
       };
     }
 
@@ -724,9 +795,9 @@ export async function resolve(sku, { write = true, token = null } = {}) {
     source: "stockx",
     sku: cleanSku,
     matched_sku: identity.matched_sku,
-    // Hoorde hier al te staan. Werd intern gebruikt om weg te schrijven,
-    // maar kwam nooit mee naar buiten, dus met write:false wist een
-    // aanroeper de url key nooit en bleef dat veld leeg.
+    // Should have been here all along. It was used internally when writing,
+    // but never came back out, so with write:false a caller never saw the
+    // url key and the field stayed empty.
     url_key: identity.url_key,
     colorway: identity.colorway,
     product_name: identity.product_name,
@@ -749,8 +820,8 @@ export async function resolve(sku, { write = true, token = null } = {}) {
   if (image) {
     fields[PICTURE_URL_FIELD] = image;
 
-    // De bijlage alleen aanmaken als hij er nog niet is. Opnieuw zetten laat
-    // Airtable de afbeelding opnieuw binnenhalen, en dat is puur verkeer.
+    // Only create the attachment when there isn't one. Setting it again
+    // makes Airtable re-download the image, which is pure traffic.
     if (!cached?.heeft_bijlage) fields["Picture"] = [{ url: image }];
   }
 
