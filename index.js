@@ -9236,20 +9236,37 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         // Discord hiccup must not undo them. Logged loudly instead,
         // because a silent miss here means a consignor who is never
         // asked — and that looks exactly like a quiet week.
-        const roundDiscordResult = await sendCounterOfferDiscordDM({
+        // The buttons have to match the round. A Member WTB round carries
+        // no "Order" link, and the counter_offer_* family sends the
+        // consignor to /api/counter-offers/:id/seller-counter, which reads
+        // exactly that field - it would weigh his counter against nothing
+        // and answer with the wrong error. The member_wtb_counter_* family
+        // exists for this and routes to the MW-aware endpoints, and shows
+        // the Member WTB ID instead of an empty order number.
+        const sharedEmbedFields = {
           counterOfferRecordId: createdRound.id,
           sellerDiscordId: consignorDiscordId,
           productName: best.row.product_name,
           sku: best.row.sku,
           size: best.row.size,
-          orderId: asText(orderFields["Order ID"]),
           payout: counterPayout,
           vatType: best.row.vat_type,
           sellerOriginalPrice: best.sellerPrice,
           sellerOriginalVatType: best.row.vat_type,
           sellerLastOfferPrice: best.sellerPrice,
           channelId: consignorOfferChannelId || null
-        }).catch((err) => {
+        };
+
+        const roundDiscordResult = await (source.kind === "member_wtb"
+          ? sendMemberWtbCounterOfferDiscordDM({
+              ...sharedEmbedFields,
+              memberWtbId: asText(orderFields["Member WTB ID"])
+            })
+          : sendCounterOfferDiscordDM({
+              ...sharedEmbedFields,
+              orderId: asText(orderFields["Order ID"])
+            })
+        ).catch((err) => {
           console.error(
             `❌ Failed to notify consignor ${best.row.seller_id} about consignment round 1 (non-blocking):`,
             err
@@ -14216,16 +14233,33 @@ async function sendMemberWtbCounterOfferDiscordDM({
   sellerOriginalVatType,
   sellerLastOfferPrice,
   noRoomToCounter,
-  deniedAmount
+  deniedAmount,
+  channelId = null
 }) {
-  await initKickzDealDiscord();
+  // Mirrors sendCounterOfferDiscordDM: a consignor with his own offer
+  // channel gets this there instead of in a DM, matching how every other
+  // consignment message is routed. Every caller that existed before this
+  // passes no channelId and keeps the DM behaviour exactly as it was,
+  // including the missing-ID throw.
+  let dm = null;
+  let deliveryType = channelId ? "private_channel" : "dm";
 
-  if (!sellerDiscordId) {
-    throw new Error("Missing seller Discord ID");
+  if (channelId) {
+    await initDiscord();
+    dm = await discordClient.channels.fetch(channelId).catch(() => null);
   }
 
-  const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
-  const dm = await user.createDM();
+  if (!dm) {
+    await initKickzDealDiscord();
+
+    if (!sellerDiscordId) {
+      throw new Error("Missing seller Discord ID");
+    }
+
+    const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
+    dm = await user.createDM();
+    deliveryType = "dm";
+  }
 
   // FIXED — same change as sendCounterOfferDiscordDM (WTB): show the
   // seller's LAST position primarily, original ask as a small
@@ -14319,7 +14353,7 @@ async function sendMemberWtbCounterOfferDiscordDM({
   return {
     channelId: message.channelId,
     messageId: message.id,
-    deliveryType: "dm"
+    deliveryType
   };
 }
 
