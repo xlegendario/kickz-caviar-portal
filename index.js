@@ -27880,22 +27880,28 @@ function getBuyingDisplayPrice(price, vatType, inventoryType, sourceType = "", o
     return n;
   }
 
-  // Consignment on All Inventory: rebuild the price from what the pair
-  // actually costs us, not from the consignor's gross ask.
+  // Consignment on All Inventory: the mark-up goes on the NORMALIZED ask,
+  // the same VAT-inclusive scale getConsignmentComparePrice puts every
+  // source on.
   //
-  // A VAT21 consignor invoices us with Dutch VAT that we reclaim, so his
-  // 121 costs us 100. Adding the margin to the 121 instead of the 100 gave
-  // away 2,10 of it - proven live on 25-08-2026 with three rows that all
-  // cost us exactly 100 net: VAT21 showed 131 where VAT0 showed 133,10.
+  // Why that scale and not "what it costs us net": whichever VAT regime a
+  // pair comes in, our profit is (selling price - ask) / 1.21. A VAT21 ask
+  // of 121 costs us 100 because we reclaim the VAT, but we then also owe
+  // VAT on the whole sale. A margin-scheme ask of 121 costs us the full
+  // 121, but we only owe VAT on our own margin. The two cancel out
+  // exactly, which is why the normalized scale has always been the right
+  // basis for comparing sources - and why a fixed mark-up on it produces
+  // the same profit on every VAT type.
   //
-  // The VAT that goes back on top is the BUYER's own rate, because that is
-  // what the pair costs in their country. Rounding is upward, to whole
-  // euros: a shop should never read a price with cents, and rounding down
-  // would hand back part of the margin we just repaired.
+  // Corrected 25-08-2026: this briefly added the mark-up to the net cost
+  // instead, which handed VAT21 and VAT0 a bigger margin than Margin and
+  // broke the very consistency it was meant to create.
   //
-  // Margin stock is left flat on purpose. Under the margin scheme there is
-  // no reclaimable VAT on either side, so the ask is already the net cost
-  // and the mark-up is gross - it is worth 8,26 to us, a deliberate choice.
+  // Margin stock is never restated by the buyer's rate: margin-scheme
+  // goods carry no reverse charge, so a foreign shop pays the same as a
+  // Dutch one. For the VAT types that DO get restated, the rate is the
+  // buyer's own, because that is what the pair costs in their country.
+  // Rounding is upward to whole euros - a shop should never read cents.
   if (cleanSourceType === "consignment") {
     const sellerPrice = Number(options?.sellerPrice);
     const rawMarkup = Number(options?.markup);
@@ -27909,9 +27915,9 @@ function getBuyingDisplayPrice(price, vatType, inventoryType, sourceType = "", o
       const rawRate = Number(options?.buyerVatRate);
       const buyerRate = Number.isFinite(rawRate) && rawRate > 0 ? rawRate : 0.21;
 
-      const netCost = cleanVatType === "VAT21" ? sellerPrice / 1.21 : sellerPrice;
+      const normalizedAsk = getConsignmentComparePrice(sellerPrice, cleanVatType);
 
-      return Math.ceil((netCost + markup) * (1 + buyerRate));
+      return Math.ceil(((normalizedAsk + markup) / 1.21) * (1 + buyerRate));
     }
   }
 
