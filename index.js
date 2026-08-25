@@ -31017,7 +31017,9 @@ async function createOpenMemberWtb({
     "Date": new Date().toISOString(),
 
     "Max Price": maxPrice,
-    "Offer Margin": 10,
+    // Was a literal 10, which would have ignored CONSIGNMENT_MARKUP and
+    // left this third creation route disagreeing with the other two.
+    "Offer Margin": getMemberWtbMargin(),
     "Current Lowest Source Price": maxPrice,
 
     "Fulfillment Status": "Outsource",
@@ -31537,6 +31539,14 @@ app.post("/api/buying/requests", async (req, res) => {
       "Date": new Date().toISOString(),
 
       "Max Price": maxPrice,
+
+      // FIXED - Buy never wrote this, while the Offer route next to it
+      // always did. Every reader then fell back to the current default,
+      // so a later change to CONSIGNMENT_MARKUP would silently recalculate
+      // deals that were struck under the old margin. Snapshotting it here
+      // keeps a running negotiation on the number it was opened with.
+      "Offer Margin": getMemberWtbMargin(),
+
       "Current Lowest Source Price": getBuyingCurrentLowestSourcePriceForMemberWtb({
         selectedSource,
         inventoryType,
