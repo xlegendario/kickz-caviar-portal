@@ -574,6 +574,27 @@ function getBuyingInventoryTypeLabel() {
 // it is already excl. VAT and nothing is divided. The hint only appears
 // where the amount can still be recalculated — on B2B and Margin it
 // cannot, so there is nothing to warn about.
+// Which scale a Want To Buy amount is read in, and why.
+//
+// Naming the buying type is the point: the dropdown that decides this sits
+// right above the hint, so a member who reads "excl. VAT" and did not mean
+// that has an obvious next move. Without it the scale reads as a rule about
+// us rather than a consequence of their own choice.
+function getMemberWtbScaleHint(inventoryType, forCsv) {
+  const subject = forCsv ? "prices in this file are" : "your price is";
+
+  if (inventoryType === "b2b") {
+    return `With buying type B2B Only, ${subject} read as excl. VAT.`;
+  }
+
+  if (inventoryType === "private") {
+    return `With buying type Margin Only, ${subject} read as incl. VAT.`;
+  }
+
+  return `With buying type All Types, ${subject} read as incl. VAT. ` +
+    "If it matches a B2B seller the invoice amount is recalculated as a VAT0 price.";
+}
+
 function getBuyingOfferInputCopy() {
   if (buyingInventoryType === "b2b") {
     return {
@@ -859,6 +880,7 @@ function openMemberWtbModalFlow() {
   memberWtbSizeInput.value = "";
   memberWtbMaxPriceInput.value = "";
   memberWtbInventoryTypeInput.value = buyingInventoryType || "all";
+  refreshMemberWtbScaleHint();
   memberWtbModal?.classList.remove("hidden");
   setTimeout(() => memberWtbSkuInput?.focus(), 50);
 }
@@ -870,6 +892,7 @@ function openMemberWtbCsvModalFlow() {
   closeMemberWtbChoiceModalFlow();
   if (memberWtbCsvInventoryTypeInput) {
     memberWtbCsvInventoryTypeInput.value = buyingInventoryType || "all";
+    refreshMemberWtbCsvScaleHint();
   }
   if (memberWtbCsvInput) memberWtbCsvInput.value = "";
   if (memberWtbCsvPreview) memberWtbCsvPreview.textContent = "";
@@ -905,6 +928,30 @@ memberWtbCsvModal?.addEventListener("click", (event) => {
 memberWtbSkuInput?.addEventListener("input", () => {
   memberWtbSkuInput.value = cleanMemberWtbSkuInput(memberWtbSkuInput.value);
 });
+// Both modals keep their hint in step with their own dropdown. Written once
+// so the single and the bulk flow can never end up saying different things
+// about the same choice.
+function refreshMemberWtbScaleHint() {
+  const target = document.getElementById("memberWtbScaleHint");
+  if (!target || !memberWtbInventoryTypeInput) return;
+
+  target.textContent = getMemberWtbScaleHint(memberWtbInventoryTypeInput.value, false);
+}
+
+function refreshMemberWtbCsvScaleHint() {
+  const select = document.getElementById("memberWtbCsvInventoryTypeInput");
+  const target = document.getElementById("memberWtbCsvScaleHint");
+  if (!select || !target) return;
+
+  target.textContent = getMemberWtbScaleHint(select.value, true);
+}
+
+memberWtbInventoryTypeInput?.addEventListener("change", refreshMemberWtbScaleHint);
+
+document
+  .getElementById("memberWtbCsvInventoryTypeInput")
+  ?.addEventListener("change", refreshMemberWtbCsvScaleHint);
+
 memberWtbMaxPriceInput?.addEventListener("input", () => {
   memberWtbMaxPriceInput.value = memberWtbMaxPriceInput.value.replace(/\D/g, "");
 });
