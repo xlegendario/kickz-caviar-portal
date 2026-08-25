@@ -28924,6 +28924,48 @@ function calculateMemberWtbConsignorOfferPrice({
   return offer;
 }
 
+// Asks the consignment auto-offer to answer a Member WTB.
+//
+// This is what replaced sendMemberWtbConsignmentRequests on the two shop
+// routes. The difference the consignor sees: a real Counter Offers round
+// with Accept / Counter / Deny instead of a Supabase offer he can only
+// take or leave - and everything after his answer is the machinery every
+// other seller already runs through.
+//
+// SKU, size and the ceiling are read from the record here rather than
+// accepted from the caller. Handing them in is exactly how a wrong SKU
+// once reached a consignor with nothing to do with the deal (24-08-2026):
+// the endpoint searched stock for what it was told, not for what the
+// Member WTB actually asks for.
+async function createMemberWtbAutoOffer(memberWtbRecordId) {
+  const record = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+  const f = record.fields || {};
+
+  const response = await fetch(`http://localhost:${PORT}/api/consignment/auto-offer/create`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+    },
+    body: JSON.stringify({
+      member_wtb_record_id: memberWtbRecordId,
+      sku: asText(f["SKU"]),
+      size: asText(f["Size"]),
+      maximum_buying_price: numberValue(f["Max Price"])
+    })
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const error = new Error(data.details || data.error || `Auto-offer failed: ${response.status}`);
+    error.payload = data;
+    throw error;
+  }
+
+  return data;
+}
+
 async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
   const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
   const f = memberWtb.fields || {};
@@ -30794,6 +30836,7 @@ app.post("/api/buying/offers", async (req, res) => {
 
     let wtbPost = null;
     let consignmentRequests = null;
+    let autoOffer = null;
     let kcOfferRequest = null;
 
     try {
@@ -30810,9 +30853,18 @@ app.post("/api/buying/offers", async (req, res) => {
     }
 
     try {
-      consignmentRequests = await sendMemberWtbConsignmentRequests(created.id);
+      autoOffer = await createMemberWtbAutoOffer(created.id);
     } catch (err) {
-      console.error("Failed to send Member WTB offer consignment requests:", err);
+      // Falling back rather than failing: a consignor who is never asked
+      // looks exactly like a quiet week, and the route below is what this
+      // did before today.
+      console.error("Member WTB auto-offer failed, falling back to consignment requests:", err.message);
+
+      try {
+        consignmentRequests = await sendMemberWtbConsignmentRequests(created.id);
+      } catch (fallbackErr) {
+        console.error("Failed to send Member WTB offer consignment requests:", fallbackErr);
+      }
     }
 
     const hasMatchingKcOwnedSource = (matchingSources || []).some((source) => {
@@ -30851,6 +30903,8 @@ app.post("/api/buying/offers", async (req, res) => {
       max_price_display: buyingMoneyValue(offerPrice),
       wtb_posted: !!wtbPost,
       wtb_post: wtbPost,
+      auto_offer_sent: !!autoOffer,
+      auto_offer: autoOffer,
       consignment_requests_sent: !!consignmentRequests,
       consignment_requests: consignmentRequests,
       kc_offer_request_sent: !!kcOfferRequest,
@@ -31578,6 +31632,7 @@ app.post("/api/buying/requests", async (req, res) => {
     let wtbPost = null;
     let kcConfirmation = null;
     let consignmentRequests = null;
+    let autoOffer = null;
     
     if (purchaseStatus === "KC Pending") {
       try {
@@ -31605,9 +31660,15 @@ app.post("/api/buying/requests", async (req, res) => {
       }
     
       try {
-        consignmentRequests = await sendMemberWtbConsignmentRequests(created.id);
+        autoOffer = await createMemberWtbAutoOffer(created.id);
       } catch (err) {
-        console.error("Failed to send Member WTB consignment requests:", err);
+        console.error("Member WTB auto-offer failed, falling back to consignment requests:", err.message);
+
+        try {
+          consignmentRequests = await sendMemberWtbConsignmentRequests(created.id);
+        } catch (fallbackErr) {
+          console.error("Failed to send Member WTB consignment requests:", fallbackErr);
+        }
       }
     }
     
@@ -31621,6 +31682,8 @@ app.post("/api/buying/requests", async (req, res) => {
       wtb_post: wtbPost,
       kc_confirmation_sent: !!kcConfirmation,
       kc_confirmation: kcConfirmation,
+      auto_offer_sent: !!autoOffer,
+      auto_offer: autoOffer,
       consignment_requests_sent: !!consignmentRequests?.ok,
       consignment_requests: consignmentRequests
     });
