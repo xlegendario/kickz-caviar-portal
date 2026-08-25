@@ -3557,7 +3557,14 @@ function bindMemberWtbDiscordCreation(
               `✅ Buying Type set to **${getBuyingInventoryFilterLabel(
                 inventoryType
               )}**.\n\n` +
-              "This applies to your next single WTBs and CSV uploads.",
+              "This applies to your next single WTBs and CSV uploads.\n\n" +
+              // Says WHY the scale is what it is. Without naming the buying
+              // type a member reads it as a rule about us and has no idea
+              // that this very menu is what decides it - so "that is not
+              // what I meant" has nowhere to go.
+              `With this buying type your prices are read as **${
+                inventoryType === "b2b" ? "excl. VAT" : "incl. VAT"
+              }**.`,
             ephemeral: true
           });
 
@@ -3767,13 +3774,18 @@ function bindMemberWtbDiscordCreation(
               `**Product:** ${result.product_name}`,
               `**SKU:** ${result.sku}`,
               `**Size:** ${result.size}`,
-              `**Max Price:** ${moneySmartValue(Number(
+              `**Your price:** ${moneySmartValue(Number(
                 result.max_price
-              ).toFixed(2))}`,
+              ).toFixed(2))} (${
+                result.inventory_type === "b2b" ? "excl. VAT" : "incl. VAT"
+              })`,
               `**Buying Type:** ${getBuyingInventoryFilterLabel(
                 result.inventory_type
               )}`,
               "",
+              // The scale next to the amount, and the buying type right
+              // under it, so the two are read together. Apart they invite
+              // exactly the mistake this is here to prevent.
               "You will automatically receive offers when sellers respond."
             ].join("\n")
           });
@@ -7395,12 +7407,64 @@ async function resolveConsignmentProduct(sku, cache = null) {
 
   const value = {
     product_name: uitkomst.product_name,
-    brand: uitkomst.brand || ""
+    brand: uitkomst.brand || "",
+
+    // The style code the catalogue actually matched, which is not always
+    // what was typed: the lookup finds "DD1503 101" and "(SPECIAL BOX)
+    // DC6887-200" perfectly well. Carrying it out of here is what lets the
+    // caller store a SKU that will match something later.
+    matched_sku: asText(uitkomst.matched_sku || uitkomst.sku || cleanSku).toUpperCase()
   };
 
   if (cache) cache.set(cleanSku, { ok: true, value: value });
 
   return value;
+}
+
+// Is this a size we can actually match stock on?
+//
+// EU scales only, which is what consignors are asked for: two digits with
+// an optional half or third, or an apparel size. A US or JP scale would
+// silently never match anything we hold.
+//
+// "355" is the failure this exists for: it looks like a number, passes any
+// digits-only test, and is invisible forever after. 52 rows had it.
+function isUsableConsignmentSize(size) {
+  const clean = asText(size).trim().toUpperCase();
+
+  if (/^\d{1,2}(\.5)?$/.test(clean)) return true;      // 42, 42.5, 9
+  if (/^\d{1,2} [12]\/3$/.test(clean)) return true;     // 37 1/3, 38 2/3
+  if (/^(XXS|XS|S|M|L|XL|XXL|XXXL)$/.test(clean)) return true;
+  if (/^(S\/M|M\/L|L\/XL)$/.test(clean)) return true;
+
+  return false;
+}
+
+// Turns a rejected size into a guess, so the answer is "did you mean 35.5?"
+// rather than "invalid". Returns null when we cannot tell.
+function suggestConsignmentSize(size) {
+  const clean = asText(size).trim().toUpperCase();
+
+  const half = clean.match(/^(\d{2})5$/);
+  if (half) return half[1] + ".5";
+
+  const third = clean.match(/^(\d{2})([12])\/(3)$/);
+  if (third) return third[1] + " " + third[2] + "/" + third[3];
+
+  const comma = clean.match(/^(\d{1,2}),(\d)$/);
+  if (comma) return comma[1] + "." + comma[2];
+
+  return null;
+}
+
+// One sentence, used by the single-item route and both CSV importers so a
+// consignor is told the same thing wherever they hit it.
+function consignmentSizeError(size) {
+  const guess = suggestConsignmentSize(size);
+
+  return guess
+    ? `size "${asText(size)}" is not a valid EU size — did you mean ${guess}?`
+    : `size "${asText(size)}" is not a valid EU size (use 42, 42.5, 37 1/3 or a clothing size)`;
 }
 
 async function addConsignmentInventoryRow({
@@ -7426,11 +7490,21 @@ async function addConsignmentInventoryRow({
   // SKU as its product name.
   const productInfo = await resolveConsignmentProduct(cleanSku, skuCache);
 
+  // FIXED - what the consignor typed was stored verbatim, and the lookup is
+  // tolerant enough that a wrong SKU still resolved to the right product.
+  // The row then carried a SKU that matched nothing, so the stock existed
+  // and was never offered to anyone. 59 rows had this on 25-08-2026,
+  // including "DD1503 101" and "(SPECIAL BOX) DC6887-200".
+  //
+  // The catalogue is the authority on what a style code looks like, so its
+  // answer is what gets stored - here and in every lookup below it.
+  const canonicalSku = asText(productInfo.matched_sku || cleanSku).toUpperCase();
+
   const { data: existingRows, error: existingError } = await supabase
     .from("consignment_inventory")
     .select("id, quantity")
     .eq("seller_record_id", sellerRecordId)
-    .eq("sku", cleanSku)
+    .eq("sku", canonicalSku)
     .eq("size", cleanSize)
     .limit(1);
 
@@ -7456,7 +7530,7 @@ async function addConsignmentInventoryRow({
 
     if (error) throw error;
 
-    const stockLevel = await refreshConsignmentStockLevel(cleanSku, cleanSize);
+    const stockLevel = await refreshConsignmentStockLevel(canonicalSku, cleanSize);
 
     return {
       mode: "updated",
@@ -7472,7 +7546,7 @@ async function addConsignmentInventoryRow({
       seller_id: sellerId,
       product_name: productInfo.product_name,
       brand: productInfo.brand,
-      sku: cleanSku,
+      sku: canonicalSku,
       size: cleanSize,
       vat_type: cleanVatType,
       selling_price_suggested: cleanPrice,
@@ -7483,7 +7557,7 @@ async function addConsignmentInventoryRow({
 
   if (error) throw error;
 
-  const stockLevel = await refreshConsignmentStockLevel(cleanSku, cleanSize);
+  const stockLevel = await refreshConsignmentStockLevel(canonicalSku, cleanSize);
 
   return {
     mode: "created",
@@ -7513,11 +7587,15 @@ async function setConsignmentInventoryRow({
   // GEWIJZIGD — zie addConsignmentInventoryRow.
   const productInfo = await resolveConsignmentProduct(cleanSku, skuCache);
 
+  // Same correction as in addConsignmentInventoryRow: the catalogue decides
+  // what a style code looks like, not whatever was typed into the form.
+  const canonicalSku = asText(productInfo.matched_sku || cleanSku).toUpperCase();
+
   const { data: existingRows, error: existingError } = await supabase
     .from("consignment_inventory")
     .select("id")
     .eq("seller_record_id", sellerRecordId)
-    .eq("sku", cleanSku)
+    .eq("sku", canonicalSku)
     .eq("size", cleanSize)
     .limit(1);
 
@@ -7554,7 +7632,7 @@ async function setConsignmentInventoryRow({
       seller_id: sellerId,
       product_name: productInfo.product_name,
       brand: productInfo.brand,
-      sku: cleanSku,
+      sku: canonicalSku,
       size: cleanSize,
       vat_type: cleanVatType,
       selling_price_suggested: cleanPrice,
@@ -7587,6 +7665,12 @@ app.post("/api/consignment/inventory/manual", async (req, res) => {
 
     if (!["Margin", "VAT0", "VAT21"].includes(vatType)) {
       return res.status(400).json({ error: "VAT Type must be Margin, VAT0 or VAT21" });
+    }
+
+    if (!isUsableConsignmentSize(size)) {
+      return res.status(400).json({
+        error: consignmentSizeError(size).replace(/^size/, "Size")
+      });
     }
 
     if (await refuseIneligibleConsignmentVat(sellerRecordId, [{ vat_type: vatType }], res)) {
@@ -7657,66 +7741,77 @@ function normalizeConsignmentCsvRows(rows) {
   }));
 }
 
-function validateConsignmentCsvAddRows(rows) {
-  const csvKeys = new Set();
+// Every problem in the file, not just the first one.
+//
+// These two used to throw on the first bad row, so a consignor with five
+// mistakes uploaded five times to discover them one at a time. The Member
+// WTB importer already collected them all; this brings these in line.
+//
+// "allowZeroQuantity" is the only real difference between add and replace:
+// replacing may legitimately set a line to zero, adding may not.
+function collectConsignmentCsvProblems(rows, { allowZeroQuantity }) {
+  const problems = [];
+  const seen = new Set();
 
   for (const row of rows) {
-    const key = getStockCounterKey(row.sku, row.size);
+    const label = `Row ${row.row_number || "?"}`;
 
     if (!row.sku || !row.size) {
-      throw new Error(`Invalid row ${row.row_number || ""}: missing SKU or Size`);
+      problems.push(`${label}: missing SKU or Size`);
+      continue;
     }
 
-    if (csvKeys.has(key)) {
-      throw new Error(`Duplicate SKU + Size in CSV: ${row.sku} / ${row.size}`);
+    const key = getStockCounterKey(row.sku, row.size);
+
+    if (seen.has(key)) {
+      problems.push(`${label}: ${row.sku} / ${row.size} appears twice in this file`);
     }
 
-    csvKeys.add(key);
+    seen.add(key);
+
+    if (!isUsableConsignmentSize(row.size)) {
+      problems.push(`${label}: ${consignmentSizeError(row.size)}`);
+    }
 
     if (!["Margin", "VAT0", "VAT21"].includes(row.vat_type)) {
-      throw new Error(`Invalid row ${row.row_number || ""}: invalid VAT Type`);
+      problems.push(`${label}: VAT Type must be Margin, VAT0 or VAT21`);
     }
 
     if (!Number.isFinite(row.selling_price_suggested) || row.selling_price_suggested <= 0) {
-      throw new Error(`Invalid row ${row.row_number || ""}: invalid Selling Price`);
+      problems.push(`${label}: Selling Price must be higher than 0`);
     }
 
-    if (!Number.isInteger(row.quantity) || row.quantity <= 0) {
-      throw new Error(`Invalid row ${row.row_number || ""}: invalid Quantity`);
+    const badQuantity = allowZeroQuantity
+      ? !Number.isInteger(row.quantity) || row.quantity < 0
+      : !Number.isInteger(row.quantity) || row.quantity <= 0;
+
+    if (badQuantity) {
+      problems.push(
+        allowZeroQuantity
+          ? `${label}: Quantity must be a whole number, 0 or higher`
+          : `${label}: Quantity must be a whole number above 0`
+      );
     }
   }
+
+  if (!problems.length) return;
+
+  const shown = problems.slice(0, 40);
+  const rest = problems.length - shown.length;
+
+  throw new Error(
+    `${problems.length} problem${problems.length === 1 ? "" : "s"} in this file:\n` +
+    shown.join("\n") +
+    (rest > 0 ? `\n...and ${rest} more` : "")
+  );
+}
+
+function validateConsignmentCsvAddRows(rows) {
+  collectConsignmentCsvProblems(rows, { allowZeroQuantity: false });
 }
 
 function validateConsignmentCsvReplaceRows(rows) {
-  const csvKeys = new Set();
-
-  for (const row of rows) {
-    const key = getStockCounterKey(row.sku, row.size);
-
-    if (!row.sku || !row.size) {
-      throw new Error(`Invalid row ${row.row_number || ""}: missing SKU or Size`);
-    }
-
-    if (csvKeys.has(key)) {
-      throw new Error(`Duplicate SKU + Size in CSV: ${row.sku} / ${row.size}`);
-    }
-
-    csvKeys.add(key);
-
-    if (!["Margin", "VAT0", "VAT21"].includes(row.vat_type)) {
-      throw new Error(`Invalid row ${row.row_number || ""}: invalid VAT Type`);
-    }
-
-    if (!Number.isFinite(row.selling_price_suggested) || row.selling_price_suggested <= 0) {
-      throw new Error(`Invalid row ${row.row_number || ""}: invalid Selling Price`);
-    }
-
-    if (!Number.isInteger(row.quantity) || row.quantity < 0) {
-      throw new Error(`Invalid row ${row.row_number || ""}: invalid Quantity`);
-    }
-  }
-
-  return csvKeys;
+  collectConsignmentCsvProblems(rows, { allowZeroQuantity: true });
 }
 
 async function getActiveCsvImportJobForSeller(sellerRecordId) {
