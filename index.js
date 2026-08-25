@@ -240,6 +240,22 @@ async function mollieRequest(pathname, options = {}) {
 
 const BUYING_KC_DELIVERY_TIME = "1-2 business days";
 const BUYING_CONSIGNMENT_DELIVERY_TIME = "1-2 business days";
+// What we add on top of a consignor's asking price, in euros.
+//
+// Set CONSIGNMENT_MARKUP to change it; leave it unset and it stays 10,
+// which is what every one of these places had hard-coded before.
+//
+// Changing it only affects NEW deals. A Member WTB writes its margin into
+// "Offer Margin" when it is created, and that snapshot keeps leading for
+// negotiations already running - so a change never moves the goalposts on
+// a consignor mid-conversation.
+const CONSIGNMENT_MARKUP = (() => {
+  const configured = Number(process.env.CONSIGNMENT_MARKUP);
+  return Number.isFinite(configured) && configured > 0 ? configured : 10;
+})();
+
+console.log(`\u{1f4b6} Consignment markup: \u20ac${CONSIGNMENT_MARKUP}`);
+
 const BUYING_MASTER_CACHE_TTL_MS = 2 * 60 * 1000;
 
 const buyingMasterCache = {
@@ -27793,12 +27809,12 @@ function getBuyingConsignmentProduct(row, imageMap = new Map()) {
     image_url: isUnstableImageUrl(rowImageUrl)
       ? fallbackImageUrl
       : rowImageUrl,
-    price: Number(row.selling_price_suggested || 0) + 10,
+    price: Number(row.selling_price_suggested || 0) + CONSIGNMENT_MARKUP,
     seller_price: Number(row.selling_price_suggested || 0),
-    kc_markup: 10,
+    kc_markup: CONSIGNMENT_MARKUP,
     vat_type: normalizeBuyingVatType(row.vat_type),
     compare_price: getBuyingComparePrice(
-      Number(row.selling_price_suggested || 0) + 10,
+      Number(row.selling_price_suggested || 0) + CONSIGNMENT_MARKUP,
       row.vat_type,
       "consignment"
     ),
@@ -27853,7 +27869,7 @@ function sourceMatchesBuyingInventoryType(source, inventoryType) {
   return true;
 }
 
-function getBuyingDisplayPrice(price, vatType, inventoryType, sourceType = "") {
+function getBuyingDisplayPrice(price, vatType, inventoryType, sourceType = "", options = {}) {
   const n = Number(price || 0);
   const cleanVatType = normalizeBuyingVatType(vatType);
   const cleanSourceType = asText(sourceType);
@@ -27862,6 +27878,41 @@ function getBuyingDisplayPrice(price, vatType, inventoryType, sourceType = "") {
 
   if (inventoryType !== "all") {
     return n;
+  }
+
+  // Consignment on All Inventory: rebuild the price from what the pair
+  // actually costs us, not from the consignor's gross ask.
+  //
+  // A VAT21 consignor invoices us with Dutch VAT that we reclaim, so his
+  // 121 costs us 100. Adding the margin to the 121 instead of the 100 gave
+  // away 2,10 of it - proven live on 25-08-2026 with three rows that all
+  // cost us exactly 100 net: VAT21 showed 131 where VAT0 showed 133,10.
+  //
+  // The VAT that goes back on top is the BUYER's own rate, because that is
+  // what the pair costs in their country. Rounding is upward, to whole
+  // euros: a shop should never read a price with cents, and rounding down
+  // would hand back part of the margin we just repaired.
+  //
+  // Margin stock is left flat on purpose. Under the margin scheme there is
+  // no reclaimable VAT on either side, so the ask is already the net cost
+  // and the mark-up is gross - it is worth 8,26 to us, a deliberate choice.
+  if (cleanSourceType === "consignment") {
+    const sellerPrice = Number(options?.sellerPrice);
+    const rawMarkup = Number(options?.markup);
+    const markup = Number.isFinite(rawMarkup) ? rawMarkup : 10;
+
+    if (Number.isFinite(sellerPrice) && sellerPrice > 0) {
+      if (cleanVatType === "Margin") {
+        return Math.ceil(sellerPrice + markup);
+      }
+
+      const rawRate = Number(options?.buyerVatRate);
+      const buyerRate = Number.isFinite(rawRate) && rawRate > 0 ? rawRate : 0.21;
+
+      const netCost = cleanVatType === "VAT21" ? sellerPrice / 1.21 : sellerPrice;
+
+      return Math.ceil((netCost + markup) * (1 + buyerRate));
+    }
   }
 
   if (
@@ -27878,7 +27929,7 @@ function getBuyingDisplayPrice(price, vatType, inventoryType, sourceType = "") {
   return n;
 }
 
-function addBuyingSourceToProductMap(productMap, source, inventoryType = "all") {
+function addBuyingSourceToProductMap(productMap, source, inventoryType = "all", buyerVatRate = null) {
   if (!source.sku || !source.size || !source.price) return;
   if (!sourceMatchesBuyingInventoryType(source, inventoryType)) return;
 
@@ -27886,7 +27937,12 @@ function addBuyingSourceToProductMap(productMap, source, inventoryType = "all") 
     source.price,
     source.vat_type,
     inventoryType,
-    source.source_type
+    source.source_type,
+    {
+      sellerPrice: source.seller_price,
+      markup: source.kc_markup,
+      buyerVatRate
+    }
   );
   
   source.compare_price = source.display_price;
@@ -28183,11 +28239,11 @@ async function cacheConsignmentImages(consignmentRows, imageMap) {
   }
 }
 
-function buildBuyingProductsFromSources(sources, inventoryType = "all") {
+function buildBuyingProductsFromSources(sources, inventoryType = "all", buyerVatRate = null) {
   const productMap = new Map();
 
   (sources || []).forEach((source) => {
-    addBuyingSourceToProductMap(productMap, { ...source }, inventoryType);
+    addBuyingSourceToProductMap(productMap, { ...source }, inventoryType, buyerVatRate);
   });
 
   return normalizeBuyingProducts(productMap);
@@ -28228,7 +28284,19 @@ async function getLiveBuyingSources({ force = false } = {}) {
   return refreshBuyingMasterCache();
 }
 
-function selectBuyingSourceFromLiveSources({ sources, sku, size, inventoryType }) {
+// The VAT rate of the store that is buying, from their own seller record.
+// Null when it cannot be read, so the calculation falls back to the Dutch
+// 0.21 it used before this existed.
+async function getBuyerVatRateForSeller(sellerRecordId) {
+  if (!sellerRecordId) return null;
+
+  const seller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+  const rate = Number(seller?.get?.("Sellers VAT Rate"));
+
+  return Number.isFinite(rate) && rate > 0 ? rate : null;
+}
+
+function selectBuyingSourceFromLiveSources({ sources, sku, size, inventoryType, buyerVatRate = null }) {
   const cleanSku = normalizeSku(sku);
   const cleanSize = getBuyingSizeKey(size);
   const cleanInventoryType = normalizeBuyingInventoryType(inventoryType);
@@ -28241,7 +28309,7 @@ function selectBuyingSourceFromLiveSources({ sources, sku, size, inventoryType }
       getBuyingSizeKey(source.size) === cleanSize
     )
     .forEach((source) => {
-      addBuyingSourceToProductMap(productMap, { ...source }, cleanInventoryType);
+      addBuyingSourceToProductMap(productMap, { ...source }, cleanInventoryType, buyerVatRate);
     });
 
   const products = normalizeBuyingProducts(productMap);
@@ -28490,9 +28558,17 @@ app.get("/api/buying/products", async (req, res) => {
     const sort = asText(req.query.sort) || "price_low";
     const inventoryType = asText(req.query.inventory_type) || "all";
 
+    // The shop in front of this passes the rate of the store that is
+    // looking. Left out - which is every existing caller, including the KC
+    // Buying page - it stays 0.21 and nothing about the answer changes.
+    const rawBuyerVatRate = Number(req.query.buyer_vat_rate);
+    const buyerVatRate = Number.isFinite(rawBuyerVatRate) && rawBuyerVatRate > 0
+      ? rawBuyerVatRate
+      : null;
+
     const sources = await getBuyingMasterSources();
 
-    let products = buildBuyingProductsFromSources(sources, inventoryType);
+    let products = buildBuyingProductsFromSources(sources, inventoryType, buyerVatRate);
 
     if (brand) {
       products = products.filter((product) => product.brand === brand);
@@ -31421,7 +31497,11 @@ app.post("/api/buying/requests", async (req, res) => {
       sources: liveSources,
       sku,
       size,
-      inventoryType
+      inventoryType,
+      // Buy takes display_price straight from the chosen source, so this
+      // has to be the same rate the shop showed this store - otherwise the
+      // price on the button and the price on the invoice drift apart.
+      buyerVatRate: await getBuyerVatRateForSeller(sellerRecordId)
     });
 
     if (!selectedSource) {
