@@ -6065,11 +6065,11 @@ function bindConsignmentDiscordButtons(client) {
       // Open. This handler had no status check at all, so an accepted or
       // cancelled round could still be denied from a stale message -
       // turning a closed deal back into a refusal.
-      const bestaandeRonde = await airtable(COUNTER_OFFERS_TABLE)
+      const existingRound = await airtable(COUNTER_OFFERS_TABLE)
         .find(counterOfferRecordId)
         .catch(() => null);
 
-      if (bestaandeRonde && asText(bestaandeRonde.fields?.["Status"]) !== "Open") {
+      if (existingRound && asText(existingRound.fields?.["Status"]) !== "Open") {
         await disableCounterOfferDiscordButtons(
           interaction.channelId,
           interaction.message.id,
@@ -6138,7 +6138,7 @@ function bindConsignmentDiscordButtons(client) {
             notify: shouldNotifyStore,
             otherSellerBest: otherSellerExistsForStore,
             ownNormalized: denyingSellerOwnNormalizedForStore
-          } = await beoordeelSellerDenyVoorStore({
+          } = await shouldNotifyStoreOfSellerDeny({
             counterOfferRecordId,
             deniedFields,
             deniedOrderId
@@ -7350,14 +7350,14 @@ async function resolveConsignmentProduct(sku, cache = null) {
     throw new UnknownSkuError(cleanSku, uitkomst.reason);
   }
 
-  const waarde = {
+  const value = {
     product_name: uitkomst.product_name,
     brand: uitkomst.brand || ""
   };
 
-  if (cache) cache.set(cleanSku, { ok: true, value: waarde });
+  if (cache) cache.set(cleanSku, { ok: true, value: value });
 
-  return waarde;
+  return value;
 }
 
 async function addConsignmentInventoryRow({
@@ -8634,7 +8634,7 @@ app.post("/api/internal/resolve-sku", async (req, res) => {
     const gevraagd = [
       ...new Set(
         (enkel ? [enkel, ...lijst] : lijst)
-          .map((waarde) => normalizeSkuStrict(waarde))
+          .map((value) => normalizeSkuStrict(value))
           .filter(Boolean)
       )
     ];
@@ -14022,24 +14022,24 @@ function getStockCounterKey(sku, size) {
 // hiccup is worse than the situation this replaces, and the check at
 // offer time still stands behind it.
 async function refuseIneligibleConsignmentVat(sellerRecordId, entries, res) {
-  const eersteRegelPerType = new Map();
+  const firstRowPerVatType = new Map();
 
   for (const entry of entries || []) {
     const vatType = asText(entry?.vat_type);
 
     if (!vatType || vatType === "Margin") continue;
-    if (!eersteRegelPerType.has(vatType)) {
-      eersteRegelPerType.set(vatType, entry?.row_number);
+    if (!firstRowPerVatType.has(vatType)) {
+      firstRowPerVatType.set(vatType, entry?.row_number);
     }
   }
 
-  if (!eersteRegelPerType.size) return false;
+  if (!firstRowPerVatType.size) return false;
 
   const seller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
 
   if (!seller) return false;
 
-  for (const [vatType, rowNumber] of eersteRegelPerType) {
+  for (const [vatType, rowNumber] of firstRowPerVatType) {
     const message = validateSellerVatEligibility(
       seller.get("VAT ID"),
       seller.get("Country"),
@@ -17683,7 +17683,7 @@ async function getBuyerHighestEverPosition(sourceType, recordId) {
 // the calculation fell over on its own guard instead of comparing anything.
 // Live case 24-08-2026, ORD-022077.
 // =====================================================================
-async function beoordeelSellerDenyVoorStore({
+async function shouldNotifyStoreOfSellerDeny({
   counterOfferRecordId,
   deniedFields,
   deniedOrderId
@@ -19552,7 +19552,7 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-deny", async (req, r
       const {
         notify: shouldNotifyStore,
         otherSellerBest: otherSellerExistsForStore
-      } = await beoordeelSellerDenyVoorStore({
+      } = await shouldNotifyStoreOfSellerDeny({
         counterOfferRecordId,
         deniedFields,
         deniedOrderId
