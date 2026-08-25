@@ -3708,14 +3708,48 @@ function bindMemberWtbDiscordCreation(
                 .replace(/[^\d]/g, "")
             );
 
+          // Same three rules the Lojiq shop applies to its own form. A
+          // modal cannot filter while someone types, so this is where it
+          // gets caught - and it has to be caught somewhere: a size of
+          // "42M" or a SKU with a stray space produces a want-to-buy that
+          // matches no stock, which nobody ever answers and nobody ever
+          // notices.
+          const cleanSku = asText(sku).trim().toUpperCase();
+          const cleanSize = asText(size).trim().replace(/\s+/g, " ");
+
+          if (!/^[A-Z0-9-]+$/.test(cleanSku)) {
+            await interaction.editReply({
+              content:
+                "⚠️ A SKU can only contain letters, numbers and hyphens."
+            });
+            return;
+          }
+
+          if (!/^[0-9./ ]+$/.test(cleanSize) || !/[0-9]/.test(cleanSize)) {
+            await interaction.editReply({
+              content:
+                "⚠️ A size can only contain numbers, a dot or a slash. " +
+                "For example 42, 42.5 or 37 1/3."
+            });
+            return;
+          }
+
+          if (!Number.isInteger(maxPrice) || maxPrice <= 0) {
+            await interaction.editReply({
+              content:
+                "⚠️ Enter a whole number above 0 as your price."
+            });
+            return;
+          }
+
           const result =
             await createOpenMemberWtb({
               sellerRecordId:
                 sellerRecord.id,
               sellerId:
                 seller.seller_id,
-              sku,
-              size,
+              sku: cleanSku,
+              size: cleanSize,
               maxPrice,
               inventoryType,
               createdFrom:
@@ -31368,11 +31402,25 @@ function parseMemberWtbCsvText(text) {
       errors.push(
         `Row ${row.row_number}: missing SKU`
       );
+    } else if (!/^[A-Z0-9-]+$/.test(row.sku)) {
+      // Presence was the only test before, so "DV1748 601" or a stray
+      // quote came straight through and produced a want-to-buy that
+      // matched no stock and that nobody ever answered.
+      errors.push(
+        `Row ${row.row_number}: a SKU can only contain letters, numbers and hyphens`
+      );
     }
 
     if (!row.size) {
       errors.push(
         `Row ${row.row_number}: missing Size`
+      );
+    } else if (
+      !/^[0-9./ ]+$/.test(row.size) ||
+      !/[0-9]/.test(row.size)
+    ) {
+      errors.push(
+        `Row ${row.row_number}: a size can only contain numbers, a dot or a slash (42, 42.5, 37 1/3)`
       );
     }
 
