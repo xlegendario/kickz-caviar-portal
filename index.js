@@ -2799,6 +2799,54 @@ async function handleMemberWtbPaymentGate(
   const trustedBuyer =
     buyerFields["Trusted Buyer?"] === true;
 
+  /*
+   * A Lojiq store settles through its own portal, where it can put several
+   * open amounts into one payment. Asking Mollie for a link here would take
+   * that away: a link per want-to-buy, a fee per link, and a store that has
+   * to click through five checkouts for one afternoon of deals.
+   *
+   * So this side asks for nothing. It records that money is owed and lets
+   * the deal continue - the same as the trusted branch below, minus Mollie
+   * and minus the DM. The Lojiq portal picks the record up from "Pending"
+   * and creates one payment for however many rows the store selects.
+   *
+   * A store is recognised by the link it already has: Merchants points at
+   * the merchant record that store logs in with. No new field, and no way
+   * for the two to drift apart.
+   */
+  const lojiqStoreBuyer =
+    Array.isArray(buyerFields["Merchants"]) &&
+    buyerFields["Merchants"].length > 0;
+
+  if (lojiqStoreBuyer) {
+    // "Pending" is not in alreadyProcessedStatuses above, because on the
+    // Mollie side it means "not asked yet". Here it means "asked, through
+    // the portal", so a second call must not run the deal update twice.
+    if (currentPaymentStatus === "Pending") {
+      return {
+        status: "already_processed",
+        payment_status: currentPaymentStatus
+      };
+    }
+
+    await airtable(MEMBER_WTBS_TABLE)
+      .update(memberWtbRecordId, {
+        "Payment Status": "Pending"
+      });
+
+    await sendMemberWtbPurchaseWebhook(
+      memberWtbRecordId
+    );
+
+    await sendMemberWtbDealUpdateAfterPayment(
+      memberWtbRecordId
+    );
+
+    return {
+      status: "lojiq_portal_payment"
+    };
+  }
+
   await sendMemberWtbPaymentRequest(
     memberWtbRecordId,
     fields,
