@@ -23764,7 +23764,10 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
     // create-first-counter endpoint already relies on.
     const allSellerOffersForTheseWtbs = memberWtbIds.length
       ? await airtable(SELLER_OFFERS_TABLE)
-          .select({ fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer", "Denied?"] })
+          // "Offer Date" is when this offer arrived. The store side fills
+          // that column from the order's "Offer Sent At"; a Member WTB has
+          // no such field, but the Seller Offer behind it does.
+          .select({ fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Offer Date", "Delete Offer", "Denied?"] })
           .all()
           .then((records) =>
             records.filter(
@@ -23818,7 +23821,8 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
           price,
           normalized,
           id: so.id,
-          vatType
+          vatType,
+          offerDate: so.fields?.["Offer Date"]
         });
       }
     }
@@ -23904,6 +23908,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
           size: displayValue(f["Size"]),
           brand: displayValue(f["Brand"]),
           max_price: moneyWholeValue(f["Max Price"]),
+          offer_date: formatDateEU(winningSellerOffer?.offerDate),
           offer: Number.isFinite(offerAmount) && offerAmount > 0
             ? moneySmartValue(offerAmount)
             : "-",
@@ -28487,7 +28492,17 @@ async function getSkuMasterImageMap(skus) {
 
     const records = await airtable(SKU_MASTER_TABLE)
       .select({
-        fields: ["SKU", "Picture"],
+        // FIXED - this read only "Picture", the attachment field, whose url
+        // always points at airtableusercontent.com. Every caller runs the
+        // answer past isUnstableImageUrl, which rejects exactly that host -
+        // so this lookup could never contribute a single image and the
+        // product ended up in the shop with no picture at all.
+        //
+        // "Picture URL" is the text field next to it, holding the permanent
+        // StockX link. Preferred here; the attachment stays as a fallback
+        // for a row that only has one, and the caller still decides whether
+        // what comes back is usable.
+        fields: ["SKU", "Picture", "Picture URL"],
         filterByFormula: formula,
         maxRecords: 50
       })
@@ -28496,7 +28511,9 @@ async function getSkuMasterImageMap(skus) {
 
     for (const record of records) {
       const sku = normalizeSku(record.fields?.["SKU"]);
-      const image = getImageUrl(record.fields?.["Picture"]);
+      const image =
+        asText(record.fields?.["Picture URL"]) ||
+        getImageUrl(record.fields?.["Picture"]);
 
       if (sku && image && !imageMap.has(sku)) {
         imageMap.set(sku, image);
