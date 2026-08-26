@@ -7421,6 +7421,27 @@ async function resolveConsignmentProduct(sku, cache = null) {
   return value;
 }
 
+// A size on a want-to-buy, tidied but not narrowed.
+//
+// Looser on purpose than the consignment rule below: stock has to be exactly
+// findable, demand only has to be understandable. Apparel runs S / M / L and
+// a cap can be L/XL, and refusing those would mean a shop simply cannot ask
+// for a tee.
+//
+// Word for word the same as the Lojiq portal's copy, so a file that passes
+// there passes here.
+function normalizeWtbSize(value) {
+  return asText(value)
+    .trim()
+    .replace(/,/g, ".")
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+}
+
+function isValidWtbSize(size) {
+  return /^[A-Z0-9./ -]+$/.test(size) && /[A-Z0-9]/.test(size);
+}
+
 // Is this a size we can actually match stock on?
 //
 // EU scales only, which is what consignors are asked for: two digits with
@@ -7942,7 +7963,86 @@ async function processCsvImportQueue() {
   }
 }
 
+// Want To Buys imported from a file, run by the same worker that handles
+// consignment stock.
+//
+// Posting them one request at a time from the browser meant the shop had to
+// keep the tab open for the whole file, and closing it left a half-finished
+// import with nothing on screen saying where it stopped - and re-uploading
+// then duplicated whatever already went through, since nothing dedupes
+// want-to-buys. As a job it survives a closed tab, resumes where it left
+// off, and reports what it skipped.
+//
+// Separate function rather than a branch inside the loop below: that one is
+// built around stock keys, quantities and the replace sweep, none of which
+// mean anything here.
+async function processMemberWtbImportJob(job) {
+  const rows = Array.isArray(job.rows_json) ? job.rows_json : [];
+  let processed = Number(job.processed_rows || 0);
+
+  const skipped = Array.isArray(job.skipped_json) ? [...job.skipped_json] : [];
+
+  await updateCsvImportJob(job.id, {
+    status: "processing",
+    started_at: new Date().toISOString()
+  });
+
+  try {
+    for (let i = processed; i < rows.length; i += 1) {
+      const row = rows[i] || {};
+
+      try {
+        await createOpenMemberWtb({
+          sellerRecordId: job.seller_record_id,
+          sellerId: job.seller_id,
+          sku: row.sku,
+          size: row.size,
+          maxPrice: row.max_price,
+          inventoryType: row.inventory_type,
+          createdFrom: asText(row.created_from) || "CSV Import"
+        });
+      } catch (err) {
+        // One row that cannot resolve must not strand the other 199.
+        skipped.push({
+          row_number: row.row_number ?? i + 2,
+          sku: asText(row.sku),
+          size: asText(row.size),
+          reason: err.message
+        });
+      }
+
+      processed = i + 1;
+
+      await updateCsvImportJob(job.id, {
+        processed_rows: processed,
+        skipped_json: skipped
+      });
+    }
+
+    await updateCsvImportJob(job.id, {
+      status: "completed",
+      processed_rows: processed,
+      skipped_json: skipped,
+      completed_at: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("Member WTB CSV import failed:", err);
+
+    await updateCsvImportJob(job.id, {
+      status: "failed",
+      processed_rows: processed,
+      skipped_json: skipped,
+      error_message: err.message,
+      failed_at: new Date().toISOString()
+    });
+  }
+}
+
 async function processCsvImportJob(job) {
+  if (job.import_type === "member_wtb") {
+    return processMemberWtbImportJob(job);
+  }
+
   const rows = Array.isArray(job.rows_json) ? job.rows_json : [];
   let processed = Number(job.processed_rows || 0);
 
@@ -8113,6 +8213,105 @@ async function processCsvImportJob(job) {
     }
   }
 }
+
+// Want To Buys from a file, queued instead of posted row by row.
+//
+// Same job table and same worker as the consignment import, so the shop can
+// close the tab and the status endpoint reports progress either way.
+app.post("/api/member-wtb/csv-import", async (req, res) => {
+  try {
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const sellerId = asText(req.body?.seller_id);
+    const inventoryType = normalizeBuyingInventoryType(req.body?.inventory_type);
+    const createdFrom = asText(req.body?.created_from) || "CSV Import";
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+
+    if (!sellerRecordId) {
+      return res.status(400).json({ error: "Missing seller_record_id" });
+    }
+
+    if (!rows.length) {
+      return res.status(400).json({ error: "No rows provided" });
+    }
+
+    // Checked here, before anything is queued: a file with mistakes should
+    // come straight back rather than half-import in the background.
+    const problems = [];
+
+    const normalizedRows = rows.map((row, index) => {
+      const rowNumber = Number(row?.row_number) || index + 2;
+      const sku = asText(row?.sku).trim().toUpperCase();
+      const size = normalizeWtbSize(row?.size);
+      const maxPrice = Number(row?.max_price);
+
+      if (!/^[A-Z0-9-]+$/.test(sku)) {
+        problems.push(`Row ${rowNumber}: a SKU can only contain letters, numbers and hyphens`);
+      }
+
+      if (!isValidWtbSize(size)) {
+        problems.push(`Row ${rowNumber}: "${asText(row?.size)}" is not a valid size`);
+      }
+
+      if (!Number.isInteger(maxPrice) || maxPrice <= 0) {
+        problems.push(`Row ${rowNumber}: price must be a whole number above 0`);
+      }
+
+      return {
+        row_number: rowNumber,
+        sku,
+        size,
+        max_price: maxPrice,
+        inventory_type: inventoryType,
+        created_from: createdFrom
+      };
+    });
+
+    if (problems.length) {
+      const shown = problems.slice(0, 40);
+      const rest = problems.length - shown.length;
+
+      return res.status(400).json({
+        error:
+          `${problems.length} problem${problems.length === 1 ? "" : "s"} in this file:\n` +
+          shown.join("\n") +
+          (rest > 0 ? `\n...and ${rest} more` : ""),
+        problems
+      });
+    }
+
+    const result = await createCsvImportJob({
+      sellerRecordId,
+      sellerId,
+      importType: "member_wtb",
+      rows: normalizedRows
+    });
+
+    if (result.existing) {
+      return res.status(409).json({
+        error: "An import is already running",
+        job: result.job,
+        message: `Import already in progress: ${result.job.processed_rows || 0} / ${result.job.total_rows || 0}`
+      });
+    }
+
+    res.json({
+      ok: true,
+      queued: true,
+      job_id: result.job.id,
+      count: normalizedRows.length,
+      message: `${normalizedRows.length} requests received. Posting has started.`
+    });
+
+    setImmediate(() => {
+      processCsvImportQueue().catch((err) => {
+        console.error("Member WTB import queue failed:", err);
+      });
+    });
+  } catch (err) {
+    console.error("Failed to queue Member WTB CSV import:", err);
+    res.status(500).json({ error: "Failed to queue import", details: err.message });
+  }
+});
 
 app.post("/api/consignment/inventory/csv-add", async (req, res) => {
   try {
