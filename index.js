@@ -24423,7 +24423,13 @@ app.get("/api/dashboard/counts", async (req, res) => {
 
       airtable(SELLER_OFFERS_TABLE)
         .select({
-          fields: ["Seller ID"],
+          // FIXED - the Want To Buys badge counted every open offer this
+          // seller has, the tab below it lists only the non-consignment
+          // ones (matchesOfferScope, scope ""), and a consignment offer on
+          // a Member WTB therefore showed as a number over an empty table.
+          // Consignment offers have their own section and are counted
+          // there; this field is read only to leave them out.
+          fields: ["Seller ID", "Consignment Inventory ID"],
           filterByFormula: `OR(
             {Fulfillment Status} = 'Outsource',
             {Fulfillment Status (MWTB)} = 'Outsource'
@@ -24433,10 +24439,18 @@ app.get("/api/dashboard/counts", async (req, res) => {
 
       airtable(COUNTER_OFFERS_TABLE)
         .select({
-          fields: ["Seller ID", "Status", "Source Type"],
+          // CHANGED - "Seller Offer Record ID" is what decides whether a
+          // round belongs to the consignment side or the want-to-buy side,
+          // and "Member WTB" was missing entirely: /api/dashboard/
+          // wtb-counter-offers reads both source types, so a round on a
+          // Member WTB showed in the tab and in no badge at all.
+          fields: ["Seller ID", "Status", "Source Type", "Seller Offer Record ID"],
           filterByFormula: `AND(
             {Status} = 'Open',
-            {Source Type} = 'Seller Offer'
+            OR(
+              {Source Type} = 'Seller Offer',
+              {Source Type} = 'Member WTB'
+            )
           )`
         })
         .all(),
@@ -24580,13 +24594,43 @@ app.get("/api/dashboard/counts", async (req, res) => {
       linkedRecordIncludes(record.fields?.["Claimed Seller ID"], sellerRecordId)
     ).length;
 
-    const wtbOpenOffers = wtbOpenOffersRecords.filter((record) =>
-      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
-    ).length;
+    // The Offers badge of a section has to answer the same question as the
+    // list under it. Both lists ask matchesOfferScope and both drop an
+    // offer that is waiting on the consignor's Confirm (that one lives in
+    // Accepted), so the badges ask exactly that, once, for both scopes.
+    //
+    // Before this, Want To Buys counted consignment offers it does not
+    // list, and Consignment counted rows in the legacy consignment_offers
+    // table in Supabase - which nothing closes when a Member WTB is
+    // deleted in Airtable, so a badge could sit there counting an offer on
+    // a want-to-buy that no longer exists.
+    const [consignmentOfferIds, pendingConfirmOfferIds] = await Promise.all([
+      getConsignmentSellerOfferIds(),
+      getConsignmentPendingConfirmOfferIds()
+    ]);
 
-    const wtbCounterOffers = wtbCounterOffersRecords.filter((record) =>
-      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
-    ).length;
+    function countOffersForScope(scope) {
+      const fresh = wtbOpenOffersRecords.filter(
+        (record) =>
+          linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId) &&
+          !pendingConfirmOfferIds.has(record.id) &&
+          matchesOfferScope(!!asText(record.fields?.["Consignment Inventory ID"]), scope)
+      ).length;
+
+      const rounds = wtbCounterOffersRecords.filter((record) => {
+        const sellerOfferId = asText(record.fields?.["Seller Offer Record ID"]);
+
+        return (
+          linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId) &&
+          !pendingConfirmOfferIds.has(sellerOfferId) &&
+          matchesOfferScope(consignmentOfferIds.has(sellerOfferId), scope)
+        );
+      }).length;
+
+      return fresh + rounds;
+    }
+
+    const wtbOffers = countOffersForScope("");
 
     const wtbAcceptedBase = wtbAcceptedRecords.filter((record) =>
       linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
@@ -24682,15 +24726,11 @@ app.get("/api/dashboard/counts", async (req, res) => {
     const consignmentInventoryCount = (consignmentInventoryRows || [])
       .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
     
-    const { count: consignmentOffersCount, error: consignmentOffersError } =
-      await supabase
-        .from("consignment_offers")
-        .select("id", { count: "exact", head: true })
-        .eq("seller_record_id", sellerRecordId)
-        .eq("status", "open");
-    
-    if (consignmentOffersError) throw consignmentOffersError;
-    
+    // CHANGED - counted open rows in Supabase's consignment_offers, which
+    // is not what the Consignment > Offers tab lists and is not kept in
+    // step with Airtable. Same source and same rules as the tab now.
+    const consignmentOffersCount = countOffersForScope("consignment");
+
     const consignmentConfirmedCount = await loadInventoryCount(
       `AND(
         {Type} = 'Consignment',
@@ -24829,7 +24869,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
         // A seller's own pending counter sits in the same tab as a fresh
         // offer - that is what the merged list shows - so they are one
         // number here too.
-        offers: wtbOpenOffers + wtbCounterOffers,
+        offers: wtbOffers,
         accepted: wtbAccepted,
         confirmed: wtbConfirmed,
         label_requested: wtbLabelRequested,
