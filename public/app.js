@@ -1023,47 +1023,42 @@ submitMemberWtbCsvBtn?.addEventListener("click", async () => {
     submitMemberWtbCsvBtn.disabled = true;
     submitMemberWtbCsvBtn.textContent = "Uploading...";
     memberWtbCsvInput.disabled = true;
-    let successCount = 0;
-    const failedRows = [];
-    for (const row of result.rows) {
-      const response = await fetch("/api/member-wtb/open", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          seller_record_id: currentSeller.id,
-          seller_id: currentSeller.seller_id,
-          sku: row.sku,
-          size: row.size,
-          max_price: row.max_price,
-          inventory_type: memberWtbCsvInventoryTypeInput.value
-        })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        failedRows.push(
-          `Row ${row.row_number}: ${data.details || data.error || "Failed"}`
-        );
-        continue;
-      }
-      successCount += 1;
-      if (memberWtbCsvPreview) {
-        memberWtbCsvPreview.textContent = `Uploaded ${successCount}/${result.rows.length} WTBs...`;
-      }
-    }
-    if (failedRows.length) {
-      memberWtbCsvError.innerHTML = failedRows
-        .slice(0, 12)
-        .map((error) => `<div>${escapeHtml(error)}</div>`)
+
+    // Queued as one job instead of posted row by row.
+    //
+    // The old loop meant a member had to keep the tab open for the whole
+    // file. Closing it stopped the import halfway with nothing on screen
+    // saying where, and re-uploading then duplicated everything that had
+    // already gone through - nothing dedupes want-to-buys. The same worker
+    // that handles consignment stock now runs it, so it survives a closed
+    // tab and resumes where it stopped.
+    const queued = await fetch("/api/member-wtb/csv-import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        seller_record_id: currentSeller.id,
+        seller_id: currentSeller.seller_id,
+        inventory_type: memberWtbCsvInventoryTypeInput.value,
+        created_from: "Buying Portal CSV",
+        rows: result.rows
+      })
+    });
+
+    const queuedData = await queued.json().catch(() => ({}));
+
+    if (!queued.ok) {
+      // The server answers with every bad row at once, one per line.
+      memberWtbCsvError.innerHTML = String(queuedData.error || "Upload failed")
+        .split(/\n/)
+        .map((line) => `<div>${escapeHtml(line)}</div>`)
         .join("");
-      if (memberWtbCsvPreview) {
-        memberWtbCsvPreview.textContent = `${successCount} WTBs created, ${failedRows.length} failed.`;
-      }
       return;
     }
+
     closeMemberWtbCsvModalFlow();
-    showSuccessToast(`${successCount} Want To Buys placed successfully`);
+    showSuccessToast(
+      `${queuedData.count} Want To Buys queued — they are being posted now`
+    );
     if (currentMainMode === "buying") {
       loadBuyingProducts({ force: true });
     }
