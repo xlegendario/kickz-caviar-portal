@@ -10,6 +10,7 @@ import {
 } from "./sku-resolver.mjs";
 
 import compression from "compression";
+import { spawn } from "child_process";
 import crypto from "crypto";
 import sgMail from "@sendgrid/mail";
 import { createClient } from "@supabase/supabase-js";
@@ -32844,8 +32845,115 @@ app.post(
   }
 );
 
+/*
+ * Missing pictures, filled in on a schedule.
+ *
+ * enrich-pictures.mjs already does the work and has done so for a while,
+ * but only when someone starts it by hand. Nobody does that daily, so the
+ * backlog grows: 2,488 of 9,812 SKU Master rows have no picture, roughly
+ * 150 added a day. Every one of those is a blank card in the shop and a
+ * listing whose image falls back to an expiring Airtable attachment.
+ *
+ * It runs here rather than as its own Render cron job because this service
+ * already holds every credential the script needs - StockX, Retailed,
+ * Airtable and Supabase. A separate service would mean copying ten secrets
+ * to a second place and keeping them in step.
+ *
+ * WHY A CHILD PROCESS AND NOT AN IMPORT:
+ *
+ * The script is a command line tool: it reads process.argv at load time and
+ * calls process.exit when it is done. Importing it would run it on startup
+ * and could take the web server down with it. Spawning leaves the file
+ * untouched - the same command you would type yourself - and a failure in
+ * there cannot reach this process.
+ *
+ * Off unless ENRICH_PICTURES_ENABLED says otherwise, so a deploy alone
+ * changes nothing.
+ */
+const ENRICH_ENABLED = /^(1|true|yes|on)$/i.test(
+  String(process.env.ENRICH_PICTURES_ENABLED || "")
+);
+
+const ENRICH_INTERVAL_MS =
+  Math.max(Number(process.env.ENRICH_PICTURES_INTERVAL_MINUTES) || 60, 15) * 60 * 1000;
+
+const ENRICH_LIMIT = Math.max(Number(process.env.ENRICH_PICTURES_LIMIT) || 100, 1);
+
+// Not at boot: a deploy restarts this service, and an enrichment starting in
+// the same breath competes with the first visitors for the same Airtable
+// quota. Fifteen minutes is past that.
+const ENRICH_FIRST_RUN_MS = 15 * 60 * 1000;
+
+let enrichRunning = false;
+
+function runEnrichPictures() {
+  // One at a time. A run that outlives its interval would otherwise be
+  // joined by the next one and both would write the same rows.
+  if (enrichRunning) {
+    console.log("[enrich] previous run still busy, skipping this round");
+    return;
+  }
+
+  enrichRunning = true;
+
+  const startedAt = Date.now();
+  const script = path.join(__dirname, "enrich-pictures.mjs");
+
+  // --delay 500 rather than the script's own 250. Airtable allows five
+  // requests a second per base, and at 250ms this alone takes four of them.
+  // That leaves almost nothing for the visitors this same service is
+  // serving, and their requests are the ones someone is waiting on.
+  const child = spawn(
+    process.execPath,
+    [script, "--apply", "--limit", String(ENRICH_LIMIT), "--delay", "500"],
+    { cwd: __dirname, env: process.env }
+  );
+
+  // The script's own output is the record of what it did - keep it, but
+  // prefixed, so it stays separable from the request log around it.
+  const relay = (stream, label) => {
+    let rest = "";
+
+    stream.on("data", (chunk) => {
+      const lines = (rest + chunk.toString()).split(/\r?\n/);
+      rest = lines.pop() || "";
+
+      for (const line of lines) {
+        if (line.trim()) console.log(`[enrich${label}] ${line}`);
+      }
+    });
+  };
+
+  relay(child.stdout, "");
+  relay(child.stderr, ":err");
+
+  child.on("error", (err) => {
+    enrichRunning = false;
+    console.error("[enrich] could not start:", err.message);
+  });
+
+  child.on("close", (code) => {
+    enrichRunning = false;
+
+    const seconds = Math.round((Date.now() - startedAt) / 1000);
+    console.log(`[enrich] finished in ${seconds}s with code ${code}`);
+  });
+}
+
 app.listen(PORT, () => {
   console.log(`Kickz Caviar Portal running on port ${PORT}`);
+
+  if (ENRICH_ENABLED) {
+    console.log(
+      `[enrich] on - every ${ENRICH_INTERVAL_MS / 60000} min, ${ENRICH_LIMIT} per run, ` +
+        `first run in ${ENRICH_FIRST_RUN_MS / 60000} min`
+    );
+
+    setTimeout(() => {
+      runEnrichPictures();
+      setInterval(runEnrichPictures, ENRICH_INTERVAL_MS);
+    }, ENRICH_FIRST_RUN_MS);
+  }
 
   initDiscord().catch((err) => {
     console.error("Failed to init Discord bot on startup:", err);
