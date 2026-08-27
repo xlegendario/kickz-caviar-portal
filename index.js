@@ -28982,14 +28982,48 @@ async function refreshBuyingMasterCache() {
       );
     });
 
-    const consignmentImageMap = await buildConsignmentImageMap(consignmentRows || []);
+    // CHANGED - the repair now covers both halves of the feed.
+    //
+    // A KC-owned unit takes its picture from the "Picture" attachment in
+    // Airtable, and Airtable serves attachments from a signed url that
+    // expires after a few hours - the expiry is baked into the path. Right
+    // after a refresh it works; a while later those cards are blank. 62 of
+    // them were in that state, one measured 36 minutes past its expiry.
+    //
+    // Consignment rows already went through this and take the permanent
+    // StockX link from SKU Master instead. There was never a reason for the
+    // other half to be treated differently; it simply was not included.
+    //
+    // Both halves are looked up in one pass, so a SKU on both sides costs a
+    // single lookup rather than two.
+    const rowsNeedingImages = [
+      ...inventorySources.map((source) => ({
+        sku: source.sku,
+        image_url: source.image_url
+      })),
+      ...(consignmentRows || [])
+    ];
 
-    cacheConsignmentImages(consignmentRows || [], consignmentImageMap).catch((err) => {
+    const imageMap = await buildConsignmentImageMap(rowsNeedingImages);
+
+    // Only the consignment rows are written back: those live in Supabase and
+    // carry their own image_url. A KC-owned unit reads its picture out of
+    // Airtable every time, so there is nothing to cache - it is repaired on
+    // the way out instead.
+    cacheConsignmentImages(consignmentRows || [], imageMap).catch((err) => {
       console.error("Failed to cache consignment images:", err);
     });
 
+    for (const source of inventorySources) {
+      if (!isUnstableImageUrl(source.image_url)) continue;
+
+      const replacement = imageMap.get(normalizeSku(source.sku));
+
+      if (replacement) source.image_url = replacement;
+    }
+
     const consignmentSources = (consignmentRows || []).map((row) =>
-      getBuyingConsignmentProduct(row, consignmentImageMap)
+      getBuyingConsignmentProduct(row, imageMap)
     );
 
     const sources = [...inventorySources, ...consignmentSources];
