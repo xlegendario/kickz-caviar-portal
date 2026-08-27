@@ -237,7 +237,15 @@ async function collectHighSkus() {
 
     for (const row of page) {
       const sku = norm(row.sku);
-      perSku.set(sku, (perSku.get(sku) || 0) + 1);
+
+      // Both the count and every spelling seen. The write has to go back
+      // with the spelling the table actually holds - see setLow.
+      const entry = perSku.get(sku) || { count: 0, spellings: new Set() };
+
+      entry.count += 1;
+      entry.spellings.add(row.sku);
+
+      perSku.set(sku, entry);
       rows += 1;
     }
   };
@@ -258,37 +266,68 @@ async function collectHighSkus() {
  */
 const needsOwnRequest = (sku) => sku.includes(",") || sku.includes('"');
 
-async function setLow(skus) {
+/*
+ * CHANGED - writes back the spelling the table holds, and counts what it
+ * actually changed.
+ *
+ * Both halves of that were wrong. The filter was built from the normalized
+ * key, which is uppercase, while Mentastore stores "fz5896" in lower case.
+ * PostgREST compares exactly, so the update matched nothing at all.
+ *
+ * And nobody noticed, because the old version asked for return=minimal and
+ * then printed its own loop counter as "updated 13/13 SKUs". That number
+ * only ever said how many requests were sent. It reported success while the
+ * table was untouched, which is worse than failing.
+ *
+ * Now: every spelling seen for a SKU goes into the filter, and count=exact
+ * makes PostgREST report how many rows it really touched. That figure is
+ * what gets printed.
+ */
+async function setLow(skus, perSku) {
   const body = JSON.stringify({ match_risk_level: "Low" });
 
   const headers = {
     "Content-Type": "application/json",
-    Prefer: "return=minimal"
+    Prefer: "return=minimal,count=exact"
   };
 
   const filter = `&status=eq.active&match_risk_level=eq.High${storeFilter}`;
 
-  const simple = skus.filter((sku) => !needsOwnRequest(sku));
-  const awkward = skus.filter(needsOwnRequest);
+  // Expand each key into the spellings that were actually read.
+  const spellings = skus.flatMap((sku) => [...(perSku.get(sku)?.spellings || [sku])]);
+
+  const simple = spellings.filter((sku) => !needsOwnRequest(sku));
+  const awkward = spellings.filter(needsOwnRequest);
+
+  let changed = 0;
+
+  const affected = (response) =>
+    Number(response.headers.get("content-range")?.split("/")[1]) || 0;
 
   for (let i = 0; i < simple.length; i += 100) {
     const batch = simple.slice(i, i + 100);
     const list = batch.map((sku) => `"${sku}"`).join(",");
 
-    await supabase(
+    const response = await supabase(
       `store_listings?sku=in.(${encodeURIComponent(list)})${filter}`,
       { method: "PATCH", headers, body }
     );
 
-    console.log(`  updated ${Math.min(i + 100, simple.length)}/${simple.length} SKUs`);
+    changed += affected(response);
+
+    console.log(`  ${Math.min(i + 100, simple.length)}/${simple.length} spellings sent, ${changed} rows changed`);
   }
 
   for (const sku of awkward) {
-    await supabase(
+    const response = await supabase(
       `store_listings?sku=eq.${encodeURIComponent(sku)}${filter}`,
       { method: "PATCH", headers, body }
     );
+
+    changed += affected(response);
   }
+
+  return changed;
 }
 
 async function main() {
@@ -307,12 +346,12 @@ async function main() {
   let verifiedRows = 0;
   let unknownRows = 0;
 
-  for (const [sku, count] of perSku) {
+  for (const [sku, entry] of perSku) {
     if (isVerified(sku, master)) {
       verified.push(sku);
-      verifiedRows += count;
+      verifiedRows += entry.count;
     } else {
-      unknownRows += count;
+      unknownRows += entry.count;
     }
   }
 
@@ -333,7 +372,15 @@ async function main() {
   const todo = verified.slice(0, LIMIT);
   console.log(`\nwriting ${todo.length} SKUs...`);
 
-  await setLow(todo);
+  const changed = await setLow(todo, perSku);
+
+  console.log(`\nrows actually changed: ${changed}`);
+
+  // The two disagreeing is how the casing bug stayed invisible for a whole
+  // run. Say so rather than let a summary imply it went fine.
+  if (changed !== verifiedRows) {
+    console.log(`  expected ${verifiedRows} - these differ, so check before rerunning`);
+  }
 
   console.log("\ndone. counting what is left:");
 
