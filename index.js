@@ -9353,12 +9353,20 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         `ℹ️ Consignment auto-offer for ${orderRecordId}: inventory ${best.row.id} already has Seller Offer ${alreadyOffered.id} — skipping.`
       );
 
+      // The stock this skipped over is described here too. Without it a
+      // caller that logs the answer has nothing to log, and the automation
+      // wrote "Seller: - / - / EUR 0.00" over an offer that was perfectly
+      // real - which is how one held offer cost an afternoon of looking.
       return res.json({
         ok: true,
         skipped: "already_offered",
         order_record_id: orderRecordId,
         seller_offer_record_id: alreadyOffered.id,
-        inventory_id: best.row.id
+        inventory_id: best.row.id,
+        seller_record_id: best.row.seller_record_id,
+        seller_id: best.row.seller_id,
+        seller_price: best.sellerPrice,
+        vat_type: best.row.vat_type
       });
     }
 
