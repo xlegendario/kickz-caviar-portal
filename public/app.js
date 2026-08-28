@@ -1686,6 +1686,11 @@ loginForm.addEventListener("submit", async (event) => {
     
     updateLoginState();
     closeModal();
+
+    // Herinnering aan de Discord-koppeling. Zie public/discord-gate.js; hij
+    // wacht een halve minuut, zodat dit niet meteen over het inlogscherm
+    // heen valt.
+    window.kcDiscordGate?.schedule(data.seller);
     
     if (pendingBuyingProductKey) {
       const productKey = pendingBuyingProductKey;
@@ -1831,7 +1836,9 @@ confirmClaimBtn.addEventListener("click", async () => {
   
     showSuccessToast("Deal claimed successfully");
   } catch (err) {
-    claimError.textContent = err.message;
+    // Staat het Discord-venster al open, dan is dit dezelfde melding een
+    // tweede keer - en die staat dan onder een venster dat hem afdekt.
+    claimError.textContent = window.kcDiscordGate?.isOpen() ? "" : err.message;
   } finally {
     confirmClaimBtn.disabled = false;
     confirmClaimBtn.textContent = "Confirm Claim";
@@ -1932,7 +1939,12 @@ confirmOfferBtn.addEventListener("click", async () => {
     await loadDeals(currentType);
     showSuccessToast("Offer submitted successfully");
   } catch (err) {
-    if (err.linkUrl) {
+    // Opende het gedeelde Discord-venster al? Dan hier niets meer tonen.
+    // Anders staat dezelfde melding twee keer op het scherm, en dekt de
+    // onderste de knop af die het probleem oplost.
+    if (err.linkUrl && window.kcDiscordGate?.isOpen()) {
+      offerError.textContent = "";
+    } else if (err.linkUrl) {
       offerError.innerHTML = "";
 
       const line = document.createElement("div");
@@ -2074,6 +2086,10 @@ function showSuccessToast(message) {
       currentSeller = data.seller;
       localStorage.setItem("kc_seller", JSON.stringify(currentSeller));
       updateLoginState();
+
+      // Bewust op wat de server zojuist zei, niet op localStorage: wie na
+      // het inloggen uit de server stapt staat daar nog als lid in.
+      window.kcDiscordGate?.schedule(data.seller);
     }
   } catch (err) {
     // Netwerkfout: laat de bestaande staat met rust.
