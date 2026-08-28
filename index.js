@@ -34,6 +34,10 @@ import {
   verifySession
 } from "./lib/auth.js";
 
+
+
+import { discordMembershipGuard } from "./lib/discordGate.js";
+
 import {
   buildAuthorizeUrl,
   exchangeCode,
@@ -6825,6 +6829,29 @@ app.use(
     serviceSecrets: KC_SERVICE_SECRETS,
     // Door Make en de bots aangeroepen, niet door een ingelogde browser.
     allowPaths: ["/api/make/", "/api/internal/"]
+  })
+);
+
+/*
+ * Discord verplicht voor wie handelt.
+ *
+ * Staat NA sellerIdentityGuard, en dat is de hele opzet: die bepaalt eerst
+ * wie je bent en weigert een verzoek zonder sessie. Pas daarna is de vraag
+ * "mag deze seller dit" zinnig te stellen.
+ *
+ * Standaard "warn": hij logt en laat door. Zet DISCORD_GATE op "strict"
+ * zodra het log een dag lang stil is gebleven op paden die wel hadden
+ * moeten mogen.
+ */
+app.use(
+  discordMembershipGuard({
+    mode: (process.env.DISCORD_GATE || "warn").toLowerCase(),
+    serviceSecrets: KC_SERVICE_SECRETS,
+    lookupSeller: async (recordId) => {
+      const record = await airtable(SELLERS_TABLE).find(recordId);
+
+      return normalizeSeller(record);
+    }
   })
 );
 
@@ -27432,7 +27459,7 @@ async function requireLinkedDiscord(sellerRecordId) {
       body: {
         error: "Link your Discord account before placing an offer.",
         details:
-          "Every accepted deal gets its own Discord channel with you in it, so we need your Discord linked first. It takes one click.",
+          "Your profile is not linked to our Discord server. Linking is required to trade on Kickz Caviar — every accepted deal gets its own channel there with you in it.",
         code: "discord_not_linked",
         link_url: "/auth/discord"
       }
@@ -27448,7 +27475,7 @@ async function requireLinkedDiscord(sellerRecordId) {
       body: {
         error: "You are no longer in the Kickz Caviar Discord server.",
         details:
-          "Rejoin to keep making deals — your deal channels live there. It takes one click.",
+          "You are no longer in our Discord server, so offering is paused. Being in the server is required to trade — every accepted deal gets its own channel there with you in it.",
         code: "discord_left_server",
         link_url: "/auth/discord"
       }
