@@ -1255,6 +1255,40 @@ function filterVisibleRows() {
     syncOpenState();
   });
 
+  // NEW - a dialog closed while you were selecting text in it.
+  //
+  // Press inside a field, drag past the edge of the card, release: the
+  // browser calls that a click, the backdrop takes it as "clicked outside",
+  // and the dialog shuts with your input still in it. Selecting an email
+  // address to correct it was enough to lose the whole form.
+  //
+  // A release is only a click-outside if the press started outside too.
+  // Both must land off the card. Real clicks on the backdrop are unchanged:
+  // there the press starts there as well.
+  //
+  // Capture phase, because the close handlers sit on the backdrops
+  // themselves and this has to get there first.
+  const KAARTEN = ".dashboard-modal-card, .dashboard-login-card";
+
+  let persBegon = null;
+
+  document.addEventListener("mousedown", (evt) => {
+    persBegon = evt.target;
+  }, true);
+
+  document.addEventListener("click", (evt) => {
+    if (!persBegon?.closest) return;
+
+    const begonInKaart = persBegon.closest(KAARTEN);
+    if (!begonInKaart) return;
+
+    const eindigdeInKaart = evt.target?.closest?.(KAARTEN);
+    if (eindigdeInKaart) return;
+
+    evt.stopPropagation();
+    evt.preventDefault();
+  }, true);
+
   syncOpenState();
 })();
 
@@ -7379,6 +7413,18 @@ dashboardLoginForm.addEventListener("submit", async (event) => {
     }
     
     syncAuthUi();
+
+    // FIXED - dit ontbrak, en daardoor deed de popup precies niets voor de
+    // persoon die hem het hardst nodig heeft: wie NET inlogt.
+    //
+    // De controle hing alleen aan de sessie-hervalidatie, en die begint met
+    // "geen seller in localStorage? dan klaar". Bij een verse login is dat
+    // op het moment van laden nog zo, dus die keerde meteen om en er werd
+    // nooit gekeken. Pas bij de volgende pagina-lading verscheen de popup.
+    //
+    // Het antwoord van de login draagt discord_id en discord_in_server al
+    // met zich mee, dus er is hier geen extra verzoek voor nodig.
+    checkDiscordGate(data.seller);
   } catch (err) {
     dashboardLoginError.textContent = err.message;
   }
