@@ -7611,6 +7611,79 @@ function showDashboardToast(message, type = "success") {
     setTimeout(() => toast.remove(), 250);
   }, 2600);
 }
+/* ------------------------------------------------------------------ *
+ * Discord verplicht.
+ *
+ * De server weigert elke handeling van een seller die niet gekoppeld is of
+ * de server heeft verlaten. Dit stuk is het schermwerk daaromheen: het legt
+ * uit waarom er niets gebeurt en biedt de knop die het oplost.
+ *
+ * Twee ingangen, want een van de twee alleen is niet genoeg:
+ *
+ *   - bij het laden, zodat iemand die er gisteren uit is gestapt het ziet
+ *     voordat hij ergens op klikt;
+ *   - bij een geweigerde actie, want de vlag kan tijdens de sessie omslaan.
+ *
+ * De tweede loopt via een omhulsel om fetch. Het dashboard doet ruim honderd
+ * fetch-aanroepen; die stuk voor stuk aanpassen zou betekenen dat de
+ * volgende die erbij komt het weer mist. Het omhulsel reageert alleen op
+ * code "discord_not_linked", die niets anders teruggeeft.
+ * ------------------------------------------------------------------ */
+
+function openDiscordGate(reason) {
+  const modal = document.getElementById("discordGateModal");
+  if (!modal) return;
+
+  const left = reason === "left_server";
+
+  document.getElementById("discordGateTitle").textContent =
+    left ? "Rejoin the Discord server" : "Link your Discord";
+
+  document.getElementById("discordGateText").textContent = left
+    ? "You are no longer in the Kickz Caviar Discord server, so claiming and offering are paused. Rejoin to continue — every accepted deal gets its own channel there with you in it."
+    : "Link your Discord account to claim deals and place offers. Every accepted deal gets its own Discord channel with you in it. It takes one click.";
+
+  document.getElementById("discordGateBtnText").textContent =
+    left ? "Rejoin Discord" : "Link Discord";
+
+  modal.classList.remove("hidden");
+}
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("[data-discord-gate-close]")) return;
+
+  document.getElementById("discordGateModal")?.classList.add("hidden");
+});
+
+(function () {
+  const origineel = window.fetch;
+
+  window.fetch = async function (...args) {
+    const response = await origineel.apply(this, args);
+
+    // 403 komt ook van andere dingen, dus alleen op de code reageren. Het
+    // antwoord wordt gekloond: de aanroeper moet hem daarna nog kunnen lezen.
+    if (response.status === 403) {
+      try {
+        const data = await response.clone().json();
+
+        if (data?.code === "discord_not_linked") openDiscordGate(data.reason);
+      } catch {
+        /* geen JSON - dan gaat het ergens anders over */
+      }
+    }
+
+    return response;
+  };
+})();
+
+function checkDiscordGate(seller) {
+  if (!seller) return;
+
+  if (!seller.discord_id) return openDiscordGate("not_linked");
+  if (seller.discord_in_server === false) return openDiscordGate("left_server");
+}
+
 // Sessie-revalidatie. localStorage ("kc_seller") overleeft het verlopen of
 // wissen van de sessiecookie, waardoor de UI ingelogd bleef lijken terwijl elke
 // schrijfactie een 401 kreeg. Deze check brengt beide weer in lijn.
@@ -7635,6 +7708,10 @@ function showDashboardToast(message, type = "success") {
       dashboardSeller = data.seller;
       localStorage.setItem("kc_seller", JSON.stringify(dashboardSeller));
       syncAuthUi();
+
+      // Bewust op wat /api/session zojuist teruggaf, niet op localStorage.
+      // Wie na het inloggen uit de server stapt staat daar nog als lid in.
+      checkDiscordGate(data.seller);
     }
   } catch (err) {
     // Netwerkfout: laat de bestaande staat met rust.
