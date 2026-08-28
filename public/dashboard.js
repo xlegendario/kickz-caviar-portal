@@ -219,6 +219,20 @@ function kcDialog(kind, message, options) {
 }
 
 function showAlert(message, options) {
+  // FIXED - twee vensters over elkaar bij dezelfde weigering.
+  //
+  // Wordt een handeling geweigerd omdat Discord ontbreekt, dan opent het
+  // omhulsel om fetch het Discord-venster. Maar de handler die de fout
+  // opving riep daarna gewoon zijn eigen showAlert aan, en dan staat er een
+  // kaal "OK"-blokje bovenop het venster dat de knop bevat die het probleem
+  // oplost. Je leest de melding twee keer en kunt de nuttige helft niet
+  // bereiken.
+  //
+  // Dit hier in plaats van bij elk van de 32 aanroepers: een melding hoort
+  // sowieso niet over een openstaand Discord-venster heen te vallen, waar
+  // hij ook vandaan komt.
+  if (window.kcDiscordGate?.isOpen()) return Promise.resolve();
+
   return kcDialog("alert", message, options);
 }
 
@@ -7424,7 +7438,7 @@ dashboardLoginForm.addEventListener("submit", async (event) => {
     //
     // Het antwoord van de login draagt discord_id en discord_in_server al
     // met zich mee, dus er is hier geen extra verzoek voor nodig.
-    checkDiscordGate(data.seller);
+    window.kcDiscordGate?.schedule(data.seller);
   } catch (err) {
     dashboardLoginError.textContent = err.message;
   }
@@ -7657,118 +7671,9 @@ function showDashboardToast(message, type = "success") {
     setTimeout(() => toast.remove(), 250);
   }, 2600);
 }
-/* ------------------------------------------------------------------ *
- * Discord verplicht.
- *
- * De server weigert elke handeling van een seller die niet gekoppeld is of
- * de server heeft verlaten. Dit stuk is het schermwerk daaromheen: het legt
- * uit waarom er niets gebeurt en biedt de knop die het oplost.
- *
- * Twee ingangen, want een van de twee alleen is niet genoeg:
- *
- *   - bij het laden, zodat iemand die er gisteren uit is gestapt het ziet
- *     voordat hij ergens op klikt;
- *   - bij een geweigerde actie, want de vlag kan tijdens de sessie omslaan.
- *
- * De tweede loopt via een omhulsel om fetch. Het dashboard doet ruim honderd
- * fetch-aanroepen; die stuk voor stuk aanpassen zou betekenen dat de
- * volgende die erbij komt het weer mist. Het omhulsel reageert alleen op de
- * twee codes van de Discord-gate, die niets anders teruggeeft.
- * ------------------------------------------------------------------ */
-
-// Hoe lang de herinnering wacht voordat hij uit zichzelf verschijnt.
-//
-// Meteen bij het openen voelde als een deur die dichtslaat: je hebt nog
-// niets gedaan en krijgt al een venster. Na een halve minuut rondkijken
-// leest hetzelfde bericht als een herinnering. Dit geldt alleen voor de
-// popup die vanzelf komt - wordt er een handeling geweigerd, dan verschijnt
-// hij direct, want anders klik je en gebeurt er een tijdlang niets.
-const DISCORD_GATE_DELAY_MS = 10000;
-
-let discordGateTimer = null;
-let discordGateGetoond = false;
-
-function openDiscordGate(reason) {
-  const modal = document.getElementById("discordGateModal");
-  if (!modal) return;
-
-  // Een wachtende herinnering is overbodig zodra hij al in beeld is geweest.
-  clearTimeout(discordGateTimer);
-  discordGateGetoond = true;
-
-  const left = reason === "left_server";
-
-  document.getElementById("discordGateTitle").textContent =
-    left ? "Rejoin the Discord server" : "Link your Discord";
-
-  document.getElementById("discordGateText").textContent = left
-    ? "You are no longer in our Discord server, so claiming and offering are paused. Being in the server is required to trade."
-    : "Your profile is not linked to our Discord server. Linking is required to trade on Kickz Caviar.";
-
-  document.getElementById("discordGateBtnText").textContent =
-    left ? "Rejoin Discord" : "Link Discord";
-
-  modal.classList.remove("hidden");
-}
-
-document.addEventListener("click", (event) => {
-  if (!event.target.closest("[data-discord-gate-close]")) return;
-
-  document.getElementById("discordGateModal")?.classList.add("hidden");
-});
-
-(function () {
-  const origineel = window.fetch;
-
-  window.fetch = async function (...args) {
-    const response = await origineel.apply(this, args);
-
-    // 403 komt ook van andere dingen, dus alleen op de code reageren. Het
-    // antwoord wordt gekloond: de aanroeper moet hem daarna nog kunnen lezen.
-    if (response.status === 403) {
-      try {
-        const data = await response.clone().json();
-
-        // Twee codes voor dezelfde dialoog: de nieuwe middleware stuurt
-        // discord_not_linked met een reason, de oudere guard op
-        // /api/place-offer stuurt discord_left_server. Beide opvangen,
-        // anders blijft de popup weg op precies dat ene pad.
-        if (data?.code === "discord_not_linked") {
-          openDiscordGate(data.reason);
-        } else if (data?.code === "discord_left_server") {
-          openDiscordGate("left_server");
-        }
-      } catch {
-        /* geen JSON - dan gaat het ergens anders over */
-      }
-    }
-
-    return response;
-  };
-})();
-
-function checkDiscordGate(seller) {
-  if (!seller) return;
-
-  const reason = !seller.discord_id
-    ? "not_linked"
-    : seller.discord_in_server === false
-      ? "left_server"
-      : null;
-
-  if (!reason) return;
-
-  clearTimeout(discordGateTimer);
-
-  discordGateTimer = setTimeout(() => {
-    // In die tien seconden kan er van alles gebeurd zijn: uitgelogd, of een
-    // geweigerde handeling die de popup al liet zien. In beide gevallen is
-    // hem alsnog openen alleen maar vervelend.
-    if (!dashboardSeller || discordGateGetoond) return;
-
-    openDiscordGate(reason);
-  }, DISCORD_GATE_DELAY_MS);
-}
+/* Discord verplicht - het venster en de logica staan in
+ * public/discord-gate.js, gedeeld met de home page. Hier alleen de twee
+ * momenten waarop we weten wie er kijkt. */
 
 // Sessie-revalidatie. localStorage ("kc_seller") overleeft het verlopen of
 // wissen van de sessiecookie, waardoor de UI ingelogd bleef lijken terwijl elke
@@ -7797,7 +7702,7 @@ function checkDiscordGate(seller) {
 
       // Bewust op wat /api/session zojuist teruggaf, niet op localStorage.
       // Wie na het inloggen uit de server stapt staat daar nog als lid in.
-      checkDiscordGate(data.seller);
+      window.kcDiscordGate?.schedule(data.seller);
     }
   } catch (err) {
     // Netwerkfout: laat de bestaande staat met rust.
