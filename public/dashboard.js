@@ -7702,8 +7702,8 @@ function openDiscordGate(reason) {
     left ? "Rejoin the Discord server" : "Link your Discord";
 
   document.getElementById("discordGateText").textContent = left
-    ? "You are no longer in our Discord server, so claiming and offering are paused. Being in the server is required to trade — every accepted deal gets its own channel there with you in it."
-    : "Your profile is not linked to our Discord server. Linking is required to trade on Kickz Caviar — every accepted deal gets its own channel there with you in it.";
+    ? "You are no longer in our Discord server, so claiming and offering are paused. Being in the server is required to trade."
+    : "Your profile is not linked to our Discord server. Linking is required to trade on Kickz Caviar.";
 
   document.getElementById("discordGateBtnText").textContent =
     left ? "Rejoin Discord" : "Link Discord";
