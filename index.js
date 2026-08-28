@@ -29103,9 +29103,44 @@ app.get("/api/buying/products", async (req, res) => {
       products.sort((a, b) => Number(a.from_price || 0) - Number(b.from_price || 0));
     }
 
+    // CHANGED - the per-size `sources` array no longer rides along.
+    //
+    // It was 72% of this response: 2.19 MB of the 3.06 MB every visitor
+    // downloaded, 3388 entries. It also repeats what the parent already
+    // says - product_name, sku, brand, image_url and delivery_time, once
+    // per source.
+    //
+    // Two front ends read this feed. The KC shop never opens `sources` at
+    // all. The Lojiq store shop does, but only ever takes its length, to
+    // print "3 sources". So the array itself was never needed - only a
+    // number, which now rides along as source_entry_count.
+    //
+    // That is deliberately not source_count, which is already here and
+    // counts something else: groups rather than entries. They disagree on
+    // 37 sizes (5 entries in 1 group, for instance), so folding them into
+    // one would quietly change a number on screen. Whether these two
+    // counts SHOULD differ is a fair question, but not one to answer by
+    // changing what a store sees while trimming a payload.
+    //
+    // Only the response is trimmed. `sources` stays on the objects
+    // themselves, because selectBuyingSourceFromLiveSources reads
+    // selectedSize.sources server-side when someone buys or makes an
+    // offer. That path is untouched.
+    //
+    // include_sources=1 puts the array back, for a caller I did not find.
+    const includeSources = asText(req.query.include_sources) === "1";
+
     res.json({
       count: products.length,
-      products
+      products: includeSources
+        ? products
+        : products.map((product) => ({
+            ...product,
+            sizes: (product.sizes || []).map(({ sources, ...size }) => ({
+              ...size,
+              source_entry_count: (sources || []).length
+            }))
+          }))
     });
   } catch (err) {
     console.error("Failed to load buying products:", err);
