@@ -456,7 +456,12 @@
        actie weigert. Sluiten mag: lezen is niet geblokkeerd, alleen handelen,
        en dat weigert de server zelf al. -->
   <div class="dashboard-modal hidden" id="discordGateModal">
-    <div class="dashboard-modal-backdrop" data-discord-gate-close></div>
+    <!-- Bewust GEEN sluit-attribuut op de achtergrond. Dit venster komt
+         uit zichzelf, tien seconden nadat je begon. Klik je net op dat
+         moment ergens, dan sluit het meteen weer en heb je alleen een
+         flits gezien - dat leest als een storing, niet als een
+         mededeling. Alleen het kruisje sluit hem. -->
+    <div class="dashboard-modal-backdrop"></div>
     <div class="dashboard-modal-card">
       <button class="dashboard-modal-close" type="button" data-discord-gate-close>&times;</button>
       <h2 id="discordGateTitle">Link your Discord</h2>
