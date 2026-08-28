@@ -226,9 +226,12 @@
         // channel met deze seller worden aangemaakt, dus dit gaat vóór het
         // offerformulier.
         if (!viewer.discord_linked || !viewer.discord_in_server) {
+          // Zelfde formulering als de popup in het dashboard. Een seller
+          // die hier strandt en daarna daar, hoort niet twee verschillende
+          // verhalen te lezen over dezelfde regel.
           el("discordReason").textContent = viewer.discord_linked
-            ? "You are no longer in the Kickz Caviar Discord server. Rejoin to place your offer — every deal gets its own channel there."
-            : "Link your Discord account to place an offer. Every accepted deal gets its own Discord channel with you in it.";
+            ? "You are no longer in our Discord server, so offering is paused. Being in the server is required to trade — every accepted deal gets its own channel there with you in it."
+            : "Your profile is not linked to our Discord server. Linking is required to trade on Kickz Caviar — every accepted deal gets its own channel there with you in it.";
 
           el("discordLink").textContent = viewer.discord_linked ? "Rejoin Discord" : "Link Discord";
           el("discordLink").href = withContext("/auth/discord");
