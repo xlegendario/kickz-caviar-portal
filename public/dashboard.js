@@ -1151,16 +1151,59 @@ function filterVisibleRows() {
 
   // A row of its own when the term matches nothing, otherwise you stare at
   // an empty table with no idea why.
+  //
+  // FIXED - this froze the browser, and consignors reported it as the site
+  // crashing. The bug was the pair of statements this replaces:
+  //
+  //     const bestaande = tableBody.querySelector("[data-search-notice]");
+  //     if (bestaande) bestaande.remove();
+  //     if (term && hitCount === 0 && rowEls.length) { ...appendChild... }
+  //
+  // A MutationObserver on this same table calls filterVisibleRows on every
+  // childList change. Removing the notice and adding it back are two such
+  // changes, so the observer fired, which ran this again, which removed and
+  // re-added, forever. The tab locked up.
+  //
+  // Appending is the only thing that starts it, and appending needs zero
+  // hits. That sounds narrow, and it is not: every reload writes a
+  // "Loading..." row first, and that row is an empty state - shown always,
+  // counted never. So a table holding just that row is already at zero hits
+  // with one row present, which is exactly the condition. Anything that
+  // reloads the table while the search box has text in it hangs the page.
+  //
+  // That is why four reports that looked unrelated are one bug: deleting a
+  // row, saving in Edit Stock, switching tabs, and typing until nothing
+  // matches. The first three never even reach their own result set.
+  //
+  // The Edit Stock report is the clearest symptom. Its handler closes the
+  // dialog and resets the button before reloading, so by the time it hangs
+  // both have already happened - but a blocked main thread never repaints,
+  // so the screen keeps showing the dialog with "Saving..." on it.
+  //
+  // The fix is to leave the table alone when it is already correct. The
+  // notice carries the term it was written for; if that still matches, it
+  // stays untouched, no mutation is recorded, and the observer has nothing
+  // to react to. Every path now settles after one pass.
   const bestaande = tableBody.querySelector("[data-search-notice]");
+  const gewenst = term && hitCount === 0 && rowEls.length ? term : "";
+
+  if (bestaande && bestaande.dataset.searchNotice === gewenst) return;
+
   if (bestaande) bestaande.remove();
 
-  if (term && hitCount === 0 && rowEls.length) {
+  if (gewenst) {
     const notice = document.createElement("tr");
-    notice.dataset.searchNotice = "1";
+
+    // The term doubles as the marker: it says both "this is the notice" and
+    // "this is what it was written for". A plain "1" could not tell a
+    // stale notice from a current one.
+    notice.dataset.searchNotice = gewenst;
+
     notice.innerHTML =
       '<td colspan="20" style="padding:28px 14px;text-align:center;opacity:.7">' +
       "No results for \u201c" + term.replace(/[<>&]/g, "") + "\u201d" +
       "</td>";
+
     tableBody.appendChild(notice);
   }
 }
