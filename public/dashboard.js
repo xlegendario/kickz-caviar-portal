@@ -7672,13 +7672,29 @@ function showDashboardToast(message, type = "success") {
  *
  * De tweede loopt via een omhulsel om fetch. Het dashboard doet ruim honderd
  * fetch-aanroepen; die stuk voor stuk aanpassen zou betekenen dat de
- * volgende die erbij komt het weer mist. Het omhulsel reageert alleen op
- * code "discord_not_linked", die niets anders teruggeeft.
+ * volgende die erbij komt het weer mist. Het omhulsel reageert alleen op de
+ * twee codes van de Discord-gate, die niets anders teruggeeft.
  * ------------------------------------------------------------------ */
+
+// Hoe lang de herinnering wacht voordat hij uit zichzelf verschijnt.
+//
+// Meteen bij het openen voelde als een deur die dichtslaat: je hebt nog
+// niets gedaan en krijgt al een venster. Na een halve minuut rondkijken
+// leest hetzelfde bericht als een herinnering. Dit geldt alleen voor de
+// popup die vanzelf komt - wordt er een handeling geweigerd, dan verschijnt
+// hij direct, want anders klik je en gebeurt er een tijdlang niets.
+const DISCORD_GATE_DELAY_MS = 10000;
+
+let discordGateTimer = null;
+let discordGateGetoond = false;
 
 function openDiscordGate(reason) {
   const modal = document.getElementById("discordGateModal");
   if (!modal) return;
+
+  // Een wachtende herinnering is overbodig zodra hij al in beeld is geweest.
+  clearTimeout(discordGateTimer);
+  discordGateGetoond = true;
 
   const left = reason === "left_server";
 
@@ -7686,8 +7702,8 @@ function openDiscordGate(reason) {
     left ? "Rejoin the Discord server" : "Link your Discord";
 
   document.getElementById("discordGateText").textContent = left
-    ? "You are no longer in the Kickz Caviar Discord server, so claiming and offering are paused. Rejoin to continue — every accepted deal gets its own channel there with you in it."
-    : "Link your Discord account to claim deals and place offers. Every accepted deal gets its own Discord channel with you in it. It takes one click.";
+    ? "You are no longer in our Discord server, so claiming and offering are paused. Being in the server is required to trade — every accepted deal gets its own channel there with you in it."
+    : "Your profile is not linked to our Discord server. Linking is required to trade on Kickz Caviar — every accepted deal gets its own channel there with you in it.";
 
   document.getElementById("discordGateBtnText").textContent =
     left ? "Rejoin Discord" : "Link Discord";
@@ -7713,7 +7729,15 @@ document.addEventListener("click", (event) => {
       try {
         const data = await response.clone().json();
 
-        if (data?.code === "discord_not_linked") openDiscordGate(data.reason);
+        // Twee codes voor dezelfde dialoog: de nieuwe middleware stuurt
+        // discord_not_linked met een reason, de oudere guard op
+        // /api/place-offer stuurt discord_left_server. Beide opvangen,
+        // anders blijft de popup weg op precies dat ene pad.
+        if (data?.code === "discord_not_linked") {
+          openDiscordGate(data.reason);
+        } else if (data?.code === "discord_left_server") {
+          openDiscordGate("left_server");
+        }
       } catch {
         /* geen JSON - dan gaat het ergens anders over */
       }
@@ -7726,8 +7750,24 @@ document.addEventListener("click", (event) => {
 function checkDiscordGate(seller) {
   if (!seller) return;
 
-  if (!seller.discord_id) return openDiscordGate("not_linked");
-  if (seller.discord_in_server === false) return openDiscordGate("left_server");
+  const reason = !seller.discord_id
+    ? "not_linked"
+    : seller.discord_in_server === false
+      ? "left_server"
+      : null;
+
+  if (!reason) return;
+
+  clearTimeout(discordGateTimer);
+
+  discordGateTimer = setTimeout(() => {
+    // In die tien seconden kan er van alles gebeurd zijn: uitgelogd, of een
+    // geweigerde handeling die de popup al liet zien. In beide gevallen is
+    // hem alsnog openen alleen maar vervelend.
+    if (!dashboardSeller || discordGateGetoond) return;
+
+    openDiscordGate(reason);
+  }, DISCORD_GATE_DELAY_MS);
 }
 
 // Sessie-revalidatie. localStorage ("kc_seller") overleeft het verlopen of
