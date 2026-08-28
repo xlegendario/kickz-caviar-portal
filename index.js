@@ -27459,7 +27459,7 @@ async function requireLinkedDiscord(sellerRecordId) {
       body: {
         error: "Link your Discord account before placing an offer.",
         details:
-          "Your profile is not linked to our Discord server. Linking is required to trade on Kickz Caviar — every accepted deal gets its own channel there with you in it.",
+          "Your profile is not linked to our Discord server. Linking is required to trade on Kickz Caviar.",
         code: "discord_not_linked",
         link_url: "/auth/discord"
       }
@@ -27475,7 +27475,7 @@ async function requireLinkedDiscord(sellerRecordId) {
       body: {
         error: "You are no longer in the Kickz Caviar Discord server.",
         details:
-          "You are no longer in our Discord server, so offering is paused. Being in the server is required to trade — every accepted deal gets its own channel there with you in it.",
+          "You are no longer in our Discord server, so offering is paused. Being in the server is required to trade.",
         code: "discord_left_server",
         link_url: "/auth/discord"
       }
