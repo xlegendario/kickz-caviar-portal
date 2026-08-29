@@ -343,7 +343,7 @@
       <table>
         <thead><tr><th>Filter</th><th>What sits there</th><th>Your move</th></tr></thead>
         <tbody>
-          <tr><td>Open</td><td>Offers you placed, still live, waiting for an answer</td><td>Wait, or delete it</td></tr>
+          <tr><td>Open</td><td>Anything of yours still waiting for an answer &mdash; your first offer, and any counter you sent</td><td><kbd>Edit</kbd> the amount, or <kbd class="no">Delete</kbd></td></tr>
           <tr><td>Countered</td><td>The buyer came back with their own price</td><td><kbd class="go">Accept</kbd> theirs, <kbd class="mid">Counter</kbd> again, or <kbd class="no">Deny</kbd></td></tr>
           <tr><td>Denied</td><td>Your offer was turned down</td><td><kbd>Retry</kbd> with a new price, or <kbd class="no">Delete</kbd></td></tr>
         </tbody>
@@ -351,14 +351,24 @@
     </div>
     <p>The columns tell you where you stand. <strong>Your Offer</strong> is always your own last position. Beside it sits theirs — headed <strong>Counter Offer</strong> while they are countering you, and <strong>Buyer's Last Offer</strong> everywhere else. <strong>Current Lowest</strong> is the best anyone has offered, with a coloured dot showing whether that is still you.</p>
     <p class="muted">The green <kbd class="go">Accept</kbd> carries their amount, so taking their price is one press and never a calculation.</p>
+
+    <div class="note">
+      <strong>Countered and heard nothing back?</strong> Your counter stays under <span class="tab">Open</span>, not under Countered &mdash; Countered is for when <em>they</em> come back to <em>you</em>. And next to it sits a green <kbd class="go">Accept</kbd> with their last amount on it.<br><br>
+      So you can still take their earlier price and close the deal, without starting a new round or asking anyone. Worth knowing, because that button only appears once you have countered, and nothing tells you it is there.
+    </div>
     <p class="muted">Denied is rarely the end. <kbd>Retry</kbd> puts you back in with a different number, and the buyer sees it like any other offer.</p>
     <figure class="shot" id="shot-8" data-shot="08">
-      <div class="shot-frame"><span><b>Screenshot 8</b>Want To Buys → Offers on the Countered filter, showing Your Offer next to Counter Offer, and the Accept / Counter / Deny buttons.<br><br>desktop: <span style="color:var(--gold)">shot-08.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-08-mobile.png</span></span></div>
+      <div class="shot-frame"><span><b>Screenshot 8</b>Want To Buys → Offers on the Open filter. Best with two rows if you have them: a plain offer, and a counter of yours showing the Accept button.<br><br>desktop: <span style="color:var(--gold)">shot-08.png</span> &nbsp;&middot;&nbsp; phone: <span style="color:var(--gold)">shot-08-mobile.png</span></span></div>
+      <figcaption>Where your live offers sit. Nothing to do here but watch the Current Lowest column.</figcaption>
+    </figure>
+
+    <figure class="shot" id="shot-9" data-shot="09">
+      <div class="shot-frame"><span><b>Screenshot 9</b>Want To Buys → Offers on the Countered filter, showing Your Offer next to Counter Offer, and the Accept / Counter / Deny buttons.<br><br>desktop: <span style="color:var(--gold)">shot-09.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-09-mobile.png</span></span></div>
       <figcaption>The buyer answered. Their number is next to yours.</figcaption>
     </figure>
-    <figure class="shot" id="shot-9" data-shot="09">
-      <div class="shot-frame"><span><b>Screenshot 9</b>The same tab with the three filter pills visible: Open, Countered, Denied.<br><br>desktop: <span style="color:var(--gold)">shot-09.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-09-mobile.png</span></span></div>
-      <figcaption>Three stages of the same offer.</figcaption>
+    <figure class="shot" id="shot-10" data-shot="10">
+      <div class="shot-frame"><span><b>Screenshot 10</b>The same tab switched to the Denied filter, with the Retry and Delete buttons in view.<br><br>desktop: <span style="color:var(--gold)">shot-10.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-10-mobile.png</span></span></div>
+      <figcaption>Denied is not the end. Retry puts the same pair back in play at a different price.</figcaption>
     </figure>
   </div>
 
@@ -404,16 +414,16 @@
       <li><strong>VAT Type</strong> — <kbd>Margin</kbd>, <kbd>VAT21</kbd> or <kbd>VAT0</kbd>. Must match how you bought it.</li>
       <li><strong>Size EU</strong>, <strong>Selling Price</strong>, <strong>Quantity</strong>. One row per size; add as many as you like under the same SKU.</li>
     </ol>
-    <figure class="shot" id="shot-10" data-shot="10">
-      <div class="shot-frame"><span><b>Screenshot 10</b>The Add Stock window, filled in with one SKU and two size rows.<br><br>desktop: <span style="color:var(--gold)">shot-10.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-10-mobile.png</span></span></div>
+    <figure class="shot" id="shot-11" data-shot="11">
+      <div class="shot-frame"><span><b>Screenshot 11</b>The Add Stock window, filled in with one SKU and two size rows.<br><br>desktop: <span style="color:var(--gold)">shot-11.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-11-mobile.png</span></span></div>
       <figcaption>One SKU per window, as many sizes underneath as you have.</figcaption>
     </figure>
   </div>
 
   <div class="task">
     <h3>Adding a lot at once</h3>
-    <figure class="shot" id="shot-11" data-shot="11">
-      <div class="shot-frame"><span><b>Screenshot 11</b>The Upload CSV window with both mode cards visible: Add Stock and Replace Stock.<br><br>desktop: <span style="color:var(--gold)">shot-11.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-11-mobile.png</span></span></div>
+    <figure class="shot" id="shot-12" data-shot="12">
+      <div class="shot-frame"><span><b>Screenshot 12</b>The Upload CSV window with both mode cards visible: Add Stock and Replace Stock.<br><br>desktop: <span style="color:var(--gold)">shot-12.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-12-mobile.png</span></span></div>
       <figcaption>Pick the mode before the file. This is the one place you can wipe your own inventory.</figcaption>
     </figure>
     <ul>
@@ -443,8 +453,8 @@
       <li><kbd class="no">Delete</kbd> removes the row entirely.</li>
       <li>The search box filters what is on screen — product name, SKU, size and brand at once.</li>
     </ul>
-    <figure class="shot" id="shot-12" data-shot="12">
-      <div class="shot-frame"><span><b>Screenshot 12</b>The Inventory tab: a couple of rows, the Actions column with Edit and Delete, and the search box in frame.<br><br>desktop: <span style="color:var(--gold)">shot-12.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-12-mobile.png</span></span></div>
+    <figure class="shot" id="shot-13" data-shot="13">
+      <div class="shot-frame"><span><b>Screenshot 13</b>The Inventory tab: a couple of rows, the Actions column with Edit and Delete, and the search box in frame.<br><br>desktop: <span style="color:var(--gold)">shot-13.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-13-mobile.png</span></span></div>
       <figcaption>Your live list. What is here is what stores can see.</figcaption>
     </figure>
   </div>
@@ -454,8 +464,8 @@
     <p>This is the difference from Want To Buys. There you go looking and place an offer. Here <strong>offers arrive on your stock by themselves</strong> — a store wants a pair you have listed, and it lands in <span class="tab">Consignment → Offers</span>.</p>
     <p>From that point it works like the Want To Buys offers tab: the same three filters, the same <kbd class="go">ACCEPT</kbd>, <kbd class="mid">Counter</kbd> and <kbd class="no">Deny</kbd>. What follows is <a href="#chain" data-goto-chain="cons" style="color:var(--gold)">the consignment chain</a> — one step longer than the others, because you still have to confirm you have the pair.</p>
     <p class="muted">You do not have to sit and watch. The count in the sidebar goes up when something needs you.</p>
-    <figure class="shot" id="shot-13" data-shot="13">
-      <div class="shot-frame"><span><b>Screenshot 13</b>Consignment → Offers with at least one open offer, sidebar visible so the counts show.<br><br>desktop: <span style="color:var(--gold)">shot-13.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-13-mobile.png</span></span></div>
+    <figure class="shot" id="shot-14" data-shot="14">
+      <div class="shot-frame"><span><b>Screenshot 14</b>Consignment → Offers with at least one open offer, sidebar visible so the counts show.<br><br>desktop: <span style="color:var(--gold)">shot-14.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-14-mobile.png</span></span></div>
       <figcaption>These came to you. You listed the stock and a store answered.</figcaption>
     </figure>
   </div>
@@ -469,8 +479,8 @@
     <h3>Finding a pair</h3>
     <p>Search by SKU or name, filter by brand, sort the same way as on the selling side. <strong>Buying Type</strong> decides the price scale you are shown: <kbd>All Types</kbd>, <kbd>B2B Only</kbd> or <kbd>Margin Only</kbd>.</p>
     <p class="muted">B2B prices show excluding VAT and say so. Margin prices include it. Check which you are looking at before comparing anything.</p>
-    <figure class="shot" id="shot-14" data-shot="14">
-      <div class="shot-frame"><span><b>Screenshot 14</b>The home page in Buying mode: the Buying Type selector, the search bar, and a few product cards.<br><br>desktop: <span style="color:var(--gold)">shot-14.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-14-mobile.png</span></span></div>
+    <figure class="shot" id="shot-15" data-shot="15">
+      <div class="shot-frame"><span><b>Screenshot 15</b>The home page in Buying mode: the Buying Type selector, the search bar, and a few product cards.<br><br>desktop: <span style="color:var(--gold)">shot-15.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-15-mobile.png</span></span></div>
       <figcaption>Same page, other direction.</figcaption>
     </figure>
   </div>
@@ -491,8 +501,8 @@
       </table>
     </div>
     <p><strong>Sources is the one people miss.</strong> A size with several sources is far more likely to actually arrive: if the first seller cannot deliver, the others can be asked. A single source is one person's word.</p>
-    <figure class="shot" id="shot-15" data-shot="15">
-      <div class="shot-frame"><span><b>Screenshot 15</b>An opened product with the size table visible: Size, Lowest Price, ETA, Sources, Available Qty, and the Buy / Offer buttons.<br><br>desktop: <span style="color:var(--gold)">shot-15.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-15-mobile.png</span></span></div>
+    <figure class="shot" id="shot-16" data-shot="16">
+      <div class="shot-frame"><span><b>Screenshot 16</b>An opened product with the size table visible: Size, Lowest Price, ETA, Sources, Available Qty, and the Buy / Offer buttons.<br><br>desktop: <span style="color:var(--gold)">shot-16.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-16-mobile.png</span></span></div>
       <figcaption>Five numbers per size. Sources tells you how likely it is to land.</figcaption>
     </figure>
   </div>
@@ -519,8 +529,8 @@
       <li><strong>Buying Type</strong> — the scale your max price is in.</li>
     </ol>
     <p>Sourcing a whole list? <kbd>Bulk Post WTBs</kbd> takes a CSV with three columns: <code>SKU</code>, <code>Size</code>, <code>Max Price</code>. There is a template to download.</p>
-    <figure class="shot" id="shot-16" data-shot="16">
-      <div class="shot-frame"><span><b>Screenshot 16</b>The Place Want To Buy window: SKU, Size, Max Price and Buying Type.<br><br>desktop: <span style="color:var(--gold)">shot-16.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-16-mobile.png</span></span></div>
+    <figure class="shot" id="shot-17" data-shot="17">
+      <div class="shot-frame"><span><b>Screenshot 17</b>The Place Want To Buy window: SKU, Size, Max Price and Buying Type.<br><br>desktop: <span style="color:var(--gold)">shot-17.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-17-mobile.png</span></span></div>
       <figcaption>Your request goes out to every matching seller at once.</figcaption>
     </figure>
   </div>
@@ -532,8 +542,8 @@
   <div class="task">
     <h3>Open WTBs</h3>
     <p><span class="tab">Buying → Open WTBs</span> holds every request still out there. Found the pair elsewhere, or no longer need it? <kbd class="no">Delete</kbd> it. A stale request stays live and sellers keep working on it, so clearing them is a courtesy that costs you nothing.</p>
-    <figure class="shot" id="shot-17" data-shot="17">
-      <div class="shot-frame"><span><b>Screenshot 17</b>Buying → Open WTBs with a couple of requests and the Delete button visible.<br><br>desktop: <span style="color:var(--gold)">shot-17.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-17-mobile.png</span></span></div>
+    <figure class="shot" id="shot-18" data-shot="18">
+      <div class="shot-frame"><span><b>Screenshot 18</b>Buying → Open WTBs with a couple of requests and the Delete button visible.<br><br>desktop: <span style="color:var(--gold)">shot-18.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-18-mobile.png</span></span></div>
       <figcaption>What you still have out. Clear what you no longer need.</figcaption>
     </figure>
   </div>
@@ -560,8 +570,8 @@
       <strong>Your money is not handed straight to the seller.</strong> They are paid once the deal has actually gone through — pair received, checked, done. Until then it sits with us. Paying up front is what lets the seller ship immediately, without it being a leap of faith in either direction.
     </div>
     <p>After payment the seller prepares the pair — but the next move is yours again: <a href="#chain" data-goto-chain="buy" style="color:var(--gold)">the buying chain</a> asks you to upload a shipping label before anything ships.</p>
-    <figure class="shot" id="shot-18" data-shot="18">
-      <div class="shot-frame"><span><b>Screenshot 18</b>Buying → Payment Due with a Pay button, sidebar in frame so the ! marker is visible.<br><br>desktop: <span style="color:var(--gold)">shot-18.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-18-mobile.png</span></span></div>
+    <figure class="shot" id="shot-19" data-shot="19">
+      <div class="shot-frame"><span><b>Screenshot 19</b>Buying → Payment Due with a Pay button, sidebar in frame so the ! marker is visible.<br><br>desktop: <span style="color:var(--gold)">shot-19.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-19-mobile.png</span></span></div>
       <figcaption>The exclamation mark means money is outstanding.</figcaption>
     </figure>
   </div>
@@ -646,8 +656,8 @@
     </div>
 
     <p class="muted">Whatever the route: the dashboard tells you where a deal stands, the channel is where it moves. Unsure what is expected of you? That button is the shortest way to an answer.</p>
-    <figure class="shot" id="shot-19" data-shot="19">
-      <div class="shot-frame"><span><b>Screenshot 19</b>A row with the DISCORD button in the Actions column — Open Claims is the clearest example.<br><br>desktop: <span style="color:var(--gold)">shot-19.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-19-mobile.png</span></span></div>
+    <figure class="shot" id="shot-20" data-shot="20">
+      <div class="shot-frame"><span><b>Screenshot 20</b>A row with the DISCORD button in the Actions column — Open Claims is the clearest example.<br><br>desktop: <span style="color:var(--gold)">shot-20.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-20-mobile.png</span></span></div>
       <figcaption>One button per deal, straight to its own channel.</figcaption>
     </figure>
   </div>
@@ -656,8 +666,8 @@
     <strong>Packing.</strong> Clean, unbranded box. Remove price stickers and any other markings. Nothing extra inside. Pack it as professionally as you can — how it arrives is how it gets graded.
   </div>
 
-  <figure class="shot" id="shot-20" data-shot="20" data-hide-on="buy">
-    <div class="shot-frame"><span><b>Screenshot 20</b>Ready To Ship with the Download Label button, and the Packaging Instructions window open.<br><br>desktop: <span style="color:var(--gold)">shot-20.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-20-mobile.png</span></span></div>
+  <figure class="shot" id="shot-21" data-shot="21" data-hide-on="buy">
+    <div class="shot-frame"><span><b>Screenshot 21</b>Ready To Ship with the Download Label button, and the Packaging Instructions window open.<br><br>desktop: <span style="color:var(--gold)">shot-21.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-21-mobile.png</span></span></div>
     <figcaption>The label and the rules, in the same place.</figcaption>
   </figure>
 
