@@ -632,6 +632,16 @@ function openBuyingProductModal(productKey) {
             ${Number(size.available_qty || 0)}
           </div>
     
+          <!-- The same three facts as the columns above, on one line.
+               Hidden on desktop, where they have their own columns; on a
+               phone those columns become six labelled blocks per size and
+               barely two sizes fit on a screen. -->
+          <div class="buying-size-meta">
+            ${escapeHtml(size.fastest_delivery_time || "-")}
+            &middot; ${Number(size.source_count || 0)} ${Number(size.source_count || 0) === 1 ? "source" : "sources"}
+            &middot; ${Number(size.available_qty || 0)} available
+          </div>
+
           <div class="buying-size-actions">
             <button
               class="table-btn buying-action-btn"
