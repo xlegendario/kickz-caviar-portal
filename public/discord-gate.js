@@ -28,20 +28,20 @@
  * would have to remember, and would not.
  */
 (function () {
-  const VERTRAGING_MS = 10000;
+  const DELAY_MS = 10000;
 
-  const TEKST = {
+  const COPY = {
     not_linked: {
-      titel: "Link your Discord",
-      uitleg:
+      title: "Link your Discord",
+      body:
         "Your profile is not linked to our Discord server. Linking is required to trade on Kickz Caviar.",
-      knop: "Link Discord"
+      button: "Link Discord"
     },
     left_server: {
-      titel: "Rejoin the Discord server",
-      uitleg:
+      title: "Rejoin the Discord server",
+      body:
         "You are no longer in our Discord server, so claiming and offering are paused. Being in the server is required to trade.",
-      knop: "Rejoin Discord"
+      button: "Rejoin Discord"
     }
   };
 
@@ -53,11 +53,11 @@
     "29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Z" +
     "m42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,46,96.12,53,91.08,65.69,84.69,65.69Z";
 
-  const STIJL = `
-    /* Eigen box-sizing, niet die van de pagina eromheen. Zonder deze regel
-       telde de binnenmarge bij de breedte op en stak de kaart 26 pixels
-       buiten het scherm op een telefoon. Een gedeeld onderdeel moet er niet
-       van afhangen welke reset de pagina toevallig heeft. */
+  const STYLE = `
+    /* Its own box-sizing, not the host page's. Without this rule
+       the padding was added to the width and the card stuck 26 pixels off
+       the side of a phone screen. A shared component should not depend on
+       whichever reset the host page happens to carry. */
     #kcGate, #kcGate * { box-sizing: border-box; }
 
     #kcGate {
@@ -155,7 +155,7 @@
 
       #kcGate h2 { font-size: 21px; }
 
-      /* 36 pixels is prima voor een muis en te klein voor een duim. */
+      /* 36 pixels is fine for a mouse and too small for a thumb. */
       #kcGate .kc-gate-close {
         width: 44px;
         height: 44px;
@@ -167,25 +167,25 @@
     }
   `;
 
-  let venster = null;
+  let dialog = null;
   let timer = null;
-  let getoond = false;
+  let shown = false;
 
-  function bouw() {
-    if (venster) return venster;
+  function build() {
+    if (dialog) return dialog;
 
-    const stijl = document.createElement("style");
-    stijl.textContent = STIJL;
-    document.head.appendChild(stijl);
+    const styleEl = document.createElement("style");
+    styleEl.textContent = STYLE;
+    document.head.appendChild(styleEl);
 
-    venster = document.createElement("div");
-    venster.id = "kcGate";
+    dialog = document.createElement("div");
+    dialog.id = "kcGate";
 
     // No close on the backdrop, deliberately. This dialog appears on its
     // own, ten seconds in. Click anywhere at that exact moment and it would
     // vanish again - you would have seen a flash, which reads as a glitch
     // rather than as a message. The cross closes it.
-    venster.innerHTML =
+    dialog.innerHTML =
       '<div class="kc-gate-card">' +
       '<button type="button" class="kc-gate-close" aria-label="Close">&times;</button>' +
       '<h2></h2><p></p>' +
@@ -194,35 +194,35 @@
       '<path fill="currentColor" d="' + LOGO + '"/></svg><span></span></a>' +
       "</div>";
 
-    venster.querySelector(".kc-gate-close").addEventListener("click", () => {
-      venster.classList.remove("kc-gate-open");
+    dialog.querySelector(".kc-gate-close").addEventListener("click", () => {
+      dialog.classList.remove("kc-gate-open");
     });
 
     document.addEventListener("keydown", (evt) => {
-      if (evt.key === "Escape") venster.classList.remove("kc-gate-open");
+      if (evt.key === "Escape") dialog.classList.remove("kc-gate-open");
     });
 
-    document.body.appendChild(venster);
+    document.body.appendChild(dialog);
 
-    return venster;
+    return dialog;
   }
 
   function open(reason) {
-    const tekst = TEKST[reason] || TEKST.not_linked;
-    const el = bouw();
+    const copy = COPY[reason] || COPY.not_linked;
+    const el = build();
 
     clearTimeout(timer);
-    getoond = true;
+    shown = true;
 
-    el.querySelector("h2").textContent = tekst.titel;
-    el.querySelector("p").textContent = tekst.uitleg;
-    el.querySelector(".kc-gate-btn span").textContent = tekst.knop;
+    el.querySelector("h2").textContent = copy.title;
+    el.querySelector("p").textContent = copy.body;
+    el.querySelector(".kc-gate-btn span").textContent = copy.button;
 
     el.classList.add("kc-gate-open");
   }
 
   function isOpen() {
-    return Boolean(venster && venster.classList.contains("kc-gate-open"));
+    return Boolean(dialog && dialog.classList.contains("kc-gate-open"));
   }
 
   function schedule(seller) {
@@ -241,11 +241,11 @@
     timer = setTimeout(() => {
       // Ten seconds is long enough for a refused action to have opened it
       // already, and long enough to have logged out again.
-      if (getoond) return;
+      if (shown) return;
       if (!localStorage.getItem("kc_seller")) return;
 
       open(reason);
-    }, VERTRAGING_MS);
+    }, DELAY_MS);
   }
 
   // One wrapper for every request the page makes.
@@ -254,10 +254,10 @@
   // discord_not_linked with a reason, the older guard on /api/place-offer
   // sends discord_left_server. Missing either leaves the dialog shut on
   // exactly one path.
-  const origineel = window.fetch;
+  const originalFetch = window.fetch;
 
   window.fetch = async function (...args) {
-    const response = await origineel.apply(this, args);
+    const response = await originalFetch.apply(this, args);
 
     if (response.status === 403) {
       try {
@@ -266,7 +266,7 @@
         if (data?.code === "discord_not_linked") open(data.reason);
         else if (data?.code === "discord_left_server") open("left_server");
       } catch {
-        /* geen JSON - dan gaat die 403 ergens anders over */
+        /* not JSON - then that 403 is about something else */
       }
     }
 
