@@ -10415,6 +10415,56 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
           `${best.row.seller_id}. The buyer decides first - the consignor is ` +
           "asked nothing until he accepts."
       );
+
+      // Point the want-to-buy at this offer, then tell the buyer.
+      //
+      // This route only ever created the Seller Offer; the want-to-buy
+      // itself was left untouched. That was invisible while the consignor
+      // was engaged straight away, because his answer drove everything
+      // after it. Now that the buyer decides first, nothing pointed at the
+      // offer at all: "Current Lowest Seller Offer" stayed empty, so the
+      // Offer To Buyer formula had nothing to compute and the buyer was
+      // never told an offer existed.
+      //
+      // Same field set the Discord side writes when a seller offers, so
+      // both routes leave the record in one shape.
+      await airtable(MEMBER_WTBS_TABLE).update(source.recordId, {
+        "Current Lowest Offer": best.sellerPrice,
+        "Current Lowest Normalized": best.sellerComparePrice,
+        "Current Lowest Seller Offer": [createdOffer.id],
+        "Current Lowest VAT Type": best.row.vat_type,
+        "Lowest Offer": best.sellerPrice,
+        "Lowest Offer Normalized": best.sellerComparePrice,
+        "Lowest Offer VAT Type": best.row.vat_type,
+        "Lowest Offer Seller ID": [best.row.seller_record_id],
+        "New Offer Available": false,
+        "Offer Sent?": true
+      });
+
+      // Non-blocking: the offer is real whether or not the DM lands, and a
+      // buyer with DMs closed still sees it in his Buying tab.
+      fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb/send-current-offer-to-buyer`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.KC_PORTAL_SECRET
+        },
+        body: JSON.stringify({ member_wtb_record_id: source.recordId })
+      })
+        .then((response) => {
+          if (!response.ok) {
+            console.error(
+              `Failed to send the consignment offer to the buyer of ${source.recordId}:`,
+              response.status
+            );
+          }
+        })
+        .catch((err) =>
+          console.error(
+            `Failed to send the consignment offer to the buyer of ${source.recordId}:`,
+            err.message
+          )
+        );
     }
 
     let counterRoundId = null;
