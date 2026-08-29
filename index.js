@@ -502,6 +502,66 @@ async function closeConsignmentRoundsForSellerOffer(sellerOfferRecordId, status)
 // store price is the one store-accept already computed. Passing them in
 // rather than recomputing keeps one number per deal — recomputing is how a
 // €157.10 once became €160 in one place and €155 in another.
+/*
+ * Take one unit off a consignment row.
+ *
+ * Two routes end in a consignment pair being sold, and until now only one
+ * of them wrote the stock off. A Member WTB bought through the Buy/Offer
+ * flow (MWTB-000402, 29-08-2026) created its Inventory Unit correctly and
+ * left the consignor's row sitting at quantity 1 - still offered to every
+ * store, still on his own Inventory tab, already gone.
+ *
+ * Everything needed was there: the Seller Offer carries the row id in
+ * "Consignment Inventory ID", the same field the other route reads. It was
+ * simply never read.
+ *
+ * So one function, called from both. A third route added later gets it by
+ * calling this rather than by remembering to repeat it.
+ *
+ * Returns a reason rather than throwing when there is nothing to write off,
+ * because "this seller was not a consignor" is a normal outcome here, not
+ * an error.
+ */
+async function writeOffConsignmentUnit(consignmentInventoryId, context = "") {
+  const id = asText(consignmentInventoryId);
+
+  if (!id) return { ok: false, reason: "not_consignment" };
+
+  const { data: row, error: readError } = await supabase
+    .from("consignment_inventory")
+    .select("id, sku, size, quantity")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (readError) throw readError;
+
+  if (!row) return { ok: false, reason: "row_not_found" };
+
+  // Already at zero: someone got there first, or this ran twice. Not an
+  // error, and definitely not a reason to go negative.
+  if (Number(row.quantity || 0) <= 0) return { ok: false, reason: "already_zero" };
+
+  const newQuantity = Math.max(0, Number(row.quantity || 0) - 1);
+
+  const { error: writeError } = await supabase
+    .from("consignment_inventory")
+    .update({ quantity: newQuantity, updated_at: new Date().toISOString() })
+    .eq("id", row.id);
+
+  if (writeError) throw writeError;
+
+  // Without this the store-facing stock level keeps the old number and the
+  // pair stays purchasable in their shop.
+  await refreshConsignmentStockLevel(row.sku, row.size);
+
+  console.log(
+    `✅ Consignment stock written off${context ? ` (${context})` : ""}: ` +
+    `${row.sku} / ${row.size} ${row.quantity} → ${newQuantity}`
+  );
+
+  return { ok: true, sku: row.sku, size: row.size, from: row.quantity, to: newQuantity };
+}
+
 async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null) {
   const offerRecord = await airtable(SELLER_OFFERS_TABLE)
     .find(sellerOfferRecordId)
@@ -614,19 +674,9 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
     "Linked Inventory Unit": [inventoryUnitRecord.id]
   });
 
-  const newQuantity = Math.max(0, Number(inventoryRow.quantity || 0) - 1);
-
-  const { error: stockError } = await supabase
-    .from("consignment_inventory")
-    .update({
-      quantity: newQuantity,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", inventoryRow.id);
-
-  if (stockError) throw stockError;
-
-  await refreshConsignmentStockLevel(inventoryRow.sku, inventoryRow.size);
+  // Was these same six statements inline; now the one call the Member WTB
+  // route makes too, so the two cannot drift apart again.
+  await writeOffConsignmentUnit(inventoryRow.id, "store order");
 
   await closeConsignmentRoundsForSellerOffer(sellerOfferRecordId, "Accepted");
 
@@ -6875,6 +6925,81 @@ app.get("/reset-password", (_req, res) => {
 
 app.get("/consignment-application", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "consignment-application.html"));
+});
+
+/*
+ * A Member WTB that was paid somewhere other than Mollie.
+ *
+ * The seller's Ready To Ship step hangs off the Mollie webhook: payment
+ * lands, status becomes Paid, sendMemberWtbDealUpdateAfterPayment sends him
+ * the Request Label button. That works for every buyer who gets a Mollie
+ * link.
+ *
+ * A Lojiq store never gets one. It settles several open amounts in one
+ * payment through its own portal, so no Mollie payment exists here and no
+ * webhook ever fires. The deal was therefore paid, marked Paid in Airtable
+ * by the Lojiq side - and the seller sat on "Waiting for buyer to make the
+ * payment" forever, with nothing in the system able to move him.
+ *
+ * Found on MWTB-000402 (29-08-2026), the first Member WTB a Lojiq store
+ * bought.
+ *
+ * So: the Lojiq portal calls this when a batch is settled, and the same
+ * function runs that the Mollie webhook would have run. One notification
+ * step, not a second copy of the fulfilment logic.
+ */
+app.post("/api/internal/member-wtb-paid", async (req, res) => {
+  const secret = asText(req.headers["x-kc-secret"]);
+
+  if (!process.env.COUNTER_OFFERS_SECRET || secret !== process.env.COUNTER_OFFERS_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+
+  if (!memberWtbRecordId) {
+    return res.status(400).json({ error: "Missing member_wtb_record_id" });
+  }
+
+  try {
+    const record = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId).catch(() => null);
+
+    if (!record) {
+      return res.status(404).json({ error: "Member WTB not found" });
+    }
+
+    // Only act on a record that is actually settled.
+    //
+    // An earlier version guarded on "Label Requested At", which was wrong
+    // in both directions: sendMemberWtbReadyToShipToChannel never sets it,
+    // so it would not have stopped a duplicate to a seller - while the
+    // KC-owned path does set it, so it would have blocked a legitimate
+    // call. A guard that fires on exactly the wrong half.
+    //
+    // Payment Status is the honest test: the Lojiq side calls this on the
+    // transition to Paid, so anything not Paid is a mistake or a stale
+    // retry.
+    const paymentStatus = asText(record.fields?.["Payment Status"]);
+
+    if (paymentStatus !== "Paid") {
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: "not_paid",
+        payment_status: paymentStatus || null
+      });
+    }
+
+    const result = await sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId);
+
+    console.log(`✅ Member WTB ${memberWtbRecordId} paid via Lojiq portal, seller notified`, result);
+
+    return res.json({ ok: true, result });
+  } catch (err) {
+    console.error("Failed to handle member-wtb-paid:", err);
+
+    return res.status(500).json({ error: "Failed to notify seller", details: err.message });
+  }
 });
 
 app.get("/guide", (_req, res) => {
@@ -29904,6 +30029,35 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       'Linked Inventory Unit': [inventoryUnit.id],
       'Final Buying Price': finalBuyingPrice,
     });
+
+    // FIXED - a consignment pair sold this way stayed on the shelf.
+    //
+    // The Inventory Unit above was always created correctly, but the
+    // consignor's own row kept its quantity: still offered to every store,
+    // still on his Inventory tab, already gone. Found on MWTB-000402
+    // (29-08-2026), the first real Member WTB filled from consignment
+    // stock.
+    //
+    // The Seller Offer already carries the row id - the very field the
+    // store-order route reads. Nothing new to look up.
+    //
+    // Deliberately not fatal: the deal is done and recorded by this point,
+    // and failing here would leave the buyer with a purchase that errored
+    // after it succeeded. A loud log is the right answer, not a 500.
+    try {
+      const consignmentInventoryId = asText(
+        offerFields['Consignment Inventory ID']
+      );
+
+      if (consignmentInventoryId) {
+        await writeOffConsignmentUnit(consignmentInventoryId, `member wtb ${memberWtbRecordId}`);
+      }
+    } catch (stockErr) {
+      console.error(
+        `❌ Member WTB ${memberWtbRecordId}: consignment stock NOT written off -`,
+        stockErr.message
+      );
+    }
     
     await disableMemberWtbKcOfferButtons(
       memberWtbRecordId,
