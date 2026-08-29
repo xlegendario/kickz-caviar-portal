@@ -986,7 +986,16 @@ function parseMemberWtbCsv(text) {
   if (missingColumns.length) {
     throw new Error(`Missing required columns: ${missingColumns.join(", ")}`);
   }
-  const columnIndex = (name) => headers.indexOf(name);
+  // Falls back to a prefix so "Max Price (optional)" still resolves.
+  // Mirrors the server; see the note there for why an unmatched header
+  // would have silently dropped every price in the file.
+  const columnIndex = (name) => {
+    const exact = headers.indexOf(name);
+
+    if (exact !== -1) return exact;
+
+    return headers.findIndex((header) => header.startsWith(name));
+  };
   const rows = lines.slice(1).map((line, index) => {
     const values = parseCsvLine(line, delimiter);
     return {
