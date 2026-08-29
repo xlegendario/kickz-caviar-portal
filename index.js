@@ -32379,8 +32379,20 @@ function parseMemberWtbCsvText(text) {
     );
   }
 
-  const columnIndex = (name) =>
-    headers.indexOf(name);
+  // Exact for the columns that must be there, forgiving for the price.
+  //
+  // The header may reasonably read "Max Price", "Max Price (optional)" or
+  // "Max price (optional)" - the word is a note to whoever fills the file in,
+  // not a different column. Matching it exactly meant a renamed header was
+  // simply not found, and since a missing column now reads as "no ceiling",
+  // every price in that file would have been dropped without a word.
+  const columnIndex = (name) => {
+    const exact = headers.indexOf(name);
+
+    if (exact !== -1) return exact;
+
+    return headers.findIndex((header) => header.startsWith(name));
+  };
 
   const rows = lines
     .slice(1)
