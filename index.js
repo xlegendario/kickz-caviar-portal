@@ -1051,6 +1051,39 @@ async function denyConsignmentSellerOffer(sellerOfferRecordId) {
     }).catch((err) =>
       console.error("Failed to re-arm the offer request after a consignment deny:", err)
     );
+
+    // NEW - say it out loud to the store as well.
+    //
+    // Re-arming gives them a fresh Offer Request, but on its own that reads
+    // as an embed going dead and another appearing for no reason. The Member
+    // WTB buyer gets a DM saying what happened; a store gets the same in the
+    // channel where it already reads its offers.
+    //
+    // Non-blocking: the deny is done by this point and a message that will
+    // not send must not undo it.
+    if (AIRTABLE_DISCORD_UPDATES_URL) {
+      const deniedOrder = await airtable(ORDERS_TABLE)
+        .find(deniedOrderId)
+        .catch(() => null);
+
+      const deniedOrderFields = deniedOrder?.fields || {};
+
+      fetch(AIRTABLE_DISCORD_UPDATES_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trigger_type: "consignment-withdrawn",
+          store_name: asText(deniedOrderFields["Store Name"]),
+          record_id: deniedOrderId,
+          shopify_order_number: asText(deniedOrderFields["Shopify Order Number"]),
+          product_name: asText(deniedOrderFields["Product Name"]),
+          sku: asText(deniedOrderFields["SKU"]),
+          size: asText(deniedOrderFields["Size"])
+        })
+      }).catch((err) =>
+        console.error("Failed to tell the store the consignor withdrew:", err.message)
+      );
+    }
   }
 
   // NEW - the Member WTB half of the same idea.
