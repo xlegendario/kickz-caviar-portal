@@ -934,6 +934,80 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
 // Deny: the consignor no longer has it. Soft-delete so the undercut check
 // stops treating it as a live position, and leave the order on Outsource
 // so regular sellers can still take it — same as the current deny.
+/*
+ * Tells the buyer his offer fell through.
+ *
+ * A consignor who denies after the buyer has already accepted leaves the
+ * buyer waiting on a deal that is not happening. The want-to-buy itself
+ * stays live and the next source is offered on automatically, so the
+ * message says exactly that rather than reading like a cancellation.
+ *
+ * Non-blocking everywhere it is called: the deny has succeeded by then and
+ * a DM that will not send must not undo it.
+ */
+async function notifyBuyerConsignmentWithdrawn(memberWtbRecordId) {
+  const memberWtb = await airtable(MEMBER_WTBS_TABLE)
+    .find(memberWtbRecordId)
+    .catch(() => null);
+
+  if (!memberWtb) return { ok: false, reason: "member_wtb_not_found" };
+
+  const f = memberWtb.fields || {};
+  const buyerRecordId = firstLinkedRecordId(f["Buyer Seller ID"]);
+
+  if (!buyerRecordId) return { ok: false, reason: "no_buyer" };
+
+  const buyerRecord = await airtable(SELLERS_TABLE)
+    .find(buyerRecordId)
+    .catch(() => null);
+
+  if (!buyerRecord) return { ok: false, reason: "buyer_not_found" };
+
+  const buyer = normalizeSeller(buyerRecord);
+
+  const discordUserId = asText(
+    buyer.discord_id ||
+    buyer.discord_user_id ||
+    buyer.discord_id_raw ||
+    buyerRecord.fields?.["Discord User ID"]
+  );
+
+  if (!discordUserId) return { ok: false, reason: "buyer_has_no_discord" };
+
+  await initKickzDealDiscord();
+
+  const memberWtbId =
+    asText(f["Member WTB ID"]) ||
+    asText(f["WTB ID"]) ||
+    memberWtbRecordId;
+
+  const user = await kickzDealDiscordClient.users.fetch(discordUserId);
+  const dm = await user.createDM();
+
+  await dm.send({
+    embeds: [
+      {
+        title: "⚠️ The seller withdrew",
+        description: [
+          `**Order Number:** ${memberWtbId}`,
+          "",
+          `**Product:** ${asText(f["Product Name"]) || "—"}`,
+          `**SKU:** ${asText(f["SKU"]) || "—"}`,
+          `**Size:** ${asText(f["Size"]) || "—"}`,
+          "",
+          "Unfortunately the seller withdrew his offer. Your WTB is still " +
+            "live and you will receive a new offer as soon as a seller " +
+            "submits one."
+        ].join("\n"),
+        color: 0xf1c40f,
+        timestamp: new Date().toISOString()
+      }
+    ]
+  });
+
+  return { ok: true };
+}
+
 async function denyConsignmentSellerOffer(sellerOfferRecordId) {
   const offerRecord = await airtable(SELLER_OFFERS_TABLE)
     .find(sellerOfferRecordId)
@@ -997,6 +1071,13 @@ async function denyConsignmentSellerOffer(sellerOfferRecordId) {
   const deniedMemberWtbId = firstLinkedRecordId(offerRecord.fields?.["Member WTBs"]);
 
   if (deniedMemberWtbId) {
+    await notifyBuyerConsignmentWithdrawn(deniedMemberWtbId).catch((err) =>
+      console.error(
+        `Failed to tell the buyer of ${deniedMemberWtbId} that the seller withdrew:`,
+        err.message
+      )
+    );
+
     try {
       const next = await createMemberWtbAutoOffer(deniedMemberWtbId);
 
