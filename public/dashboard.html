@@ -77,12 +77,12 @@
         Become a Consignor →
       </a>
 
-      <!-- Onderaan de navigatie, want dat is waar je kijkt als je iets zoekt
-           dat niet in de lijst met tabs staat.
+      <!-- At the foot of the navigation, because that is where you look for
+           something that is not in the list of tabs.
 
-           Nieuw tabblad met opzet: de guide is bedoeld om ernaast open te
-           houden terwijl je bezig bent, niet om je werk van je scherm te
-           duwen. rel="noopener" hoort bij target="_blank". -->
+           New tab on purpose: the guide is meant to be kept open next to
+           what you are doing, not to take your work off the screen.
+           rel="noopener" belongs with target="_blank". -->
       <a
         class="dashboard-guide-link"
         href="/guide"
@@ -145,14 +145,12 @@
               LOGIN
             </button>
             
-            <a
-              class="dashboard-signup-btn"
-              href="https://discord.com/channels/922818998163361792/1444130166703128676"
-              target="_blank"
-              rel="noopener"
-            >
-              SIGN UP
-            </a>
+            <!-- CHANGED - pointed at the Discord registration channel, from before
+                   the portal had a sign-up form of its own. Someone landed in Discord
+                   instead of on the form, with no way to tell that was a detour.
+                   Internal page, so same tab: this is a step in a flow, not a
+                   reference to keep open alongside. -->
+              <a class="dashboard-signup-btn" href="/signup">SIGN UP</a>
             
             <div class="dashboard-form-error" id="dashboardLoginError"></div>
           </form>
