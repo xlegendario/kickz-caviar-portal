@@ -1849,8 +1849,18 @@ body.modal-open {
   vertical-align: middle;
 }
 
-.buying-inventory-filter {
+/* Both Buying filters share one row. The wrapper carries the grid-column
+   so the two of them line up rather than each claiming a full row. */
+.buying-filter-row {
   grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.buying-inventory-filter {
   display: flex;
   gap: 6px;
   width: fit-content;
@@ -2462,4 +2472,28 @@ body.kc-dialog-open {
 .guide-btn:hover {
   color: #ffcc00;
   border-color: rgba(255, 204, 0, 0.28);
+}
+
+/* Size filter on Buying. Same height as the inventory-type buttons next to
+   it, so the row reads as one control rather than two stacked ideas. */
+.buying-size-filter {
+  height: 52px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid #262626;
+  background: #151515;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.buying-size-filter:hover {
+  border-color: rgba(255, 204, 0, 0.28);
+}
+
+@media (max-width: 840px) {
+  .buying-size-filter {
+    width: 100%;
+  }
 }
