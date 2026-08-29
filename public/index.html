@@ -21,9 +21,9 @@
       </div>
   
       <div class="header-auth">
-        <!-- Voor Sign up, zodat ook iemand die nog niet is ingelogd kan
-             opzoeken hoe dit werkt voordat hij een profiel maakt.
-             Nieuw tabblad: bedoeld om ernaast open te houden. -->
+        <!-- Before Sign up, so someone who is not signed in yet can read how
+             this works before making a profile. New tab on purpose: the guide
+             is meant to be kept open alongside. -->
         <a
           class="guide-btn"
           href="/guide"
@@ -160,14 +160,12 @@
           LOGIN
         </button>
       
-        <a
-          class="modal-signup-btn"
-          href="https://discord.com/channels/922818998163361792/1444130166703128676"
-          target="_blank"
-          rel="noopener"
-        >
-          SIGN UP
-        </a>
+        <!-- CHANGED - pointed at the Discord registration channel, from before
+               the portal had a sign-up form of its own. Someone landed in Discord
+               instead of on the form, with no way to tell that was a detour.
+               Internal page, so same tab: this is a step in a flow, not a
+               reference to keep open alongside. -->
+          <a class="modal-signup-btn" href="/signup">SIGN UP</a>
       
         <div id="loginError" class="login-error"></div>
       </form>
