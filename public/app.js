@@ -1907,12 +1907,62 @@ function openClaimModal(dealId) {
     loadDeals(currentType, true);
     return;
   }
-  selectedVatType = "Margin";
   claimError.textContent = "";
-  vatOptions.forEach((option) => {
-    option.classList.toggle("active", option.dataset.vat === selectedVatType);
-  });
+  selectedVatType = applyVatRestrictions(claimModal, "Margin");
   claimModal.classList.remove("hidden");
+}
+/*
+ * Only offer the VAT types this seller may actually sell.
+ *
+ * The server refuses the rest either way - every offer and every claim runs
+ * through validateSellerVatEligibility - so this changes nothing about what
+ * can be sold. It stops a seller picking a type that was never theirs and
+ * finding out only after they submit.
+ *
+ * The page reached from Discord (offer.html) has done this for a while, and
+ * so does Add Stock. These two modals were the ones left: all three buttons
+ * were always live here.
+ *
+ * currentSeller.vat_types is computed by that same server-side rule, so the
+ * buttons and the server cannot drift apart. A session stored before that
+ * field existed has none, and then every option stays open exactly as before
+ * - the server still has the last word, which beats guessing the rule again
+ * on this side.
+ */
+function applyVatRestrictions(scope, preferredVatType) {
+  const allowed = Array.isArray(currentSeller?.vat_types) && currentSeller.vat_types.length
+    ? currentSeller.vat_types
+    : null;
+
+  const buttons = scope.querySelectorAll(".vat-option");
+
+  buttons.forEach((button) => {
+    const blocked = Boolean(allowed) && !allowed.includes(button.dataset.vat);
+
+    button.disabled = blocked;
+    button.classList.toggle("is-unavailable", blocked);
+
+    // Greyed out with no reason given is its own small mystery.
+    if (blocked) {
+      button.title = "Not available for the company details on your profile.";
+    } else {
+      button.removeAttribute("title");
+    }
+  });
+
+  // Margin is open to everyone, so there is always somewhere to land. The
+  // offer modal needs this more than the claim one: it opens on VAT0
+  // whenever the page is showing VAT0 prices, which is precisely the type a
+  // Dutch company may not use.
+  const chosen = allowed && !allowed.includes(preferredVatType)
+    ? "Margin"
+    : preferredVatType;
+
+  buttons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.vat === chosen);
+  });
+
+  return chosen;
 }
 function closeClaimFlow() {
   claimModal.classList.add("hidden");
@@ -1989,13 +2039,16 @@ function openOfferFlow(dealId) {
     showAlert("Deal not found. Please refresh and try again.");
     return;
   }
-  selectedOfferVatType = priceView === "vat0" ? "VAT0" : "Margin";
   offerAmountInput.value = "";
   offerError.textContent = "";
+
+  // Before updateOfferPlaceholder, which words itself around the chosen type.
+  selectedOfferVatType = applyVatRestrictions(
+    offerModal,
+    priceView === "vat0" ? "VAT0" : "Margin"
+  );
+
   updateOfferPlaceholder();
-  offerVatOptions.forEach((option) => {
-    option.classList.toggle("active", option.dataset.vat === selectedOfferVatType);
-  });
   offerModal.classList.remove("hidden");
 }
 function closeOfferFlow() {
