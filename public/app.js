@@ -682,6 +682,21 @@ function getBuyingInventoryTypeLabel() {
 // right above the hint, so a member who reads "excl. VAT" and did not mean
 // that has an obvious next move. Without it the scale reads as a rule about
 // us rather than a consequence of their own choice.
+/**
+ * FIXED - this promised a VAT0 invoice to everyone.
+ *
+ * A seller who is not on Margin invoices VAT21 to a Dutch buyer and VAT0 to
+ * a foreign one - that is what the server has always done. The copy only
+ * ever named the foreign case, so a Dutch company was told it would be
+ * charged VAT0 on a purchase that will carry 21%.
+ *
+ * is_dutch comes from the session, so the wording follows whoever is
+ * actually looking at it.
+ */
+function buyerIsDutch() {
+  return currentSeller?.is_dutch === true;
+}
+
 function getMemberWtbScaleHint(inventoryType, forCsv) {
   const subject = forCsv ? "prices in this file are" : "your price is";
 
@@ -693,8 +708,11 @@ function getMemberWtbScaleHint(inventoryType, forCsv) {
     return `With buying type Margin Only, ${subject} read as incl. VAT.`;
   }
 
-  return `With buying type All Types, ${subject} read as incl. VAT. ` +
-    "If it matches a B2B seller the invoice amount is recalculated as a VAT0 price.";
+  const matched = buyerIsDutch()
+    ? "If it matches a B2B seller the invoice carries 21% VAT."
+    : "If it matches a B2B seller the invoice amount is recalculated as a VAT0 price.";
+
+  return `With buying type All Types, ${subject} read as incl. VAT. ` + matched;
 }
 
 function getBuyingOfferInputCopy() {
@@ -717,7 +735,9 @@ function getBuyingOfferInputCopy() {
   return {
     label: "Your offer:",
     placeholder: "Enter your price (incl. VAT)",
-    hint: "If your offer matches a B2B seller, the invoice amount will be recalculated as VAT0 price."
+    hint: buyerIsDutch()
+      ? "If your offer matches a B2B seller, the invoice will carry 21% VAT."
+      : "If your offer matches a B2B seller, the invoice amount will be recalculated as VAT0 price."
   };
 }
 function openBuyingActionFlow(action, productKey, sizeValue) {
