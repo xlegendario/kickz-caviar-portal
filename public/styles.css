@@ -2049,10 +2049,26 @@ body.modal-open {
     font-size: 16px;
   }
 
-  .buying-size-actions button {
-    flex: 0 0 auto;
+  /* width, not just flex. .table-btn carries width: 100%, and flex-basis
+     auto reads that width - so each button became the full width of its
+     cell. Two of them in a 126px cell with justify-content: flex-end
+     overflowed 134px to the LEFT, and since a button paints its own
+     background they covered the size and the price completely. Chrome
+     still reported both as visible, the right size and pure white; they
+     were simply underneath. Reported live, 29-08-2026. */
+  .buying-size-table-row .buying-size-actions button {
+    width: auto;
+    flex: 0 1 auto;
+    min-width: 0;
     padding: 0 14px;
     font-size: 13px;
+    white-space: nowrap;
+  }
+
+  /* Nothing here may spill over its neighbour again. */
+  .buying-size-table-row .buying-size-actions {
+    min-width: 0;
+    overflow: hidden;
   }
 
   /* CHANGED - 44px is a headline size. A name like "Jordan 4 Retro
