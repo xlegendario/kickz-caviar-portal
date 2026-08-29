@@ -10371,16 +10371,51 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
           : null)
       : calculateConsignmentOfferPrice(maximumBuyingPrice, orderFields);
 
-    if (calculatedOfferPrice === null) {
+
+    // Same test the current embed builder uses: both sides on the
+    // normalized compare scale.
+    const isConfirmation = best.sellerComparePrice <= calculatedOfferPrice;
+
+    // NEW - a posted want-to-buy asks the consignor nothing, yet.
+    //
+    // Both branches below speak to the consignor: one asks him to confirm,
+    // the other asks him to come down to a ceiling. Either is only fair when
+    // the buyer has already committed to a number. On a store order that
+    // commitment is the Maximum Buying Price of an auto-accept store. On a
+    // Member WTB it is "Auto Accept Seller Offers?", which is true exactly
+    // when the buyer pressed Buy or made an Offer - he named a price himself.
+    //
+    // A plainly posted open WTB has neither. A Max Price there is a ceiling,
+    // not an agreement, so the consignor is told nothing at this point: the
+    // Seller Offer is created, the buyer sees it, and only if he accepts is
+    // the consignor asked - see askConsignorToConfirmMemberWtbOffer.
+    //
+    // Store orders are untouched: the flag is true for them by definition.
+    const engageConsignorNow =
+      source.kind !== "member_wtb" ||
+      sourceRecord?.fields?.["Auto Accept Seller Offers?"] === true;
+
+    // Only an error when we were about to use it.
+    //
+    // A posted want-to-buy without a Max Price has no ceiling and needs
+    // none: nothing is asked of the consignor here, so there is no figure to
+    // compute. Refusing it meant such a want-to-buy got no consignment offer
+    // at all - the opposite of what "no ceiling" should mean.
+    if (calculatedOfferPrice === null && engageConsignorNow) {
       return res.status(400).json({
         error: "Invalid Maximum Buying Price",
         seller_offer_record_id: createdOffer.id
       });
     }
 
-    // Same test the current embed builder uses: both sides on the
-    // normalized compare scale.
-    const isConfirmation = best.sellerComparePrice <= calculatedOfferPrice;
+    if (!engageConsignorNow) {
+      console.log(
+        `ℹ️ Member WTB ${source.recordId}: offer created at ` +
+          `${moneySmartValue(best.sellerPrice)} ${best.row.vat_type} from ` +
+          `${best.row.seller_id}. The buyer decides first - the consignor is ` +
+          "asked nothing until he accepts."
+      );
+    }
 
     let counterRoundId = null;
     let counterPayout = null;
@@ -10389,7 +10424,7 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       .find(best.row.seller_record_id)
       .catch(() => null);
 
-    if (isConfirmation) {
+    if (isConfirmation && engageConsignorNow) {
       // His price already fits under the ceiling, so there is nothing to
       // negotiate — just the one question this whole route exists for:
       // do you still have it?
@@ -10437,7 +10472,7 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       await rememberConsignmentConfirmMessage(createdOffer.id, confirmDiscordResult);
     }
 
-    if (!isConfirmation) {
+    if (!isConfirmation && engageConsignorNow) {
       // Back to the consignor's OWN VAT scale — what he actually gets
       // paid, and the number his embed shows.
       counterPayout = getConsignmentSellerOfferPrice(
