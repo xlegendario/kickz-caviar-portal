@@ -11299,6 +11299,26 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
 // already went into negotiation).
 // ---------------------------------------------------------------------
 
+// One preparation at a time per Seller Offer.
+//
+// The duplicate guard inside the route reads before it writes: it asks
+// Airtable whether an open round exists, and only then creates one. Two
+// requests a fraction apart both get their answer before either has
+// written anything, so both create.
+//
+// This is NOT what caused the duplicates on ORD-022963 or ORD-022500 -
+// those were four seconds and three minutes apart, far too wide for a
+// race, and they had a different cause (see the already-accepted guard
+// below). It closes the window that is genuinely left: two clicks close
+// enough together that neither round has been accepted yet, which the
+// guard below cannot see either.
+//
+// A second caller now waits for the first and receives the same round,
+// rather than racing it. The portal runs a single instance
+// (WEB_CONCURRENCY=1), so a process-local map genuinely closes this; were
+// it ever scaled out, this would need a lock the instances share.
+const freshRoundInFlight = new Map();
+
 app.post("/api/counter-offers/create-fresh-round", async (req, res) => {
   try {
     const secret = asText(req.headers["x-kc-secret"]);
@@ -11328,6 +11348,45 @@ app.post("/api/counter-offers/create-fresh-round", async (req, res) => {
 
     if (sof["Delete Offer"] || sof["Denied?"] || sof["Withdrawn?"]) {
       return res.status(409).json({ error: "This offer is no longer available." });
+    }
+
+    // FIXED - an order that is already won still handed out fresh rounds.
+    //
+    // The reuse guard further down only looks for rounds with Status
+    // 'Open'. The moment the first round is accepted it stops matching,
+    // so a second call finds nothing to reuse and creates another Open
+    // round - on an order that is already allocated, with no accept left
+    // to close it. It then sits in the store's Offers tab forever.
+    //
+    // Twice in the live data: ORD-022963 (CTO-000709 accepted, CTO-000710
+    // stranded four seconds later) and ORD-022500 (CTO-000680 / CTO-000681,
+    // three minutes apart). Both far too wide to be a race - the earlier
+    // round had simply already flipped out of 'Open'.
+    //
+    // Asked per order, not per Seller Offer: once ANY seller's round on
+    // this order is accepted the order is settled, and preparing an accept
+    // for a different seller is just as meaningless.
+    const acceptedRounds = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `{Status} = 'Accepted'`,
+        fields: ["Order", "Counter Offer ID"]
+      })
+      .all()
+      .catch(() => []);
+
+    const settledRound = acceptedRounds.find((record) =>
+      linkedRecordIncludes(record.fields?.["Order"], orderRecordId)
+    );
+
+    if (settledRound) {
+      console.log(
+        `⛔ create-fresh-round refused: order ${orderRecordId} already settled by ` +
+          `${asText(settledRound.fields?.["Counter Offer ID"]) || settledRound.id}.`
+      );
+
+      return res.status(409).json({
+        error: "This order has already been accepted — please refresh."
+      });
     }
 
     const sellerRecordId = firstLinkedRecordId(sof["Seller ID"]);
@@ -11381,60 +11440,85 @@ app.post("/api/counter-offers/create-fresh-round", async (req, res) => {
     // top: the caller only needs a round to act on, and an existing open one
     // is exactly that.
     //
-    // Filtered on the plain text field, never on the link — a
-    // FIND(recordId, ARRAYJOIN({Order})) formula does not match in this base.
-    const existingOpenRounds = await airtable(COUNTER_OFFERS_TABLE)
-      .select({
-        filterByFormula: `AND(
-          {Seller Offer Record ID} = '${escapeFormulaValue(sellerOfferRecordId)}',
-          {Status} = 'Open'
-        )`,
-        fields: ["Seller Offer Record ID", "Order", "Created At"]
-      })
-      .all()
-      .catch(() => []);
+    const inFlightKey = `${orderRecordId}:${sellerOfferRecordId}`;
+    const alreadyPreparing = freshRoundInFlight.has(inFlightKey);
 
-    const reusableRound = existingOpenRounds.find((record) =>
-      linkedRecordIncludes(record.fields?.["Order"], orderRecordId)
-    );
+    const prepare = alreadyPreparing
+      ? freshRoundInFlight.get(inFlightKey)
+      : (async () => {
+      // Filtered on the plain text field, never on the link — a
+      // FIND(recordId, ARRAYJOIN({Order})) formula does not match in this base.
+      const existingOpenRounds = await airtable(COUNTER_OFFERS_TABLE)
+        .select({
+          filterByFormula: `AND(
+            {Seller Offer Record ID} = '${escapeFormulaValue(sellerOfferRecordId)}',
+            {Status} = 'Open'
+          )`,
+          fields: ["Seller Offer Record ID", "Order", "Created At"]
+        })
+        .all()
+        .catch(() => []);
 
-    if (reusableRound) {
-      console.log(
-        `♻️ create-fresh-round reused open round ${reusableRound.id} for Seller Offer ` +
-          `${sellerOfferRecordId} on ${orderRecordId} instead of creating a duplicate.`
+      const reusableRound = existingOpenRounds.find((record) =>
+        linkedRecordIncludes(record.fields?.["Order"], orderRecordId)
       );
 
-      return res.json({
-        ok: true,
-        reused: true,
-        counter_offer_record_id: reusableRound.id
+      if (reusableRound) {
+        console.log(
+          `♻️ create-fresh-round reused open round ${reusableRound.id} for Seller Offer ` +
+            `${sellerOfferRecordId} on ${orderRecordId} instead of creating a duplicate.`
+        );
+
+        return { id: reusableRound.id, reused: true };
+      }
+
+      const createdRound = await airtable(COUNTER_OFFERS_TABLE).create({
+        "Order": [orderRecordId],
+        "Seller ID": [sellerRecordId],
+        "Source Type": "Seller Offer",
+        "Seller Offer Record ID": sellerOfferRecordId,
+
+        "Seller Original Price": sellerOriginalPrice,
+        "Seller Original VAT Type": sellerVatType,
+
+        // Shaped exactly like a genuine seller-placed round — this is
+        // what tells store-accept "the seller's number to honor is
+        // this one," using the exact same branch it already uses for a
+        // real seller counter-back. Uses the seller's TRUE current
+        // price (see fix above), not necessarily their original ask.
+        "Seller Counter Price": currentTruePrice,
+
+        "Counter Payout": currentTruePrice,
+        "Counter Payout VAT Type": currentTrueVatType,
+
+        "Status": "Open",
+        "Created At": new Date().toISOString()
       });
+
+      return { id: createdRound.id, reused: false };
+        })();
+
+    if (!alreadyPreparing) {
+      freshRoundInFlight.set(inFlightKey, prepare);
+
+      // Cleared however it ends. Swallowing here only stops an unhandled
+      // rejection warning - the route still awaits `prepare` itself and its
+      // own catch answers the caller.
+      prepare.then(() => {}, () => {}).finally(() => freshRoundInFlight.delete(inFlightKey));
+    } else {
+      console.log(
+        `⏳ create-fresh-round waited for the in-flight preparation of Seller Offer ` +
+          `${sellerOfferRecordId} on ${orderRecordId} instead of racing it.`
+      );
     }
 
-    const createdRound = await airtable(COUNTER_OFFERS_TABLE).create({
-      "Order": [orderRecordId],
-      "Seller ID": [sellerRecordId],
-      "Source Type": "Seller Offer",
-      "Seller Offer Record ID": sellerOfferRecordId,
+    const prepared = await prepare;
 
-      "Seller Original Price": sellerOriginalPrice,
-      "Seller Original VAT Type": sellerVatType,
-
-      // Shaped exactly like a genuine seller-placed round — this is
-      // what tells store-accept "the seller's number to honor is
-      // this one," using the exact same branch it already uses for a
-      // real seller counter-back. Uses the seller's TRUE current
-      // price (see fix above), not necessarily their original ask.
-      "Seller Counter Price": currentTruePrice,
-
-      "Counter Payout": currentTruePrice,
-      "Counter Payout VAT Type": currentTrueVatType,
-
-      "Status": "Open",
-      "Created At": new Date().toISOString()
+    res.json({
+      ok: true,
+      reused: prepared.reused || alreadyPreparing,
+      counter_offer_record_id: prepared.id
     });
-
-    res.json({ ok: true, counter_offer_record_id: createdRound.id });
   } catch (err) {
     console.error("Failed to create fresh round for instant accept:", err);
     res.status(500).json({ error: "Failed to prepare offer for acceptance", details: err.message });
