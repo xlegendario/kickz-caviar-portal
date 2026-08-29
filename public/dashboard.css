@@ -5099,3 +5099,40 @@ a.offer-secondary {
   justify-content: center;
   text-decoration: none;
 }
+
+/* Guide-link onderaan de zijbalk. Bewust rustiger dan de consignor-CTA
+   daarboven: die wil je verleiden, deze moet alleen te vinden zijn op het
+   moment dat iemand vastloopt. */
+.dashboard-guide-link {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid #1f1f1f;
+  background: #101010;
+  color: #8a8a8a;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 900;
+  transition: 0.18s ease;
+}
+
+.dashboard-guide-link:hover {
+  color: #ffcc00;
+  border-color: rgba(255, 204, 0, 0.28);
+  background: #141414;
+}
+
+.dashboard-guide-icon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  border: 1px solid #2a2a2a;
+  font-size: 11px;
+  line-height: 1;
+}
