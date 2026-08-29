@@ -3838,22 +3838,27 @@ body.modal-open {
     table-layout: fixed;
   }
 
-  /* A sized cell clips instead of escaping.
+  /* A sized VALUE clips instead of escaping.
 
      table-layout: fixed does not make text respect its column - a value
      that does not fit spills over the neighbour, which is how
      "All Inventory" ended up printed on top of a price. Every width note
      below is a fix for one value that outgrew its class; this is the
      backstop for the next one, so the worst case is an ellipsis rather
-     than two numbers on top of each other. */
-  .dashboard-table th.col-short, .dashboard-table td.col-short,
-  .dashboard-table th.col-type, .dashboard-table td.col-type,
-  .dashboard-table th.col-date, .dashboard-table td.col-date,
-  .dashboard-table th.col-money, .dashboard-table td.col-money,
-  .dashboard-table th.col-code, .dashboard-table td.col-code,
-  .dashboard-table th.col-status, .dashboard-table td.col-status,
-  .dashboard-table th.col-long, .dashboard-table td.col-long,
-  .dashboard-table th.col-default, .dashboard-table td.col-default {
+     than two numbers on top of each other.
+
+     Cells only, never headers. A header is two or three words and is
+     meant to wrap onto a second line - "CURRENT LOWEST" has always sat on
+     two. Including th here turned every one of them into "CURREN...",
+     which is worse than the overlap it was meant to prevent. */
+  .dashboard-table td.col-short,
+  .dashboard-table td.col-type,
+  .dashboard-table td.col-date,
+  .dashboard-table td.col-money,
+  .dashboard-table td.col-code,
+  .dashboard-table td.col-status,
+  .dashboard-table td.col-long,
+  .dashboard-table td.col-default {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
