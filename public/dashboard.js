@@ -5451,10 +5451,72 @@ function closeEditOfferModal() {
   editOfferModal.classList.add("hidden");
 }
 
+/*
+ * Only offer the VAT types this seller may actually sell.
+ *
+ * The server already refuses the rest - /api/consignment/inventory/manual
+ * runs refuseIneligibleConsignmentVat before it writes anything - so this
+ * changes nothing about what can be added. It stops a seller filling in a
+ * SKU, a price and a list of sizes before being told the very first choice
+ * was never open to them.
+ *
+ * seller.vat_types is computed by that same server-side rule, so the two
+ * cannot drift apart. The rule itself: no VAT ID means Margin only, a
+ * Dutch company cannot sell VAT0 to a Dutch B.V., and a foreign company
+ * cannot sell VAT21.
+ *
+ * A session stored before this field existed has no vat_types. Then every
+ * option stays open and the server keeps the last word - exactly the old
+ * behaviour, which is safer than guessing the rule again here.
+ */
+function applyConsignmentVatRestrictions() {
+  const allowed = Array.isArray(dashboardSeller?.vat_types) && dashboardSeller.vat_types.length
+    ? dashboardSeller.vat_types
+    : null;
+
+  const cards = document.querySelectorAll(
+    "#consignmentAddStockForm .consignment-vat-card"
+  );
+
+  cards.forEach((card) => {
+    const input = card.querySelector('input[name="consignmentVatType"]');
+
+    if (!input) return;
+
+    const blocked = Boolean(allowed) && !allowed.includes(input.value);
+
+    input.disabled = blocked;
+    card.classList.toggle("is-unavailable", blocked);
+
+    // Greyed out with no reason given is its own small mystery.
+    if (blocked) {
+      card.title = "Not available for the company details on your profile.";
+      if (input.checked) input.checked = false;
+    } else {
+      card.removeAttribute("title");
+    }
+  });
+
+  // Margin is open to everyone, so there is always somewhere to land when
+  // the selected type turns out not to be this seller's to pick.
+  const stillChecked = document.querySelector(
+    '#consignmentAddStockForm input[name="consignmentVatType"]:checked'
+  );
+
+  if (!stillChecked) {
+    const margin = document.querySelector(
+      '#consignmentAddStockForm input[name="consignmentVatType"][value="Margin"]'
+    );
+
+    if (margin) margin.checked = true;
+  }
+}
+
 function openConsignmentAddStockModal() {
   consignmentAddStockError.textContent = "";
   consignmentAddStockSuccess.textContent = "";
   resetConsignmentAddStockForm();
+  applyConsignmentVatRestrictions();
   consignmentAddStockModal.classList.remove("hidden");
 
   if (window.innerWidth > 768) {
