@@ -150,6 +150,10 @@
   }
   figure.shot img { max-width:100%; height:auto; display:block; border:1px solid var(--line); border-radius:var(--r-sm); }
   figure.shot picture { display:block; }
+
+  .shot-link { display:block; border-radius:var(--r-sm); }
+  .shot-link img { transition:border-color .15s ease; }
+  .shot-link:hover img { border-color:var(--gold); }
   figcaption { font-size:13.5px; color:var(--muted); line-height:1.55; }
 
   .chain-switch { display:flex; gap:8px; flex-wrap:wrap; }
@@ -743,7 +747,19 @@
     img.loading = "lazy";
     picture.appendChild(img);
 
-    figure.querySelector(".shot-frame")?.replaceWith(picture);
+    // Click to open it full size. A shot taken wider than this column gets
+    // scaled down to fit, and small print does not survive that. The link
+    // is the way back to the real thing without having to hunt for the
+    // file.
+    const link = document.createElement("a");
+    link.href = desktop;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.title = "Open full size";
+    link.className = "shot-link";
+    link.appendChild(picture);
+
+    figure.querySelector(".shot-frame")?.replaceWith(link);
   });
 
   // The chains share everything but their opening steps. A switch rather
