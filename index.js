@@ -3834,13 +3834,20 @@ function bindMemberWtbDiscordCreation(
                   {
                     type: 4,
                     custom_id: "max_price",
-                    // "Maximum" overstates it: a seller can counter above
-                    // this number and the buyer can still accept, so the
-                    // label promised a ceiling that does not exist. Same
-                    // wording as the Lojiq shop - the Airtable column keeps
-                    // its own name, which nobody outside the base reads.
+                    // CHANGED back to "Max Price".
+                    //
+                    // This was "Your price", argued for on the grounds that a
+                    // seller can counter above the figure and the buyer can
+                    // still accept, so "maximum" promised a ceiling we do not
+                    // hold to. True, but it traded one wrong idea for a worse
+                    // one: "your price" reads as a bid someone can simply say
+                    // yes to, and a seller never sees this number at all.
+                    //
+                    // It is also what every other surface calls it, and one
+                    // field with two names across two portals is the same
+                    // drift we keep fixing in the code.
                     label:
-                      "Your price (optional)",
+                      "Max Price (optional)",
                     style: 1,
                     // CHANGED - min_length 1 and required: true were
                     // enforced by Discord itself, so the modal would refuse
@@ -3988,11 +3995,15 @@ function bindMemberWtbDiscordCreation(
               `**Product:** ${result.product_name}`,
               `**SKU:** ${result.sku}`,
               `**Size:** ${result.size}`,
-              `**Your price:** ${moneySmartValue(Number(
-                result.max_price
-              ).toFixed(2))} (${
-                result.inventory_type === "b2b" ? "excl. VAT" : "incl. VAT"
-              })`,
+              // Number(null) is 0, so a want-to-buy posted without a
+              // ceiling would have confirmed itself as "Max Price: 0.00".
+              result.max_price === null || result.max_price === undefined
+                ? "**Max Price:** none - every offer reaches you"
+                : `**Max Price:** ${moneySmartValue(Number(
+                    result.max_price
+                  ).toFixed(2))} (${
+                    result.inventory_type === "b2b" ? "excl. VAT" : "incl. VAT"
+                  })`,
               `**Buying Type:** ${getBuyingInventoryFilterLabel(
                 result.inventory_type
               )}`,
