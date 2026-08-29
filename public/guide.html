@@ -149,21 +149,9 @@
     text-transform:uppercase; color:var(--gold); margin-bottom:7px;
   }
   figure.shot img { max-width:100%; height:auto; display:block; border:1px solid var(--line); border-radius:var(--r-sm); }
-  figure.shot picture { display:block; }
-
   /* A shot narrower than the column would otherwise sit against the left
-     edge, which reads as a mistake rather than a choice. width:fit-content
-     lets the margins do the centring; without it the link fills the row and
-     the image stays left inside it. */
-  .shot-link {
-    display:block;
-    width:fit-content;
-    max-width:100%;
-    margin:0 auto;
-    border-radius:var(--r-sm);
-  }
-  .shot-link img { transition:border-color .15s ease; }
-  .shot-link:hover img { border-color:var(--gold); }
+     edge, which reads as a mistake rather than a choice. */
+  figure.shot picture { width:fit-content; max-width:100%; margin:0 auto; }
   figcaption { font-size:13.5px; color:var(--muted); line-height:1.55; }
 
   .chain-switch { display:flex; gap:8px; flex-wrap:wrap; }
@@ -757,19 +745,7 @@
     img.loading = "lazy";
     picture.appendChild(img);
 
-    // Click to open it full size. A shot taken wider than this column gets
-    // scaled down to fit, and small print does not survive that. The link
-    // is the way back to the real thing without having to hunt for the
-    // file.
-    const link = document.createElement("a");
-    link.href = desktop;
-    link.target = "_blank";
-    link.rel = "noopener";
-    link.title = "Open full size";
-    link.className = "shot-link";
-    link.appendChild(picture);
-
-    figure.querySelector(".shot-frame")?.replaceWith(link);
+    figure.querySelector(".shot-frame")?.replaceWith(picture);
   });
 
   // The chains share everything but their opening steps. A switch rather
