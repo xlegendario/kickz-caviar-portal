@@ -979,6 +979,39 @@ async function denyConsignmentSellerOffer(sellerOfferRecordId) {
     );
   }
 
+  // NEW - the Member WTB half of the same idea.
+  //
+  // A store order is re-armed above so the store gets a live Offer Request
+  // again. A Member WTB has no order to re-arm, so nothing happened at all:
+  // the offer went to Withdrawn and the want-to-buy sat there pointing at a
+  // consignor who had just said no.
+  //
+  // Running the auto-offer again is the equivalent - it picks the next
+  // cheapest source. It will not land on this consignor a second time
+  // because the picker now skips stock that has already refused on this
+  // record.
+  //
+  // Non-blocking: the deny itself has succeeded by this point and must not
+  // be undone because no replacement could be found. "No valid consignment
+  // stock found" simply means he was the last one.
+  const deniedMemberWtbId = firstLinkedRecordId(offerRecord.fields?.["Member WTBs"]);
+
+  if (deniedMemberWtbId) {
+    try {
+      const next = await createMemberWtbAutoOffer(deniedMemberWtbId);
+
+      console.log(
+        `🔁 Consignment deny on Member WTB ${deniedMemberWtbId}: offered on to the ` +
+          `next source (${next?.seller_offer_record_id || "none"}).`
+      );
+    } catch (err) {
+      console.log(
+        `🔁 Consignment deny on Member WTB ${deniedMemberWtbId}: no further ` +
+          `consignment source available (${err.message}).`
+      );
+    }
+  }
+
   return { ok: true, seller_offer_record_id: sellerOfferRecordId };
 }
 
@@ -9927,7 +9960,50 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     // getConsignmentComparePrice is the identical normalization the
     // Seller Offers side stores in "Offer Cost (Normalized)", so the
     // same consignment row wins as before.
+    // Stock this record has already asked and been refused on.
+    //
+    // The duplicate guard further down deliberately ignores Withdrawn and
+    // Denied offers, so without this the picker keeps landing on the same
+    // cheapest consignor: he says no, we ask him again, forever. Skipping
+    // him here is what lets the next-cheapest source get a turn.
+    //
+    // Member WTBs only. A store order that was refused may legitimately be
+    // asked again later - its price and ceiling move - and that behaviour is
+    // left exactly as it was.
+    const refusedInventoryIds = new Set();
+
+    if (source.kind === "member_wtb") {
+      const refused = await airtable(SELLER_OFFERS_TABLE)
+        .select({
+          filterByFormula: `OR({Withdrawn?}, {Denied?})`,
+          fields: ["Consignment Inventory ID", source.offerLink]
+        })
+        .all()
+        .catch((err) => {
+          console.error("Failed to read refused consignment offers:", err.message);
+          return [];
+        });
+
+      for (const record of refused) {
+        const linked = record.fields?.[source.offerLink] || [];
+
+        if (linked.includes(source.recordId)) {
+          const id = asText(record.fields?.["Consignment Inventory ID"]);
+
+          if (id) refusedInventoryIds.add(id);
+        }
+      }
+
+      if (refusedInventoryIds.size) {
+        console.log(
+          `ℹ️ Member WTB ${source.recordId}: skipping ${refusedInventoryIds.size} ` +
+            "consignment source(s) that already said no."
+        );
+      }
+    }
+
     const best = (inventoryRows || [])
+      .filter((row) => !refusedInventoryIds.has(row.id))
       .map((row) => {
         const sellerPrice = Number(row.selling_price_suggested);
 
