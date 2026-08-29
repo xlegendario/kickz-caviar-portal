@@ -1090,6 +1090,7 @@ body.modal-open {
   gap: 10px;
 }
 
+.guide-btn,
 .signup-btn,
 .login-btn,
 .profile-btn {
@@ -1323,6 +1324,7 @@ body.modal-open {
     border-radius: 18px;
   }
 
+  .guide-btn,
   .signup-btn,
   .login-btn {
     height: 42px;
@@ -2444,4 +2446,20 @@ body.kc-dialog-open {
   width: 22px;
   height: auto;
   flex: 0 0 auto;
+}
+
+/* De guide staat naast Sign up en Login maar vraagt niet om dezelfde
+   aandacht: dit is naslag, geen stap in een flow. Zelfde vorm en hoogte als
+   zijn buren, rustiger van kleur. */
+.guide-btn {
+  padding: 0 16px;
+  border: 1px solid #242424;
+  background: #101010;
+  color: #8a8a8a;
+  transition: 0.18s ease;
+}
+
+.guide-btn:hover {
+  color: #ffcc00;
+  border-color: rgba(255, 204, 0, 0.28);
 }
