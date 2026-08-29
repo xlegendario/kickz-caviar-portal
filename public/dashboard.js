@@ -219,18 +219,16 @@ function kcDialog(kind, message, options) {
 }
 
 function showAlert(message, options) {
-  // FIXED - twee vensters over elkaar bij dezelfde weigering.
+  // FIXED - two dialogs on top of each other for one refusal.
   //
-  // Wordt een handeling geweigerd omdat Discord ontbreekt, dan opent het
-  // omhulsel om fetch het Discord-venster. Maar de handler die de fout
-  // opving riep daarna gewoon zijn eigen showAlert aan, en dan staat er een
-  // kaal "OK"-blokje bovenop het venster dat de knop bevat die het probleem
-  // oplost. Je leest de melding twee keer en kunt de nuttige helft niet
-  // bereiken.
+  // When an action is refused because Discord is missing, the wrapper around
+  // fetch opens the Discord dialog. But the handler that caught the error
+  // then called its own showAlert anyway, putting a bare "OK" box on top of
+  // the dialog holding the button that fixes the problem. You read the
+  // message twice and cannot reach the useful half.
   //
-  // Dit hier in plaats van bij elk van de 32 aanroepers: een melding hoort
-  // sowieso niet over een openstaand Discord-venster heen te vallen, waar
-  // hij ook vandaan komt.
+  // Handled here rather than at each of the 32 callers: an alert should never
+  // land on top of an open Discord dialog, wherever it comes from.
   if (window.kcDiscordGate?.isOpen()) return Promise.resolve();
 
   return kcDialog("alert", message, options);
@@ -959,13 +957,13 @@ const COLUMN_SIZE_BY_HEADER = {
 // stretches to fill the cell, so measuring it means measuring your own
 // result.
 function fitDashboardColumns() {
-  const tabel = document.querySelector(".dashboard-table");
-  if (!tabel) return;
+  const table = document.querySelector(".dashboard-table");
+  if (!table) return;
 
   // On a narrow screen these are cards, and a card has no column width.
   if (window.matchMedia("(max-width: 768px)").matches) {
-    tabel.style.removeProperty("--action-width");
-    tabel.style.minWidth = "";
+    table.style.removeProperty("--action-width");
+    table.style.minWidth = "";
     return;
   }
 
@@ -994,7 +992,7 @@ function fitDashboardColumns() {
     }));
 
     if (widest > 0) {
-      tabel.style.setProperty("--action-width", Math.ceil(widest) + 36 + "px");
+      table.style.setProperty("--action-width", Math.ceil(widest) + 36 + "px");
     }
   }
 
@@ -1003,7 +1001,7 @@ function fitDashboardColumns() {
     .filter((th) => !th.classList.contains("dashboard-product-col"))
     .reduce((som, th) => som + th.getBoundingClientRect().width, 0);
 
-  tabel.style.minWidth = Math.round(fixedWidth + 275) + "px";
+  table.style.minWidth = Math.round(fixedWidth + 275) + "px";
 }
 
 window.addEventListener("resize", () => {
@@ -1175,8 +1173,8 @@ function filterVisibleRows() {
   // FIXED - this froze the browser, and consignors reported it as the site
   // crashing. The bug was the pair of statements this replaces:
   //
-  //     const bestaande = tableBody.querySelector("[data-search-notice]");
-  //     if (bestaande) bestaande.remove();
+  //     const existing = tableBody.querySelector("[data-search-notice]");
+  //     if (existing) existing.remove();
   //     if (term && hitCount === 0 && rowEls.length) { ...appendChild... }
   //
   // A MutationObserver on this same table calls filterVisibleRows on every
@@ -1204,20 +1202,20 @@ function filterVisibleRows() {
   // notice carries the term it was written for; if that still matches, it
   // stays untouched, no mutation is recorded, and the observer has nothing
   // to react to. Every path now settles after one pass.
-  const bestaande = tableBody.querySelector("[data-search-notice]");
-  const gewenst = term && hitCount === 0 && rowEls.length ? term : "";
+  const existing = tableBody.querySelector("[data-search-notice]");
+  const wanted = term && hitCount === 0 && rowEls.length ? term : "";
 
-  if (bestaande && bestaande.dataset.searchNotice === gewenst) return;
+  if (existing && existing.dataset.searchNotice === wanted) return;
 
-  if (bestaande) bestaande.remove();
+  if (existing) existing.remove();
 
-  if (gewenst) {
+  if (wanted) {
     const notice = document.createElement("tr");
 
     // The term doubles as the marker: it says both "this is the notice" and
     // "this is what it was written for". A plain "1" could not tell a
     // stale notice from a current one.
-    notice.dataset.searchNotice = gewenst;
+    notice.dataset.searchNotice = wanted;
 
     notice.innerHTML =
       '<td colspan="20" style="padding:28px 14px;text-align:center;opacity:.7">' +
@@ -1233,11 +1231,11 @@ function filterVisibleRows() {
 // than to whatever opens it, so this sits in one place for every dialog in
 // this portal.
 (function () {
-  const VENSTERS = ".dashboard-modal";
-  const SLUITKNOPPEN = ".dashboard-modal-close";
+  const DIALOGS = ".dashboard-modal";
+  const CLOSE_BUTTONS = ".dashboard-modal-close";
 
   function openDialogs() {
-    return Array.from(document.querySelectorAll(VENSTERS))
+    return Array.from(document.querySelectorAll(DIALOGS))
       .filter((v) => getComputedStyle(v).display !== "none");
   }
 
@@ -1250,7 +1248,7 @@ function filterVisibleRows() {
   // Watch only the dialogs, not the whole page: the tables change classes
   // constantly and none of that needs to trigger anything here.
   const observer = new MutationObserver(syncOpenState);
-  document.querySelectorAll(VENSTERS).forEach((v) => {
+  document.querySelectorAll(DIALOGS).forEach((v) => {
     observer.observe(v, { attributes: true, attributeFilter: ["class", "style"] });
   });
 
@@ -1263,7 +1261,7 @@ function filterVisibleRows() {
     // Close the topmost dialog through its own close button, so whatever
     // cleanup is attached to it still runs.
     const topDialog = open[open.length - 1];
-    const btnEl = topDialog.querySelector(SLUITKNOPPEN);
+    const btnEl = topDialog.querySelector(CLOSE_BUTTONS);
 
     if (btnEl) {
       btnEl.click();
@@ -1288,22 +1286,22 @@ function filterVisibleRows() {
   //
   // Capture phase, because the close handlers sit on the backdrops
   // themselves and this has to get there first.
-  const KAARTEN = ".dashboard-modal-card, .dashboard-login-card";
+  const CARDS = ".dashboard-modal-card, .dashboard-login-card";
 
-  let persBegon = null;
+  let pressStarted = null;
 
   document.addEventListener("mousedown", (evt) => {
-    persBegon = evt.target;
+    pressStarted = evt.target;
   }, true);
 
   document.addEventListener("click", (evt) => {
-    if (!persBegon?.closest) return;
+    if (!pressStarted?.closest) return;
 
-    const begonInKaart = persBegon.closest(KAARTEN);
-    if (!begonInKaart) return;
+    const startedInCard = pressStarted.closest(CARDS);
+    if (!startedInCard) return;
 
-    const eindigdeInKaart = evt.target?.closest?.(KAARTEN);
-    if (eindigdeInKaart) return;
+    const endedInCard = evt.target?.closest?.(CARDS);
+    if (endedInCard) return;
 
     evt.stopPropagation();
     evt.preventDefault();
@@ -3820,7 +3818,7 @@ function renderCsvImportStatus(job) {
     return;
   }
 
-  const overgeslagen = Array.isArray(job.skipped_json) ? job.skipped_json : [];
+  const skippedRows = Array.isArray(job.skipped_json) ? job.skipped_json : [];
 
   if (job.status === "completed") {
     // CHANGED — two things.
@@ -3840,28 +3838,28 @@ function renderCsvImportStatus(job) {
       return;
     }
 
-    if (overgeslagen.length) {
+    if (skippedRows.length) {
       el.classList.add("skipped");
       el.title = "Click to see which rows were skipped";
 
       el.innerHTML = `
         <span class="csv-import-status-mark" aria-hidden="true">!</span>
         <span class="csv-import-status-text" role="button" tabindex="0">
-          ${processed - overgeslagen.length}/${total} imported,
-          ${overgeslagen.length} skipped
+          ${processed - skippedRows.length}/${total} imported,
+          ${skippedRows.length} skipped
         </span>
         <button type="button" class="csv-import-status-dismiss"
                 aria-label="Dismiss">&times;</button>
       `;
 
-      const openen = () => showSkippedRows(overgeslagen);
+      const showSkipped = () => showSkippedRows(skippedRows);
       const messageText = el.querySelector(".csv-import-status-text");
 
-      messageText.addEventListener("click", openen);
+      messageText.addEventListener("click", showSkipped);
       messageText.addEventListener("keydown", (evt) => {
         if (evt.key === "Enter" || evt.key === " ") {
           evt.preventDefault();
-          openen();
+          showSkipped();
         }
       });
 
@@ -7487,16 +7485,16 @@ dashboardLoginForm.addEventListener("submit", async (event) => {
     
     syncAuthUi();
 
-    // FIXED - dit ontbrak, en daardoor deed de popup precies niets voor de
-    // persoon die hem het hardst nodig heeft: wie NET inlogt.
+    // FIXED - this was missing, so the dialog did nothing at all for the
+    // person who needs it most: someone who has JUST signed in.
     //
-    // De controle hing alleen aan de sessie-hervalidatie, en die begint met
-    // "geen seller in localStorage? dan klaar". Bij een verse login is dat
-    // op het moment van laden nog zo, dus die keerde meteen om en er werd
-    // nooit gekeken. Pas bij de volgende pagina-lading verscheen de popup.
+    // The check hung only off session revalidation, which starts with "no
+    // seller in localStorage? then we are done". On a fresh sign-in that is
+    // still true at load time, so it turned around immediately and never
+    // looked. The dialog only appeared on the next page load.
     //
-    // Het antwoord van de login draagt discord_id en discord_in_server al
-    // met zich mee, dus er is hier geen extra verzoek voor nodig.
+    // The login response already carries discord_id and discord_in_server,
+    // so no extra request is needed here.
     window.kcDiscordGate?.schedule(data.seller);
   } catch (err) {
     dashboardLoginError.textContent = err.message;
@@ -7544,8 +7542,8 @@ dashboardForgotPasswordBtn.addEventListener("click", async () => {
 });
 
 dashboardLogoutBtn.addEventListener("click", async () => {
-  // De sessiecookie is httpOnly, dus alleen de server kan hem wissen.
-  // Zonder deze call bleef de seller server-side ingelogd.
+  // The session cookie is httpOnly, so only the server can clear it.
+  // Without this call the seller stayed signed in server-side.
   try {
     await fetch("/api/logout", { method: "POST" });
   } catch (err) {
@@ -7587,9 +7585,9 @@ dashboardSearchInput.addEventListener("input", () => {
 // NEW — a cross to clear the search field in one go. Built here rather than
 // in the HTML, so no extra file has to ship.
 (function () {
-  const veld = dashboardSearchInput;
-  const rowEl = veld && veld.closest(".dashboard-search-wrap");
-  if (!veld || !rowEl) return;
+  const field = dashboardSearchInput;
+  const rowEl = field && field.closest(".dashboard-search-wrap");
+  if (!field || !rowEl) return;
 
   const btnEl = document.createElement("button");
   btnEl.type = "button";
@@ -7599,17 +7597,17 @@ dashboardSearchInput.addEventListener("input", () => {
   rowEl.appendChild(btnEl);
 
   function syncClearButton() {
-    rowEl.classList.toggle("has-text", !!veld.value);
+    rowEl.classList.toggle("has-text", !!field.value);
   }
 
   btnEl.addEventListener("click", () => {
-    veld.value = "";
+    field.value = "";
     syncClearButton();
     filterVisibleRows();
-    veld.focus();
+    field.focus();
   });
 
-  veld.addEventListener("input", syncClearButton);
+  field.addEventListener("input", syncClearButton);
   syncClearButton();
 })();
 
@@ -7730,13 +7728,13 @@ function showDashboardToast(message, type = "success") {
     setTimeout(() => toast.remove(), 250);
   }, 2600);
 }
-/* Discord verplicht - het venster en de logica staan in
- * public/discord-gate.js, gedeeld met de home page. Hier alleen de twee
- * momenten waarop we weten wie er kijkt. */
+/* Discord is required - the dialog and the logic live in
+ * public/discord-gate.js, shared with the home page. Only the two moments
+ * where we know who is looking are handled here. */
 
-// Sessie-revalidatie. localStorage ("kc_seller") overleeft het verlopen of
-// wissen van de sessiecookie, waardoor de UI ingelogd bleef lijken terwijl elke
-// schrijfactie een 401 kreeg. Deze check brengt beide weer in lijn.
+// Session revalidation. localStorage ("kc_seller") outlives the session
+// cookie expiring or being cleared, which left the UI looking signed in while
+// every write got a 401. This check brings the two back in line.
 (async () => {
   if (!dashboardSeller) return;
 
@@ -7759,26 +7757,27 @@ function showDashboardToast(message, type = "success") {
       localStorage.setItem("kc_seller", JSON.stringify(dashboardSeller));
       syncAuthUi();
 
-      // Bewust op wat /api/session zojuist teruggaf, niet op localStorage.
-      // Wie na het inloggen uit de server stapt staat daar nog als lid in.
+      // Deliberately on what /api/session just returned, not on localStorage.
+      // Someone who leaves the server after signing in still shows as a member
+      // there.
       window.kcDiscordGate?.schedule(data.seller);
     }
   } catch (err) {
-    // Netwerkfout: laat de bestaande staat met rust.
+    // Network error: leave the existing state alone.
   }
 })();
 
-// De Discord-koppeling stuurt de seller hier terug met ?discord of
-// ?discord_error. Zonder deze melding landt hij op een dashboard dat er
-// precies hetzelfde uitziet als daarvoor en weet hij niet of het gelukt is.
+// The Discord link sends the seller back here with ?discord or
+// ?discord_error. Without this message they land on a dashboard that looks
+// exactly as it did before and have no idea whether it worked.
 (() => {
   const discordParams = new URLSearchParams(window.location.search);
   const discordOk = discordParams.get("discord");
-  const discordFout = discordParams.get("discord_error");
+  const discordError = discordParams.get("discord_error");
 
-  if (!discordOk && !discordFout) return;
+  if (!discordOk && !discordError) return;
 
-  const DISCORD_FOUTEN = {
+  const DISCORD_ERRORS = {
     cancelled: "You cancelled the Discord link. You can try again whenever you want.",
     invalid_state: "That link expired. Start the Discord link again from your dashboard.",
     not_configured: "Discord linking is not configured yet. Please contact support.",
@@ -7789,44 +7788,44 @@ function showDashboardToast(message, type = "success") {
     failed: "Something went wrong while linking Discord. Please try again."
   };
 
-  let bericht;
-  let geslaagd = false;
+  let message;
+  let succeeded = false;
 
   if (discordOk === "linked") {
-    bericht = "Discord linked. You have been added to the Kickz Caviar server.";
-    geslaagd = true;
+    message = "Discord linked. You have been added to the Kickz Caviar server.";
+    succeeded = true;
   } else if (discordOk === "already_member") {
-    bericht = "Discord linked. You were already in the server.";
-    geslaagd = true;
-  } else if (discordFout === "already_linked") {
-    // Het Seller ID erbij, zodat de seller weet met welk profiel hij moet
-    // inloggen in plaats van alleen te horen dát het misging.
-    const bestaandSellerId = discordParams.get("seller_id");
+    message = "Discord linked. You were already in the server.";
+    succeeded = true;
+  } else if (discordError === "already_linked") {
+    // The Seller ID alongside it, so the seller knows which profile to sign
+    // in with instead of only hearing THAT it went wrong.
+    const existingSellerId = discordParams.get("seller_id");
 
-    bericht = bestaandSellerId
-      ? "That Discord account is already linked to seller " + bestaandSellerId +
+    message = existingSellerId
+      ? "That Discord account is already linked to seller " + existingSellerId +
         ". Log in with that profile instead — you do not need a second one."
       : "That Discord account is already linked to another seller profile. Log in with that profile instead.";
   } else {
-    bericht = DISCORD_FOUTEN[discordFout] || "Something went wrong while linking Discord.";
+    message = DISCORD_ERRORS[discordError] || "Something went wrong while linking Discord.";
   }
 
-  const balk = document.createElement("div");
-  balk.className = "discord-banner " + (geslaagd ? "is-ok" : "is-off");
-  balk.textContent = bericht;
+  const banner = document.createElement("div");
+  banner.className = "discord-banner " + (succeeded ? "is-ok" : "is-off");
+  banner.textContent = message;
 
-  const sluit = document.createElement("button");
-  sluit.type = "button";
-  sluit.className = "discord-banner-close";
-  sluit.setAttribute("aria-label", "Dismiss");
-  sluit.textContent = "×";
-  sluit.addEventListener("click", () => balk.remove());
-  balk.appendChild(sluit);
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "discord-banner-close";
+  closeButton.setAttribute("aria-label", "Dismiss");
+  closeButton.textContent = "×";
+  closeButton.addEventListener("click", () => banner.remove());
+  banner.appendChild(closeButton);
 
-  document.body.prepend(balk);
+  document.body.prepend(banner);
 
-  // De parameters uit de URL halen, anders komt de melding bij elke refresh
-  // terug alsof er opnieuw iets gebeurd is.
+  // Strip the parameters from the URL, otherwise the message returns on every
+  // refresh as though something had happened again.
   for (const key of ["discord", "discord_error", "seller_id"]) discordParams.delete(key);
 
   const rest = discordParams.toString();
