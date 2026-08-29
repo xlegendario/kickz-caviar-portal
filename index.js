@@ -9975,10 +9975,29 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     // shop sticker adds 12.10 to keep 10. Subtracting the bare 10 left us
     // with 10 / 1.21 = 8.26 while the price the buyer was shown promised a
     // full 10.
+    // CHANGED - a Member WTB without a ceiling still gets an offer.
+    //
+    // Max Price became optional on 29-08-2026, and "no figure" was read here
+    // as "invalid": the route answered 400 and the want-to-buy got no
+    // consignment offer at all. That is backwards - no ceiling means every
+    // consignor qualifies, so the cheapest one should be offered, not none.
+    //
+    // Expressed as "our ceiling is whatever he asks": the comparison below
+    // then always matches, so he is asked to confirm his own price rather
+    // than to come down to a limit that does not exist. The counter branch
+    // never runs, which is right - there is nothing to negotiate him down
+    // to. From there it is the normal flow: the buyer sees the offer and
+    // accepts, counters or denies.
+    //
+    // Store orders are untouched; they have a Maximum Buying Price by
+    // definition and keep their own calculation.
+    const hasCeiling =
+      Number.isFinite(maximumBuyingPrice) && maximumBuyingPrice > 0;
+
     const calculatedOfferPrice = source.kind === "member_wtb"
-      ? (Number.isFinite(maximumBuyingPrice) && maximumBuyingPrice > 0
+      ? (hasCeiling
           ? Math.max(0, maximumBuyingPrice - getMemberWtbMargin(orderFields) * 1.21)
-          : null)
+          : best.sellerComparePrice)
       : calculateConsignmentOfferPrice(maximumBuyingPrice, orderFields);
 
     if (calculatedOfferPrice === null) {
@@ -9986,6 +10005,14 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         error: "Invalid Maximum Buying Price",
         seller_offer_record_id: createdOffer.id
       });
+    }
+
+    if (!hasCeiling && source.kind === "member_wtb") {
+      console.log(
+        `ℹ️ Member WTB ${source.recordId} has no Max Price - offering the ` +
+          `cheapest consignment stock at ${moneySmartValue(best.sellerPrice)} ` +
+          `${best.row.vat_type} without a ceiling.`
+      );
     }
 
     // Same test the current embed builder uses: both sides on the
