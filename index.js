@@ -2893,9 +2893,31 @@ async function handleMemberWtbPaymentGate(
       memberWtbRecordId
     );
 
-    await sendMemberWtbDealUpdateAfterPayment(
-      memberWtbRecordId
-    );
+    // NEW - was an unguarded await, and that hid a real failure.
+    //
+    // On MWTB-000402 (29-08-2026) the seller got the "waiting for payment"
+    // line and no Ready To Ship step. Whatever went wrong in here left no
+    // trace: a throw would have turned a completed deal into a 500 for the
+    // buyer, and a silent skip returned something nobody was reading.
+    //
+    // Both outcomes are logged now, with the reason attached. The deal is
+    // already done by this point, so failing to send an embed must not
+    // undo it - but it has to be findable.
+    try {
+      const update = await sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId);
+
+      if (update?.skipped) {
+        console.error(
+          `⚠️ Member WTB ${memberWtbRecordId}: seller got no Ready To Ship step -`,
+          update.reason
+        );
+      }
+    } catch (updateErr) {
+      console.error(
+        `❌ Member WTB ${memberWtbRecordId}: Ready To Ship step failed -`,
+        updateErr.message
+      );
+    }
 
     return {
       status: "lojiq_portal_payment"
