@@ -934,7 +934,10 @@ const COLUMN_SIZE_BY_HEADER = {
   "Order ID": "col-code",
   "Payment": "col-status",
   "Payout": "col-money",
-  "Quantity": "col-short",
+  // CHANGED - col-short gives 48px after padding and "QUANTITY" is one
+  // unbreakable word of about 65px, so the header could not wrap and did
+  // not fit. The value is small; the label decides the width here.
+  "Quantity": "col-default",
   "SKU": "col-code",
   "Seller's Last Offer": "col-money",
   "Seller's Offer": "col-money",
