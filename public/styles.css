@@ -1957,6 +1957,12 @@ body.modal-open {
   justify-content: flex-end;
 }
 
+/* On a wide screen ETA, sources and quantity each have a column, so the
+   one-line summary is redundant. It takes over below. */
+.buying-size-meta {
+  display: none;
+}
+
 @media (max-width: 840px) {
   .buying-inventory-filter {
     width: 100%;
@@ -1967,35 +1973,82 @@ body.modal-open {
     padding: 0 10px;
   }
 
+  /* CHANGED - one line per size instead of a labelled block per field.
+
+     Every column used to become its own captioned row on a phone: Size,
+     Lowest Price, ETA, Sources, Available Qty, then two full-width
+     buttons. Six lines for one size, so a shopper saw two of them and had
+     to scroll to compare a third - on the screen whose whole purpose is
+     comparing sizes.
+
+     Now it reads like the rest of the app: number, price and the two
+     buttons on one line, detail underneath in small type. */
   .buying-size-table-head {
     display: none;
   }
 
   .buying-size-table-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(38px, auto) 1fr auto;
+    column-gap: 10px;
+    row-gap: 6px;
+    padding: 12px 14px;
+    border-radius: 14px;
   }
 
+  /* The captions were the layout. Without them the values speak for
+     themselves: a size is a number, a price carries its euro sign. */
   .buying-size-table-row > div::before {
-    display: block;
-    margin-bottom: 4px;
-    color: #777;
-    font-size: 11px;
-    font-weight: 900;
-    text-transform: uppercase;
+    display: none;
   }
 
-  .buying-size-table-row > div:nth-child(1)::before { content: "Size"; }
-  .buying-size-table-row > div:nth-child(2)::before { content: "Lowest Price"; }
-  .buying-size-table-row > div:nth-child(3)::before { content: "ETA"; }
-  .buying-size-table-row > div:nth-child(4)::before { content: "Sources"; }
-  .buying-size-table-row > div:nth-child(5)::before { content: "Available Qty"; }
+  /* ETA, sources and quantity are summarised on one line instead. */
+  .buying-size-table-row > div:nth-child(3),
+  .buying-size-table-row > div:nth-child(4),
+  .buying-size-table-row > div:nth-child(5) {
+    display: none;
+  }
 
-  .buying-size-actions {
-    justify-content: stretch;
+  /* Placed rather than flowed: the summary sits after the buttons in the
+     markup, and auto-placement would push them onto a third row. */
+  .buying-size-table-row .buying-size-actions {
+    grid-row: 1;
+    grid-column: 3;
+    justify-content: flex-end;
+  }
+
+  .buying-size-table-row .buying-size-meta {
+    display: block;
+    grid-row: 2;
+    grid-column: 1 / -1;
+    color: #8a8a8a;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .buying-size-main,
+  .buying-size-price {
+    font-size: 16px;
   }
 
   .buying-size-actions button {
-    flex: 1;
+    flex: 0 0 auto;
+    padding: 0 14px;
+    font-size: 13px;
+  }
+
+  /* CHANGED - 44px is a headline size. A name like "Jordan 4 Retro
+     Metallic Gold (Women's)" ran straight off the side of the card, and a
+     longer one would only be worse. */
+  .buying-modal-title-block h2 {
+    font-size: 20px;
+    line-height: 1.2;
+    letter-spacing: -0.3px;
+    margin: 0 0 6px;
+    overflow-wrap: anywhere;
+  }
+
+  .buying-modal-header {
+    margin-bottom: 16px;
   }
 }
 
