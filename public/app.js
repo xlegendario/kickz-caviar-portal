@@ -280,6 +280,12 @@ let buyingSort = localStorage.getItem("kc_buying_sort") || "az";
 let selectedSort = currentMainMode === "buying" ? buyingSort : sellingSort;
 sortFilter.value = selectedSort;
 let currentBuyingProducts = [];
+// NEW - size filter on the Buying page, matching the one the Lojiq shop
+// already has. Kept in memory rather than localStorage: the inventory type
+// is a lasting preference, a size is what you happen to be sourcing right
+// now, and a remembered size would silently hide stock on your next visit.
+let buyingSize = "";
+
 let buyingInventoryType = localStorage.getItem("kc_buying_inventory_type") || "all";
 if (!["all", "b2b", "private"].includes(buyingInventoryType)) {
   buyingInventoryType = "all";
@@ -323,6 +329,85 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
+/**
+ * Sorting sizes the way a shoe rack does, not the way a computer does.
+ *
+ * Plain alphabetical puts 10 before 9 and 41 1/3 before 41. Same rule the
+ * Lojiq shop uses: a fraction written after a whole number adds to it, a
+ * bare fraction is the value itself.
+ */
+const BUYING_LETTER_SIZES = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"];
+
+function buyingSizeOrder(size) {
+  const text = String(size).trim();
+
+  // Apparel first, in the order a rack is arranged. Without this they fall
+  // back to alphabetical and you get L, M, S, XL, XS - which is every
+  // letter size in the wrong place at once. Negative values keep them as a
+  // block ahead of the numeric sizes instead of mixed among them.
+  const upper = text.toUpperCase();
+  const parts = upper.split("/").map((piece) => BUYING_LETTER_SIZES.indexOf(piece.trim()));
+
+  if (parts.length && parts.every((index) => index >= 0)) {
+    // "L/XL" sits between the two it names.
+    const average = parts.reduce((sum, index) => sum + index, 0) / parts.length;
+
+    return average - 100;
+  }
+
+  const whole = parseFloat(text) || 0;
+
+  const fraction = text.match(/(\d+)\s*\/\s*(\d+)/);
+  const extra = fraction ? Number(fraction[1]) / Number(fraction[2]) : 0;
+
+  return /^\s*\d+\s*\/\s*\d+\s*$/.test(text) ? extra : whole + extra;
+}
+
+/**
+ * The options come from everything that was loaded, never from what is
+ * currently shown. Otherwise picking a size empties the list you would use
+ * to pick a different one.
+ */
+function renderBuyingSizeFilter() {
+  const sizes = new Set();
+
+  for (const product of currentBuyingProducts) {
+    for (const item of product.sizes || []) {
+      if (item?.size) sizes.add(String(item.size));
+    }
+  }
+
+  if (!sizes.size) return "";
+
+  const sorted = [...sizes].sort(
+    (a, b) => buyingSizeOrder(a) - buyingSizeOrder(b) || a.localeCompare(b)
+  );
+
+  // A size that has sold out since it was chosen would otherwise leave the
+  // select showing a value it no longer holds, and an empty grid with no
+  // way back.
+  if (buyingSize && !sizes.has(buyingSize)) buyingSize = "";
+
+  return `
+    <select class="buying-size-filter" data-buying-size-filter>
+      <option value="">All sizes</option>
+      ${sorted.map((size) => `
+        <option value="${escapeHtml(size)}" ${size === buyingSize ? "selected" : ""}>
+          ${escapeHtml(size)}
+        </option>
+      `).join("")}
+    </select>
+  `;
+}
+
+function buyingProductsForDisplay() {
+  if (!buyingSize) return currentBuyingProducts;
+
+  return currentBuyingProducts.filter((product) =>
+    (product.sizes || []).some((item) => String(item.size) === buyingSize)
+  );
+}
+
 function renderBuyingInventoryTypeFilter() {
   return `
     <div class="buying-inventory-filter">
@@ -463,10 +548,27 @@ function renderBuyingProducts() {
       </div>
     `
     : "";
+  const shown = buyingProductsForDisplay();
+
+  // The filter bar stays put even when nothing matches. Removing it would
+  // leave someone staring at "no stock" with no way to widen the search
+  // again - the thing that caused it is the thing that has to remain.
+  const empty = shown.length
+    ? ""
+    : `
+      <div class="empty-state">
+        No buying stock in size ${escapeHtml(buyingSize)}.
+      </div>
+    `;
+
   dealsGrid.innerHTML = `
-    ${renderBuyingInventoryTypeFilter()}
+    <div class="buying-filter-row">
+      ${renderBuyingInventoryTypeFilter()}
+      ${renderBuyingSizeFilter()}
+    </div>
     ${b2bNotice}
-    ${currentBuyingProducts.map(renderBuyingProductCard).join("")}
+    ${empty}
+    ${shown.map(renderBuyingProductCard).join("")}
   `;
 }
 function openBuyingProductModal(productKey) {
@@ -722,6 +824,19 @@ function closeBuyingActionFlow() {
   selectedBuyingAction = null;
 }
 window.openBuyingProductModal = openBuyingProductModal;
+// The select is rebuilt on every render, so the listener sits on the grid
+// rather than on the element itself.
+dealsGrid.addEventListener("change", (event) => {
+  const sizeFilter = event.target.closest("[data-buying-size-filter]");
+  if (!sizeFilter) return;
+
+  buyingSize = sizeFilter.value;
+
+  // No refetch: the size is chosen from stock that is already loaded, so
+  // this is purely a matter of what to show.
+  renderBuyingProducts();
+});
+
 dealsGrid.addEventListener("click", (event) => {
   const inventoryTypeButton = event.target.closest("[data-buying-inventory-type]");
   if (inventoryTypeButton) {
