@@ -25045,11 +25045,28 @@ app.get("/api/dashboard/counts", async (req, res) => {
       getConsignmentPendingConfirmOfferIds()
     ]);
 
+    // FIXED - one negotiation was counted twice.
+    //
+    // A Seller Offer that has since moved into a counter round still
+    // matches the fresh query below, and its round matches the one after
+    // it, so the badge added both. Consignment showed 2 while all three
+    // pills together held one row: the auto-offer plus the round the store
+    // opened on it. Seen on MWTB-000403, 29-08-2026.
+    //
+    // The tab agrees with this: its Open pill drops an offer as soon as a
+    // round exists, because from then on the round IS the negotiation.
+    const offerIdsWithRounds = new Set(
+      wtbCounterOffersRecords
+        .map((record) => asText(record.fields?.["Seller Offer Record ID"]))
+        .filter(Boolean)
+    );
+
     function countOffersForScope(scope) {
       const fresh = wtbOpenOffersRecords.filter(
         (record) =>
           linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId) &&
           !pendingConfirmOfferIds.has(record.id) &&
+          !offerIdsWithRounds.has(record.id) &&
           matchesOfferScope(!!asText(record.fields?.["Consignment Inventory ID"]), scope)
       ).length;
 
