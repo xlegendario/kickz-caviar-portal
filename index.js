@@ -4973,6 +4973,72 @@ function bindConsignmentDiscordButtons(client) {
         "Closed At": new Date().toISOString()
       });
 
+      // Same rule as the two dashboard accept routes: a consignor accepting
+      // needs no deal channel of his own.
+      //
+      // This button lives on the counter embed sent to sellerDiscordId, so
+      // whoever clicks it IS the seller - there is no buyer path through
+      // here to protect, unlike accept-previous.
+      const sellerOfferForConsignment = await airtable(SELLER_OFFERS_TABLE)
+        .find(sellerOfferRecordId)
+        .catch(() => null);
+
+      const consignmentInventoryIdForButton = asText(
+        sellerOfferForConsignment?.fields?.["Consignment Inventory ID"]
+      );
+
+      if (consignmentInventoryIdForButton) {
+        const processResponse = await fetch(
+          `${APP_PUBLIC_BASE_URL}/api/member-wtb/process-seller-offer`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-kc-secret": process.env.KC_PORTAL_SECRET
+            },
+            body: JSON.stringify({
+              member_wtb_record_id: memberWtbRecordId,
+              seller_offer_record_id: sellerOfferRecordId,
+              override_purchase_price: acceptedPayout,
+              override_vat_type: acceptedVatType
+            })
+          }
+        );
+
+        const processData = await processResponse.json().catch(() => ({}));
+
+        if (!processResponse.ok) {
+          console.error("member_wtb_counter_accept consignment finalise failed:", {
+            status: processResponse.status,
+            processData
+          });
+
+          await safeEditInteractionMessage(interaction, {
+            content: `❌ Failed to accept offer. ${processData.error || ""}`,
+            embeds: interaction.message.embeds,
+            components: []
+          }).catch(() => {});
+
+          return;
+        }
+
+        console.log(
+          `✅ Consignor accepted counter ${counterOfferRecordId} on ` +
+            `${memberWtbRecordId} from Discord — finalised in the portal, no ` +
+            `deal channel (payout ${moneySmartValue(acceptedPayout)} ${acceptedVatType}).`
+        );
+
+        await safeEditInteractionMessage(interaction, {
+          content:
+            "✅ Counter offer accepted. The pair is written off your consignment " +
+            "stock and you will get the shipping step in your own Deal Updates channel.",
+          embeds: interaction.message.embeds,
+          components: []
+        }).catch(() => {});
+
+        return;
+      }
+
       const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
 
       if (!wtbBotBaseUrl) {
@@ -17683,6 +17749,66 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/accept-previous", async (re
         "Denied At": new Date().toISOString(),
         "Closed At": new Date().toISOString()
       }).catch((err) => console.error("Failed to close abandoned own counter (non-blocking):", err));
+      }
+
+      // Same rule as in seller-accept: a consignor accepting his own round
+      // needs no deal channel, because this route settles the deal itself.
+      //
+      // Guarded on callerIsRoundSeller and NOT on the offer alone. This one
+      // endpoint serves both sides - see the note at the top - and when the
+      // BUYER accepts, the seller still has to confirm he holds the pair.
+      // That confirmation is what the channel and its Process Deal button
+      // are for, so the buyer path keeps them. Reading only the Seller
+      // Offer would have taken them away from the buyer path too, which is
+      // exactly how MWTB-000390 broke.
+      const sellerOfferForConsignment = callerIsRoundSeller && !callerIsBuyer
+        ? await airtable(SELLER_OFFERS_TABLE).find(sellerOfferRecordId).catch(() => null)
+        : null;
+
+      const consignmentInventoryIdForPrevious = asText(
+        sellerOfferForConsignment?.fields?.["Consignment Inventory ID"]
+      );
+
+      if (consignmentInventoryIdForPrevious) {
+        const processResponse = await fetch(
+          `${APP_PUBLIC_BASE_URL}/api/member-wtb/process-seller-offer`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-kc-secret": process.env.KC_PORTAL_SECRET
+            },
+            body: JSON.stringify({
+              member_wtb_record_id: linkedMemberWtbIdForPrevious,
+              seller_offer_record_id: sellerOfferRecordId,
+              override_purchase_price: acceptedPayout,
+              override_vat_type: acceptedVatType
+            })
+          }
+        );
+
+        const processData = await processResponse.json().catch(() => ({}));
+
+        if (!processResponse.ok) {
+          return res.status(processResponse.status).json({
+            error: processData.error || "Could not finalise this consignment deal.",
+            details: processData.details
+          });
+        }
+
+        console.log(
+          `✅ Consignor accepted his standing round ${acceptTargetId} on ` +
+            `${linkedMemberWtbIdForPrevious} — finalised in the portal, no deal ` +
+            `channel (payout ${moneySmartValue(acceptedPayout)} ${acceptedVatType}).`
+        );
+
+        return res.json({
+          ok: true,
+          consignment: true,
+          member_wtb_record_id: linkedMemberWtbIdForPrevious,
+          seller_offer_record_id: sellerOfferRecordId,
+          inventory_unit_record_id: processData.inventory_unit_record_id || null
+        });
       }
 
       const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
