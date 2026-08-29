@@ -151,7 +151,17 @@
   figure.shot img { max-width:100%; height:auto; display:block; border:1px solid var(--line); border-radius:var(--r-sm); }
   figure.shot picture { display:block; }
 
-  .shot-link { display:block; border-radius:var(--r-sm); }
+  /* A shot narrower than the column would otherwise sit against the left
+     edge, which reads as a mistake rather than a choice. width:fit-content
+     lets the margins do the centring; without it the link fills the row and
+     the image stays left inside it. */
+  .shot-link {
+    display:block;
+    width:fit-content;
+    max-width:100%;
+    margin:0 auto;
+    border-radius:var(--r-sm);
+  }
   .shot-link img { transition:border-color .15s ease; }
   .shot-link:hover img { border-color:var(--gold); }
   figcaption { font-size:13.5px; color:var(--muted); line-height:1.55; }
