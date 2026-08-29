@@ -2548,6 +2548,20 @@ body.modal-open {
   box-shadow: 0 0 0 1px rgba(255,204,0,0.35) inset;
 }
 
+/* A VAT type this seller is not allowed to sell.
+
+   Shown rather than removed: a seller who knows VAT0 exists should see
+   that it is not theirs, not a form that quietly has one option fewer
+   than the one they saw last month. The title attribute carries the
+   reason. */
+.consignment-vat-card.is-unavailable {
+  opacity: 0.38;
+  cursor: not-allowed;
+  border-color: #2a2a2a;
+  background: #0d0d0d;
+  box-shadow: none;
+}
+
 .consignment-size-rows {
   display: grid;
   gap: 14px;
