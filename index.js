@@ -748,6 +748,24 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
       return { ok: false, reason: "member_wtb_finalise_failed" };
     }
 
+    // Link the unit back onto the Seller Offer.
+    //
+    // The store-order path below does this, and that field is its
+    // double-click guard: "already confirmed" is read straight off it. It is
+    // also what getConsignmentPendingConfirmOfferIds uses to decide an offer
+    // is no longer waiting on an answer, so leaving it empty kept a finished
+    // deal counted as pending in the badges.
+    if (processData.inventory_unit_record_id) {
+      await airtable(SELLER_OFFERS_TABLE).update(sellerOfferRecordId, {
+        "Linked Inventory Unit": [processData.inventory_unit_record_id]
+      }).catch((err) =>
+        console.error(
+          `Failed to link unit ${processData.inventory_unit_record_id} to ${sellerOfferRecordId}:`,
+          err.message
+        )
+      );
+    }
+
     console.log(
       `✅ Consignment confirm on Member WTB ${memberWtbRecordIdForConfirm} — ` +
         `seller offer ${sellerOfferRecordId} finalised in the portal.`
