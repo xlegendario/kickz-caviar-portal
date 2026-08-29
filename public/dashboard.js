@@ -4627,30 +4627,21 @@ async function loadDashboardData() {
         open: count
       };
 
-      // CHANGED - this ran for consignment only, so the Want To Buys and
-      // Buying badges kept whatever the counts endpoint had guessed and
-      // never agreed with the list on screen. The stat tile reads the
-      // same cache, which is why it showed 0 next to a table with a row
-      // in it.
+      // REVERTED - this used to write the Open pill count over the
+      // section total, and that is what made the badge lie.
       //
-      // The Open pill is the authoritative number for every section;
-      // summing all three pills would count one negotiation twice.
-      dashboardCountsCache[activeSection] = {
-        ...(dashboardCountsCache[activeSection] || {}),
-        offers: count
-      };
-
-      setNavCount(
-        document.querySelector(`[data-count-key="${activeSection}:offers"]`),
-        count
-      );
-
-      if (activeSection === "consignment") {
-        setConsignmentCount("offers", count);
-      }
-
-      renderStats();
-
+      // It was added to stop a tile reading 0 next to a table with rows in
+      // it, but it only ever runs in this branch - the Open pill - so the
+      // total became "however many are Open" and stopped counting anything
+      // that had been countered. Land on Offers with Open empty and the
+      // tile went to 0 while Countered had a row waiting for you. Seen on
+      // Consignment → Offers, 29-08-2026.
+      //
+      // /api/dashboard/counts already answers this properly: fresh offers
+      // plus every Counter Offers round still Open, which is exactly
+      // "things on my plate in this section". Two numbers for one question
+      // is what broke it, so the browser no longer computes a second one -
+      // it only fills in the pill it just loaded.
       document
         .querySelectorAll(`[data-pill-count-key="${pillCacheKey}:open"]`)
         .forEach((el) => { el.textContent = count; });
