@@ -978,7 +978,8 @@ function parseMemberWtbCsv(text) {
         .trim()
         .toLowerCase()
     );
-  const requiredColumns = ["sku", "size", "max price"];
+  // "max price" is optional now, per row or left out of the file entirely.
+  const requiredColumns = ["sku", "size"];
   const missingColumns = requiredColumns.filter(
     (column) => !headers.includes(column)
   );
@@ -992,14 +993,20 @@ function parseMemberWtbCsv(text) {
       row_number: index + 2,
       sku: cleanMemberWtbSkuInput(values[columnIndex("sku")]),
       size: String(values[columnIndex("size")] || "").trim(),
-      max_price: Number(String(values[columnIndex("max price")] || "").replace(/[^\d]/g, ""))
+      // Blank stays blank: Number("") is 0, which would turn an empty cell
+      // into a ceiling of zero and refuse the file. Mirrors readCsvMaxPrice
+      // on the server.
+      max_price: (() => {
+        const text = String(values[columnIndex("max price")] ?? "").trim();
+        return text === "" ? null : Number(text.replace(/[^\d]/g, ""));
+      })()
     };
   });
   const errors = [];
   rows.forEach((row) => {
     if (!row.sku) errors.push(`Row ${row.row_number}: missing SKU`);
     if (!row.size) errors.push(`Row ${row.row_number}: missing Size`);
-    if (!Number.isInteger(row.max_price) || row.max_price <= 0) {
+    if (row.max_price !== null && (!Number.isInteger(row.max_price) || row.max_price <= 0)) {
       errors.push(`Row ${row.row_number}: invalid Max Price`);
     }
   });
@@ -1107,10 +1114,22 @@ submitMemberWtbBtn?.addEventListener("click", async () => {
   }
   const sku = cleanMemberWtbSkuInput(memberWtbSkuInput.value);
   const size = memberWtbSizeInput.value.trim();
-  const maxPrice = Number(memberWtbMaxPriceInput.value);
+  // A ceiling is optional. Leave it empty and every offer reaches you,
+  // which you then negotiate down yourself.
+  const rawMaxPrice = memberWtbMaxPriceInput.value.trim();
+  const maxPrice = rawMaxPrice === "" ? null : Number(rawMaxPrice);
+
   memberWtbError.textContent = "";
-  if (!sku || !size || !Number.isInteger(maxPrice) || maxPrice <= 0) {
-    memberWtbError.textContent = "Enter SKU, size and a valid max price.";
+
+  if (!sku || !size) {
+    memberWtbError.textContent = "Enter a SKU and a size.";
+    return;
+  }
+
+  // Typed but unusable is still an error - only a genuinely empty field
+  // means "no ceiling".
+  if (maxPrice !== null && (!Number.isInteger(maxPrice) || maxPrice <= 0)) {
+    memberWtbError.textContent = "A max price must be a whole number above 0, or left empty.";
     return;
   }
   submitMemberWtbBtn.disabled = true;
