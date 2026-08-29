@@ -22956,9 +22956,23 @@ app.get("/api/dashboard/buying-open-wtbs", async (req, res) => {
         const f = record.fields || {};
         const winningSellerOffer = winningPositionByWtbId.get(record.id);
 
-        const currentLowest = winningSellerOffer
+        // This column answers "what would buying this cost me right now",
+        // which is the same question the shop answers - so it follows the
+        // shop's convention and reads whole euros. Without it the shop said
+        // 153 and this said 152.10 for one pair, which looks like a fee
+        // being taken off the top rather than one number rounded up.
+        //
+        // Rounded here and not in calculateMemberWtbBuyerEquivalent: that
+        // function mirrors the Airtable formula behind "Offer To Buyer" and
+        // feeds real negotiated amounts. Rounding it would move money and
+        // put the portal out of step with Airtable.
+        const rawCurrentLowest = winningSellerOffer
           ? calculateMemberWtbBuyerEquivalent(winningSellerOffer.price, winningSellerOffer.vatType, f)
           : numberValue(f["Current Lowest Offer"]);
+
+        const currentLowest = Number.isFinite(rawCurrentLowest) && rawCurrentLowest > 0
+          ? Math.ceil(rawCurrentLowest)
+          : rawCurrentLowest;
 
         return {
           id: record.id,
@@ -28782,15 +28796,28 @@ function getBuyingDisplayPrice(price, vatType, inventoryType, sourceType = "", o
     }
   }
 
+  // CHANGED - these two round up like the consignment branch above.
+  //
+  // "Rounding is upward to whole euros - a shop should never read cents"
+  // was written as a general rule and then applied to one branch only, so
+  // a KC-owned pair still showed 152.10 where a consignment pair showed
+  // 153. Buy takes display_price straight, so the invoice inherited that
+  // same split.
+  //
+  // Only the branches that DERIVE a price round. The pass-through below
+  // hands back a price someone already set, and inflating that would be a
+  // different thing entirely. getBuyingComparePrice keeps its exact
+  // arithmetic either way - that one decides which source is cheapest,
+  // and rounding it could change the winner.
   if (
     cleanSourceType === "kc_owned" &&
     (cleanVatType === "VAT0" || cleanVatType === "VAT21")
   ) {
-    return n * 1.21;
+    return Math.ceil(n * 1.21);
   }
 
   if (cleanVatType === "VAT0") {
-    return n * 1.21;
+    return Math.ceil(n * 1.21);
   }
 
   return n;
