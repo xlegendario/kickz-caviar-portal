@@ -655,6 +655,16 @@ body.modal-open {
   margin-bottom: 18px;
 }
 
+/* "optional" beside a field label. Quieter than the label itself, so the
+   field still reads as a field and the word as a note about it. */
+.offer-label-optional {
+  margin-left: 6px;
+  color: rgba(255, 255, 255, 0.42);
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 .offer-label {
   display: block;
   margin-bottom: 12px;
