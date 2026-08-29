@@ -1791,7 +1791,50 @@ async function sendMemberWtbLabelRequestToBuyer(memberWtbRecordId) {
   };
 }
 
+/*
+ * One send, however many triggers.
+ *
+ * The seller Ready To Ship step has two possible triggers for the same
+ * deal. The payment gate sends it straight away for a trusted buyer or a
+ * Lojiq store, and the payment side sends it when the money lands - the
+ * Mollie webhook, or the Lojiq portal calling /api/internal/member-wtb-paid
+ * after a bundle is settled.
+ *
+ * The webhook already guards on !trustedBuyer, and that guard is correct,
+ * but it only covers one of the two and it lives at the call site. The next
+ * caller has to remember it, and the Lojiq route did not - it would have
+ * sent a second Request Label button for every store deal.
+ *
+ * So the record answers the question instead of each caller. This stamps
+ * Ready To Ship Sent At on success, and a caller can ask whether this
+ * seller has already been told. It also makes that answerable in Airtable
+ * without reading a log, which is exactly what MWTB-000402 cost us.
+ *
+ * Stamping is deliberately not fatal. The embed is already in Discord by
+ * the time we get here; failing to record it must not turn a completed step
+ * into an error.
+ */
 async function sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId) {
+  const result = await sendMemberWtbDealUpdate(memberWtbRecordId);
+
+  // A skip sent nothing, so there is nothing to record.
+  if (result?.skipped) return result;
+
+  try {
+    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+      "Ready To Ship Sent At": new Date().toISOString()
+    });
+  } catch (stampErr) {
+    console.error(
+      `⚠️ Member WTB ${memberWtbRecordId}: seller step sent but not stamped -`,
+      stampErr.message
+    );
+  }
+
+  return result;
+}
+
+async function sendMemberWtbDealUpdate(memberWtbRecordId) {
   const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
   const f = memberWtb.fields || {};
 
@@ -6985,6 +7028,11 @@ app.get("/consignment-application", (_req, res) => {
  * So: the Lojiq portal calls this when a batch is settled, and the same
  * function runs that the Mollie webhook would have run. One notification
  * step, not a second copy of the fulfilment logic.
+ *
+ * Since then the gate itself sends that step immediately for a store
+ * deal, so in practice this route finds the work already done and says
+ * so. It is kept as the fallback for when that send failed - see the
+ * Ready To Ship Sent At check below.
  */
 app.post("/api/internal/member-wtb-paid", async (req, res) => {
   const secret = asText(req.headers["x-kc-secret"]);
@@ -7025,6 +7073,29 @@ app.post("/api/internal/member-wtb-paid", async (req, res) => {
         skipped: true,
         reason: "not_paid",
         payment_status: paymentStatus || null
+      });
+    }
+
+    // The gate already told him, in almost every case.
+    //
+    // A Lojiq store deal sends the seller his Ready To Ship step the
+    // moment Process Deal is pressed - same as a trusted buyer, and for
+    // the same reason: a store settles later, and the seller must not
+    // wait on a bundle payment before he may ship. This route is only
+    // ever called for those same deals, so without this check it would
+    // hand every one of them a second Request Label button.
+    //
+    // It stays as the fallback for the one case that is left: the send
+    // at the gate failed and was logged. Then the stamp is missing and
+    // this is the seller second chance.
+    const readyToShipSentAt = asText(record.fields?.["Ready To Ship Sent At"]);
+
+    if (readyToShipSentAt) {
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: "already_sent",
+        ready_to_ship_sent_at: readyToShipSentAt
       });
     }
 
