@@ -3840,13 +3840,16 @@ function bindMemberWtbDiscordCreation(
                     // wording as the Lojiq shop - the Airtable column keeps
                     // its own name, which nobody outside the base reads.
                     label:
-                      "Your price",
+                      "Your price (optional)",
                     style: 1,
-                    min_length: 1,
+                    // CHANGED - min_length 1 and required: true were
+                    // enforced by Discord itself, so the modal would refuse
+                    // an empty field before our own code ever saw it.
+                    min_length: 0,
                     max_length: 10,
                     placeholder:
-                      "Example: 120",
-                    required: true
+                      "Leave empty for no ceiling",
+                    required: false
                   }
                 ]
               }
@@ -3912,14 +3915,18 @@ function bindMemberWtbDiscordCreation(
             interaction.fields
               .getTextInputValue("size");
 
+          // A ceiling is optional here too, so the Discord modal matches the
+          // portal and the CSV. An empty field is "no maximum"; anything
+          // typed still has to be a usable number.
+          const rawMaxPrice =
+            interaction.fields
+              .getTextInputValue("max_price")
+              .trim();
+
           const maxPrice =
-            Number(
-              interaction.fields
-                .getTextInputValue(
-                  "max_price"
-                )
-                .replace(/[^\d]/g, "")
-            );
+            rawMaxPrice === ""
+              ? null
+              : Number(rawMaxPrice.replace(/[^\d]/g, ""));
 
           // Same three rules the Lojiq shop applies to its own form. A
           // modal cannot filter while someone types, so this is where it
@@ -3951,10 +3958,11 @@ function bindMemberWtbDiscordCreation(
             return;
           }
 
-          if (!Number.isInteger(maxPrice) || maxPrice <= 0) {
+          if (maxPrice !== null && (!Number.isInteger(maxPrice) || maxPrice <= 0)) {
             await interaction.editReply({
               content:
-                "⚠️ Enter a whole number above 0 as your price."
+                "⚠️ Enter a whole number above 0 as your price, " +
+                "or leave it empty for no ceiling."
             });
             return;
           }
@@ -8578,7 +8586,15 @@ app.post("/api/member-wtb/csv-import", async (req, res) => {
       const rowNumber = Number(row?.row_number) || index + 2;
       const sku = asText(row?.sku).trim().toUpperCase();
       const size = normalizeWtbSize(row?.size);
-      const maxPrice = Number(row?.max_price);
+      // A ceiling is optional per row. Blank means every offer reaches the
+      // buyer; a value that IS there must still be usable, so a typo in one
+      // line of fifty cannot pass as a deliberate blank.
+      const hasMaxPrice =
+        row?.max_price !== null &&
+        row?.max_price !== undefined &&
+        String(row?.max_price).trim() !== "";
+
+      const maxPrice = hasMaxPrice ? Number(row?.max_price) : null;
 
       if (!/^[A-Z0-9-]+$/.test(sku)) {
         problems.push(`Row ${rowNumber}: a SKU can only contain letters, numbers and hyphens`);
@@ -8588,8 +8604,8 @@ app.post("/api/member-wtb/csv-import", async (req, res) => {
         problems.push(`Row ${rowNumber}: "${asText(row?.size)}" is not a valid size`);
       }
 
-      if (!Number.isInteger(maxPrice) || maxPrice <= 0) {
-        problems.push(`Row ${rowNumber}: price must be a whole number above 0`);
+      if (hasMaxPrice && (!Number.isInteger(maxPrice) || maxPrice <= 0)) {
+        problems.push(`Row ${rowNumber}: price must be a whole number above 0, or left empty`);
       }
 
       return {
@@ -31957,7 +31973,24 @@ async function createOpenMemberWtb({
 }) {
   const sku = normalizeSku(rawSku);
   const size = getBuyingSizeKey(rawSize);
-  const maxPrice = Number(rawMaxPrice);
+
+  // CHANGED - a want-to-buy may be posted without a ceiling.
+  //
+  // Blank means "no maximum": every offer reaches the buyer and he
+  // negotiates it down himself. The bot already treats a record without a
+  // maximum that way - it falls back to what other sellers are bidding - and
+  // an open want-to-buy never used this figure for the money anyway; that
+  // comes from the winning offer plus margin.
+  //
+  // Blank and zero are deliberately not the same. Blank is a choice; a 0 or
+  // an unreadable value is a mistake and still gets refused, so a typo in a
+  // fifty-line CSV cannot quietly turn into "no ceiling".
+  const hasMaxPrice =
+    rawMaxPrice !== null &&
+    rawMaxPrice !== undefined &&
+    String(rawMaxPrice).trim() !== "";
+
+  const maxPrice = hasMaxPrice ? Number(rawMaxPrice) : null;
   const inventoryType =
     normalizeBuyingInventoryType(rawInventoryType);
 
@@ -31974,8 +32007,8 @@ async function createOpenMemberWtb({
   }
 
   if (
-    !Number.isFinite(maxPrice) ||
-    maxPrice <= 0
+    hasMaxPrice &&
+    (!Number.isFinite(maxPrice) || maxPrice <= 0)
   ) {
     const error = new Error("Invalid max price");
     error.statusCode = 400;
@@ -32125,9 +32158,9 @@ async function createOpenMemberWtb({
       `Filter: ${getBuyingInventoryFilterLabel(
         inventoryType
       )}`,
-      `Buyer Max Price: ${buyingMoneyValue(
-        maxPrice
-      )}`,
+      `Buyer Max Price: ${
+        hasMaxPrice ? buyingMoneyValue(maxPrice) : "none - no ceiling"
+      }`,
       `Created From: ${createdFrom}`
     ].join("\n")
   };
@@ -32229,6 +32262,23 @@ function detectMemberWtbCsvDelimiter(
   return ",";
 }
 
+// A Max Price cell, where empty means "no ceiling on this row".
+//
+// Kept apart from the parsing on purpose: Number("") is 0 and
+// "".replace(/[^\d]/g, "") is "" which is also 0, so an empty cell and a
+// deliberate zero were indistinguishable. They must not be - blank is a
+// choice, zero is a mistake.
+//
+// A missing column lands here as undefined and reads as blank, so a file
+// without the column at all is simply a file without ceilings.
+function readCsvMaxPrice(rawValue) {
+  const text = String(rawValue ?? "").trim();
+
+  if (text === "") return null;
+
+  return Number(text.replace(/[^\d]/g, ""));
+}
+
 function parseMemberWtbCsvLine(
   line,
   delimiter = ","
@@ -32305,10 +32355,14 @@ function parseMemberWtbCsvText(text) {
         .toLowerCase()
     );
 
+  // CHANGED - "max price" is no longer required.
+  //
+  // A ceiling is optional per row, so a file may leave the cell empty or
+  // drop the column altogether. Files that still carry it keep working
+  // unchanged.
   const requiredColumns = [
     "sku",
-    "size",
-    "max price"
+    "size"
   ];
 
   const missingColumns =
@@ -32349,12 +32403,10 @@ function parseMemberWtbCsvText(text) {
             values[columnIndex("size")]
           ),
 
-        max_price: Number(
-          String(
-            values[
-              columnIndex("max price")
-            ] || ""
-          ).replace(/[^\d]/g, "")
+        // Blank stays blank. Number("") is 0, which would have turned an
+        // empty cell into a ceiling of zero and refused the whole file.
+        max_price: readCsvMaxPrice(
+          values[columnIndex("max price")]
         )
       };
     });
@@ -32388,9 +32440,12 @@ function parseMemberWtbCsvText(text) {
       );
     }
 
+    // null is "no ceiling on this row" and is fine. A value that IS there
+    // still has to be a whole number above zero, so a typo cannot pass as a
+    // deliberate blank.
     if (
-      !Number.isInteger(row.max_price) ||
-      row.max_price <= 0
+      row.max_price !== null &&
+      (!Number.isInteger(row.max_price) || row.max_price <= 0)
     ) {
       errors.push(
         `Row ${row.row_number}: invalid Max Price`
