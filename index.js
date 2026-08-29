@@ -26068,6 +26068,12 @@ app.post("/api/login", async (req, res) => {
         discord_id: seller.discord_id,
         discord_in_server: seller.discord_in_server,
         is_dutch: seller.is_dutch,
+
+        // Both payloads hand-pick their fields, so a new one on
+        // normalizeSeller does not arrive here on its own - which is exactly
+        // how the VAT gate shipped live and gated nothing.
+        vat_types: seller.vat_types,
+
         consignor: seller.consignor
       }
     });
@@ -27226,6 +27232,12 @@ app.get("/api/session", async (req, res) => {
         discord_id: seller.discord_id,
         discord_in_server: seller.discord_in_server,
         is_dutch: seller.is_dutch,
+
+        // Both payloads hand-pick their fields, so a new one on
+        // normalizeSeller does not arrive here on its own - which is exactly
+        // how the VAT gate shipped live and gated nothing.
+        vat_types: seller.vat_types,
+
         consignor: seller.consignor
       }
     });
