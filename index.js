@@ -308,8 +308,8 @@ const kickzDealDiscordClient = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    // Nodig voor GuildMemberAdd/Remove en voor guild.members.fetch(). Vereist
-    // dat "Server Members Intent" aan staat in de Discord Developer Portal.
+    // Needed for GuildMemberAdd/Remove and for guild.members.fetch(). Requires
+    // "Server Members Intent" to be enabled in the Discord Developer Portal.
     GatewayIntentBits.GuildMembers
   ]
 });
@@ -6979,8 +6979,8 @@ app.use(express.urlencoded({
   limit: "25mb"
 }));
 
-// Sessie- en identiteitslaag. Moet ná express.json() staan (de guard leest
-// req.body) en vóór alle routes. Zie lib/auth.js voor het waarom.
+// Session and identity layer. Must sit AFTER express.json() (the guard reads
+// req.body) and BEFORE every route. See lib/auth.js for the reasoning.
 const SESSION_SECRET = process.env.SESSION_SECRET || "";
 const AUTH_ENFORCE = (process.env.AUTH_ENFORCE || "warn").toLowerCase();
 const KC_SERVICE_SECRETS = [
@@ -6999,21 +6999,21 @@ app.use(
     secret: SESSION_SECRET,
     mode: AUTH_ENFORCE,
     serviceSecrets: KC_SERVICE_SECRETS,
-    // Door Make en de bots aangeroepen, niet door een ingelogde browser.
+    // Called by Make and the bots, not by a signed-in browser.
     allowPaths: ["/api/make/", "/api/internal/"]
   })
 );
 
 /*
- * Discord verplicht voor wie handelt.
+ * Discord is required for anyone who acts.
  *
- * Staat NA sellerIdentityGuard, en dat is de hele opzet: die bepaalt eerst
- * wie je bent en weigert een verzoek zonder sessie. Pas daarna is de vraag
- * "mag deze seller dit" zinnig te stellen.
+ * Sits AFTER sellerIdentityGuard, and that is the whole design: that one
+ * first decides who you are and refuses a request without a session. Only
+ * then is "may this seller do this" a sensible question to ask.
  *
- * Standaard "warn": hij logt en laat door. Zet DISCORD_GATE op "strict"
- * zodra het log een dag lang stil is gebleven op paden die wel hadden
- * moeten mogen.
+ * Defaults to "warn": it logs and lets through. Set DISCORD_GATE to
+ * "strict" once the log has stayed quiet for a day on paths that should
+ * have been allowed.
  */
 app.use(
   discordMembershipGuard({
@@ -16424,10 +16424,10 @@ async function normalizeDeal(record, dealType) {
     current_offer_margin: currentOfferMargin,
     current_offer_vat0: currentOfferVat0
 
-    // VERWIJDERD: maximum_buying_price. /api/deals is publiek en had geen
-    // auth, dus dit gaf iedereen met de netwerk-tab je inkoopplafond per
-    // order — precies het getal waar een seller net onder wil gaan zitten.
-    // Geen enkele frontend las het veld, dus er breekt niets.
+    // REMOVED: maximum_buying_price. /api/deals is public and had no auth, so
+    // this handed anyone with the network tab our buying ceiling per order -
+    // exactly the figure a seller wants to sit just below. No front end read
+    // the field, so nothing breaks.
   };
 }
 
@@ -16477,8 +16477,8 @@ async function normalizeMemberWtbDeal(record) {
 
     current_offer_vat0: memberWtbOfferVat0,
 
-    // VERWIJDERD: maximum_buying_price (hier het "Max Price" van de koper).
-    // Zelfde reden als bij normalizeDeal hierboven.
+    // REMOVED: maximum_buying_price (here the buyer's "Max Price").
+    // Same reason as in normalizeDeal above.
     raw_date: f["Date"] || f["Created At"] || ""
   };
 }
@@ -16796,8 +16796,8 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       // sitting there (Seller Counter Price still empty) is NOT another
       // seller's real competing position, it's just the same baseline
       // offer mirrored to every seller at once. Confirmed directly by
-      // him: "Sellers competeren alleen tegen de andere sellers en hun
-      // eigen laatste laagste offer" — the buyer's own counter should
+      // him: sellers compete only against the other sellers and against
+      // their own last lowest offer - the buyer's own counter should
       // NEVER count as the thing sellers must beat against each other.
       // Only counts a round here once the seller has GENUINELY
       // countered (Seller Counter Price set); otherwise their raw,
@@ -26110,10 +26110,10 @@ app.post("/api/login", async (req, res) => {
       });
     }
 
-    // FIXED — was een kale === op een plain-text wachtwoord uit Airtable.
-    // verifyPassword accepteert nog steeds het oude formaat, maar meldt via
-    // needsRehash dat het record gemigreerd moet worden. Zo migreert iedereen
-    // vanzelf bij zijn eerstvolgende login, zonder mass-reset.
+    // FIXED - this was a bare === against a plain-text password from
+    // Airtable. verifyPassword still accepts the old format, but reports via
+    // needsRehash that the record should be migrated. Everyone migrates by
+    // themselves on their next sign-in, with no mass reset.
     const { ok, needsRehash } = verifyPassword(password, seller.portal_password);
 
     if (!ok) {
@@ -26128,7 +26128,7 @@ app.post("/api/login", async (req, res) => {
           "Portal Password": hashPassword(password)
         });
       } catch (rehashErr) {
-        // Migratie mag een geslaagde login nooit blokkeren.
+        // Migration must never block a successful sign-in.
         console.error("Password rehash failed:", rehashErr);
       }
     }
@@ -26168,16 +26168,16 @@ app.post("/api/login", async (req, res) => {
 });
 
 /* ------------------------------------------------------------------ *
- * Registratie in de portal.
+ * Registration in the portal.
  *
- * Verving de registratie via de Discord-bot. Dit is nu de enige plek waar
- * seller-records ontstaan, en het is met opzet één stap: alle velden in één
- * formulier, en daarna meteen door naar de verplichte Discord-koppeling.
- * Een seller zonder Discord ID kan namelijk geen deal-channel krijgen.
+ * Replaced registration through the Discord bot. This is now the only place
+ * where seller records come into being, and it is deliberately one step: all
+ * fields in one form, then straight on to the required Discord link. A
+ * seller without a Discord ID cannot be given a deal channel.
  * ------------------------------------------------------------------ */
 
-// De dropdown haalt de lijst hiervandaan in plaats van hem in de HTML te
-// herhalen, zodat er maar één plek is waar landen staan.
+// The dropdown takes the list from here rather than repeating it in the
+// HTML, so there is only one place where countries live.
 /* ------------------------------------------------------------------ *
  * Offer-pagina per order.
  *
@@ -26221,9 +26221,9 @@ app.get("/api/offer-page/:sourceType/:recordId", async (req, res) => {
     const status = displayValue(f["Fulfillment Status"]);
     const openState = isOpenForOffers({ sourceType, fulfillmentStatus: status });
 
-    // Het laagste huidige bod komt uit dezelfde rollups die de Want To
-    // Buys-pagina gebruikt, dus hier komt niets naar buiten wat daar niet al
-    // te zien is.
+    // The current lowest bid comes from the same rollups the Want To Buys
+    // page uses, so nothing is exposed here that is not already visible
+    // there.
     let currentOfferMargin = "";
     let currentOfferVat0 = "";
 
@@ -26260,9 +26260,9 @@ app.get("/api/offer-page/:sourceType/:recordId", async (req, res) => {
       current_offer_vat0: currentOfferVat0
     };
 
-    // De bezoeker is niet per se ingelogd — dat is het hele punt van deze
-    // pagina. Wat we teruggeven bepaalt welk scherm hij krijgt: registreren,
-    // Discord koppelen, of gewoon bieden.
+    // The visitor is not necessarily signed in - that is the whole point of
+    // this page. What we return decides which screen they get: register, link
+    // Discord, or simply place an offer.
     const session = readSession(req, SESSION_SECRET);
 
     if (!session?.rid) {
@@ -26292,9 +26292,9 @@ app.get("/api/offer-page/:sourceType/:recordId", async (req, res) => {
         discord_linked: !!seller.discord_id,
         discord_in_server: seller.discord_in_server !== false,
         offerable_vat_types: vatTypes,
-        // Leeg betekent: deze seller kan hier fiscaal niets bieden. Dat is
-        // geen fout maar een feit, en het is eerlijker om dat te zeggen dan
-        // hem een offer te laten insturen die de bot toch weigert.
+        // Empty means this seller can offer nothing here for tax reasons.
+        // That is a fact rather than an error, and saying so is fairer than
+        // letting them submit an offer the bot will refuse anyway.
         no_vat_types_reason: vatTypes.length
           ? ""
           : "This buyer only accepts VAT invoices, and your profile is not registered as a company."
@@ -26311,16 +26311,16 @@ app.get("/api/offer-page/:sourceType/:recordId", async (req, res) => {
 });
 
 /* ------------------------------------------------------------------ *
- * Wie zit er nog in de Discord-server?
+ * Who is still in the Discord server?
  *
- * De offer-flow weigert sellers die de server verlaten hebben, want een
- * geaccepteerde deal maakt een channel met de seller erin en dat mislukt
- * stil als hij er niet meer is. Hieronder wordt "Discord In Server?"
- * waarheidsgetrouw gehouden, uit twee bronnen:
+ * The offer flow refuses sellers who have left the server, because an
+ * accepted deal creates a channel with the seller in it and that fails
+ * silently once they are gone. Below keeps "Discord In Server?" truthful,
+ * from two sources:
  *
- *  1. Gateway-events — direct, maar gemist zolang de service down is.
- *  2. Een periodieke reconcile tegen de volledige ledenlijst, die inhaalt
- *     wat de gateway miste.
+ *  1. Gateway events - immediate, but missed while the service is down.
+ *  2. A periodic reconcile against the full member list, which catches up
+ *     on whatever the gateway missed.
  * ------------------------------------------------------------------ */
 
 const MEMBERSHIP_RECONCILE_INTERVAL_MS =
@@ -26345,13 +26345,13 @@ async function setMembershipState(discordUserId, { inServer }) {
 
   await airtable(DISCORD_MEMBERS_TABLE).update(row.id, {
     "In Server?": inServer,
-    // Bij een rejoin wordt de vertrekdatum gewist, zodat het veld altijd de
-    // huidige situatie beschrijft in plaats van een oud vertrek.
+    // On a rejoin the leave date is cleared, so the field always describes
+    // the current situation rather than an old departure.
     "Left Server At": inServer ? null : new Date().toISOString()
   });
 
-  // Het seller-record is wat de offer-flow leest; zonder deze stap verandert
-  // er functioneel niets.
+  // The seller record is what the offer flow reads; without this step
+  // nothing changes in practice.
   const sellerRecordId = firstLinkedRecordId(row.fields?.["Linked Seller"]);
 
   if (!sellerRecordId) return;
@@ -26456,8 +26456,8 @@ function bindMembershipEvents() {
   });
 }
 
-// Handmatig aftrappen, voor als je niet op de volgende ronde wil wachten.
-// Achter het bestaande service-secret, want dit doet een volledige ledenfetch.
+// Kick it off by hand, for when you do not want to wait for the next round.
+// Behind the existing service secret, because this does a full member fetch.
 app.post("/api/internal/reconcile-membership", async (req, res) => {
   const secret = asText(req.headers["x-kc-secret"]);
 
@@ -26472,13 +26472,12 @@ app.post("/api/internal/reconcile-membership", async (req, res) => {
 });
 
 /* ------------------------------------------------------------------ *
- * Affiliate-attributie voor de portal-route.
+ * Affiliate attribution for the portal route.
  *
- * discord-deal-bot leidt af wie iemand uitnodigde door invite-tellers te
- * vergelijken. Bij een OAuth-join wordt er geen invite verbruikt, dus die
- * route ziet zo'n join helemaal niet. Hieronder wordt de referral expliciet
- * meegedragen in de URL en vastgelegd — dezelfde velden, dezelfde regels,
- * andere ingang.
+ * discord-deal-bot works out who invited someone by comparing invite
+ * counters. An OAuth join consumes no invite, so that route never sees such
+ * a join at all. Below carries the referral explicitly in the URL and
+ * records it - same fields, same rules, different entrance.
  * ------------------------------------------------------------------ */
 
 const INVITES_LOG_TABLE = process.env.AIRTABLE_INVITES_LOG_TABLE || "Invites Log";
@@ -26539,19 +26538,19 @@ async function attributeReferral({ discordUser, refCode }) {
       `Referral vastgelegd: ${asText(inviter.fields["Discord User ID"])} -> ${discordUser.id} (${code})`
     );
   } catch (err) {
-    // De Discord-koppeling zelf is op dit punt al gelukt; affiliate-
-    // administratie mag die nooit terugdraaien.
+    // The Discord link itself has already succeeded at this point;
+    // affiliate bookkeeping must never undo it.
     console.error("Failed to attribute referral:", err);
   }
 }
 
-// Zet "Referral Qualified" aan zodra er een Inventory Unit op de Seller ID van
-// de uitgenodigde staat. Dat is het eerste harde bewijs dat er echt een deal
-// was — een aanmelding met gekoppelde Discord is dat nog niet.
+// Turns "Referral Qualified" on as soon as an Inventory Unit exists under the
+// invited seller's Seller ID. That is the first hard proof there was a real
+// deal - a sign-up with a linked Discord is not yet.
 //
-// Bewust een periodieke sweep en geen haakje op het aanmaken van een unit:
-// units ontstaan op meerdere plekken (portal, Make, bots), en een sweep werkt
-// ongeacht welke dat was. Ook idempotent, dus dubbel draaien kan geen kwaad.
+// Deliberately a periodic sweep rather than a hook on unit creation: units
+// come into being in several places (portal, Make, bots), and a sweep works
+// whichever it was. Idempotent too, so running it twice does no harm.
 async function qualifyReferrals() {
   try {
     const openLogs = [];
@@ -26574,8 +26573,8 @@ async function qualifyReferrals() {
 
     if (!openLogs.length) return { qualified: 0 };
 
-    // Twee volledige uitlezingen in plaats van een lookup per rij: bij een paar
-    // honderd openstaande referrals scheelt dat honderden API-calls.
+    // Two full reads instead of a lookup per row: with a few hundred open
+    // referrals that saves hundreds of API calls.
     const sellerByDiscordId = new Map();
 
     await airtable(DISCORD_MEMBERS_TABLE)
@@ -26633,37 +26632,37 @@ async function qualifyReferrals() {
 }
 
 /* ------------------------------------------------------------------ *
- * Seller-onboarding, overgenomen van de losse seller-registration bot.
+ * Seller onboarding, taken over from the separate seller-registration bot.
  *
- * Die service kan uit. Registreren gebeurt nu op /signup, dus de reeks
- * Discord-modals is vervallen. Wat wél moest blijven draait hieronder mee in
- * de portal, die al een Discord-client heeft:
+ * That service can be switched off. Registration now happens at /signup, so
+ * the series of Discord modals is gone. What did have to stay runs below,
+ * inside the portal, which already has a Discord client:
  *
- *  - de welkomst-DM bij het joinen, nu met een link naar de portal
- *  - Seller ID Check, voor wie zijn ID kwijt is
- *  - de twee endpoints die Make aanroept
+ *  - the welcome DM on joining, now with a link to the portal
+ *  - Seller ID Check, for anyone who lost their ID
+ *  - the two endpoints Make calls
  * ------------------------------------------------------------------ */
 
 const SELLER_WELCOME_DM =
   String(process.env.SELLER_WELCOME_DM ?? "true").toLowerCase() === "true";
 const DISCORD_INVITE_URL = process.env.DISCORD_INVITE_URL || "";
 
-// De knop onder de Seller ID-DM. Zet hier dezelfde verkorte link in die de
-// hub-berichten van de deal-bot gebruiken; leeg laten kan ook, dan wijst hij
-// naar de homepage.
+// The button under the Seller ID DM. Put the same short link here that the
+// deal bot hub messages use; leaving it empty is fine too, then it points
+// at the homepage.
 const WTBS_WEBSITE_URL = process.env.WTBS_WEBSITE_URL || "";
 
 function signupUrl() {
   return portalUrl("/signup");
 }
 
-// Zoekt het seller-record bij een Discord-gebruiker.
+// Finds the seller record for a Discord user.
 //
-// Eerst op Discord ID, want dat is de betrouwbare match. Lukt dat niet, dan
-// zoeken we op naam in het tekstveld "Discord" — precies zoals de oude
-// registratie-bot deed. Dat is geen overbodige luxe: ruim de helft van de
-// sellers heeft (nog) geen Discord ID, en voor hen is dit de enige manier
-// waarop Seller ID Check iets vindt.
+// By Discord ID first, because that is the reliable match. Failing that we
+// search by name in the "Discord" text field - exactly as the old
+// registration bot did. That is not a luxury: well over half the sellers
+// have no Discord ID yet, and for them this is the only way Seller ID Check
+// finds anything.
 async function findSellerForDiscordUser(interaction) {
   const discordId = asText(interaction.user.id);
 
@@ -26689,8 +26688,8 @@ async function findSellerForDiscordUser(interaction) {
     if (clean) namen.add(clean);
   }
 
-  // In een DM heeft de interaction geen member, dus halen we de servernaam
-  // alsnog op — daar staat vaak de naam onder die in Airtable is ingevuld.
+  // In a DM the interaction has no member, so we fetch the server name
+  // anyway - that is often the name recorded in Airtable.
   if (!interaction.member) {
     try {
       const guild = await kickzDealDiscordClient.guilds.fetch(KICKZ_DEAL_SERVER_ID);
@@ -26698,13 +26697,13 @@ async function findSellerForDiscordUser(interaction) {
 
       if (member?.displayName) namen.add(member.displayName);
     } catch {
-      // Niet in de server, of geen toegang. Dan blijft het bij de namen hierboven.
+      // Not in the server, or no access. Then the names above are all we have.
     }
   }
 
   if (!namen.size) return null;
 
-  // SEARCH in plaats van gelijkheid, zodat "Legendario" ook "Legendario#4880" vindt.
+  // SEARCH rather than equality, so "Legendario" also finds "Legendario#4880".
   const condities = [...namen]
     .map((naam) => `SEARCH('${escapeFormulaValue(naam)}', {Discord} & '') > 0`)
     .join(", ");
@@ -26730,14 +26729,14 @@ function bindSellerOnboarding() {
       const { title, description } = buildWelcomeMessage({
         username: member.user.username,
         signupUrl: signupUrl(),
-        // De homepage opent standaard op de Selling-sectie, dus dit is meteen
-        // de lijst met open deals.
+        // The homepage opens on the Selling section by default, so this lands
+        // straight on the list of open deals.
         dealsUrl: portalUrl("/")
       });
 
-      // Raw component-objecten, geen EmbedBuilder/ButtonBuilder: die classes
-      // worden in dit bestand nergens geïmporteerd en veroorzaakten eerder een
-      // ReferenceError die het hele proces omlegde.
+      // Raw component objects, not EmbedBuilder/ButtonBuilder: those classes
+      // are imported nowhere in this file and previously caused a
+      // ReferenceError that took the whole process down.
       await member.send({
         embeds: [{ title, description, color: 0xffd300 }],
         components: [
@@ -26750,14 +26749,14 @@ function bindSellerOnboarding() {
         ]
       });
     } catch (err) {
-      // Mensen met DM's uit zijn geen fout om over te loggen als probleem.
+      // People with DMs switched off are not an error worth logging as a problem.
       console.warn(`Could not DM new member ${member.user?.tag || member.id}: ${err.message}`);
     }
   });
 
-  // Eigen listener naast de bestaande deal-knoppen. Die handler filtert op
-  // zijn eigen customId-prefixen en negeert alles daarbuiten, dus de twee
-  // zitten elkaar niet in de weg.
+  // Its own listener alongside the existing deal buttons. That handler
+  // filters on its own customId prefixes and ignores everything else, so the
+  // two do not get in each other's way.
   kickzDealDiscordClient.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton() || interaction.customId !== "seller_id_check") return;
 
@@ -26806,10 +26805,10 @@ function bindSellerOnboarding() {
   });
 }
 
-// Plaatst het registratie-embed in een kanaal. Bewust geen slash command:
-// die zou via guild.commands.set() geregistreerd moeten worden, en dat
-// vervangt ALLE commands van deze applicatie in de guild — inclusief
-// /mystats van de deal-bot. Dit endpoint roep je één keer aan.
+// Posts the registration embed into a channel. Deliberately not a slash
+// command: that would have to be registered through guild.commands.set(),
+// which replaces EVERY command this application has in the guild -
+// including the deal bot /mystats. You call this endpoint once.
 app.post("/api/internal/post-registration-embed", async (req, res) => {
   const secret = asText(req.headers["x-kc-secret"]);
 
@@ -26835,7 +26834,7 @@ app.post("/api/internal/post-registration-embed", async (req, res) => {
         {
           type: 1,
           components: [
-            // style 5 = link-knop; die draagt een url in plaats van een custom_id.
+            // style 5 = link button; it carries a url instead of a custom_id.
             { type: 2, style: 5, label: "Create your seller profile", url: signupUrl() },
             { type: 2, style: 2, label: "Seller ID Check", custom_id: "seller_id_check" }
           ]
@@ -26850,7 +26849,7 @@ app.post("/api/internal/post-registration-embed", async (req, res) => {
   }
 });
 
-/* ---- de twee endpoints die Make aanroept ---- */
+/* ---- the two endpoints Make calls ---- */
 
 app.post("/notify-existing-seller", async (req, res) => {
   const { discordId, sellerId, orderId, email } = req.body || {};
@@ -26938,19 +26937,19 @@ app.post("/notify-deal-confirmation", async (req, res) => {
 });
 
 /* ------------------------------------------------------------------ *
- * Een bestaand seller-profiel claimen vanuit Discord.
+ * Claiming an existing seller profile from Discord.
  *
- * De bots vragen niet langer om een Seller ID bij elke offer — ze zoeken de
- * seller op via zijn Discord ID. Werkt dat niet, dan claimt hij zijn profiel
- * één keer met Seller ID + e-mail + een code die naar dat e-mailadres gaat.
- * Daarna is hij voorgoed bekend.
+ * The bots no longer ask for a Seller ID on every offer - they look the
+ * seller up by Discord ID. When that fails, they claim their profile once
+ * with Seller ID plus email plus a code sent to that address. After that
+ * they are known for good.
  *
- * De mail loopt via de portal omdat SendGrid hier al staat; de bots roepen
- * deze twee endpoints aan achter het bestaande x-kc-secret.
+ * The mail goes through the portal because SendGrid already lives here; the
+ * bots call these two endpoints behind the existing x-kc-secret.
  * ------------------------------------------------------------------ */
 
-// Pogingen per Discord-gebruiker, in geheugen. Bewust niet in Airtable: het
-// hoeft een herstart niet te overleven, en zo blijft het aantal velden beperkt.
+// Attempts per Discord user, held in memory. Deliberately not in Airtable:
+// it does not need to survive a restart, and this keeps the field count down.
 const claimAttempts = new Map();
 
 function bumpClaimAttempts(discordId) {
@@ -26970,8 +26969,8 @@ function requireServiceSecret(req, res) {
   return true;
 }
 
-// Zoekt de seller die bij dit Discord ID hoort. Dit is wat de bots straks als
-// eerste doen, zodat niemand zijn Seller ID nog hoeft over te typen.
+// Finds the seller belonging to this Discord ID. This is what the bots do
+// first, so nobody has to type their Seller ID out any more.
 app.post("/api/internal/seller-by-discord", async (req, res) => {
   if (!requireServiceSecret(req, res)) return;
 
@@ -27017,8 +27016,8 @@ app.post("/api/internal/claim/start", async (req, res) => {
     return res.status(400).json({ error: "Missing discord_id, seller_id or email" });
   }
 
-  // Eén tekst voor elke afwijzing. Verschillende meldingen zouden verklappen
-  // of een Seller ID of e-mailadres bestaat, en Seller ID's zijn te raden.
+  // One message for every refusal. Different messages would reveal whether a
+  // Seller ID or an email address exists, and Seller IDs are guessable.
   const vaag = {
     ok: false,
     error:
@@ -27046,8 +27045,8 @@ app.post("/api/internal/claim/start", async (req, res) => {
     if (!check.ok) {
       console.warn(`Claim geweigerd voor Discord ${discordId}: ${check.reason}`);
 
-      // Een al gekoppeld profiel is een echt supportgeval, geen typefout —
-      // dat mag de seller weten zodat hij niet blijft proberen.
+      // An already linked profile is a genuine support case, not a typo -
+      // the seller should know that so they stop trying.
       if (check.reason === "already_linked") {
         return res.json({
           ok: false,
@@ -27151,15 +27150,15 @@ app.post("/api/internal/claim/confirm", async (req, res) => {
       return res.json({ ok: false, error: "That code is not correct." });
     }
 
-    // Vanaf hier is het profiel van hem. Het claim-spoor wissen, anders blijft
-    // een gebruikte code staan en is hij later opnieuw in te wisselen.
+    // From here the profile is theirs. Clear the claim trail, otherwise a used
+    // code stays behind and can be redeemed again later.
     await airtable(SELLERS_TABLE).update(record.id, {
       "Discord ID": discordId,
       "Discord": discordTag || asText(record.fields?.["Discord"]),
       "Discord Linked At": new Date().toISOString(),
-      // Claimen gebeurt door op een knop in de server te klikken, dus deze
-      // seller zit er per definitie in. Zonder deze regel bleef het veld leeg
-      // en week het seller-record af van de Discord Members-rij.
+      // Claiming happens by clicking a button in the server, so this seller is
+      // in it by definition. Without this line the field stayed empty and the
+      // seller record disagreed with the Discord Members row.
       "Discord In Server?": true,
       "Claim Code Hash": "",
       "Claim Code Expires At": null,
@@ -27168,9 +27167,9 @@ app.post("/api/internal/claim/confirm", async (req, res) => {
 
     claimAttempts.delete(discordId);
 
-    // Ook Discord Members bijwerken, net als de OAuth-koppeling doet. Zonder
-    // dit blijft "Linked Seller" naar het verkeerde record wijzen en houdt de
-    // vertrek-detectie de verkeerde seller bij.
+    // Update Discord Members too, exactly as the OAuth link does. Without this
+    // "Linked Seller" keeps pointing at the wrong record and leave detection
+    // tracks the wrong seller.
     await upsertDiscordMember({
       discordUser: {
         id: discordId,
@@ -27216,10 +27215,10 @@ app.post("/api/signup", async (req, res) => {
       });
     }
 
-    // Nooit blind aanmaken. Er bestaan seller-records van vóór de portal
-    // (aangemaakt door de Discord-bot of via het oude formulier); een tweede
-    // record voor dezelfde persoon levert een tweede Seller ID op en splitst
-    // zijn dealgeschiedenis in tweeën.
+    // Never create blindly. Seller records exist from before the portal
+    // (created by the Discord bot or the old form); a second record for the
+    // same person produces a second Seller ID and splits their deal history
+    // in two.
     const existing = await airtable(SELLERS_TABLE)
       .select({
         filterByFormula: `LOWER(TRIM({Email} & '')) = '${escapeFormulaValue(result.email)}'`,
@@ -27230,7 +27229,7 @@ app.post("/api/signup", async (req, res) => {
     if (existing.length) {
       const seller = normalizeSeller(existing[0]);
 
-      // Heeft al een wachtwoord: gewoon inloggen.
+      // Already has a password: just sign in.
       if (seller.portal_password) {
         return res.status(409).json({
           error: "An account with this email already exists. Please log in instead.",
@@ -27238,9 +27237,9 @@ app.post("/api/signup", async (req, res) => {
         });
       }
 
-      // Bestaand profiel zonder portal-wachtwoord — de seller die ooit via
-      // Discord of het formulier is aangemaakt. Die claimt zijn record via de
-      // reset-mail in plaats van een nieuw record te krijgen.
+      // An existing profile with no portal password - the seller created at
+      // some point through Discord or the old form. They claim their record
+      // through the reset mail instead of being given a new one.
       return res.status(409).json({
         error:
           "You already have a seller profile with us. Use \"First time login or forgot password\" to set your password.",
@@ -27269,9 +27268,9 @@ app.post("/api/signup", async (req, res) => {
         discord_id: seller.discord_id,
         consignor: seller.consignor
       },
-      // De registratie is pas af als Discord gekoppeld is; de frontend stuurt
-      // hier meteen naartoe. Kwam de seller van een offer-link, dan keert hij
-      // na het koppelen daar terug in plaats van op het dashboard.
+      // Registration is only finished once Discord is linked; the front end
+      // sends them straight here. If the seller came from an offer link they
+      // return there after linking rather than to the dashboard.
       next: buildDiscordLinkPath({ returnTo, refCode, fresh: true })
     });
   } catch (err) {
@@ -27289,9 +27288,9 @@ app.post("/api/logout", (req, res) => {
   res.json({ ok: true });
 });
 
-// Laat de frontend controleren of de cookie nog geldig is. localStorage
-// ("kc_seller") overleeft een verlopen sessie, dus zonder deze check zou de UI
-// ingelogd blijven lijken terwijl elke schrijfactie een 401 krijgt.
+// Lets the front end check whether the cookie is still valid. localStorage
+// ("kc_seller") outlives an expired session, so without this check the UI
+// would keep looking signed in while every write gets a 401.
 app.get("/api/session", async (req, res) => {
   const session = readSession(req, SESSION_SECRET);
 
@@ -27328,21 +27327,21 @@ app.get("/api/session", async (req, res) => {
 });
 
 /* ------------------------------------------------------------------ *
- * Discord koppelen.
+ * Linking Discord.
  *
- * Eén klik die twee dingen tegelijk doet: het Discord-account aan het
- * Sellers Database-record hangen en de seller in de server zetten. Zonder
- * Discord ID op het record kan er bij een geaccepteerde deal geen channel
- * met de seller worden aangemaakt, dus dit is geen extraatje maar een
- * voorwaarde om te mogen bieden.
+ * One click doing two things at once: attaching the Discord account to the
+ * Sellers Database record, and putting the seller into the server. Without
+ * a Discord ID on the record no channel with the seller can be created for
+ * an accepted deal, so this is not an extra but a condition for being
+ * allowed to bid.
  * ------------------------------------------------------------------ */
 
 const DISCORD_OAUTH_CLIENT_ID =
   process.env.DISCORD_OAUTH_CLIENT_ID || "942785648048353370";
 const DISCORD_OAUTH_CLIENT_SECRET = process.env.DISCORD_OAUTH_CLIENT_SECRET || "";
 
-// Moet letterlijk gelijk zijn aan een Redirect die in de Discord Developer
-// Portal staat, anders weigert Discord de hele flow.
+// Must match a Redirect registered in the Discord Developer Portal exactly,
+// or Discord refuses the whole flow.
 const DISCORD_OAUTH_REDIRECT_URI =
   process.env.DISCORD_OAUTH_REDIRECT_URI ||
   `${String(APP_PUBLIC_BASE_URL).replace(/\/$/, "")}/auth/discord/callback`;
@@ -27351,9 +27350,9 @@ function portalUrl(pathname) {
   return `${String(APP_PUBLIC_BASE_URL).replace(/\/$/, "")}${pathname}`;
 }
 
-// Alleen een pad binnen de portal mag als terugkeeradres dienen. Zonder deze
-// controle kan iemand een offer-link rondsturen die na het koppelen doorstuurt
-// naar een site die hij zelf beheert.
+// Only a path inside the portal may serve as a return address. Without this
+// check someone could circulate an offer link that, after linking, forwards
+// to a site they control themselves.
 function safeReturnPath(input) {
   const value = String(input || "");
 
@@ -27362,8 +27361,8 @@ function safeReturnPath(input) {
   return value;
 }
 
-// Bouwt het pad naar de koppelstap met de context die meegedragen moet
-// worden: waar de seller vandaan kwam, en wie hem gestuurd heeft.
+// Builds the path to the linking step with the context that has to travel
+// along: where the seller came from, and who sent them.
 function buildDiscordLinkPath({ returnTo = "", refCode = "", fresh = false } = {}) {
   const params = new URLSearchParams();
 
@@ -27398,8 +27397,9 @@ app.get("/auth/discord", (req, res) => {
     return discordLinkRedirect(res, { discord_error: "not_configured" });
   }
 
-  // De state is ondertekend en draagt het seller-record, zodat de callback niet
-  // op een meegestuurde parameter hoeft te vertrouwen. Vervalt na 10 minuten.
+  // The state is signed and carries the seller record, so the callback does
+  // not have to trust a parameter sent along with it. Expires after 10
+  // minutes.
   const state = signSession(
     {
       rid: session.rid,
@@ -27425,7 +27425,7 @@ app.get("/auth/discord/callback", async (req, res) => {
   const code = asText(req.query.code);
   const state = asText(req.query.state);
 
-  // De gebruiker kan op "Cancel" drukken; dan komt hij hier terug zonder code.
+  // The user can press "Cancel"; then they come back here without a code.
   if (!code) {
     return discordLinkRedirect(res, { discord_error: "cancelled" });
   }
@@ -27446,9 +27446,9 @@ app.get("/auth/discord/callback", async (req, res) => {
 
     const discordUser = await fetchDiscordUser({ accessToken });
 
-    // Dit Discord-account mag niet al aan een ánder seller-record hangen.
-    // Stil overzetten zou twee sellers door elkaar halen en de deal-channels
-    // naar de verkeerde persoon sturen.
+    // This Discord account must not already belong to a DIFFERENT seller
+    // record. Moving it silently would mix two sellers up and send deal
+    // channels to the wrong person.
     const conflicts = await airtable(SELLERS_TABLE)
       .select({
         filterByFormula: `{Discord ID} = '${escapeFormulaValue(discordUser.id)}'`,
@@ -27497,16 +27497,17 @@ app.get("/auth/discord/callback", async (req, res) => {
 
     await upsertDiscordMember({ discordUser, sellerRecordId: claim.rid });
 
-    // Na de upsert, want attributeReferral heeft de Discord Members-rij van
-    // de uitgenodigde nodig.
+    // After the upsert, because attributeReferral needs the invited seller
+    // Discord Members row.
     await attributeReferral({ discordUser, refCode: claim.ref });
 
-    // Alleen bij een verse registratie. De oude seller-registration bot vuurde
-    // dit vlak na het aanmaken van het record; in de portal bestaat het record
-    // al vóór de koppeling, dus we wachten tot hier — anders krijgt Make een
-    // lege discordId en discordTag.
-    // Succes logde niets, dus bij een uitblijvende DM was niet te zien of de
-    // stap was overgeslagen of stilletjes mislukt. Nu allebei zichtbaar.
+    // Only on a fresh registration. The old seller-registration bot fired this
+    // just after creating the record; in the portal the record already exists
+    // before linking, so we wait until here - otherwise Make gets an empty
+    // discordId and discordTag.
+    // Success logged nothing, so when a DM failed to arrive there was no way
+    // to tell whether the step was skipped or had failed quietly. Both are
+    // visible now.
     if (claim.fresh) {
       console.log(`Verse registratie ${claim.rid}: agreement-webhook en Seller ID-DM volgen`);
 
@@ -27531,8 +27532,8 @@ app.get("/auth/discord/callback", async (req, res) => {
   } catch (err) {
     console.error("Discord link failed:", err);
 
-    // Een 403 op de join betekent vrijwel altijd dat de bot "Create Invite"
-    // mist; dat is een serverinstelling, geen gebruikersfout.
+    // A 403 on the join almost always means the bot lacks "Create Invite";
+    // that is a server setting, not a user error.
     const reason = /Failed to add user to guild \(403/.test(err.message)
       ? "bot_missing_permission"
       : "failed";
@@ -27541,20 +27542,20 @@ app.get("/auth/discord/callback", async (req, res) => {
   }
 });
 
-// Houdt de Discord Members-tabel in lijn, zodat de controle "zit deze seller
-// nog in de server?" één bron heeft.
-// De DM met het Seller ID, vanuit onze eigen bot. Dit deed het Make-scenario,
-// waardoor het bericht van Make's Discord-app ("Integromat") kwam in plaats van
-// van Kickz Caviar. Verwijder de Discord-module uit dat scenario, anders krijgt
-// de seller het bericht twee keer.
+// Keeps the Discord Members table in line, so the check "is this seller still
+// in the server?" has a single source.
+// The DM with the Seller ID, sent from our own bot. The Make scenario used to
+// do this, which made the message come from Make's Discord app ("Integromat")
+// instead of from Kickz Caviar. Remove the Discord module from that scenario,
+// or the seller gets the message twice.
 async function sendSellerIdDm({ sellerRecord, discordUser }) {
   try {
     await initKickzDealDiscord();
 
     const user = await kickzDealDiscordClient.users.fetch(discordUser.id);
 
-    // Een knop in plaats van een URL in de tekst: gemaskeerde links renderen
-    // niet in een gewoon DM-bericht, maar componenten wel.
+    // A button rather than a URL in the text: masked links do not render in a
+    // plain DM message, but components do.
     console.log(`Seller ID-DM versturen naar ${discordUser.id}`);
 
     await user.send({
@@ -27582,15 +27583,15 @@ async function sendSellerIdDm({ sellerRecord, discordUser }) {
     });
     console.log(`Seller ID-DM verstuurd naar ${discordUser.id}`);
   } catch (err) {
-    // Iemand met DM's uit mag de registratie niet laten stranden; het Seller ID
-    // staat ook gewoon op zijn dashboard.
+    // Someone with DMs switched off must not strand the registration; the
+    // Seller ID is on their dashboard as well.
     console.warn(`Could not DM Seller ID to ${discordUser.id}: ${err.message}`);
   }
 }
 
-// Vuurt het Make-scenario af dat de Sales Agreement PDF genereert en in het
-// veld "Agreement PDF" zet. Zonder MAKE_PDF_WEBHOOK_URL gebeurt er niets, dan
-// blijft dat veld gewoon leeg.
+// Fires the Make scenario that generates the Sales Agreement PDF and puts it
+// in the "Agreement PDF" field. Without MAKE_PDF_WEBHOOK_URL nothing happens
+// and that field simply stays empty.
 async function sendAgreementWebhook({ sellerRecord, discordUser }) {
   const url = process.env.MAKE_PDF_WEBHOOK_URL;
 
@@ -27619,8 +27620,8 @@ async function sendAgreementWebhook({ sellerRecord, discordUser }) {
       console.error(`Agreement webhook returned ${response.status}`);
     }
   } catch (err) {
-    // Het profiel en de koppeling zijn op dit punt al gelukt; een mislukte
-    // PDF mag die niet terugdraaien.
+    // The profile and the link have already succeeded at this point; a failed
+    // PDF must not undo them.
     console.error("Failed to call agreement webhook:", err);
   }
 }
@@ -27652,8 +27653,8 @@ async function upsertDiscordMember({ discordUser, sellerRecordId }) {
       });
     }
   } catch (err) {
-    // De koppeling op het seller-record is het belangrijke deel en is op dit
-    // punt al geslaagd; deze tabel is administratie en mag de flow niet breken.
+    // The link on the seller record is the part that matters and has already
+    // succeeded here; this table is bookkeeping and must not break the flow.
     console.error("Failed to upsert Discord Members record:", err);
   }
 }
@@ -27871,15 +27872,14 @@ app.post("/api/claim-deal", async (req, res) => {
   }
 });
 
-// Zonder Discord ID op het seller-record kan er bij een geaccepteerde deal
-// geen channel met de seller worden aangemaakt. Dat maakt dit geen nette-
-// gegevens-kwestie maar een harde voorwaarde om te mogen bieden.
+// Without a Discord ID on the seller record, no channel with the seller can
+// be created for an accepted deal. That makes this a hard condition for
+// being allowed to bid, not a tidy-data question.
 //
-// Registratie via de portal levert altijd een gekoppelde Discord op. Wat
-// overblijft zijn de records van vóór de portal: aangemaakt door de
-// Discord-bot of het oude formulier, soms zonder Discord ID. Die lopen hier
-// tegenaan, met een melding die in één klik op te lossen is in plaats van een
-// supportbericht.
+// Registering through the portal always produces a linked Discord. What is
+// left are the records from before the portal: created by the Discord bot or
+// the old form, sometimes without a Discord ID. Those run into this, with a
+// message that takes one click to resolve rather than a support ticket.
 async function requireLinkedDiscord(sellerRecordId) {
   if (!sellerRecordId) {
     return { ok: false, status: 400, body: { error: "Missing sellerRecordId" } };
@@ -27907,8 +27907,8 @@ async function requireLinkedDiscord(sellerRecordId) {
     };
   }
 
-  // Wel een Discord ID, maar niet meer in de server. Dezelfde oplossing: de
-  // koppelflow zet hem er via guilds.join weer in.
+  // A Discord ID, but no longer in the server. Same resolution: the linking
+  // flow puts them back in through guilds.join.
   if (seller.discord_in_server === false) {
     return {
       ok: false,
@@ -27935,10 +27935,10 @@ app.post("/api/place-offer", async (req, res) => {
       sourceType = "order"
     } = req.body || {};
 
-    // FIXED — de offer-pagina stuurt bewust geen sellerRecordId mee; de
-    // sessie bepaalt wie er biedt. De guard PINT de body alleen als het veld
-    // er al in staat, dus zonder deze regel kwam hier undefined binnen en
-    // liep elke offer vanaf /offer/... stuk op "Missing sellerRecordId".
+    // FIXED - the offer page deliberately sends no sellerRecordId; the session
+    // decides who is bidding. The guard only PINS the body when the field is
+    // already there, so without this line undefined arrived here and every
+    // offer from /offer/... failed on "Missing sellerRecordId".
     const sellerRecordId = req.sellerSession?.rid || req.body?.sellerRecordId;
 
     const gate = await requireLinkedDiscord(sellerRecordId);
@@ -33560,8 +33560,8 @@ app.listen(PORT, () => {
       bindMembershipEvents();
       bindSellerOnboarding();
 
-      // Eén ronde bij het opstarten haalt in wat er tijdens een deploy of
-      // downtime aan join/leave-events is gemist.
+      // One round at start-up catches up on the join and leave events missed
+      // during a deploy or downtime.
       reconcileGuildMembership();
       qualifyReferrals();
 
