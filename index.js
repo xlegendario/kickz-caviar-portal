@@ -1696,6 +1696,15 @@ async function sendMemberWtbReadyToShipToChannel({
     ]
   });
 
+  // Logged because its absence is what made MWTB-000402 impossible to
+  // diagnose. Every failure in here throws and is therefore loud;
+  // success was silent, so a quiet log could mean the embed landed in
+  // an unexpected channel or that it was never sent at all. Those need
+  // different fixes, so the destination goes on the record either way.
+  console.log(
+    `Member WTB ${memberWtbRecordId}: Ready To Ship sent to channel ${message.channelId}`
+  );
+
   return {
     channelId: message.channelId,
     messageId: message.id
@@ -1820,6 +1829,13 @@ async function sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId) {
     selectedSourceTypeKey.includes("owned")
   ) {
     await sendMemberWtbLabelRequestToBuyer(memberWtbRecordId);
+
+    // Same reason as the log in sendMemberWtbReadyToShipToChannel: this
+    // branch sends no seller embed at all, on purpose. Without a line
+    // here that is indistinguishable from the embed going missing.
+    console.log(
+      `Member WTB ${memberWtbRecordId}: KC owned - label request sent to buyer, no seller step`
+    );
 
     return {
       ok: true,
