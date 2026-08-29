@@ -10432,7 +10432,6 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         "Current Lowest Offer": best.sellerPrice,
         "Current Lowest Normalized": best.sellerComparePrice,
         "Current Lowest Seller Offer": [createdOffer.id],
-        "Current Lowest VAT Type": best.row.vat_type,
         "Lowest Offer": best.sellerPrice,
         "Lowest Offer Normalized": best.sellerComparePrice,
         "Lowest Offer VAT Type": best.row.vat_type,
