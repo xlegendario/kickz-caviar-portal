@@ -770,6 +770,24 @@ body.modal-open {
   background: radial-gradient(circle at center, #ffd21f 0 42%, transparent 45%);
 }
 
+/* A VAT type this seller is not allowed to sell.
+
+   Shown rather than removed: seeing that VAT0 exists but is not yours reads
+   better than a form that quietly has one option fewer than last month. The
+   title attribute carries the reason. Matches how offer.html has handled
+   this for a while. */
+.vat-option.is-unavailable {
+  opacity: 0.34;
+  cursor: not-allowed;
+  border-color: rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.01);
+}
+
+.vat-option.is-unavailable:hover {
+  transform: none;
+  filter: none;
+}
+
 #confirmClaimBtn {
   width: 100%;
   height: 58px;
