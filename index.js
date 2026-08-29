@@ -6877,6 +6877,10 @@ app.get("/consignment-application", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "consignment-application.html"));
 });
 
+app.get("/guide", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "guide.html"));
+});
+
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
