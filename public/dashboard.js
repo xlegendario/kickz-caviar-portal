@@ -922,7 +922,10 @@ const COLUMN_SIZE_BY_HEADER = {
   "Current Lowest": "col-money",
   "Date": "col-date",
   "Denied": "col-date",
-  "Filter": "col-short",
+  // CHANGED - was col-short (84px, so 48px of room after padding), and
+  // "All Inventory" needs about 88px. With table-layout: fixed it did not
+  // wrap or clip, it ran straight over the Max Price beside it.
+  "Filter": "col-code",
   "Issue": "col-status",
   "Lowest Price": "col-money",
   "Max Price": "col-money",
