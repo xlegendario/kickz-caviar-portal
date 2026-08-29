@@ -14098,6 +14098,14 @@ function normalizeSeller(record) {
     portal_password: displayValue(f["Portal Password"]),
     portal_enabled: f["Portal Enabled"] !== false,
     discord_in_server: f["Discord In Server?"] !== false,
+    // NEW - the browser needs this to word the VAT hints correctly. A
+    // non-Margin seller invoices VAT21 to a Dutch buyer and VAT0 to a
+    // foreign one, and the copy said VAT0 to everyone.
+    //
+    // A flag rather than the country itself: the rule is what the front
+    // end needs, and shipping a whole address to every page is more than
+    // the question asks for.
+    is_dutch: isDutchClientCountry(f["Country"]),
     consignor: f["Consignor?"] === true,
     deal_updates_channel_id: displayValue(f["Deal Updates Channel ID"]),
     consignment_offer_channel_id: displayValue(f["Consignment Offer Channel ID"]),
@@ -25724,6 +25732,7 @@ app.post("/api/login", async (req, res) => {
         discord: seller.discord,
         discord_id: seller.discord_id,
         discord_in_server: seller.discord_in_server,
+        is_dutch: seller.is_dutch,
         consignor: seller.consignor
       }
     });
@@ -26881,6 +26890,7 @@ app.get("/api/session", async (req, res) => {
         discord: seller.discord,
         discord_id: seller.discord_id,
         discord_in_server: seller.discord_in_server,
+        is_dutch: seller.is_dutch,
         consignor: seller.consignor
       }
     });
