@@ -14340,6 +14340,23 @@ function normalizeSeller(record) {
     // end needs, and shipping a whole address to every page is more than
     // the question asks for.
     is_dutch: isDutchClientCountry(f["Country"]),
+
+    // NEW - which VAT types this seller may actually pick.
+    //
+    // Derived from validateSellerVatEligibility rather than restated,
+    // and that is the whole point. The rule already exists in four
+    // places that disagree about what counts as Dutch: this one accepts
+    // "netherlands", "nederland" and "nl", offerRules only the first,
+    // and registration resolves through the country table, which knows
+    // none of the short forms. A fifth copy for the front end would
+    // have been the one that drifts next.
+    //
+    // Asking the enforcing function itself means the buttons a seller
+    // can press are exactly the ones the server will accept - not
+    // approximately, by construction.
+    vat_types: ["Margin", "VAT21", "VAT0"].filter(
+      (type) => !validateSellerVatEligibility(f["VAT ID"], f["Country"], type)
+    ),
     consignor: f["Consignor?"] === true,
     deal_updates_channel_id: displayValue(f["Deal Updates Channel ID"]),
     consignment_offer_channel_id: displayValue(f["Consignment Offer Channel ID"]),
