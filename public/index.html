@@ -265,8 +265,8 @@
       <label class="offer-label">SIZE</label>
       <input id="memberWtbSizeInput" class="offer-input" type="text" placeholder="43" />
   
-      <label class="offer-label">MAX PRICE</label>
-      <input id="memberWtbMaxPriceInput" class="offer-input" type="text" inputmode="numeric" placeholder="120" />
+      <label class="offer-label">MAX PRICE <span class="offer-label-optional">optional</span></label>
+      <input id="memberWtbMaxPriceInput" class="offer-input" type="text" inputmode="numeric" placeholder="Leave empty for no ceiling" />
   
       <label class="offer-label">BUYING TYPE</label>
       <select id="memberWtbInventoryTypeInput" class="offer-input">
@@ -287,7 +287,8 @@
       <button id="closeMemberWtbCsvModal" class="modal-close" type="button">×</button>
   
       <h2>Bulk Post WTBs</h2>
-      <p>Upload multiple Want To Buys using a CSV file.</p>
+      <p>Upload multiple Want To Buys using a CSV file. Leave <strong>Max Price</strong> empty
+        on any row you do not want a ceiling on.</p>
   
       <label class="offer-label">BUYING TYPE</label>
       <select id="memberWtbCsvInventoryTypeInput" class="offer-input">
