@@ -586,6 +586,76 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
 
   const orderRecordId = firstLinkedRecordId(f["Linked Orders"]);
 
+  // NEW - a consignment match on a Member WTB confirms here too.
+  //
+  // Everything below this point is written around a store order: it reads
+  // Client Country, computes a store price, and finalises through the order.
+  // A Member WTB links through "Member WTBs" and has no order at all, so it
+  // fell straight into no_linked_order below and the consignor was told
+  // "This match is no longer available." He had done nothing wrong - there
+  // was simply no path for him.
+  //
+  // Reachable whenever his asking price fits the buyer's budget, because
+  // that is what makes the auto-offer send Confirm/Deny instead of a counter
+  // round (see isConfirmation in sendConsignmentOfferDiscordMessage).
+  //
+  // Finalised through process-seller-offer: the same call the Process Deal
+  // button makes, and the same one the three accept routes now use. It
+  // creates the Inventory Unit, writes the pair off his stock and runs the
+  // payment gate. Nothing below is touched - the store-order path is
+  // exactly as it was.
+  const memberWtbRecordIdForConfirm = firstLinkedRecordId(f["Member WTBs"]);
+
+  if (!orderRecordId && memberWtbRecordIdForConfirm) {
+    const processResponse = await fetch(
+      `${APP_PUBLIC_BASE_URL}/api/member-wtb/process-seller-offer`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.KC_PORTAL_SECRET
+        },
+        body: JSON.stringify({
+          member_wtb_record_id: memberWtbRecordIdForConfirm,
+          seller_offer_record_id: sellerOfferRecordId,
+          ...(agreed?.payout > 0
+            ? {
+                override_purchase_price: agreed.payout,
+                override_vat_type: agreed.vatType
+              }
+            : {})
+        })
+      }
+    );
+
+    const processData = await processResponse.json().catch(() => ({}));
+
+    if (!processResponse.ok) {
+      console.error(
+        `❌ Consignment confirm on Member WTB ${memberWtbRecordIdForConfirm} failed:`,
+        { status: processResponse.status, processData }
+      );
+
+      // out_of_stock and already_confirmed keep their own wording in the
+      // caller; anything else reads as "no longer available", which is what
+      // this reason maps to.
+      return { ok: false, reason: "member_wtb_finalise_failed" };
+    }
+
+    console.log(
+      `✅ Consignment confirm on Member WTB ${memberWtbRecordIdForConfirm} — ` +
+        `seller offer ${sellerOfferRecordId} finalised in the portal.`
+    );
+
+    return {
+      ok: true,
+      seller_offer_record_id: sellerOfferRecordId,
+      inventory_unit_record_id: processData.inventory_unit_record_id || null,
+      seller_id: asText(f["Seller ID (Lookup)"]) || asText(f["Seller ID"]),
+      member_wtb: true
+    };
+  }
+
   if (!orderRecordId) {
     return { ok: false, reason: "no_linked_order" };
   }
