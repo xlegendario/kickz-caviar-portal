@@ -9329,11 +9329,11 @@ app.post("/api/internal/resolve-sku", async (req, res) => {
     }
 
     const enkel = asText(req.body?.sku);
-    const lijst = Array.isArray(req.body?.skus) ? req.body.skus : [];
+    const list = Array.isArray(req.body?.skus) ? req.body.skus : [];
 
     const gevraagd = [
       ...new Set(
-        (enkel ? [enkel, ...lijst] : lijst)
+        (enkel ? [enkel, ...list] : list)
           .map((value) => normalizeSkuStrict(value))
           .filter(Boolean)
       )
@@ -20004,6 +20004,82 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/seller-accept", async (req,
         "Closed At": new Date().toISOString()
       });
 
+      // NEW - a consignor accepting his own round needs no deal channel.
+      //
+      // The store-order branch further down has done this since 20-08-2026:
+      // when the Seller Offer carries a Consignment Inventory ID it finalises
+      // in the portal and never asks the bot for a channel. The Member WTB
+      // branch never got the same treatment, so a consignor kept receiving an
+      // mwtb-... channel in the KC server while he already has private
+      // channels with us - with a Process Deal button for a deal that this
+      // route had already settled. MWTB-000402 and MWTB-000404 both ended
+      // that way.
+      //
+      // The test sits HERE and not in the bot. Whether stock is
+      // consignment-backed says nothing about which flow is settling the
+      // deal; the caller is what knows that. Putting it in the bot covered
+      // all seven callers at once and broke MWTB-000390, where a BUYER
+      // accepted a seller offer and the channel is the only way forward.
+      //
+      // confirmConsignmentSellerOffer cannot be reused: it requires
+      // "Linked Orders" and answers no_linked_order for a Member WTB. The
+      // equivalent here is process-seller-offer - the very thing the Process
+      // Deal button calls - so the deal is settled by exactly the code that
+      // would have run had the seller pressed it, minus the channel.
+      const sellerOfferForConsignment = await airtable(SELLER_OFFERS_TABLE)
+        .find(sellerOfferRecordId)
+        .catch(() => null);
+
+      const consignmentInventoryIdForMemberWtb = asText(
+        sellerOfferForConsignment?.fields?.["Consignment Inventory ID"]
+      );
+
+      if (consignmentInventoryIdForMemberWtb) {
+        const processResponse = await fetch(
+          `${APP_PUBLIC_BASE_URL}/api/member-wtb/process-seller-offer`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-kc-secret": process.env.KC_PORTAL_SECRET
+            },
+            body: JSON.stringify({
+              member_wtb_record_id: linkedMemberWtbId,
+              seller_offer_record_id: sellerOfferRecordId,
+              override_purchase_price: acceptedPayout,
+              override_vat_type: acceptedVatType
+            })
+          }
+        );
+
+        const processData = await processResponse.json().catch(() => ({}));
+
+        if (!processResponse.ok) {
+          return res.status(processResponse.status).json({
+            error: processData.error || "Could not finalise this consignment deal.",
+            details: processData.details
+          });
+        }
+
+        await closeCompetingCountersForMemberWtb(linkedMemberWtbId, counterOfferRecordId).catch((err) =>
+          console.error("Failed to close competing counters (non-blocking):", err)
+        );
+
+        console.log(
+          `✅ Consignor accepted round ${counterOfferRecordId} on ${linkedMemberWtbId} — ` +
+            `finalised in the portal, no deal channel (payout ` +
+            `${moneySmartValue(acceptedPayout)} ${acceptedVatType}).`
+        );
+
+        return res.json({
+          ok: true,
+          consignment: true,
+          member_wtb_record_id: linkedMemberWtbId,
+          seller_offer_record_id: sellerOfferRecordId,
+          inventory_unit_record_id: processData.inventory_unit_record_id || null
+        });
+      }
+
       const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
 
       if (!wtbBotBaseUrl) {
@@ -26676,16 +26752,16 @@ async function findSellerForDiscordUser(interaction) {
 
   if (byId.length) return byId[0];
 
-  const namen = new Set();
+  const names = new Set();
 
-  for (const naam of [
+  for (const name of [
     interaction.user.username,
     interaction.user.globalName,
     interaction.member?.nickname,
     interaction.member?.displayName
   ]) {
-    const clean = asText(naam);
-    if (clean) namen.add(clean);
+    const clean = asText(name);
+    if (clean) names.add(clean);
   }
 
   // In a DM the interaction has no member, so we fetch the server name
@@ -26695,17 +26771,17 @@ async function findSellerForDiscordUser(interaction) {
       const guild = await kickzDealDiscordClient.guilds.fetch(KICKZ_DEAL_SERVER_ID);
       const member = await guild.members.fetch(discordId);
 
-      if (member?.displayName) namen.add(member.displayName);
+      if (member?.displayName) names.add(member.displayName);
     } catch {
       // Not in the server, or no access. Then the names above are all we have.
     }
   }
 
-  if (!namen.size) return null;
+  if (!names.size) return null;
 
   // SEARCH rather than equality, so "Legendario" also finds "Legendario#4880".
-  const condities = [...namen]
-    .map((naam) => `SEARCH('${escapeFormulaValue(naam)}', {Discord} & '') > 0`)
+  const condities = [...names]
+    .map((name) => `SEARCH('${escapeFormulaValue(name)}', {Discord} & '') > 0`)
     .join(", ");
 
   const byName = await airtable(SELLERS_TABLE)
