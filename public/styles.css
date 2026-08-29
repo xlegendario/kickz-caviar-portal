@@ -2008,8 +2008,27 @@ body.modal-open {
     display: none;
   }
 
-  /* Placed rather than flowed: the summary sits after the buttons in the
-     markup, and auto-placement would push them onto a third row. */
+  /* Every child gets an explicit cell - none are left to auto-placement.
+
+     The first version placed only the buttons and the summary and let the
+     size and price flow into whatever was left. Chrome fills row one with
+     them, other engines are free not to, and on Dario's browser the size
+     and the price disappeared from the card entirely while the buttons
+     stretched. Mixing placed and flowed items in one grid is the corner
+     where that behaviour differs, so there is nothing left to interpret
+     here: four children, four stated positions. */
+  .buying-size-table-row .buying-size-main {
+    grid-row: 1;
+    grid-column: 1;
+    align-self: center;
+  }
+
+  .buying-size-table-row .buying-size-price {
+    grid-row: 1;
+    grid-column: 2;
+    align-self: center;
+  }
+
   .buying-size-table-row .buying-size-actions {
     grid-row: 1;
     grid-column: 3;
