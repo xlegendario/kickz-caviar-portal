@@ -1899,36 +1899,26 @@ async function sendMemberWtbDealUpdate(memberWtbRecordId) {
   );
 
   /*
-    WTB Seller winner:
-    - WTB bot already created a Member WTB deal channel
-    - Member WTB field WTB Created Channel ID should contain that channel
-  */
-  const memberWtbDealChannelId = asText(f["WTB Created Channel ID"]);
+    CHANGED - the seller's own channel comes first, and a channel we cannot
+    reach no longer ends the whole thing.
 
-  if (memberWtbDealChannelId) {
-    await initKickzDealDiscord();
+    This used to try "WTB Created Channel ID" first and throw when that
+    channel could not be fetched. Two problems, both seen live.
 
-    const channel = await kickzDealDiscordClient.channels
-      .fetch(memberWtbDealChannelId)
-      .catch(() => null);
+    A consignor already has private channels with us. Sending his Ready To
+    Ship into a freshly made WTB channel instead is the wrong room, and he
+    said so himself on MWTB-000402: "shouldn't have opened a channel here
+    while you have the private channels."
 
-    if (!channel) {
-      throw new Error(`Member Created WTB deal channel not found: ${memberWtbDealChannelId}`);
-    }
+    Worse, that channel is created by the WTB bot and posted to by the deal
+    bot. When the deal bot cannot see it the fetch fails, and a throw there
+    meant the seller got nothing at all - no fallback to the channel he does
+    have. MWTB-000404 (29-08-2026) ended exactly that way: deal complete,
+    unit created, consignor never told, and a dead channel to look at.
 
-    return await sendMemberWtbReadyToShipToChannel({
-      channel,
-      sellerDiscordId,
-      memberWtbRecordId,
-      memberFields: f,
-      payout,
-      compact: true
-    });
-  }
-
-  /*
-    Consignment private-channel winner:
-    - Use seller Deal Updates channel if it exists.
+    So: his own Deal Updates channel first, the WTB channel only if he has
+    none, and an unreachable channel falls through to the next option rather
+    than ending the attempt.
   */
   const privateDealUpdatesChannelId = asText(seller.deal_updates_channel_id);
 
@@ -1939,17 +1929,49 @@ async function sendMemberWtbDealUpdate(memberWtbRecordId) {
       .fetch(privateDealUpdatesChannelId)
       .catch(() => null);
 
-    if (!channel) {
-      throw new Error(`Deal Updates channel not found: ${privateDealUpdatesChannelId}`);
+    if (channel) {
+      return await sendMemberWtbReadyToShipToChannel({
+        channel,
+        sellerDiscordId,
+        memberWtbRecordId,
+        memberFields: f,
+        payout
+      });
     }
 
-    return await sendMemberWtbReadyToShipToChannel({
-      channel,
-      sellerDiscordId,
-      memberWtbRecordId,
-      memberFields: f,
-      payout
-    });
+    console.error(
+      `⚠️ Member WTB ${memberWtbRecordId}: Deal Updates channel ${privateDealUpdatesChannelId} ` +
+        "could not be fetched, trying the next option."
+    );
+  }
+
+  /*
+    No private channels: the WTB bot made a deal channel for this one.
+  */
+  const memberWtbDealChannelId = asText(f["WTB Created Channel ID"]);
+
+  if (memberWtbDealChannelId) {
+    await initKickzDealDiscord();
+
+    const channel = await kickzDealDiscordClient.channels
+      .fetch(memberWtbDealChannelId)
+      .catch(() => null);
+
+    if (channel) {
+      return await sendMemberWtbReadyToShipToChannel({
+        channel,
+        sellerDiscordId,
+        memberWtbRecordId,
+        memberFields: f,
+        payout,
+        compact: true
+      });
+    }
+
+    console.error(
+      `⚠️ Member WTB ${memberWtbRecordId}: WTB deal channel ${memberWtbDealChannelId} ` +
+        "could not be fetched, falling back to a new channel."
+    );
   }
 
   /*
