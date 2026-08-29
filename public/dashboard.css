@@ -3838,6 +3838,27 @@ body.modal-open {
     table-layout: fixed;
   }
 
+  /* A sized cell clips instead of escaping.
+
+     table-layout: fixed does not make text respect its column - a value
+     that does not fit spills over the neighbour, which is how
+     "All Inventory" ended up printed on top of a price. Every width note
+     below is a fix for one value that outgrew its class; this is the
+     backstop for the next one, so the worst case is an ellipsis rather
+     than two numbers on top of each other. */
+  .dashboard-table th.col-short, .dashboard-table td.col-short,
+  .dashboard-table th.col-type, .dashboard-table td.col-type,
+  .dashboard-table th.col-date, .dashboard-table td.col-date,
+  .dashboard-table th.col-money, .dashboard-table td.col-money,
+  .dashboard-table th.col-code, .dashboard-table td.col-code,
+  .dashboard-table th.col-status, .dashboard-table td.col-status,
+  .dashboard-table th.col-long, .dashboard-table td.col-long,
+  .dashboard-table th.col-default, .dashboard-table td.col-default {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   /* CHANGED - 75px left 39px after padding, and a fractional size like
      "38 2/3" is 42px. */
   .dashboard-table th.col-short,
