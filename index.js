@@ -562,6 +562,112 @@ async function writeOffConsignmentUnit(consignmentInventoryId, context = "") {
   return { ok: true, sku: row.sku, size: row.size, from: row.quantity, to: newQuantity };
 }
 
+/*
+ * The buyer accepted a consignment-backed offer: now ask the consignor.
+ *
+ * This is the Member WTB counterpart of what a store order already does.
+ * Posting a want-to-buy commits the buyer to nothing, and a Max Price is a
+ * ceiling rather than an agreement - so nothing may be asked of the
+ * consignor until the buyer has actually accepted. The moment he does, the
+ * consignor gets the same "do you still have it" request he would get on a
+ * store order, in his own channel.
+ *
+ * Replaces the deal channel that used to be created for him here. He has
+ * private channels; a fresh mwtb-... channel with a Process Deal button was
+ * both the wrong room and a second mechanism for one question.
+ *
+ * Reuses sendConsignmentOfferDiscordMessage rather than building a second
+ * embed - it decides confirmation vs counter from the price it is handed,
+ * so handing it the accepted amount produces exactly the Confirm/Deny pair.
+ */
+async function askConsignorToConfirmMemberWtbOffer({
+  memberWtbRecordId,
+  sellerOfferRecordId,
+  acceptedPayout = null
+}) {
+  const offerRecord = await airtable(SELLER_OFFERS_TABLE)
+    .find(sellerOfferRecordId)
+    .catch(() => null);
+
+  if (!offerRecord) return { ok: false, reason: "offer_not_found" };
+
+  const f = offerRecord.fields || {};
+  const inventoryId = asText(f["Consignment Inventory ID"]);
+
+  if (!inventoryId) return { ok: false, reason: "not_consignment" };
+
+  const sellerRecordId = firstLinkedRecordId(f["Seller ID"]);
+
+  if (!sellerRecordId) return { ok: false, reason: "no_seller" };
+
+  const sellerRecord = await airtable(SELLERS_TABLE)
+    .find(sellerRecordId)
+    .catch(() => null);
+
+  if (!sellerRecord) return { ok: false, reason: "seller_not_found" };
+
+  const sf = sellerRecord.fields || {};
+
+  const memberWtb = await airtable(MEMBER_WTBS_TABLE)
+    .find(memberWtbRecordId)
+    .catch(() => null);
+
+  if (!memberWtb) return { ok: false, reason: "member_wtb_not_found" };
+
+  const mf = memberWtb.fields || {};
+  const sellerPrice = numberValue(f["Seller Offer"]);
+
+  // What we hand in as the ceiling decides which embed comes out. The
+  // buyer accepted this price, so it is at least the asking price and the
+  // function produces Confirm/Deny rather than a counter round.
+  const calculatedOfferPrice = Number.isFinite(acceptedPayout) && acceptedPayout > 0
+    ? Math.max(acceptedPayout, sellerPrice)
+    : sellerPrice;
+
+  const discordResult = await sendConsignmentOfferDiscordMessage({
+    seller: {
+      seller_record_id: sellerRecordId,
+      seller_id: asText(sf["Seller ID"]),
+      discord_id: asText(sf["Discord ID"]),
+      consignment_offer_channel_id: asText(sf["Consignment Offer Channel ID"]),
+      consignment_confirmation_channel_id: asText(sf["Consignment Confirmation Channel ID"])
+    },
+    offer: {
+      id: sellerOfferRecordId,
+      order_record_id: null,
+      member_wtb_record_id: memberWtbRecordId,
+      order_id: asText(mf["Member WTB ID"]) || memberWtbRecordId,
+      source_type: "member_wtb",
+      seller_record_id: sellerRecordId,
+      seller_id: asText(sf["Seller ID"]),
+      product_name: asText(mf["Product Name"]),
+      sku: asText(mf["SKU"]),
+      size: asText(mf["Size"]),
+      brand: asText(mf["Brand"]),
+      vat_type: asText(f["Offer VAT Type"]),
+      seller_price: sellerPrice,
+      offer_price: sellerPrice
+    },
+    calculatedOfferPrice,
+    sellerOfferRecordId
+  });
+
+  await rememberConsignmentConfirmMessage(sellerOfferRecordId, discordResult);
+
+  console.log(
+    `📩 Consignment confirmation asked for Member WTB ${memberWtbRecordId} ` +
+      `(seller offer ${sellerOfferRecordId}, ${moneySmartValue(sellerPrice)} ` +
+      `${asText(f["Offer VAT Type"])}).`
+  );
+
+  return {
+    ok: true,
+    seller_offer_record_id: sellerOfferRecordId,
+    channel_id: discordResult?.channelId || null,
+    message_id: discordResult?.messageId || null
+  };
+}
+
 async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null) {
   const offerRecord = await airtable(SELLER_OFFERS_TABLE)
     .find(sellerOfferRecordId)
@@ -4791,6 +4897,47 @@ function bindConsignmentDiscordButtons(client) {
             components: []
           }).catch(() => {});
     
+          // A consignment-backed offer gets a confirmation request, not a channel.
+          //
+          // The buyer has just accepted, which is the moment the consignor may be
+          // asked whether he still holds the pair - the same question a store order
+          // asks. It goes to his own channel, and confirming there finalises the deal.
+          const offerForConsignment = await airtable(SELLER_OFFERS_TABLE)
+            .find(sellerOfferRecordId)
+            .catch(() => null);
+
+          if (asText(offerForConsignment?.fields?.["Consignment Inventory ID"])) {
+            const asked = await askConsignorToConfirmMemberWtbOffer({
+              memberWtbRecordId,
+              sellerOfferRecordId,
+              acceptedPayout: null
+            });
+
+            if (!asked.ok) {
+              console.error(
+                `❌ Could not ask the consignor to confirm ${sellerOfferRecordId}:`,
+                asked.reason
+              );
+
+              await safeEditInteractionMessage(interaction, {
+                content: "❌ Could not reach the consignor for confirmation.",
+                embeds: interaction.message.embeds,
+                components: []
+              }).catch(() => {});
+              
+              return;
+            }
+
+            await safeEditInteractionMessage(interaction, {
+              content:
+                "✅ Offer accepted. The consignor has been asked to confirm he still " +
+                "has the pair; you get the payment step once he does.",
+              embeds: interaction.message.embeds,
+              components: []
+            }).catch(() => {});
+            
+            return;
+          }
           const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
 
           if (!wtbBotBaseUrl) {
@@ -5617,6 +5764,47 @@ function bindConsignmentDiscordButtons(client) {
         "Closed At": new Date().toISOString()
       });
 
+      // A consignment-backed offer gets a confirmation request, not a channel.
+      //
+      // The buyer has just accepted, which is the moment the consignor may be
+      // asked whether he still holds the pair - the same question a store order
+      // asks. It goes to his own channel, and confirming there finalises the deal.
+      const offerForConsignment = await airtable(SELLER_OFFERS_TABLE)
+        .find(sellerOfferRecordId)
+        .catch(() => null);
+
+      if (asText(offerForConsignment?.fields?.["Consignment Inventory ID"])) {
+        const asked = await askConsignorToConfirmMemberWtbOffer({
+          memberWtbRecordId,
+          sellerOfferRecordId,
+          acceptedPayout: acceptedPayout
+        });
+
+        if (!asked.ok) {
+          console.error(
+            `❌ Could not ask the consignor to confirm ${sellerOfferRecordId}:`,
+            asked.reason
+          );
+
+          await safeEditInteractionMessage(interaction, {
+            content: "❌ Could not reach the consignor for confirmation.",
+            embeds: interaction.message.embeds,
+            components: []
+          }).catch(() => {});
+          
+          return;
+        }
+
+        await safeEditInteractionMessage(interaction, {
+          content:
+            "✅ Counter accepted. The consignor has been asked to confirm he still " +
+            "has the pair; you get the payment step once he does.",
+          embeds: interaction.message.embeds,
+          components: []
+        }).catch(() => {});
+        
+        return;
+      }
       const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
 
       if (!wtbBotBaseUrl) {
@@ -9975,29 +10163,22 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     // shop sticker adds 12.10 to keep 10. Subtracting the bare 10 left us
     // with 10 / 1.21 = 8.26 while the price the buyer was shown promised a
     // full 10.
-    // CHANGED - a Member WTB without a ceiling still gets an offer.
+    // REVERTED - a missing ceiling must NOT be read as "his price is fine".
     //
-    // Max Price became optional on 29-08-2026, and "no figure" was read here
-    // as "invalid": the route answered 400 and the want-to-buy got no
-    // consignment offer at all. That is backwards - no ceiling means every
-    // consignor qualifies, so the cheapest one should be offered, not none.
+    // Briefly this fell back to best.sellerComparePrice when Max Price was
+    // empty, which made the comparison below always true and sent the
+    // consignor a Confirm embed straight away. One press and the deal was
+    // done - on a price the BUYER had never agreed to, because a want-to-buy
+    // without a ceiling commits him to nothing. Caught live on 30-08-2026.
     //
-    // Expressed as "our ceiling is whatever he asks": the comparison below
-    // then always matches, so he is asked to confirm his own price rather
-    // than to come down to a limit that does not exist. The counter branch
-    // never runs, which is right - there is nothing to negotiate him down
-    // to. From there it is the normal flow: the buyer sees the offer and
-    // accepts, counters or denies.
-    //
-    // Store orders are untouched; they have a Maximum Buying Price by
-    // definition and keep their own calculation.
-    const hasCeiling =
-      Number.isFinite(maximumBuyingPrice) && maximumBuyingPrice > 0;
-
+    // With a ceiling the confirmation is legitimate: naming a Max Price IS
+    // agreeing to anything at or below it. Without one there is no such
+    // agreement, so nothing may be asked of the consignor until the buyer
+    // has accepted. That path does not exist yet, so this stays as it was.
     const calculatedOfferPrice = source.kind === "member_wtb"
-      ? (hasCeiling
+      ? (Number.isFinite(maximumBuyingPrice) && maximumBuyingPrice > 0
           ? Math.max(0, maximumBuyingPrice - getMemberWtbMargin(orderFields) * 1.21)
-          : best.sellerComparePrice)
+          : null)
       : calculateConsignmentOfferPrice(maximumBuyingPrice, orderFields);
 
     if (calculatedOfferPrice === null) {
@@ -10005,14 +10186,6 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         error: "Invalid Maximum Buying Price",
         seller_offer_record_id: createdOffer.id
       });
-    }
-
-    if (!hasCeiling && source.kind === "member_wtb") {
-      console.log(
-        `ℹ️ Member WTB ${source.recordId} has no Max Price - offering the ` +
-          `cheapest consignment stock at ${moneySmartValue(best.sellerPrice)} ` +
-          `${best.row.vat_type} without a ceiling.`
-      );
     }
 
     // Same test the current embed builder uses: both sides on the
@@ -23919,6 +24092,42 @@ app.post("/api/dashboard/buying-counter-offers/:offerId/buyer-accept", async (re
       "Closed At": new Date().toISOString()
     });
 
+    // A consignment-backed offer gets a confirmation request, not a channel.
+    //
+    // The buyer has just accepted, which is the moment the consignor may be
+    // asked whether he still holds the pair - the same question a store order
+    // asks. It goes to his own channel, and confirming there finalises the deal.
+    const offerForConsignment = await airtable(SELLER_OFFERS_TABLE)
+      .find(sellerOfferRecordId)
+      .catch(() => null);
+
+    if (asText(offerForConsignment?.fields?.["Consignment Inventory ID"])) {
+      const asked = await askConsignorToConfirmMemberWtbOffer({
+        memberWtbRecordId,
+        sellerOfferRecordId,
+        acceptedPayout: acceptedPayout
+      });
+
+      if (!asked.ok) {
+        console.error(
+          `❌ Could not ask the consignor to confirm ${sellerOfferRecordId}:`,
+          asked.reason
+        );
+
+        return res.status(500).json({
+          error: "Could not reach the consignor for confirmation.",
+          reason: asked.reason
+        });
+      }
+
+      return res.json({
+        ok: true,
+        consignment: true,
+        awaiting_consignor_confirmation: true,
+        member_wtb_record_id: memberWtbRecordId,
+        seller_offer_record_id: sellerOfferRecordId
+      });
+    }
     const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
 
     if (!wtbBotBaseUrl) {
@@ -24753,6 +24962,47 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
     // Fall back to the buyer-facing value only if the Seller Offer's own
     // type is somehow unreadable (shouldn't happen).
     const overrideVatType = sellerVatType || buyerFacingVatType;
+
+    // A consignment-backed offer gets a confirmation request, not a channel.
+    //
+    // The buyer has just accepted, which is the moment the consignor may be
+    // asked whether he still holds the pair - the same question a store order
+    // asks him. It goes to his own channel; a fresh mwtb-... channel with a
+    // Process Deal button was the wrong room and a second mechanism for one
+    // question. Confirming there finalises the deal.
+    if (sellerOfferRecordId) {
+      const offerForConsignment = await airtable(SELLER_OFFERS_TABLE)
+        .find(sellerOfferRecordId)
+        .catch(() => null);
+
+      if (asText(offerForConsignment?.fields?.["Consignment Inventory ID"])) {
+        const asked = await askConsignorToConfirmMemberWtbOffer({
+          memberWtbRecordId,
+          sellerOfferRecordId,
+          acceptedPayout: Number(overridePrice) || null
+        });
+
+        if (!asked.ok) {
+          console.error(
+            `❌ Could not ask the consignor to confirm ${sellerOfferRecordId}:`,
+            asked.reason
+          );
+
+          return res.status(500).json({
+            error: "Could not reach the consignor for confirmation.",
+            reason: asked.reason
+          });
+        }
+
+        return res.json({
+          ok: true,
+          consignment: true,
+          awaiting_consignor_confirmation: true,
+          member_wtb_record_id: memberWtbRecordId,
+          seller_offer_record_id: sellerOfferRecordId
+        });
+      }
+    }
 
     const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
     if (!wtbBotBaseUrl) {
