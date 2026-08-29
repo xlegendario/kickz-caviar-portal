@@ -3014,7 +3014,7 @@ function renderWtbUnifiedOfferRows(items) {
               ` : `
                 ${(item.previous_record_id || item.previous_store_price) ? `
                   <button class="dashboard-confirm-btn" type="button" data-wtb-accept-previous-id="${escapeHtml(item.id || "")}">${item.previous_store_price ? `Accept ${escapeHtml(item.previous_store_price)}` : "Accept Previous"}</button>
-                  <button class="dashboard-counter-btn" type="button" data-wtb-retry-counter-id="${escapeHtml(item.id || "")}">Counter</button>
+                  <button class="dashboard-counter-btn" type="button" data-wtb-retry-counter-id="${escapeHtml(item.id || "")}">Retry</button>
                 ` : ""}
                 <button class="dashboard-deny-btn" type="button" data-wtb-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
               `}
