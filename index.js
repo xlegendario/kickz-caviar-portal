@@ -9425,6 +9425,11 @@ app.post("/api/member-wtb/csv-import", async (req, res) => {
     const sellerRecordId = asText(req.body?.seller_record_id);
     const sellerId = asText(req.body?.seller_id);
     const inventoryType = normalizeBuyingInventoryType(req.body?.inventory_type);
+    const b2bRefusal = await b2bBuyingTypeRefusal(inventoryType, sellerRecordId);
+
+    if (b2bRefusal) {
+      return res.status(400).json({ error: b2bRefusal });
+    }
     const createdFrom = asText(req.body?.created_from) || "CSV Import";
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
 
@@ -30830,6 +30835,38 @@ async function getLiveBuyingSources({ force = false } = {}) {
 // The VAT rate of the store that is buying, from their own seller record.
 // Null when it cannot be read, so the calculation falls back to the Dutch
 // 0.21 it used before this existed.
+/*
+ * A buyer without a VAT ID has no business in B2B stock.
+ *
+ * "B2B Only" reads the amount as excluding VAT, which is the right scale
+ * for anyone who reclaims it: a Dutch company is invoiced net plus 21% and
+ * gets that 21% back, and a foreign one with a VAT ID pays the net figure
+ * under reverse charge. Both bear the same number, which is exactly what
+ * makes it comparable across countries.
+ *
+ * Without a VAT ID neither applies. The 21% is added and stays added, so
+ * the price he typed sits a fifth under what he actually pays - on a filter
+ * he picked himself, next to a hint saying "excl. VAT" that reads as a
+ * bookkeeping detail rather than as part of the price.
+ *
+ * Refused here and not only hidden in the interface: the buttons are a
+ * suggestion, these three routes are what actually create the row.
+ */
+async function b2bBuyingTypeRefusal(inventoryType, sellerRecordId) {
+  if (normalizeBuyingInventoryType(inventoryType) !== "b2b") return null;
+  if (!sellerRecordId) return null;
+
+  const seller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+
+  if (asText(seller?.fields?.["VAT ID"])) return null;
+
+  return (
+    "B2B Only is for buyers with a VAT ID. Prices there are read excluding " +
+    "VAT, so 21% is added to what you pay and you cannot reclaim it. " +
+    "Choose All Inventory or Margin Only instead."
+  );
+}
+
 async function getBuyerVatRateForSeller(sellerRecordId) {
   if (!sellerRecordId) return null;
 
@@ -33563,6 +33600,11 @@ app.post("/api/buying/offers", async (req, res) => {
     const sku = normalizeSku(req.body?.sku);
     const size = getBuyingSizeKey(req.body?.size);
     const inventoryType = normalizeBuyingInventoryType(req.body?.inventory_type);
+    const b2bRefusal = await b2bBuyingTypeRefusal(inventoryType, sellerRecordId);
+
+    if (b2bRefusal) {
+      return res.status(400).json({ error: b2bRefusal });
+    }
     const offerPrice = Number(req.body?.offer_price);
 
     if (!sellerRecordId || !sellerId || !sku || !size) {
@@ -33772,6 +33814,18 @@ async function createOpenMemberWtb({
   inventoryType: rawInventoryType,
   createdFrom = "Buying Portal"
 }) {
+  // The same refusal the three HTTP routes give, here as well.
+  //
+  // Not redundancy for its own sake: a want-to-buy is also created from two
+  // Discord paths that never touch those routes, and any path added later
+  // would inherit the gap by default. The routes answer with a clean 400;
+  // this makes sure nothing can get past without one.
+  const b2bRefusalOnCreate = await b2bBuyingTypeRefusal(rawInventoryType, sellerRecordId);
+
+  if (b2bRefusalOnCreate) {
+    throw new Error(b2bRefusalOnCreate);
+  }
+
   const sku = normalizeSku(rawSku);
   const size = getBuyingSizeKey(rawSize);
 
@@ -34468,6 +34522,11 @@ app.post("/api/buying/requests", async (req, res) => {
     const sku = normalizeSku(req.body?.sku);
     const size = getBuyingSizeKey(req.body?.size);
     const inventoryType = normalizeBuyingInventoryType(req.body?.inventory_type);
+    const b2bRefusal = await b2bBuyingTypeRefusal(inventoryType, sellerRecordId);
+
+    if (b2bRefusal) {
+      return res.status(400).json({ error: b2bRefusal });
+    }
 
     if (!sellerRecordId || !sellerId || !sku || !size) {
       return res.status(400).json({
