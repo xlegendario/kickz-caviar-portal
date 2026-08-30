@@ -2758,7 +2758,8 @@ async function sendMemberWtbLabelRequestToBuyer(memberWtbRecordId) {
       "The seller is ready to ship.",
       "Please upload the shipping label and tracking number using the button below."
     ].join("\n"),
-    color: 0xf1c40f,
+    // Green next to the other Lojiq label messages; yellow in a member DM.
+    color: storeLabelChannelId ? 0x2ecc71 : 0xf1c40f,
     timestamp: new Date().toISOString()
   };
 
@@ -10745,6 +10746,43 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       });
     }
 
+    // NEW - a ceiling is still a ceiling when nobody is being asked.
+    //
+    // The two branches further down weigh the consignor against the Max
+    // Price before speaking to him. The buyer-decides-first path did not
+    // weigh it at all: a want-to-buy with a Max Price of 120 got an offer
+    // request at 140 sent straight to the buyer. A Max Price is not an
+    // agreement to pay it, but it is a limit - above it there is nothing to
+    // offer.
+    //
+    // No ceiling means no limit, so the check only applies when one is set.
+    // Held rather than dropped, the same as an over-ceiling store offer just
+    // above: "Hold From Store?" keeps it out of the Lowest Seller Offer
+    // rollups while the undercut check still reads the record, so the
+    // consignor price keeps forcing the next seller lower - it simply never
+    // reaches the buyer.
+    if (!engageConsignorNow && calculatedOfferPrice !== null && !isConfirmation) {
+      console.log(
+        `⏭️ Member WTB ${source.recordId}: consignment offer ` +
+          `${moneySmartValue(best.sellerPrice)} ${best.row.vat_type} sits above ` +
+          "the buyer's Max Price - held, and the buyer is told nothing."
+      );
+
+      await airtable(SELLER_OFFERS_TABLE).update(createdOffer.id, {
+        "Hold From Store?": true
+      }).catch((err) =>
+        console.error("Failed to hold an over-ceiling member WTB offer:", err)
+      );
+
+      return res.json({
+        ...baseResponse,
+        held: true,
+        skipped: "above_max_price",
+        max_price_offer_ceiling: calculatedOfferPrice,
+        seller_compare_price: best.sellerComparePrice
+      });
+    }
+
     if (!engageConsignorNow) {
       console.log(
         `ℹ️ Member WTB ${source.recordId}: offer created at ` +
@@ -15860,10 +15898,49 @@ async function sendCounterOfferDiscordDM({
   deniedAmount,
   channelId = null
 }) {
-  // NEW — additive only: a consignor with his own offer channel gets this
-  // there instead of in a DM, matching how every other consignment
-  // message is routed. Regular sellers pass no channelId and keep the DM
-  // behaviour exactly as it was, including the missing-ID throw.
+  // A consignor with his own offer channel gets this there instead of in a
+  // DM, matching how every other consignment message is routed.
+  //
+  // The rule depended on the caller passing channelId, and only 3 of the 11
+  // call sites did - so a consignor got some rounds in his channel and the
+  // rest in a DM. Derived here now, exactly like the Member WTB twin, which
+  // fixes all eleven and cannot drift again. An explicit channelId still
+  // wins, so those three callers are untouched.
+  //
+  // Scoped to consignment-backed offers: a regular seller has no such
+  // channel and keeps the DM, including the missing-ID throw.
+  if (!channelId && counterOfferRecordId) {
+    const roundForChannel = await airtable(COUNTER_OFFERS_TABLE)
+      .find(counterOfferRecordId)
+      .catch(() => null);
+
+    const roundSellerRecordId = firstLinkedRecordId(
+      roundForChannel?.fields?.["Seller ID"]
+    );
+
+    const roundSeller = roundSellerRecordId
+      ? await airtable(SELLERS_TABLE).find(roundSellerRecordId).catch(() => null)
+      : null;
+
+    const consignorChannelId = asText(
+      roundSeller?.fields?.["Consignment Offer Channel ID"]
+    );
+
+    if (consignorChannelId) {
+      const roundOfferRecordId = asText(
+        roundForChannel?.fields?.["Seller Offer Record ID"]
+      );
+
+      const roundOffer = roundOfferRecordId
+        ? await airtable(SELLER_OFFERS_TABLE).find(roundOfferRecordId).catch(() => null)
+        : null;
+
+      if (asText(roundOffer?.fields?.["Consignment Inventory ID"])) {
+        channelId = consignorChannelId;
+      }
+    }
+  }
+
   let target = null;
 
   if (channelId) {
@@ -16022,11 +16099,52 @@ async function sendMemberWtbCounterOfferDiscordDM({
   deniedAmount,
   channelId = null
 }) {
-  // Mirrors sendCounterOfferDiscordDM: a consignor with his own offer
-  // channel gets this there instead of in a DM, matching how every other
-  // consignment message is routed. Every caller that existed before this
-  // passes no channelId and keeps the DM behaviour exactly as it was,
-  // including the missing-ID throw.
+  // A consignor is messaged in his own channel, every round.
+  //
+  // The rule was here from the start, but it depended on the caller passing
+  // channelId - and of the eleven call sites exactly one did: the first
+  // consignment round. So a consignor got round 1 in his channel and every
+  // round after it in a DM, which is how it turned up on MWTB-000409.
+  //
+  // Deriving it from the round fixes all eleven at once and cannot drift
+  // again. An explicit channelId still wins, so that first caller is
+  // untouched.
+  //
+  // Scoped to consignment-backed offers, exactly like round 1 was: a regular
+  // seller has no such channel and keeps his DM. The seller is read first
+  // because most sellers are not consignors, and that answer alone ends it.
+  if (!channelId && counterOfferRecordId) {
+    const roundForChannel = await airtable(COUNTER_OFFERS_TABLE)
+      .find(counterOfferRecordId)
+      .catch(() => null);
+
+    const roundSellerRecordId = firstLinkedRecordId(
+      roundForChannel?.fields?.["Seller ID"]
+    );
+
+    const roundSeller = roundSellerRecordId
+      ? await airtable(SELLERS_TABLE).find(roundSellerRecordId).catch(() => null)
+      : null;
+
+    const consignorChannelId = asText(
+      roundSeller?.fields?.["Consignment Offer Channel ID"]
+    );
+
+    if (consignorChannelId) {
+      const roundOfferRecordId = asText(
+        roundForChannel?.fields?.["Seller Offer Record ID"]
+      );
+
+      const roundOffer = roundOfferRecordId
+        ? await airtable(SELLER_OFFERS_TABLE).find(roundOfferRecordId).catch(() => null)
+        : null;
+
+      if (asText(roundOffer?.fields?.["Consignment Inventory ID"])) {
+        channelId = consignorChannelId;
+      }
+    }
+  }
+
   let dm = null;
   let deliveryType = channelId ? "private_channel" : "dm";
 
@@ -16265,7 +16383,13 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
           "",
           denyClosingLine
         ].join("\n"),
-        color: isDeny ? 0xe74c3c : 0xf1c40f
+        // Red for a deny either way; a live counter is green in Lojiq and
+        // yellow in a member DM.
+        color: isDeny
+          ? 0xe74c3c
+          : storeOfferChannelId
+          ? 0x2ecc71
+          : 0xf1c40f
       }
     ],
     components: [
@@ -16357,14 +16481,54 @@ async function sendOfferDeniedDiscordDM({
   // says "Member WTB" instead of "Order" in that context.
   contextLabel = "Order"
 }) {
-  await initKickzDealDiscord();
+  // A consignor hears about his own consignment stock in his own channel.
+  //
+  // This one had no channel at all, so a denial always landed in a DM even
+  // for a consignor who has an offer channel and reads everything else
+  // there. Both ids are already parameters, so no caller has to change.
+  //
+  // Only for consignment-backed offers: a regular seller has no such
+  // channel and keeps his DM, including the missing-ID throw below.
+  let target = null;
 
-  if (!sellerDiscordId) {
-    throw new Error("Missing seller Discord ID");
+  if (sellerRecordId && sellerOfferRecordId) {
+    const deniedSeller = await airtable(SELLERS_TABLE)
+      .find(sellerRecordId)
+      .catch(() => null);
+
+    const consignorChannelId = asText(
+      deniedSeller?.fields?.["Consignment Offer Channel ID"]
+    );
+
+    if (consignorChannelId) {
+      const deniedOffer = await airtable(SELLER_OFFERS_TABLE)
+        .find(sellerOfferRecordId)
+        .catch(() => null);
+
+      if (asText(deniedOffer?.fields?.["Consignment Inventory ID"])) {
+        await initDiscord();
+
+        target = await discordClient.channels
+          .fetch(consignorChannelId)
+          .catch(() => null);
+
+      }
+    }
   }
 
-  const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
-  const dm = await user.createDM();
+  if (!target) {
+    await initKickzDealDiscord();
+
+    if (!sellerDiscordId) {
+      throw new Error("Missing seller Discord ID");
+    }
+
+    const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
+
+    target = await user.createDM();
+  }
+
+  const dm = target;
 
   const amountText =
     deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== ""
@@ -16443,27 +16607,50 @@ async function disableSellerOfferDeniedEmbed(sellerOfferRecordId) {
     const channelId = asText(f["Denied Discord Channel ID"]);
     if (!messageId || !channelId) return;
 
+    // NEW - this embed can belong to either bot.
+    //
+    // A consignor now gets his denial in his own channel, posted by
+    // discordClient, while a regular seller still gets a DM from
+    // kickzDealDiscordClient. Discord only lets an application edit its own
+    // messages, so asking just one of them left the other embed on screen
+    // with a live "Place New Offer" button - the same way a store-channel
+    // counter embed stayed alive on ORD-019780.
+    await initDiscord();
     await initKickzDealDiscord();
-    const channel = await kickzDealDiscordClient.channels.fetch(channelId).catch(() => null);
-    if (!channel) return;
-    const message = await channel.messages.fetch(messageId).catch(() => null);
-    if (!message) return;
 
-    const oldEmbed = message.embeds?.[0];
-    await message.edit({
-      embeds: [
-        {
-          title: "❌ Offer Denied",
-          description: [
-            (oldEmbed?.description || "").split("\n").filter((l) => l && !l.startsWith("You can place a new offer")).join("\n"),
-            "",
-            "This embed disabled — please check your dashboard for the current status of this offer."
-          ].join("\n"),
-          color: 0x95a5a6
-        }
-      ],
-      components: []
-    }).catch((err) => console.error("Could not disable denied embed (non-blocking):", err.message));
+    for (const client of [discordClient, kickzDealDiscordClient]) {
+      if (!client?.isReady?.()) continue;
+
+      const channel = await client.channels.fetch(channelId).catch(() => null);
+      if (!channel) continue;
+
+      const message = await channel.messages.fetch(messageId).catch(() => null);
+      if (!message) continue;
+
+      const oldEmbed = message.embeds?.[0];
+
+      const edited = await message.edit({
+        embeds: [
+          {
+            title: "❌ Offer Denied",
+            description: [
+              (oldEmbed?.description || "").split("\n").filter((l) => l && !l.startsWith("You can place a new offer")).join("\n"),
+              "",
+              "This embed disabled — please check your dashboard for the current status of this offer."
+            ].join("\n"),
+            color: 0x95a5a6
+          }
+        ],
+        components: []
+      }).then(() => true).catch(() => false);
+
+      if (edited) return;
+    }
+
+    console.error(
+      "Could not disable denied embed - neither bot could edit it:",
+      messageId
+    );
   } catch (err) {
     console.error("disableSellerOfferDeniedEmbed failed (non-blocking):", err.message);
   }
@@ -31864,7 +32051,9 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
         "",
         "Accept, Counter or Deny on this offer below."
       ].join("\n"),
-      color: 0xf1c40f,
+      // NEW - a store reads this next to its other Lojiq offer requests,
+      // which are blue. Kickz Caviar members keep the yellow they know.
+      color: storeOfferChannelId ? 0x58a6ff : 0xf1c40f,
       timestamp: new Date().toISOString(),
       ...(imageUrl ? { image: { url: imageUrl } } : {})
     };
