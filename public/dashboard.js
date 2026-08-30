@@ -2086,7 +2086,7 @@ function renderConsignmentAcceptedRows(items) {
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
-        <div class="dashboard-action-row">
+        <div class="dashboard-action-row action-row-inline">
           <button
             class="dashboard-confirm-btn action-accept"
             type="button"
