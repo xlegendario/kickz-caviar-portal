@@ -29199,7 +29199,25 @@ app.post("/api/forgot-password", async (req, res) => {
       "Password Reset Expires At": expiresAt
     });
 
-    const resetUrl = `${APP_PUBLIC_BASE_URL}/reset-password?token=${token}`;
+    // NEW - carry the page they started from into the e-mail.
+    //
+    // A seller who already exists and lands on an offer page has to set a
+    // password first. Without this he sets it, gets dropped on the dashboard,
+    // and the pair he came for is gone - which is where these visitors were
+    // being lost.
+    //
+    // Same guard signup.html already applies: a path on this site only, so a
+    // reset link can never be turned into a redirect somewhere else.
+    const rawReturnTo = asText(req.body?.return_to);
+
+    const returnTo =
+      rawReturnTo.startsWith("/") && !rawReturnTo.startsWith("//")
+        ? rawReturnTo
+        : "";
+
+    const resetUrl =
+      `${APP_PUBLIC_BASE_URL}/reset-password?token=${token}` +
+      (returnTo ? `&return=${encodeURIComponent(returnTo)}` : "");
 
     await sgMail.send({
       to: email,
