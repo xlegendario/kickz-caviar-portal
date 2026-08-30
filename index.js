@@ -23348,6 +23348,19 @@ app.post("/api/member-wtb/place-offer", async (req, res) => {
       });
     }
 
+    // NEW - nobody offers on his own want-to-buy.
+    //
+    // The deals page already hides these from the seller who posted them,
+    // but that is only the page. The same want-to-buy is posted in Discord,
+    // where he sees it like every other seller, and this route is what that
+    // button ends up calling. Without a check here he could bid on his own
+    // request to drag the lowest offer down before a real seller answers.
+    if (linkedRecordIncludes(f["Buyer Seller ID"], sellerRecordId)) {
+      return res.status(403).json({
+        error: "You cannot place an offer on your own Want To Buy"
+      });
+    }
+
     const normalizedOffer =
       vatType === "VAT0"
         ? offerAmount * 1.21
@@ -30092,7 +30105,8 @@ app.get("/api/deals", async (req, res) => {
             "Current Lowest Normalized",
             "Lowest Offer",
             "Lowest Offer Normalized",
-            "Lowest Offer VAT Type"
+            "Lowest Offer VAT Type",
+            "Buyer Seller ID"
           ],
           filterByFormula: `AND(
             {Fulfillment Status} = 'Outsource',
@@ -30105,7 +30119,28 @@ app.get("/api/deals", async (req, res) => {
         })
         .all();
     
-      const memberDeals = await Promise.all(memberWtbRecords.map(normalizeMemberWtbDeal));
+      // NEW - a seller never sees his own want-to-buys.
+      //
+      // Two reasons, and the second is the one that matters. He would be
+      // reading what other sellers are offering on his own request, which is
+      // ours to know and not his. And he could place an offer on it himself
+      // to drag the lowest down before anyone else answers.
+      //
+      // Read from the signed session rather than a query parameter, so
+      // dropping it from the request in a browser console reveals nothing.
+      // A visitor who is not signed in sees the list unchanged.
+      const viewerRecordId = asText(readSession(req, SESSION_SECRET)?.rid);
+
+      const visibleMemberWtbRecords = viewerRecordId
+        ? memberWtbRecords.filter(
+            (record) =>
+              !linkedRecordIncludes(record.fields?.["Buyer Seller ID"], viewerRecordId)
+          )
+        : memberWtbRecords;
+
+      const memberDeals = await Promise.all(
+        visibleMemberWtbRecords.map(normalizeMemberWtbDeal)
+      );
 
       // NEW - merged and sorted, not appended.
       //
