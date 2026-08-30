@@ -644,66 +644,207 @@
 </div>
 
   <div class="chain-pane" data-pane="wtb">
-    <ol class="chain">
-      <li><div><div class="tab">Offers</div><p>Your offer is in play. <span class="act">Your turn</span> when the buyer answers: take their price, counter again, or let it go.</p></div></li>
-      <li><div><div class="tab">Accepted</div><p>They took your offer. <span class="act">Your turn:</span> press <kbd class="mid">DISCORD</kbd> and handle the deal in its channel. There is nothing to confirm here. You named the price yourself, so their accept was already the agreement.</p></div></li>
-      <li><div><div class="tab">Confirmed</div><p>The sale is on. <span class="act">Your turn:</span> press <kbd class="gold">REQUEST LABEL</kbd> when you are ready to send it.</p></div></li>
-      <li><div><div class="tab">Label Requested</div><p>Waiting on us. We make the label.</p></div></li>
-      <li><div><div class="tab">Ready To Ship</div><p>Label ready. <span class="act">Your turn:</span> <kbd>Download Label</kbd>, pack it as described below, hand it over.</p></div></li>
-      <li><div><div class="tab">Shipped</div><p>On its way. <kbd>Track</kbd> opens the carrier's page. The status updates itself.</p></div></li>
-      <li><div><div class="tab">Delivered</div><p>Arrived. It moves to <span class="tab">History → Sales</span>, where your payout is recorded.</p></div></li>
-    </ol>
+  <ol class="chain">
+
+    <li>
+      <div>
+        <div class="tab">Offers</div>
+        <p>Your offer is waiting for the buyer's response. If they send a counter offer, <span class="act">your turn:</span> accept their price, counter it, or decline it.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Accepted</div>
+        <p>The buyer accepted your offer. <span class="act">Your turn:</span> press <kbd class="mid">DISCORD</kbd> to open the deal channel and continue from there. No additional confirmation is needed because the buyer accepted the price you offered.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Confirmed</div>
+        <p>The deal is confirmed. <span class="act">Your turn:</span> press <kbd class="gold">REQUEST LABEL</kbd> once the pair is ready to ship.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Label Requested</div>
+        <p>Your label request has been received. We'll prepare the shipping label for you.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Ready To Ship</div>
+        <p>Your shipping label is ready. <span class="act">Your turn:</span> <kbd>Download Label</kbd>, pack the pair as described below, and ship it.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Shipped</div>
+        <p>The pair is on its way. Press <kbd>Track</kbd> to open the carrier's tracking page. The status updates automatically.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Delivered</div>
+        <p>The pair has been delivered. The deal moves to <span class="tab">History → Sales</span>, where your payout is recorded.</p>
+      </div>
+    </li>
+
+  </ol>
+</div>
+
+  <div class="chain-pane" data-pane="cons" hidden>
+  <ol class="chain">
+
+    <li>
+      <div>
+        <div class="tab">Offers</div>
+        <p>A buyer has made an offer on your consignment stock. <span class="act">Your turn:</span> <kbd class="go">ACCEPT</kbd>, <kbd class="mid">Counter</kbd> or <kbd class="no">Deny</kbd>.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Accepted</div>
+        <p>A buyer accepted your listed price without any prior negotiation. <span class="act">Your turn:</span> press <kbd class="go">CONFIRM</kbd> to confirm the deal at the payout shown, or <kbd class="no">Deny</kbd> if the pair is no longer available.</p>
+        <p>If you previously sent a counter offer, this step is skipped. By countering, you've already confirmed your willingness to sell, so a buyer accepting your counter moves the deal directly to <span class="tab">Confirmed</span>.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Confirmed</div>
+        <p>The deal is confirmed. <span class="act">Your turn:</span> press <kbd class="gold">REQUEST LABEL</kbd> once the pair is ready to ship.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Label Requested</div>
+        <p>Your label request has been received. We'll prepare the shipping label for you.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Ready To Ship</div>
+        <p>Your shipping label is ready. <span class="act">Your turn:</span> <kbd>Download Label</kbd>, pack the pair as described below, and ship it.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Shipped</div>
+        <p>The pair is on its way. Press <kbd>Track</kbd> to open the carrier's tracking page. The status updates automatically.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Delivered</div>
+        <p>The pair has been delivered. The deal moves to <span class="tab">History → Sales</span>, where your payout is recorded.</p>
+      </div>
+    </li>
+
+  </ol>
+</div>
+
+  <div class="chain-pane" data-pane="buy" hidden>
+  <ol class="chain">
+
+    <li>
+      <div>
+        <div class="tab">Open WTBs</div>
+        <p>Your active Want To Buys are live across the network. No action is needed while you wait for offers. Delete any requests you no longer need.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Offers</div>
+        <p>A seller has made you an offer. <span class="act">Your turn:</span> <kbd class="go">ACCEPT</kbd>, <kbd class="mid">Counter</kbd> or <kbd class="no">Deny</kbd>.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Accepted</div>
+        <p>The deal is waiting for the seller to confirm the pair. No action is needed from you at this stage.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Payment Due</div>
+        <p>The seller has confirmed the deal. <span class="act">Your turn:</span> press <kbd class="gold">Pay</kbd> to complete the payment and move the deal forward. A <strong>!</strong> appears next to this tab whenever a payment is waiting.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Confirmed</div>
+        <p>Payment is complete and the deal is confirmed. The seller can now prepare the pair for shipping.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Label Requested</div>
+        <p>The seller is ready to ship and has requested a shipping label. <span class="act">Your turn:</span> press <kbd class="gold">Upload</kbd> to provide the label.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Ready to Ship</div>
+        <p>Your shipping label has been provided to the seller. The pair is now ready to be packed and shipped.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Shipped</div>
+        <p>The pair is on its way. Press <kbd>Track</kbd> to open the carrier's tracking page. The status updates automatically.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Delivered</div>
+        <p>The pair has been delivered and the deal is complete. The seller can now be paid out.</p>
+      </div>
+    </li>
+
+  </ol>
+</div>
+
+  <div class="task" data-hide-on="buy">
+  <h3>The DISCORD button</h3>
+  <p>Every deal has its own Discord channel. Press <kbd class="mid">DISCORD</kbd> in the Actions column to open the channel linked to that specific deal.</p>
+
+  <div class="chain-pane" data-pane="quick" hidden>
+    <p><strong>Quick Deals.</strong> After claiming a deal, use its Discord channel to continue the deal and handle any deal-specific communication.</p>
+  </div>
+
+  <div class="chain-pane" data-pane="wtb">
+    <p><strong>Want To Buys.</strong> Once your offer is accepted, use the deal's Discord channel to continue the deal and handle any deal-specific communication.</p>
   </div>
 
   <div class="chain-pane" data-pane="cons" hidden>
-    <ol class="chain">
-      <li><div><div class="tab">Offers</div><p>An offer arrived on stock you listed. <span class="act">Your turn:</span> <kbd class="go">ACCEPT</kbd>, <kbd class="mid">Counter</kbd> or <kbd class="no">Deny</kbd>.</p></div></li>
-      <li><div><div class="tab">Accepted</div><p>A buyer took your listed price without either of you negotiating. <span class="act">Your turn:</span> press <kbd class="go">CONFIRM</kbd>, with the payout on the button, to say you still physically have the pair. <kbd class="no">Deny</kbd> if you do not.</p><p>You only land here if you never touched the deal yourself. It went out automatically on your listing, so this is the first moment anyone asks you anything. <strong>Did you counter at any point?</strong> Then you already said yes, and an accept closes the deal on the spot: straight to Confirmed, no step in between.</p></div></li>
-      <li><div><div class="tab">Confirmed</div><p>The sale is on. <span class="act">Your turn:</span> press <kbd class="gold">REQUEST LABEL</kbd> when you are ready to send it.</p></div></li>
-      <li><div><div class="tab">Label Requested</div><p>Waiting on us. We make the label.</p></div></li>
-      <li><div><div class="tab">Ready To Ship</div><p>Label ready. <span class="act">Your turn:</span> <kbd>Download Label</kbd>, pack it as described below, hand it over.</p></div></li>
-      <li><div><div class="tab">Shipped</div><p>On its way. <kbd>Track</kbd> opens the carrier's page. The status updates itself.</p></div></li>
-      <li><div><div class="tab">Delivered</div><p>Arrived. It moves to <span class="tab">History → Sales</span>, where your payout is recorded.</p></div></li>
-    </ol>
+    <p><strong>Consignment.</strong> Use the deal's Discord channel for communication and updates related to that specific consignment deal.</p>
   </div>
 
-  <div class="chain-pane" data-pane="buy" hidden>
-    <ol class="chain">
-      <li><div><div class="tab">Open WTBs</div><p>Your requests, out in the network. <span class="act">Your turn:</span> nothing, until someone answers. Do delete the ones you no longer need.</p></div></li>
-      <li><div><div class="tab">Offers</div><p>A seller answered. <span class="act">Your turn:</span> <kbd class="go">ACCEPT</kbd>, <kbd class="mid">Counter</kbd> or <kbd class="no">Deny</kbd>.</p></div></li>
-      <li><div><div class="tab">Accepted</div><p>It says <em>Waiting for seller</em>. They are confirming they have the pair. Nothing for you to do.</p></div></li>
-      <li><div><div class="tab">Payment Due</div><p><span class="act">Your turn:</span> press <kbd class="gold">Pay</kbd>. The sidebar carries a <strong>!</strong> while anything is still open.</p></div></li>
-      <li><div><div class="tab">Confirmed</div><p>Paid and agreed. The pair is being prepared.</p></div></li>
-      <li><div><div class="tab">Label Requested</div><p>It says <em>Waiting for Label</em>. <span class="act">Your turn:</span> press <kbd class="gold">Upload</kbd> and supply the shipping label.</p><p>This is where buying differs most from selling. As a seller you wait for us to make a label. As a buyer <strong>you provide it</strong>, and nothing moves until you have.</p></div></li>
-      <li><div><div class="tab">Ready to Ship</div><p>Your label is with the seller. They pack the pair and hand it over.</p></div></li>
-      <li><div><div class="tab">Shipped</div><p>On its way to you. <kbd>Track</kbd> opens the carrier's page.</p></div></li>
-      <li><div><div class="tab">Delivered</div><p>Arrived. Only now is the seller paid. Until then the money sits with us.</p></div></li>
-    </ol>
-    <p class="muted" style="margin-top:14px">Two steps here have no equal on the selling side: Payment Due, and a Label Requested that asks something of you instead of of us.</p>
-  </div>
-
-  <div class="task" data-hide-on="buy">
-    <h3>The DISCORD button</h3>
-    <p>Every deal has one: a blue <strong>DISCORD</strong> button at the end of its row, in the Actions column on the right. It opens the Discord channel made for that deal. That is where the deal is handled, and where any question or problem about it belongs. What you do there depends on the route, so this follows the switch above.</p>
-
-    <div class="chain-pane" data-pane="quick" hidden>
-      <p><strong>Quick Deals.</strong> The channel is not a side conversation here. It is where the deal is handled. A claim lands in Open Claims, and the real work happens in its channel. Use the dashboard as your list of what is still open, and the channel as the place where you finish it.</p>
-    </div>
-
-    <div class="chain-pane" data-pane="wtb">
-      <p><strong>Want To Buys.</strong> Once your offer is accepted, the channel is where the deal is handled: what is expected of you, the label, anything that needs saying. There is nothing to confirm in the dashboard, so the channel is the next step, not an extra one.</p>
-    </div>
-
-    <div class="chain-pane" data-pane="cons" hidden>
-      <p><strong>Consignment.</strong> The same channel holds the confirmation request you answered, so it doubles as the record of what was agreed and at what price. Useful when several of your pairs are moving at once and you need to see which is which.</p>
-    </div>
-
-    <p class="muted">Whatever the route: the dashboard tells you where a deal stands, the channel is where it moves. Not sure what is expected of you? That button is the fastest way to an answer.</p>
-  </div>
+  <p class="muted">Each channel belongs to one deal, keeping its communication and updates together in one place.</p>
+</div>
 
   <div class="note" data-hide-on="buy">
-    <strong>Packing.</strong> Clean box, no branding. Take off price stickers and any other marks. Nothing extra inside. Pack it as professionally as you can. The way it arrives is the way it gets graded.
-  </div>
+  <strong>Packing.</strong> Use a clean shipping box without branding, remove any price stickers or unnecessary markings, and do not include anything extra in the package. Pack the pair securely and make sure the shoebox and product are well protected during transit.
+</div>
 
   <figure class="shot" id="shot-21" data-shot="21" data-hide-on="buy">
     <div class="shot-frame"><span><b>Screenshot 21</b>Ready To Ship with the Download Label button, and the Packaging Instructions window open.<br><br>desktop: <span style="color:var(--gold)">shot-21.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-21-mobile.png</span></span></div>
@@ -711,44 +852,78 @@
   </figure>
 
   <div class="task">
-    <h3>Something went wrong</h3>
+    <h3>Something went wrong?</h3>
 
     <div class="chain-pane" data-pane="quick" hidden>
-      <p>Go to <span class="tab">History → Sales</span>, find the sale, press <kbd>Report Issue</kbd> and describe it in your own words. It shows up under <span class="tab">History → Issues</span> with our answer.</p>
-    </div>
+  <p>Go to <span class="tab">History → Sales</span>, find the deal and press <kbd>Report Issue</kbd> to describe the problem. You can follow the issue and our response under <span class="tab">History → Issues</span>.</p>
+</div>
 
-    <div class="chain-pane" data-pane="wtb">
-      <p>Go to <span class="tab">History → Sales</span>, find the sale, press <kbd>Report Issue</kbd> and describe it in your own words. It shows up under <span class="tab">History → Issues</span> with our answer.</p>
-    </div>
+<div class="chain-pane" data-pane="wtb">
+  <p>Go to <span class="tab">History → Sales</span>, find the deal and press <kbd>Report Issue</kbd> to describe the problem. You can follow the issue and our response under <span class="tab">History → Issues</span>.</p>
+</div>
 
-    <div class="chain-pane" data-pane="cons" hidden>
-      <p>Go to <span class="tab">History → Sales</span>, find the sale, press <kbd>Report Issue</kbd> and describe it in your own words. It shows up under <span class="tab">History → Issues</span> with our answer.</p>
-    </div>
+<div class="chain-pane" data-pane="cons" hidden>
+  <p>Go to <span class="tab">History → Sales</span>, find the deal and press <kbd>Report Issue</kbd> to describe the problem. You can follow the issue and our response under <span class="tab">History → Issues</span>.</p>
+</div>
 
-    <div class="chain-pane" data-pane="buy" hidden>
-      <p>Go to <span class="tab">History → Buying</span>, find the purchase, press <kbd>Report Issue</kbd> and describe it in your own words. It shows up under <span class="tab">History → Issues</span> with our answer.</p>
-    </div>
+<div class="chain-pane" data-pane="buy" hidden>
+  <p>Go to <span class="tab">History → Buying</span>, find the purchase and press <kbd>Report Issue</kbd> to describe the problem. You can follow the issue and our response under <span class="tab">History → Issues</span>.</p>
+</div>
   </div>
 </section>
 
 <section class="part" id="tips">
   <h2><span class="num">09 &middot; WORTH KNOWING</span>Small things that save time</h2>
+
   <div class="task">
     <ul>
-      <li><strong>The sidebar counts are live.</strong> A number that will not go down means something is really waiting for you.</li>
-      <li><strong>The search box keeps your search when you switch tabs.</strong> If a tab looks empty, clear it with the <kbd>&times;</kbd> first.</li>
-      <li><strong>Payout View and Buying Type change what you read, not what you get.</strong> Set them before you compare prices.</li>
-      <li><strong>Most prices are whole euros.</strong> Sellers type whole numbers, so that is what you normally see. An amount that lands on cents after a VAT conversion keeps them, so € 102,10 is not a mistake on screen.</li>
-      <li><strong>Sizes are EU,</strong> written the way the brand writes them: <code>42 2/3</code>, not <code>42.67</code>.</li>
-      <li><strong>VAT type is not a preference.</strong> It has to match how you bought the pair, and it decides what you are paid.</li>
-      <li><strong>Always answer the newest message.</strong> When a better offer comes in, the older one expires and turns grey. Reply to the live one.</li>
-      <li><strong>The Discord buttons are real.</strong> Accepting something in Discord is the same as accepting it in the portal. There is no second confirmation after it.</li>
+
+      <li>
+        <strong>The sidebar counts are live.</strong>
+        The number next to each tab shows how many deals are currently in that step of the process.
+      </li>
+
+      <li>
+        <strong>Your search stays active when switching tabs.</strong>
+        If a tab looks unexpectedly empty, check the search box and clear it with the <kbd>&times;</kbd>.
+      </li>
+
+      <li>
+        <strong>Set your views before comparing prices.</strong>
+        Payout View controls how payouts are displayed when selling, while Buying Type determines which inventory types you see when buying.
+      </li>
+
+      <li>
+        <strong>Prices may sometimes include cents.</strong>
+        Most offers are entered as whole euros, but VAT conversions can result in amounts such as €102.10. This is normal.
+      </li>
+
+      <li>
+        <strong>Sizes are shown in EU sizing.</strong>
+        Brand-specific fractions are kept as they are, such as <code>42 2/3</code> instead of <code>42.67</code>.
+      </li>
+
+      <li>
+        <strong>Choose the correct VAT type when selling.</strong>
+        The VAT type should match the VAT treatment of the pair and directly affects how your payout is calculated.
+      </li>
+
+      <li>
+        <strong>Always respond to the current offer.</strong>
+        When an offer is replaced by a newer one, the previous offer becomes inactive and is shown in grey.
+      </li>
+
+      <li>
+        <strong>Discord actions are connected to the portal.</strong>
+        Accepting or responding to a deal through its Discord channel updates the same deal in your dashboard, so you do not need to repeat the action in the portal.
+      </li>
+
     </ul>
   </div>
 </section>
 
 <footer>
-  Something here not matching what you see on screen? Say so in Discord. The portal changes often, and this page is easier to fix than a misunderstanding.
+  See something that does not match this guide? Let us know on Discord. The portal is continuously improving, and we'll keep this guide updated along with it.
 </footer>
 
 </div>
