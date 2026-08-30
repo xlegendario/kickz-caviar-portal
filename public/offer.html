@@ -309,7 +309,13 @@
         const response = await fetch("/api/forgot-password", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: el("forgotEmail").value.trim() })
+          body: JSON.stringify({
+            email: el("forgotEmail").value.trim(),
+            // So the reset link brings them back to this pair rather than to
+            // the dashboard. The offer page then handles the Discord step
+            // itself, with the shoe still on screen.
+            return_to: here
+          })
         });
 
         const data = await response.json();
