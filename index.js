@@ -6289,13 +6289,51 @@ function bindConsignmentDiscordButtons(client) {
           const sof = sellerOfferRecordForFallback?.fields || {};
           const rawSellerAsk = numberValue(sof["Seller Offer"]);
           const rawSellerVatType = asText(sof["Offer VAT Type"]);
-          const offerToBuyerForFallback = Number.isFinite(rawSellerAsk)
+          // CHANGED - whole euros, up, like the shop.
+          //
+          // The shop showed this pair at 153 and this fallback offered the
+          // same pair at 152,10, which reads as "denied, and now 90 cents
+          // cheaper" rather than one number rounded two ways. Rounded here
+          // and settled the same way in process-seller-offer, so what the
+          // buyer is shown is what he is invoiced.
+          const rawOfferToBuyerForFallback = Number.isFinite(rawSellerAsk)
             ? calculateMemberWtbBuyerEquivalent(rawSellerAsk, rawSellerVatType, wtbFieldsForFallback)
             : null;
 
-          if (buyerDiscordIdForFallback && sellerOfferRecordIdForFallback && Number.isFinite(offerToBuyerForFallback)) {
-            const user = await kickzDealDiscordClient.users.fetch(buyerDiscordIdForFallback).catch(() => null);
-            const dm = user ? await user.createDM().catch(() => null) : null;
+          const offerToBuyerForFallback = Number.isFinite(rawOfferToBuyerForFallback)
+            ? Math.ceil(rawOfferToBuyerForFallback)
+            : null;
+
+          // NEW - a Lojiq store never gets a Kickz Caviar DM.
+          //
+          // This one was missed when the other buyer messages were moved to
+          // the store channels: it builds its embed inline and sends it
+          // straight from this bot, so it stayed a DM.
+          const storeChannelsForFallback = await resolveStoreBuyerChannels(buyerRecordForFallback);
+          const storeChannelIdForFallback = asText(storeChannelsForFallback?.offerRequestsChannelId);
+
+          if (
+            (storeChannelIdForFallback || buyerDiscordIdForFallback) &&
+            sellerOfferRecordIdForFallback &&
+            Number.isFinite(offerToBuyerForFallback)
+          ) {
+            // One destination object with the shape dm.send already has, so
+            // the embed and its buttons below stay untouched.
+            const dm = storeChannelIdForFallback
+              ? {
+                  send: (payload) =>
+                    postStoreBuyerEmbed({
+                      channelId: storeChannelIdForFallback,
+                      ...payload
+                    })
+                }
+              : await (async () => {
+                  const user = await kickzDealDiscordClient.users
+                    .fetch(buyerDiscordIdForFallback)
+                    .catch(() => null);
+
+                  return user ? user.createDM().catch(() => null) : null;
+                })();
 
             const imageUrlForFallback =
               Array.isArray(wtbFieldsForFallback["Picture"]) && wtbFieldsForFallback["Picture"][0]?.url
@@ -31822,7 +31860,39 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
         finalBuyingPrice = offerToBuyer || purchasePrice + offerMargin;
       }
 
-      finalBuyingPrice = Math.round(finalBuyingPrice * 100) / 100;
+      // CHANGED - the whole euro belongs on the invoice, not on the net.
+      //
+      // The shop and the denial fallback both quote this pair at 153, which
+      // is the amount including VAT. This variable is the NET figure, and
+      // the invoice is 1.21 times it for a Dutch buyer. Rounding the net
+      // would have produced 126 x 1.21 = 152,46 - a whole euro nowhere and
+      // still not the number the buyer was shown.
+      //
+      // So the gross is rounded and the net carried back from it. That keeps
+      // net x 1.21 exactly equal to the invoice, so the VAT line stays right
+      // instead of being a cent off.
+      //
+      // Only this consignment branch. The else below settles at the Max
+      // Price the buyer typed himself, which is his own figure to keep.
+      const grossToBuyer = memberWtbBuyerInvoiceAmount(
+        finalBuyingPrice,
+        vatType,
+        memberFields
+      );
+
+      if (Number.isFinite(grossToBuyer) && grossToBuyer > 0) {
+        const roundedGross = Math.ceil(grossToBuyer);
+
+        const carriesDutchVat =
+          (vatType === 'VAT0' || vatType === 'VAT21') &&
+          !memberWtbIsReverseCharge(memberFields);
+
+        finalBuyingPrice = carriesDutchVat
+          ? Math.round((roundedGross / 1.21) * 100) / 100
+          : roundedGross;
+      } else {
+        finalBuyingPrice = Math.round(finalBuyingPrice * 100) / 100;
+      }
     } else {
       const maxPrice = Number(memberFields['Max Price'] || 0);
 
