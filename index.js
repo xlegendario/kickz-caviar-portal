@@ -17608,7 +17608,16 @@ async function normalizeDeal(record, dealType) {
     max_payout_vat0: moneyValue(f["Final Outsource Buying Price (VAT 0%)"]),
 
     current_offer_margin: currentOfferMargin,
-    current_offer_vat0: currentOfferVat0
+    current_offer_vat0: currentOfferVat0,
+
+    // NEW - the same field a Member WTB already carries, so the two can be
+    // sorted against each other once they end up in one list. Airtable sorts
+    // the store orders on its side; this is for the merge.
+    //
+    // Created Time for the same reason the query sorts on it: the order date
+    // can be days older than the moment this became something a seller could
+    // act on. Falls back to the order date if it is ever missing.
+    raw_date: f["Created Time"] || f["Order Date"] || ""
 
     // REMOVED: maximum_buying_price. /api/deals is public and had no auth, so
     // this handed anyone with the network tab our buying ceiling per order -
@@ -29989,11 +29998,24 @@ app.get("/api/deals", async (req, res) => {
     
     airtableUrl.searchParams.set("filterByFormula", formula);
     airtableUrl.searchParams.set("pageSize", String(pageSize));
-    let sortField = "Order Date";
+    // CHANGED - was "Order Date", which is when the customer ordered, not
+    // when we could do anything with it. An order can sit for days before it
+    // reaches this base: ORD-022706 was ordered on 21-08 and only landed on
+    // 27-08, six days buried under things a seller had already seen. It is 19
+    // out of every 100 on the first page, so not an edge case.
+    //
+    // "Outsource Start Time" would be the purest reading of "available to
+    // offer on", but it is empty on 4 of those 100 - ORD-022706 among them -
+    // and those would sort to one end. Created Time is always there and
+    // tracks it closely, which makes it the honest choice.
+    //
+    // A Member WTB stamps its "Date" the moment it is posted, so the two
+    // halves of the merged list now mean the same thing.
+    let sortField = "Created Time";
     let sortDirection = "desc";
     
     if (sort === "oldest") {
-      sortField = "Order Date";
+      sortField = "Created Time";
       sortDirection = "asc";
     }
     
@@ -30049,7 +30071,10 @@ app.get("/api/deals", async (req, res) => {
     const records = airtableData.records || [];
     let deals = await Promise.all(records.map((record) => normalizeDeal(record, type)));
     
-    if (type === "wtb") {
+    // Only on the first page. Paging runs on Airtable's offset for the store
+    // orders alone, so appending the want-to-buys to every page showed the
+    // same ones again each time the reader scrolled.
+    if (type === "wtb" && !offset) {
       const memberWtbRecords = await airtable(MEMBER_WTBS_TABLE)
         .select({
           fields: [
@@ -30081,11 +30106,36 @@ app.get("/api/deals", async (req, res) => {
         .all();
     
       const memberDeals = await Promise.all(memberWtbRecords.map(normalizeMemberWtbDeal));
-    
-      deals = [
-        ...deals,
-        ...memberDeals
-      ];
+
+      // NEW - merged and sorted, not appended.
+      //
+      // These used to be pushed onto the end of the page, so a want-to-buy
+      // posted a minute ago sat below every store order no matter which sort
+      // was picked. Airtable sorts the store orders on its side; the combined
+      // list has to be sorted here, because only here are both halves known.
+      const compareByDate = (direction) => (a, b) => {
+        const left = new Date(a.raw_date || 0).getTime();
+        const right = new Date(b.raw_date || 0).getTime();
+
+        return direction === "asc" ? left - right : right - left;
+      };
+
+      const merged = [...deals, ...memberDeals];
+
+      if (sort === "oldest") {
+        deals = merged.sort(compareByDate("asc"));
+      } else if (sort === "az") {
+        deals = merged.sort((a, b) => asText(a.product).localeCompare(asText(b.product)));
+      } else if (sort === "za") {
+        deals = merged.sort((a, b) => asText(b.product).localeCompare(asText(a.product)));
+      } else if (sort === "payout_low" || sort === "payout_high") {
+        // A want-to-buy has no payout to rank - the buyer names a ceiling, not
+        // a price to a seller. Sorting them into a payout order would put them
+        // somewhere arbitrary, so they stay behind the orders that do have one.
+        deals = merged;
+      } else {
+        deals = merged.sort(compareByDate("desc"));
+      }
     }
     
     res.json({
