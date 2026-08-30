@@ -320,6 +320,22 @@ const skeletonColumns = [
   "Action"
 ];
 
+// NEW - the Accepted tab asks something none of the other consignment tabs
+// ask: "your price was accepted, do you still have the pair?". That only
+// reads as such if the consignor can see his own asking price next to the
+// payout, so this one tab carries an extra column. Everywhere else keeps
+// skeletonColumns.
+const consignmentAcceptedColumns = [
+  "Product",
+  "Size",
+  "Order ID",
+  "Your Price",
+  "Payout",
+  "VAT Type",
+  "Date",
+  "Action"
+];
+
 const consignmentInventoryColumns = [
   "Product",
   "Size",
@@ -927,6 +943,7 @@ const COLUMN_SIZE_BY_HEADER = {
   "Issue": "col-status",
   "Lowest Price": "col-money",
   "Max Price": "col-money",
+  "Your Price": "col-money",
   "My Last Offer": "col-money",
   "Offer": "col-money",
   "Order ID": "col-code",
@@ -2037,16 +2054,15 @@ function renderBuyingAcceptedRows(items) {
 function renderConsignmentAcceptedRows(items) {
   dashboardTableBody.closest(".dashboard-table")?.classList.remove("open-offers-table");
 
-  // Same layout as the Confirmed tab on purpose — one column set for the
-  // whole consignment section rather than a private one per tab.
-  dashboardTableHead.innerHTML = skeletonColumns
+  // Deliberately not skeletonColumns: see consignmentAcceptedColumns.
+  dashboardTableHead.innerHTML = consignmentAcceptedColumns
     .map((column) => dashboardHeadCell(column))
     .join("");
 
   if (!items.length) {
     dashboardTableBody.innerHTML = `
       <tr>
-        <td colspan="${skeletonColumns.length}">
+        <td colspan="${consignmentAcceptedColumns.length}">
           <div class="dashboard-empty-state">
             <div class="dashboard-empty-icon">◇</div>
             <strong>Nothing waiting for you</strong>
@@ -2065,39 +2081,42 @@ function renderConsignmentAcceptedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
+      <td>${amountForColumn(item.your_price)}</td>
       <td>${amountForColumn(item.payout)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
-        <button
-          class="dashboard-confirm-btn action-accept"
-          type="button"
-          data-consignment-confirm="${escapeHtml(item.seller_offer_record_id)}"
-        >
-          <span class="accept-kop">CONFIRM</span>
-          <span class="accept-amount">${escapeHtml(amountForButton(item.payout))}</span>
-        </button>
-        <button
-          class="dashboard-deny-btn"
-          type="button"
-          data-consignment-deny="${escapeHtml(item.seller_offer_record_id)}"
-        >
-          Deny
-        </button>
-        ${
-          item.discord_url
-            ? `
-              <a
-                class="dashboard-discord-btn"
-                href="${escapeHtml(item.discord_url)}"
-                target="_blank"
-                rel="noopener"
-              >
-                Discord
-              </a>
-            `
-            : ""
-        }
+        <div class="dashboard-action-row">
+          <button
+            class="dashboard-confirm-btn action-accept"
+            type="button"
+            data-consignment-confirm="${escapeHtml(item.seller_offer_record_id)}"
+          >
+            <span class="accept-kop">CONFIRM</span>
+            <span class="accept-amount">${escapeHtml(amountForButton(item.payout))}</span>
+          </button>
+          <button
+            class="dashboard-deny-btn"
+            type="button"
+            data-consignment-deny="${escapeHtml(item.seller_offer_record_id)}"
+          >
+            Deny
+          </button>
+          ${
+            item.discord_url
+              ? `
+                <a
+                  class="dashboard-discord-btn"
+                  href="${escapeHtml(item.discord_url)}"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  Discord
+                </a>
+              `
+              : ""
+          }
+        </div>
       </td>
     </tr>
   `).join("");
