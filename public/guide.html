@@ -530,61 +530,63 @@
     <ol>
       <li>Press <kbd class="gold">Post WTBs</kbd>, then <kbd>+ Single WTB</kbd>. (<kbd>+ Bulk WTB</kbd> is the CSV route, below.)</li>
       <li><strong>SKU</strong> and <strong>Size</strong>. A <strong>Max Price</strong> is optional: the most you are willing to pay. Sellers never see it. It only decides which offers reach you.</li>
-      <li><strong>Buying Type</strong> &mdash; the scale your max price is in.</li>
+      <li><strong>Buying Type</strong> &mdash; choose which inventory types can match your Want To Buy and how your Max Price is interpreted: all inventory, B2B only, or Margin only.</li>
     </ol>
-    <div class="note"><strong>A Max Price is a ceiling, not a promise.</strong> Filling one in does not agree to anything and does not buy anything. You still decide on every offer, one by one. Leave it empty and every offer comes through, and you counter them down yourself.</div>
-    <p>Sourcing a whole list? <kbd>+ Bulk WTB</kbd> takes a CSV with <code>SKU</code>, <code>Size</code> and <code>Max Price (optional)</code>. Leave the price empty on any row you do not want a ceiling on, or leave the column out completely. There is a template to download.</p>
+    <div class="note">
+  <strong>A Max Price is a ceiling, not a promise.</strong> Filling one in does not agree to anything and does not buy anything. You still decide on every offer, one by one. Leave it empty and every offer comes through, and you counter them down yourself.
+</div>
+    <p>Sourcing a whole list? <kbd>+ Bulk WTB</kbd> lets you upload a CSV with <code>SKU</code>, <code>Size</code> and an optional <code>Max Price</code>. Leave Max Price empty for any pair where you want to receive all offers, or leave the column out entirely. A CSV template is available to download.</p>
     <figure class="shot" id="shot-17" data-shot="17">
       <div class="shot-frame"><span><b>Screenshot 17</b>The Place Want To Buy window: SKU, Size, Max Price and Buying Type.<br><br>desktop: <span style="color:var(--gold)">shot-17.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-17-mobile.png</span></span></div>
-      <figcaption>Your request goes out to every matching seller at once.</figcaption>
+      <figcaption>Post once and let matching sellers across the network respond with their offers.</figcaption>
     </figure>
   </div>
 </section>
 
 <section class="part" id="buying-tabs">
-  <h2><span class="num">07 &middot; YOUR BUYING TABS</span>Following what you asked for</h2>
+  <h2><span class="num">07 &middot; YOUR BUYING TABS</span>Track your requests and offers</h2>
 
   <div class="task">
     <h3>Open WTBs</h3>
-    <p><span class="tab">Buying → Open WTBs</span> holds every request you still have out there. Found the pair somewhere else, or no longer need it? <kbd class="no">Delete</kbd> it. An old request stays live and sellers keep working on it, so clearing it costs you nothing and saves them time.</p>
+    <p><span class="tab">Buying → Open WTBs</span> shows all your active Want To Buys. If you sourced a pair elsewhere or no longer need it, simply <kbd class="no">Delete</kbd> the request. Active WTBs remain visible to sellers across the network, so keeping this list up to date prevents sellers from responding to pairs you no longer need.</p>
     <figure class="shot" id="shot-18" data-shot="18">
       <div class="shot-frame"><span><b>Screenshot 18</b>Buying → Open WTBs with a couple of requests and the Delete button visible.<br><br>desktop: <span style="color:var(--gold)">shot-18.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-18-mobile.png</span></span></div>
-      <figcaption>What you still have out. Clear what you no longer need.</figcaption>
+      <figcaption>Your active Want To Buys, all managed from one place.</figcaption>
     </figure>
   </div>
 
   <div class="task">
     <h3>Offers on your requests</h3>
-    <p>Answers land in <span class="tab">Buying → Offers</span>, with the same three filters you know from the selling side, Open, Countered and Denied, and the same buttons. The only difference is which side of the deal you are on.</p>
+    <p>Seller offers appear under <span class="tab">Buying → Offers</span>. Use the <span class="tab">Open</span>, <span class="tab">Countered</span> and <span class="tab">Denied</span> filters to keep track of each negotiation, and accept, counter or decline offers directly from your dashboard.</p>
     <ul>
-      <li><kbd class="go">ACCEPT</kbd> takes the offer at the price shown.</li>
-      <li><kbd class="mid">Counter</kbd> proposes your own.</li>
-      <li><kbd class="no">Deny</kbd> ends it.</li>
+      <li><kbd class="go">ACCEPT</kbd> accepts the seller's offer at the price shown.</li>
+      <li><kbd class="mid">Counter</kbd> sends the seller a counter offer.</li>
+      <li><kbd class="no">Deny</kbd> declines the seller's offer.</li>
     </ul>
   </div>
 
   <div class="task">
-    <h3>Paying</h3>
-    <p>An accepted offer moves to <span class="tab">Buying → Payment Due</span>. The sidebar shows a <strong>!</strong> next to that tab while anything is open, so you can see it without going in.</p>
+    <h3>Payments</h3>
+    <p>An accepted offer moves to <span class="tab">Buying → Payment Due</span>. A <strong>"!"</strong> appears next to the tab whenever a payment is waiting, so you can immediately see when something needs your attention.</p>
     <ol>
-      <li>Press <kbd class="gold">Pay</kbd>. A payment page opens.</li>
-      <li>Pay there and come back.</li>
+      <li>Press <kbd class="gold">Pay</kbd> and a Mollie payment page opens.</li>
+      <li>Complete the payment to move the deal forward.</li>
     </ol>
-    <p class="muted">The link belongs to that one purchase. Close it and come back later, and the same Pay button reopens the same payment. You cannot end up paying twice for one deal.</p>
+    <p class="muted">Each deal has its own payment link. If you close the payment page before completing it, you can simply use the Pay button again to reopen the same payment.</p>
     <div class="note">
-      <strong>Your money does not go straight to the seller.</strong> They are paid once the deal has really gone through: pair received, checked, done. Until then it sits with us. Paying up front is what lets the seller ship straight away, without either of you having to trust a stranger.
+      <strong>Your payment does not go directly to the seller.</strong> We hold the payment in escrow while the deal is being completed and only pay the seller once the deal has been successfully completed. This allows the seller to move forward while your payment remains protected throughout the process.
     </div>
-    <p>After payment the seller prepares the pair, but the next move is yours again. <a href="#chain" data-goto-chain="buy" style="color:var(--gold)">The buying chain</a> asks you to upload a shipping label before anything ships.</p>
+    <p>After payment, you'll receive a request to provide a shipping label once the seller is ready to ship. From there, <a href="#chain" data-goto-chain="buy" style="color:var(--gold)">The Buying Chain</a> guides you through the remaining steps of the deal.</p>
     <figure class="shot" id="shot-19" data-shot="19">
       <div class="shot-frame"><span><b>Screenshot 19</b>Buying → Payment Due with a Pay button, sidebar in frame so the ! marker is visible.<br><br>desktop: <span style="color:var(--gold)">shot-19.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-19-mobile.png</span></span></div>
-      <figcaption>The exclamation mark means money is still open.</figcaption>
+      <figcaption>The exclamation mark shows that a payment is still due.</figcaption>
     </figure>
   </div>
 </section>
 
 <section class="part" id="chain">
-  <h2><span class="num">08 &middot; THE CHAIN</span>What every deal does after it is agreed</h2>
-  <p>The tabs in the sidebar are not categories. They are steps, in order, and the one a deal sits in tells you whose turn it is. Quick Deals take a shorter route than the others, so pick the one you are following.</p>
+  <h2><span class="num">08 &middot; THE CHAIN</span>From agreement to completion</h2>
+  <p>The tabs in the sidebar are not categories, but steps in the deal process. A deal moves through them in order, and its current step shows you where it stands and who needs to act next. Select a deal type below to see how its Chain works.</p>
 
   <div class="chain-switch">
     <button type="button" data-chain="quick" aria-pressed="false">Quick Deals</button>
@@ -594,16 +596,56 @@
   </div>
 
   <div class="chain-pane" data-pane="quick" hidden>
-    <ol class="chain">
-      <li><div><div class="tab">Open Claims</div><p>Your claim has its own Discord channel. <span class="act">Your turn:</span> press <kbd class="mid">DISCORD</kbd> in the Actions column and handle the deal there. This tab is your way back to it.</p></div></li>
-      <li><div><div class="tab">Confirmed</div><p>The sale is on. <span class="act">Your turn:</span> press <kbd class="gold">REQUEST LABEL</kbd> when you are ready to send it.</p></div></li>
-      <li><div><div class="tab">Label Requested</div><p>Waiting on us. We make the label.</p></div></li>
-      <li><div><div class="tab">Ready To Ship</div><p>Label ready. <span class="act">Your turn:</span> <kbd>Download Label</kbd>, pack it as described below, hand it over.</p></div></li>
-      <li><div><div class="tab">Shipped</div><p>On its way. <kbd>Track</kbd> opens the carrier's page. The status updates itself.</p></div></li>
-      <li><div><div class="tab">Delivered</div><p>Arrived. It moves to <span class="tab">History → Sales</span>, where your payout is recorded.</p></div></li>
-    </ol>
-    <p class="muted" style="margin-top:14px">No Offers tab and no Accepted tab. The payout was fixed on the card and you took it, so there is nothing left to agree on.</p>
-  </div>
+  <ol class="chain">
+
+    <li>
+      <div>
+        <div class="tab">Open Claims</div>
+        <p>Your claim has its own Discord channel. <span class="act">Your turn:</span> press <kbd class="mid">DISCORD</kbd> in the Actions column to open it and continue the deal there.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Confirmed</div>
+        <p>The deal is confirmed. <span class="act">Your turn:</span> press <kbd class="gold">REQUEST LABEL</kbd> once the pair is ready to ship.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Label Requested</div>
+        <p>Your label request has been received. We'll prepare the shipping label for you.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Ready To Ship</div>
+        <p>Your shipping label is ready. <span class="act">Your turn:</span> <kbd>Download Label</kbd>, pack the pair as described below, and ship it.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Shipped</div>
+        <p>The pair is on its way. Press <kbd>Track</kbd> to open the carrier's tracking page. The status updates automatically.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Delivered</div>
+        <p>The pair has been delivered. The deal moves to <span class="tab">History → Sales</span>, where your payout is recorded.</p>
+      </div>
+    </li>
+
+  </ol>
+
+  <p class="muted" style="margin-top:14px">
+    Quick Deals skip the Offers and Accepted steps because the payout is already set when you claim the deal.
+  </p>
+</div>
 
   <div class="chain-pane" data-pane="wtb">
     <ol class="chain">
