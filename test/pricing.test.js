@@ -83,7 +83,8 @@ function refFinalBuyingPriceOpenFlow(purchasePrice, sellerVatType, f) {
   let x;
   if (sellerVatType === "VAT0") x = purchasePrice + margin;
   else if (sellerVatType === "VAT21") x = purchasePrice / 1.21 + margin;
-  else x = purchasePrice + margin;
+  // Margin stock: the margin is grossed up, same as the buyer-facing side.
+  else x = purchasePrice + margin * 1.21;
   return Math.round(x * 100) / 100;
 }
 
@@ -195,8 +196,8 @@ const matrix6a = [
   [120, "VAT0",   "reverse",   130.00, 130.00, 130.00],
   [120, "VAT0",   "nl",        157.30, 130.00, 157.30],
   [120, "VAT0",   "foreignNo", 157.30, 130.00, 157.30],
-  [200, "Margin", "reverse",   210.00, 210.00, 210.00],
-  [200, "Margin", "nl",        210.00, 210.00, 210.00]
+  [200, "Margin", "reverse",   212.10, 212.10, 212.10],
+  [200, "Margin", "nl",        212.10, 212.10, 212.10]
 ];
 
 for (const [ask, sellerVat, ctxName, expBuyer, expFbp, expInvoice] of matrix6a) {
