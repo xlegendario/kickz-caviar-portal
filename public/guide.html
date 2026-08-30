@@ -313,23 +313,23 @@
 
   <div class="task">
     <h3>What happens next?</h3>
-    <p>Your claim will appear under <span class="tab">Quick Deals → Open Claims</span> in your dashboard, and a dedicated Discord channel will automatically be created for the deal. You can open the channel directly from your dashboard or find it in our Discord server. From there it follows <a href="#chain" data-goto-chain="quick" style="color:var(--gold)">the chain</a>. Quick Deals skip two of the steps the other routes have.</p>
+    <p>Your claim will appear under <span class="tab">Quick Deals → Open Claims</span> in your dashboard, and a dedicated Discord channel will automatically be created for the deal. You can open the channel directly from your dashboard or find it in our Discord server. From there it follows <a href="#chain" data-goto-chain="quick" style="color:var(--gold)">the chain</a>. </p>
   </div>
 </section>
 
 <section class="part" id="wtb">
   <h2><span class="num">04 &middot; WANT TO BUYS</span>Name your own price</h2>
-  <p>A Want To Buy is a buyer looking for one specific pair. There is no set payout. You say what you want for it, and they answer. This is the part of the portal where you set your own margin, so it is worth learning properly.</p>
+  <p>Want To Buys let you make your own offer. Set the price you want for the pair and the buyer can accept, decline or counter your offer. Other sellers can compete for the same WTB, while you manage the entire negotiation from your dashboard.</p>
 
   <div class="task">
     <h3>Making an offer</h3>
     <ol>
       <li>Set <strong>Deal Type</strong> to <kbd>Want To Buys</kbd>.</li>
-      <li>The card shows <strong>Current Offer</strong>: the best offer so far, or <em>No offer yet</em>.</li>
-      <li>Press <kbd class="gold">Make Offer</kbd>, pick your VAT type, and type your amount.</li>
+      <li>The card shows <strong>Current Offer</strong>— the best offer so far, or No offer yet. The amount is displayed according to your selected <strong>Payout View</strong>.</li>
+      <li>Press <kbd class="gold">Make Offer</kbd>, select the VAT type that applies to your pair, and enter your offer. Your selected VAT type determines how your offer is getting processed.</li>
     </ol>
     <p class="muted">Check the Payout View switch before you type a number. Your amount is read in the scale that is showing.</p>
-    <div class="note"><strong>"No offer yet" does not mean any price works.</strong> Every buyer sets a maximum when they post the request, and you never see it. So a first offer can still come back refused. Not because someone beat you, but because you asked above their ceiling. Try again, lower. The pair is still there.</div>
+    <div class="note"><strong>"No offer yet" does not mean any price will be accepted.</strong> Buyers can set a maximum price when posting a request. If your offer is above that limit, it will be declined immediately — even if you're the first seller to make an offer. You can simply try again with a lower offer; the WTB remains open.</div>
     <figure class="shot" id="shot-7" data-shot="07">
       <div class="shot-frame"><span><b>Screenshot 7</b>A Want To Buy card showing Current Offer, plus the Make Offer window with the amount field open.<br><br>desktop: <span style="color:var(--gold)">shot-07.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-07-mobile.png</span></span></div>
       <figcaption>You are bidding against the current lowest, not against a fixed price.</figcaption>
@@ -337,25 +337,25 @@
   </div>
 
   <div class="task">
-    <h3>Following it: your Offers tab</h3>
-    <p>Go to <span class="tab">Want To Buys → Offers</span>. Everything here is <strong>your own offer</strong>, at some point in its life. The three filters tell you where it stands.</p>
+    <h3>Managing your offers</h3>
+    <p>Go to <span class="tab">Want To Buys → Offers</span>. Here you'll find all the offers you've made and their current status. Use the three filters to see which offers are still open, have received a counter offer, or were denied but can still be renegotiated.</p>
     <div class="tablewrap">
       <table>
         <thead><tr><th>Filter</th><th>What sits there</th><th>Your move</th></tr></thead>
         <tbody>
-          <tr><td>Open</td><td>Anything of yours still waiting for an answer: your first offer, and any counter you sent</td><td><kbd>Edit</kbd> the amount, or <kbd class="no">Delete</kbd></td></tr>
-          <tr><td>Countered</td><td>The buyer came back with their own price</td><td><kbd class="go">Accept</kbd> theirs, <kbd class="mid">Counter</kbd> again, or <kbd class="no">Deny</kbd></td></tr>
-          <tr><td>Denied</td><td>Your offer was turned down</td><td><kbd>Retry</kbd> at a new price, or <kbd class="no">Delete</kbd></td></tr>
+          <tr><td>Open</td><td>Any offer still waiting for a response — whether it's your initial offer or a counter offer you've sent</td><td><kbd>Edit</kbd> the amount, Accept previous counter or <kbd class="no">Delete</kbd></td></tr>
+          <tr><td>Countered</td><td>The buyer responded to your offer with a counter price</td><td><kbd class="go">Accept</kbd> theirs, <kbd class="mid">Counter</kbd> again, or <kbd class="no">Deny</kbd></td></tr>
+          <tr><td>Denied</td><td>An offer or counter offer was declined</td><td><kbd>Retry</kbd> at a new price, Accept previous counter or <kbd class="no">Delete</kbd></td></tr>
         </tbody>
       </table>
     </div>
-    <p>The columns show you where you stand. <strong>Your Offer</strong> is always your own last price. Next to it is theirs: it says <strong>Counter Offer</strong> while they are countering you, and <strong>Buyer's Last Offer</strong> the rest of the time. <strong>Current Lowest</strong> is the best offer anyone has made, with a coloured dot that tells you whether it is still yours.</p>
-    <p class="muted">The green <kbd class="go">Accept</kbd> carries their amount, so taking their price is one press. You never have to work it out yourself.</p>
+    <p>The columns show you exactly where each offer stands. <strong>Your Offer</strong> shows the last price you offered. <strong>Counter Offer</strong> shows the buyer's current counter when there is one, otherwise you'll see their <strong>Buyer's Last Offer</strong>. <strong>Current Lowest</strong> shows the best price currently offered by any seller, with a coloured dot indicating whether that offer is yours.</p>
+    <p class="muted">The green <kbd class="go">Accept</kbd> button already shows the buyer's offer. If you're happy with their price, simply press it to accept.</p>
 
     <div class="note">
-      <strong>Countered, and heard nothing back?</strong> Your counter sits under <span class="tab">Open</span>, not under Countered. Countered is for when <em>they</em> come back to <em>you</em>. And next to your counter there is a green <kbd class="go">Accept</kbd> with their last amount on it.<br><br>
-      So you can still take their earlier price and close the deal right now, without a new round and without asking anyone. Use it. That button only shows up once you have countered, and nothing on screen tells you it is there.
-    </div>
+  <strong>Sent a counter offer?</strong> Your offer stays under <span class="tab">Open</span> while you wait for the buyer to respond. The <span class="tab">Countered</span> tab is only for counter offers you receive from the buyer.<br><br>
+  While waiting, you can still accept the buyer's previous price. The green <kbd class="go">Accept</kbd> button shows their last offer — press it at any time to accept and close the deal immediately.
+</div>
     <p class="muted">Denied is rarely the end. <kbd>Retry</kbd> puts you back in at a different number, and the buyer sees it like any other offer.</p>
     <figure class="shot" id="shot-8" data-shot="08">
       <div class="shot-frame"><span><b>Screenshot 8</b>Want To Buys → Offers on the Open filter. Best with two rows if you have them: a plain offer, and a counter of yours showing the Accept button.<br><br>desktop: <span style="color:var(--gold)">shot-08.png</span> &nbsp;&middot;&nbsp; phone: <span style="color:var(--gold)">shot-08-mobile.png</span></span></div>
