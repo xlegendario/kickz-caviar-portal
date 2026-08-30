@@ -4449,6 +4449,18 @@ body.kc-dialog-open {
   padding: 7px 12px;
 }
 
+/* NEW - three buttons, not two.
+
+   The grid above is built for an accept with two siblings stacked beside
+   it. The consignment Accepted tab has three - Confirm, Deny and Discord -
+   so the third dropped to a second row and the whole block sat lopsided.
+   Here they stay on one line, with Confirm keeping its stacked label. */
+.dashboard-action-row.action-row-inline:has(.action-accept) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .dashboard-action-row .action-accept .accept-kop {
   font-size: 10px;
   letter-spacing: 0.07em;
@@ -4544,10 +4556,10 @@ body.kc-dialog-open {
   text-align: center;
 }
 
-/* De native <select> erfde niets van .dashboard-login-form input en viel
-   daardoor uit de toon op de donkere kaart. Hier dezelfde maten, rand en
-   focusring, plus een eigen pijl omdat appearance:none de standaardpijl
-   weghaalt. */
+/* The native <select> inherited nothing from .dashboard-login-form input and
+   so looked out of place on the dark card. Same sizing, border and focus
+   ring here, plus an arrow of its own because appearance:none removes the
+   default one. */
 .dashboard-login-form select {
   width: 100%;
   height: 50px;
@@ -4715,9 +4727,9 @@ body.kc-dialog-open {
   letter-spacing: -0.3px;
 }
 
-/* SKU, maat en ordernummer als losse regels met een label ervoor. Op één
-   compacte regel onder de titel liepen ze visueel mee met de productnaam en
-   moest je zoeken welk getal de maat was. */
+/* SKU, size and order number as separate lines with a label in front. On
+   one compact line under the title they blended into the product name and
+   you had to hunt for which number was the size. */
 .offer-specs {
   margin: 20px 0 0;
   padding: 16px 0;
@@ -4793,8 +4805,8 @@ body.kc-dialog-open {
   margin-top: 6px;
 }
 
-/* De inlog-knop op deze pagina erft anders het groen van
-   .dashboard-login-form button, wat naast de gouden huisstijl misstaat. */
+/* Without this the sign-in button on this page inherits the green from
+   .dashboard-login-form button, which clashes with the gold branding. */
 .offer-card .dashboard-login-form button {
   background: linear-gradient(180deg, #fff27a, #f0a500);
   color: #050505;
@@ -4852,9 +4864,9 @@ body.kc-dialog-open {
   box-shadow: 0 0 0 1px rgba(255,210,31,0.15) inset, 0 0 30px rgba(255,210,31,0.08);
 }
 
-/* Dezelfde bolletjes als de offer-popup op de Selling-pagina, maar onder
-   elkaar — in een kaart van 460px is drie kolommen te krap voor bolletje
-   plus label. */
+/* The same radio dots as the offer dialog on the Selling page, but stacked
+   - in a 460px card three columns leave too little room for a dot plus its
+   label. */
 .offer-vat-stack {
   grid-template-columns: 1fr;
   gap: 10px;
@@ -4867,8 +4879,8 @@ body.kc-dialog-open {
   min-height: 58px;
 }
 
-/* Uitgeschakeld in plaats van weggelaten: zo ziet de seller dát er meer
-   mogelijk is, en waarom het voor hem niet geldt. */
+/* Disabled rather than removed: this way the seller sees that more exists,
+   and why it does not apply to them. */
 .offer-vat-stack .vat-option:disabled {
   opacity: 0.34;
   cursor: not-allowed;
@@ -4967,7 +4979,7 @@ body.kc-dialog-open {
   font-size: 12px !important;
 }
 
-/* Ook hier het groen van de login-knop wegnemen. */
+/* Take the green off the sign-in button here as well. */
 .dashboard-signup-card .dashboard-login-form button {
   background: linear-gradient(180deg, #fff27a, #f0a500);
   color: #050505;
@@ -4976,7 +4988,7 @@ body.kc-dialog-open {
   font-size: 16px;
 }
 
-/* ---- Terugkoppeling na het koppelen van Discord ---- */
+/* ---- Feedback after linking Discord ---- */
 
 .discord-banner {
   position: relative;
@@ -5021,7 +5033,7 @@ body.kc-dialog-open {
 
 /* ---- Registratieformulier compacter ---- */
 
-/* Twee velden naast elkaar. Op een smal scherm vallen ze terug op elkaar. */
+/* Two fields side by side. On a narrow screen they fall back to stacked. */
 .signup-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -5032,15 +5044,15 @@ body.kc-dialog-open {
   .signup-row { grid-template-columns: 1fr; }
 }
 
-/* Het formulier telt dertien velden; met de hoogte van het inlogscherm werd
-   dat een pagina die niemand in één keer overziet. */
+/* The form has thirteen fields; at the sign-in screen's row height that
+   became a page nobody can take in at once. */
 .dashboard-signup-card .dashboard-login-form {
   gap: 9px;
 }
 
-/* :not() om de akkoord-checkbox erbuiten te houden: zonder dat wint deze
-   regel op specificiteit van .signup-terms input[type=checkbox] en werd het
-   vinkje 42px hoog en volle breedte, waardoor het uit de regel viel. */
+/* :not() keeps the terms checkbox out of this: without it this rule beats
+   .signup-terms input[type=checkbox] on specificity, and the tick box became
+   42px tall and full width, falling out of its line. */
 .dashboard-signup-card .dashboard-login-form input:not([type="checkbox"]) {
   height: 42px;
   border-radius: 11px;
@@ -5068,8 +5080,8 @@ body.kc-dialog-open {
   margin-top: 4px;
 }
 
-/* De productfoto stond niet in lijn met merk en productnaam en had scherpere
-   hoeken dan de rest van de kaart. */
+/* The product image did not line up with the brand and product name, and
+   had sharper corners than the rest of the card. */
 .offer-product {
   align-items: center;
 }
@@ -5078,7 +5090,7 @@ body.kc-dialog-open {
   border-radius: 18px;
 }
 
-/* De titel van 44px kostte op dit formulier meer hoogte dan hij waard was. */
+/* At 44px the title cost this form more height than it was worth. */
 .dashboard-signup-card h2 {
   font-size: 30px;
   line-height: 1.05;
@@ -5131,8 +5143,8 @@ body.kc-dialog-open {
   letter-spacing: -0.4px;
 }
 
-/* .offer-secondary was alleen als <button> gestyled; als link had hij geen
-   uitlijning en wel een onderstreping. */
+/* .offer-secondary was styled as a <button> only; as a link it had no
+   alignment and an underline it did not want. */
 a.offer-secondary {
   display: flex;
   align-items: center;
@@ -5140,9 +5152,9 @@ a.offer-secondary {
   text-decoration: none;
 }
 
-/* Guide-link onderaan de zijbalk. Bewust rustiger dan de consignor-CTA
-   daarboven: die wil je verleiden, deze moet alleen te vinden zijn op het
-   moment dat iemand vastloopt. */
+/* Guide link at the bottom of the sidebar. Deliberately quieter than the
+   consignor call to action above it: that one is meant to tempt, this one
+   only has to be findable at the moment someone gets stuck. */
 .dashboard-guide-link {
   display: flex;
   align-items: center;
