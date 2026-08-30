@@ -5,7 +5,8 @@ File names, exactly like this:
     shot-01.png          taken on a normal screen
     shot-01-mobile.png   taken on a phone
 
-Numbers 01 through 20, leading zero included. Which screen belongs to which
+Numbers 01 through 21, leading zero included. Not every number is in use -
+the guide only asks for the ones it shows a slot for. Which screen belongs to which
 number is written in the slot on the guide page itself.
 
 If the mobile version is missing, the desktop one is shown on phones too.
