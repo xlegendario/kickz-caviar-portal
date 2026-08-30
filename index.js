@@ -27151,6 +27151,44 @@ app.get("/api/dashboard/consignment-accepted", async (req, res) => {
       ].filter(Boolean)
     );
 
+    // NEW - the stock row behind each offer, in one query.
+    //
+    // Two reasons. Product, SKU and size on the Seller Offer are lookups
+    // through "Linked Orders", so a consignment offer on a Member WTB - which
+    // links through "Member WTBs" instead - showed a row of dashes with no
+    // way to tell which pair it was about.
+    //
+    // And this tab asks the consignor to confirm that HIS price was accepted,
+    // which only reads as such if he can see that price. It lives here, not
+    // on the offer.
+    const inventoryIds = [
+      ...new Set(
+        ownOffers
+          .map((record) => asText(record.fields?.["Consignment Inventory ID"]))
+          .filter(Boolean)
+      )
+    ];
+
+    const inventoryById = new Map();
+
+    if (inventoryIds.length) {
+      const { data: inventoryRows, error: inventoryError } = await supabase
+        .from("consignment_inventory")
+        .select("id, product_name, sku, size, brand, selling_price_suggested")
+        .in("id", inventoryIds);
+
+      if (inventoryError) {
+        // Non-fatal: without it the row falls back to whatever Airtable has,
+        // which is what it showed before this existed.
+        console.error(
+          "Could not read consignment stock for the Accepted tab:",
+          inventoryError.message
+        );
+      }
+
+      for (const row of inventoryRows || []) inventoryById.set(String(row.id), row);
+    }
+
     const items = ownOffers.map((record) => {
       const f = record.fields || {};
 
@@ -27161,13 +27199,20 @@ app.get("/api/dashboard/consignment-accepted", async (req, res) => {
 
       // Same field names and formatting as the Confirmed tab, so both use
       // the shared skeletonColumns layout and nothing has to be special-cased.
+      const stock = inventoryById.get(asText(f["Consignment Inventory ID"]));
+
       return {
         seller_offer_record_id: record.id,
         order_id: displayValue(f["Order ID"]),
-        product: displayValue(f["Product Name"]),
-        sku: displayValue(f["SKU"]),
-        size: displayValue(f["Size"]),
-        brand: displayValue(f["Brand"]),
+        // Airtable first so a store order reads exactly as it always did;
+        // the stock row fills in for a Member WTB, which has no lookup.
+        product: displayValue(f["Product Name"]) || asText(stock?.product_name),
+        sku: displayValue(f["SKU"]) || asText(stock?.sku),
+        size: displayValue(f["Size"]) || asText(stock?.size),
+        brand: displayValue(f["Brand"]) || asText(stock?.brand),
+        // What he listed it for, next to what he gets - the whole point of
+        // this tab is that his own price came back accepted.
+        your_price: moneyWholeValue(stock?.selling_price_suggested),
         payout: moneyWholeValue(f["Seller Offer"]),
         vat_type: displayValue(f["Offer VAT Type"]),
         date: formatDateEU(f["Offer Date"]),
