@@ -2086,37 +2086,28 @@ function renderConsignmentAcceptedRows(items) {
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
-        <div class="dashboard-action-row action-row-inline">
-          <button
-            class="dashboard-confirm-btn action-accept"
-            type="button"
-            data-consignment-confirm="${escapeHtml(item.seller_offer_record_id)}"
-          >
-            <span class="accept-kop">CONFIRM</span>
-            <span class="accept-amount">${escapeHtml(amountForButton(item.payout))}</span>
-          </button>
-          <button
-            class="dashboard-deny-btn"
-            type="button"
-            data-consignment-deny="${escapeHtml(item.seller_offer_record_id)}"
-          >
-            Deny
-          </button>
-          ${
-            item.discord_url
-              ? `
-                <a
-                  class="dashboard-discord-btn"
-                  href="${escapeHtml(item.discord_url)}"
-                  target="_blank"
-                  rel="noopener"
-                >
-                  Discord
-                </a>
-              `
-              : ""
-          }
-        </div>
+        <button
+          class="dashboard-confirm-btn"
+          type="button"
+          data-consignment-confirm="${escapeHtml(item.seller_offer_record_id)}"
+        >Confirm ${escapeHtml(amountForButton(item.payout))}</button>
+        <button
+          class="dashboard-deny-btn"
+          type="button"
+          data-consignment-deny="${escapeHtml(item.seller_offer_record_id)}"
+        >Deny</button>
+        ${
+          item.discord_url
+            ? `
+              <a
+                class="dashboard-discord-btn"
+                href="${escapeHtml(item.discord_url)}"
+                target="_blank"
+                rel="noopener"
+              >Discord</a>
+            `
+            : ""
+        }
       </td>
     </tr>
   `).join("");
