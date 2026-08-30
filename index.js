@@ -949,6 +949,652 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
   };
 }
 
+/*
+ * Where a store buyer reads its messages.
+ *
+ * A Lojiq store is not part of Kickz Caviar and must never hear from the
+ * Kickz Caviar bot. As far as the store knows it posts want-to-buys in its
+ * own Lojiq server, and everything comes back there.
+ *
+ * The Merchants link on the buyer record is what marks such a buyer - the
+ * same link the payment side already uses to skip Mollie and settle through
+ * Open Payments, so the two cannot drift apart.
+ *
+ * Returns null for a normal member, who keeps his DM.
+ */
+async function resolveStoreBuyerChannels(buyerRecord) {
+  const merchantRecordId = firstLinkedRecordId(buyerRecord?.fields?.["Merchants"]);
+
+  if (!merchantRecordId) return null;
+
+  const merchant = await airtable(MERCHANTS_TABLE)
+    .find(merchantRecordId)
+    .catch(() => null);
+
+  if (!merchant) {
+    console.error(
+      `Store buyer points at merchant ${merchantRecordId}, which could not be read.`
+    );
+
+    return null;
+  }
+
+  const mf = merchant.fields || {};
+
+  return {
+    merchantRecordId,
+    storeName: asText(mf["Store Name"]),
+    offerRequestsChannelId: asText(mf["Offer Requests Channel ID"]),
+    labelRequestChannelId: asText(mf["Label Request Channel ID"])
+  };
+}
+
+/*
+ * Posts an embed into a store channel through the Lojiq bot.
+ *
+ * Discord only lets an application post and edit as itself, and the bot that
+ * sits in the store servers is the one behind airtable-discord-updates
+ * (DISCORD_TOKEN), not this portal (KICKZ_DEAL_DISCORD_BOT_TOKEN). So the
+ * portal keeps building the embed - one shape wherever it lands - and hands
+ * it over for delivery.
+ *
+ * Returns the {channelId, messageId} shape a DM send gives back, so callers
+ * can track the message exactly the way they already do.
+ */
+async function postStoreBuyerEmbed({ channelId, content, embeds, components }) {
+  if (!AIRTABLE_DISCORD_UPDATES_URL) {
+    return { ok: false, reason: "no_updates_service_url" };
+  }
+
+  const secret = COUNTER_OFFERS_SECRET || process.env.COUNTER_OFFERS_SECRET || "";
+
+  const response = await fetch(
+    `${AIRTABLE_DISCORD_UPDATES_URL}/post-member-wtb-store-message`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(secret ? { "x-kc-secret": secret } : {})
+      },
+      body: JSON.stringify({
+        channel_id: channelId,
+        content: content || "",
+        embeds: embeds || [],
+        components: components || []
+      })
+    }
+  ).catch((err) => {
+    console.error("Failed to reach the Lojiq bot for a store message:", err.message);
+
+    return null;
+  });
+
+  if (!response || !response.ok) {
+    const detail = response ? await response.text().catch(() => "") : "no response";
+
+    console.error(
+      `Failed to post a store message to channel ${channelId}:`,
+      response ? response.status : "-",
+      String(detail).slice(0, 200)
+    );
+
+    return { ok: false, reason: "post_failed" };
+  }
+
+  const data = await response.json().catch(() => ({}));
+
+  return {
+    ok: true,
+    channelId: asText(data.channel_id) || channelId,
+    messageId: asText(data.message_id)
+  };
+}
+
+/*
+ * What the three buyer buttons actually do, with no Discord in sight.
+ *
+ * The same offer embed now reaches two kinds of buyer over two different
+ * bots: a Kickz Caviar member gets it as a DM from this portal, a Lojiq store
+ * gets it in its own channel from the updates service. Both then press the
+ * same buttons, and both must land on the same behaviour.
+ *
+ * Keeping the work here is the whole point - a second front end may format
+ * the reply, never decide what a press means. Returns the line the caller
+ * should put above the embed, plus an optional private note to the presser.
+ */
+async function runMemberWtbBuyerAction({
+  action,
+  memberWtbRecordId,
+  sellerOfferRecordId,
+  counterPrice
+}) {
+  if (action === "accept") {
+    // A consignment-backed offer gets a confirmation request, not a channel.
+    //
+    // The buyer has just accepted, which is the moment the consignor may be
+    // asked whether he still holds the pair - the same question a store order
+    // asks. Confirming there finalises the deal.
+    const offerForConsignment = await airtable(SELLER_OFFERS_TABLE)
+      .find(sellerOfferRecordId)
+      .catch(() => null);
+
+    if (asText(offerForConsignment?.fields?.["Consignment Inventory ID"])) {
+      const asked = await askConsignorToConfirmMemberWtbOffer({
+        memberWtbRecordId,
+        sellerOfferRecordId,
+        acceptedPayout: null
+      });
+
+      if (!asked.ok) {
+        console.error(
+          `❌ Could not ask the consignor to confirm ${sellerOfferRecordId}:`,
+          asked.reason
+        );
+
+        return {
+          ok: false,
+          content: "❌ Could not reach the consignor for confirmation."
+        };
+      }
+
+      return {
+        ok: true,
+        content:
+          "✅ Offer accepted. The consignor has been asked to confirm he still " +
+          "has the pair; you get the payment step once he does."
+      };
+    }
+
+    const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
+
+    if (!wtbBotBaseUrl) {
+      return { ok: false, content: "❌ KICKZ_WTB_BOT_BASE_URL is missing." };
+    }
+
+    const response = await fetch(`${wtbBotBaseUrl}/member-wtb/deal-channel`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-kc-secret": process.env.KC_PORTAL_SECRET
+      },
+      body: JSON.stringify({
+        member_wtb_record_id: memberWtbRecordId,
+        seller_offer_record_id: sellerOfferRecordId
+      })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      console.error("accept_member_wtb_buyer_offer failed:", {
+        status: response.status,
+        data
+      });
+
+      return {
+        ok: false,
+        content: `❌ Failed to accept offer. Status: ${response.status}. ${data.details || data.error || ""}`
+      };
+    }
+
+    return {
+      ok: true,
+      content: "✅ Offer accepted. Payment will be requested once the seller confirms the deal."
+    };
+  }
+
+  if (action === "decline") {
+    // Routes through the same endpoint the portal deny uses.
+    //
+    // This was once a stub that only flipped Purchase Status and greyed the
+    // embed: it never denied the seller offer, never sent the seller his
+    // Denied embed, and never ran the cross-seller broadcast. A buyer denying
+    // in Discord therefore did nothing on the seller side while the portal
+    // deny did all of it - the Discord-vs-portal split again.
+    let currentSellerOfferId = "";
+
+    try {
+      const wtbForDecline = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+      currentSellerOfferId = firstLinkedRecordId(wtbForDecline.fields?.["Current Lowest Seller Offer"]);
+    } catch (e) {
+      currentSellerOfferId = "";
+    }
+
+    if (currentSellerOfferId) {
+      await fetch(`${APP_PUBLIC_BASE_URL}/api/dashboard/buying-offers/${memberWtbRecordId}/deny`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.KC_PORTAL_SECRET
+        },
+        body: JSON.stringify({
+          seller_offer_record_id: currentSellerOfferId
+        })
+      }).catch((err) => console.error("Discord buyer-decline → deny endpoint failed (non-blocking):", err.message));
+    }
+
+    return { ok: true, content: "❌ Offer denied." };
+  }
+
+  if (action === "counter") {
+    if (!Number.isInteger(counterPrice) || counterPrice <= 0) {
+      return {
+        ok: false,
+        reply: "⚠️ Please enter a valid whole-number counter."
+      };
+    }
+
+    const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/create`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+      },
+      body: JSON.stringify({
+        member_wtb_record_id: memberWtbRecordId,
+        seller_offer_record_id: sellerOfferRecordId,
+        price: counterPrice
+      })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        reply: `❌ ${data.error || "Failed to submit your counter."}`
+      };
+    }
+
+    return {
+      ok: true,
+      reply: `✅ Your counter of ${moneySmartValue(counterPrice)} was sent to the seller(s).`,
+      content: `🔁 You countered with ${moneySmartValue(counterPrice)}. Waiting on the seller(s). You can still edit your counter through your dashboard.`
+    };
+  }
+
+  return { ok: false, content: "❌ Unknown action.", reason: "unknown_action" };
+}
+
+/*
+ * The buyer side of a counter round, with no Discord in sight.
+ *
+ * Same reason as runMemberWtbBuyerAction above: this embed now reaches a
+ * member as a DM from this portal and a Lojiq store as a channel message
+ * from the updates service, and a press has to mean the same thing either
+ * way. The work stays here; a front end only supplies the two callbacks.
+ *
+ * editMessage({ content, components }) rewrites the embed that was pressed.
+ * replyToUser({ content }) is the private note back to whoever pressed. Both
+ * are called in the same order the DM handler always called them, so nothing
+ * about the member path changes.
+ */
+async function runMemberWtbCounterRoundAction({
+  action,
+  counterOfferRecordId,
+  counterPrice,
+  sourceMessageId,
+  editMessage,
+  replyToUser
+}) {
+  if (action === "accept") {
+
+      const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
+      const f = counterOffer.fields || {};
+
+      if (asText(f["Status"]) === "Accepted") {
+        // His rule: the seller's standing position stays grabbable from
+        // the buyer's Denied embed even though that round is Closed
+        // (superseded by later negotiation). Only an already-Accepted
+        // round is genuinely gone — the deal closed with someone.
+        await editMessage({
+          content: "❌ This offer is no longer available.",
+          components: []
+        });
+        return;
+      }
+
+      await editMessage({
+        content: "⏳ Processing your acceptance...",
+        components: []
+      });
+
+      const memberWtbRecordId = firstLinkedRecordId(f["Member WTB"]);
+      const sellerOfferRecordId = asText(f["Seller Offer Record ID"]);
+      // This round has "Seller Counter Price" set (a seller-placed
+      // round) — that IS the seller's payout directly, already in
+      // seller terms, no conversion needed (unlike Store Orders, where
+      // an extra store-vs-seller scale conversion was needed — here the
+      // seller's own counter number already means "what I want to
+      // receive").
+      const sellerCounterPrice = numberValue(f["Seller Counter Price"]);
+      const acceptedPayout = sellerCounterPrice > 0 ? sellerCounterPrice : numberValue(f["Counter Payout"]);
+      const acceptedVatType = asText(f["Counter Payout VAT Type"] || f["Seller Original VAT Type"]);
+
+      if (!memberWtbRecordId || !sellerOfferRecordId) {
+        await editMessage({
+          content: "❌ Missing linked Member WTB or Seller Offer.",
+          components: []
+        });
+        return;
+      }
+
+      await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+        "Status": "Accepted",
+        "Accepted At": new Date().toISOString(),
+        "Closed At": new Date().toISOString()
+      });
+
+      // A consignment-backed offer gets a confirmation request, not a channel.
+      //
+      // The buyer has just accepted, which is the moment the consignor may be
+      // asked whether he still holds the pair - the same question a store order
+      // asks. It goes to his own channel, and confirming there finalises the deal.
+      const offerForConsignment = await airtable(SELLER_OFFERS_TABLE)
+        .find(sellerOfferRecordId)
+        .catch(() => null);
+
+      if (asText(offerForConsignment?.fields?.["Consignment Inventory ID"])) {
+        const asked = await askConsignorToConfirmMemberWtbOffer({
+          memberWtbRecordId,
+          sellerOfferRecordId,
+          acceptedPayout: acceptedPayout
+        });
+
+        if (!asked.ok) {
+          console.error(
+            `❌ Could not ask the consignor to confirm ${sellerOfferRecordId}:`,
+            asked.reason
+          );
+
+          await editMessage({
+            content: "❌ Could not reach the consignor for confirmation.",
+            components: []
+          });
+          
+          return;
+        }
+
+        await editMessage({
+          content:
+            "✅ Counter accepted. The consignor has been asked to confirm he still " +
+            "has the pair; you get the payment step once he does.",
+          components: []
+        });
+        
+        return;
+      }
+      const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
+
+      if (!wtbBotBaseUrl) {
+        await editMessage({
+          content: "❌ KICKZ_WTB_BOT_BASE_URL is missing.",
+          components: []
+        });
+        return;
+      }
+
+      const response = await fetch(`${wtbBotBaseUrl}/member-wtb/deal-channel`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.KC_PORTAL_SECRET
+        },
+        body: JSON.stringify({
+          member_wtb_record_id: memberWtbRecordId,
+          seller_offer_record_id: sellerOfferRecordId,
+          override_price: acceptedPayout,
+          override_vat_type: acceptedVatType
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        console.error("member_wtb_buyer_counter_accept failed:", { status: response.status, data });
+        await editMessage({
+          content: `❌ Failed to accept offer. ${data.error || ""}`,
+          components: []
+        });
+        return;
+      }
+
+      // The channel that gets created belongs to the SELLER - it is where he
+      // processes the deal. A buyer never gets one: he works from his dashboard
+      // and, for a store, from its own Lojiq channels. This line was copied
+      // from the seller-facing accept, where it is correct.
+      await editMessage({
+        content: "✅ Counter offer accepted. Payment will be requested once the seller confirms the deal.",
+        components: []
+      });
+
+      return;
+  }
+
+  if (action === "deny") {
+
+      const deniedRecord = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
+      const deniedFields = deniedRecord.fields || {};
+
+      await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+        "Status": "Denied",
+        "Denied At": new Date().toISOString(),
+        "Closed At": new Date().toISOString()
+      });
+
+      await editMessage({
+        content: "❌ Counter offer denied.",
+        components: []
+      });
+
+      await disableAllMemberWtbBuyerOfferMessages(
+        firstLinkedRecordId(deniedFields["Member WTB"]),
+        "❌ You denied this in your dashboard.",
+        sourceMessageId
+      ).catch((err) => console.error("Failed to disable buyer embeds after MW buyer-deny (non-blocking):", err.message));
+
+      // FIXED — the MW buyer-deny used to REOPEN the denied round's prior
+      // round and resend a seller embed. That (a) showed the buyer "A
+      // newer round is now active" after they'd just denied (a message
+      // meant for the seller leaked back), and (b) is exactly the
+      // spook-round "deny-reopens-prior-round" pattern we already REMOVED
+      // for Store Orders. It also never denied the OTHER sellers, so
+      // Seller A stayed Open on Current Lowest after the buyer denied the
+      // (lower) Seller B. Now mirrors the fixed Store Orders deny: no
+      // reopen — instead broadcast the buyer's floor to ALL other sellers
+      // (denying the lowest is implicitly a "no" to everyone higher).
+      try {
+        const memberWtbRecordId = firstLinkedRecordId(deniedFields["Member WTB"]);
+        const sellerRecordId = firstLinkedRecordId(deniedFields["Seller ID"]);
+
+        // First: send the DENIED seller their OWN Denied embed (their bid
+        // was rejected) with the buyer's standing position as the Accept
+        // fallback — mirrors the Store Orders deny. Without this the denied
+        // seller got no embed at all.
+        if (memberWtbRecordId && sellerRecordId) {
+          const memberWtbForDeny = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId).catch(() => null);
+          const wtbFieldsForDeny = memberWtbForDeny?.fields || {};
+          const sellerRecordForDeny = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+          const sellerDiscordIdForDeny = asText(sellerRecordForDeny?.fields?.["Discord ID"]);
+
+          const buyerFloorForDeny = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
+          const sellerVatTypeForDeny = asText(deniedFields["Seller Original VAT Type"]);
+          const standingPayoutForDeny = Number.isFinite(buyerFloorForDeny) && buyerFloorForDeny > 0
+            ? calculateMemberWtbSellerPayout(buyerFloorForDeny, sellerVatTypeForDeny, wtbFieldsForDeny)
+            : numberValue(deniedFields["Counter Payout"]);
+
+          if (sellerDiscordIdForDeny) {
+            const deniedDiscordResult = await sendMemberWtbCounterOfferDiscordDM({
+              counterOfferRecordId,
+              sellerDiscordId: sellerDiscordIdForDeny,
+              productName: asText(wtbFieldsForDeny["Product Name"]),
+              sku: asText(wtbFieldsForDeny["SKU"]),
+              size: asText(wtbFieldsForDeny["Size"]),
+              memberWtbId: asText(wtbFieldsForDeny["Member WTB ID"]) || memberWtbRecordId,
+              payout: standingPayoutForDeny,
+              vatType: sellerVatTypeForDeny,
+              sellerOriginalPrice: numberValue(deniedFields["Seller Original Price"]),
+              sellerOriginalVatType: sellerVatTypeForDeny,
+              sellerLastOfferPrice: numberValue(deniedFields["Seller Counter Price"]),
+              deniedAmount: numberValue(deniedFields["Seller Counter Price"]) || numberValue(deniedFields["Counter Payout"])
+            }).catch((err) => {
+              console.error("Failed to send denied seller their MW Denied embed (non-blocking):", err);
+              return null;
+            });
+
+            if (deniedDiscordResult) {
+              await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
+                "Discord Channel ID": deniedDiscordResult.channelId,
+                "Discord Message ID": deniedDiscordResult.messageId,
+                "Discord Delivery Type": deniedDiscordResult.deliveryType
+              }).catch(() => {});
+            }
+          }
+        }
+
+        if (memberWtbRecordId) {
+          const buyerFloorForBroadcast = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
+
+          if (Number.isFinite(buyerFloorForBroadcast) && buyerFloorForBroadcast > 0) {
+            await reengageDeniedSellers({
+              sourceType: "Member WTB",
+              recordId: memberWtbRecordId,
+              newBuyerCounterPrice: buyerFloorForBroadcast,
+              excludeSellerId: sellerRecordId,
+              isDenyBroadcast: true
+            }).catch((err) => console.error("Failed to broadcast buyer floor to other sellers after MW buyer-deny (non-blocking):", err));
+          }
+        }
+      } catch (broadcastErr) {
+        console.error("Failed to broadcast after member WTB buyer-deny (non-blocking):", broadcastErr);
+      }
+
+      return;
+  }
+
+  if (action === "counter") {
+
+      if (!Number.isInteger(counterPrice) || counterPrice <= 0) {
+        await replyToUser({
+          content: "⚠️ Please enter a valid whole-number counter.",
+        }).catch(() => {});
+        return;
+      }
+
+      // A Retry comes from a DENIED round (the buyer coming back on the
+      // "Counter Offer Denied" embed via the Retry button). The
+      // buyer-counter endpoint requires Status=Open and would reject a
+      // denied round ("no longer open"). Detect a non-Open round and
+      // route it to the buyer retry-counter endpoint instead, which
+      // handles a denied round (reversed band + cross-seller ceiling)
+      // and needs the buyer's own seller_record_id (WTB Buyer Seller ID).
+      let buyerRetryRoundStatus = null;
+      let buyerRetrySellerRecordId = null;
+      try {
+        const buyerRetryRound = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
+        buyerRetryRoundStatus = asText(buyerRetryRound.fields?.["Status"]);
+        const retryMwId = firstLinkedRecordId(buyerRetryRound.fields?.["Member WTB"]);
+        if (retryMwId) {
+          const retryMwRec = await airtable(MEMBER_WTBS_TABLE).find(retryMwId).catch(() => null);
+          buyerRetrySellerRecordId = firstLinkedRecordId(retryMwRec?.fields?.["Buyer Seller ID"]);
+        }
+      } catch (err) {
+        // fall through — buyer-counter path will reject cleanly
+      }
+
+      const isBuyerRetryFromDenied = buyerRetryRoundStatus && buyerRetryRoundStatus !== "Open";
+
+      const response = isBuyerRetryFromDenied
+        ? await fetch(`${APP_PUBLIC_BASE_URL}/api/dashboard/buying-counter-offers/${counterOfferRecordId}/retry-counter`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+            },
+            body: JSON.stringify({ price: counterPrice, seller_record_id: buyerRetrySellerRecordId })
+          })
+        : await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/${counterOfferRecordId}/buyer-counter`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+            },
+            body: JSON.stringify({ price: counterPrice })
+          });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        await replyToUser({
+          content: `❌ ${data.error || "Failed to submit your counter."}`
+        }).catch(() => {});
+        return;
+      }
+
+      await replyToUser({
+        content: `✅ Your counter of ${moneySmartValue(counterPrice)} was sent to the seller.`
+      }).catch(() => {});
+
+      await editMessage({
+        content: `🔁 You countered with ${moneySmartValue(counterPrice)}. Waiting on the seller.`,
+        components: [
+          {
+            type: 1,
+            components: [
+              { type: 2, style: 3, label: "Accept", custom_id: "member_wtb_buyer_counter_accept_disabled", disabled: true },
+              { type: 2, style: 1, label: "Edit", custom_id: `member_wtb_edit:${data.counter_offer_record_id}` },
+              { type: 2, style: 4, label: "Deny", custom_id: "member_wtb_buyer_counter_deny_disabled", disabled: true }
+            ]
+          }
+        ]
+      });
+
+      return;
+  }
+
+  if (action === "edit") {
+      const editedPrice = counterPrice;
+
+
+      if (!Number.isInteger(editedPrice) || editedPrice <= 0) {
+        await replyToUser({
+          content: "⚠️ Please enter a valid whole-number counter.",
+        }).catch(() => {});
+        return;
+      }
+
+      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/${counterOfferRecordId}/edit`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+        },
+        body: JSON.stringify({ price: editedPrice })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        await replyToUser({
+          content: `❌ ${data.error || "Failed to edit your counter."}`,
+        }).catch(() => {});
+        return;
+      }
+
+      await replyToUser({
+        content: `✅ Your counter was updated to ${moneySmartValue(editedPrice)}.`,
+      }).catch(() => {});
+
+      await editMessage({
+        content: `✏️ You edited your counter to ${moneySmartValue(editedPrice)}.`,
+        components: []
+      });
+
+      return;
+  }
+
+  return { ok: false, reason: "unknown_action" };
+}
 // Deny: the consignor no longer has it. Soft-delete so the undercut check
 // stops treating it as a live position, and leave the order on Outsource
 // so regular sellers can still take it — same as the current deny.
@@ -990,38 +1636,51 @@ async function notifyBuyerConsignmentWithdrawn(memberWtbRecordId) {
     buyerRecord.fields?.["Discord User ID"]
   );
 
-  if (!discordUserId) return { ok: false, reason: "buyer_has_no_discord" };
+  // A store hears this in its own channel, like everything else.
+  const storeChannels = await resolveStoreBuyerChannels(buyerRecord);
+  const storeOfferChannelId = asText(storeChannels?.offerRequestsChannelId);
 
-  await initKickzDealDiscord();
+  if (!storeOfferChannelId && !discordUserId) {
+    return { ok: false, reason: "buyer_has_no_discord" };
+  }
 
   const memberWtbId =
     asText(f["Member WTB ID"]) ||
     asText(f["WTB ID"]) ||
     memberWtbRecordId;
 
+  const withdrawnEmbed = {
+    title: "⚠️ The seller withdrew",
+    description: [
+      `**Order Number:** ${memberWtbId}`,
+      "",
+      `**Product:** ${asText(f["Product Name"]) || "—"}`,
+      `**SKU:** ${asText(f["SKU"]) || "—"}`,
+      `**Size:** ${asText(f["Size"]) || "—"}`,
+      "",
+      "Unfortunately the seller withdrew his offer. Your WTB is still " +
+        "live and you will receive a new offer as soon as a seller " +
+        "submits one."
+    ].join("\n"),
+    color: 0xf1c40f,
+    timestamp: new Date().toISOString()
+  };
+
+  if (storeOfferChannelId) {
+    const posted = await postStoreBuyerEmbed({
+      channelId: storeOfferChannelId,
+      embeds: [withdrawnEmbed]
+    });
+
+    return posted.ok ? { ok: true } : { ok: false, reason: posted.reason };
+  }
+
+  await initKickzDealDiscord();
+
   const user = await kickzDealDiscordClient.users.fetch(discordUserId);
   const dm = await user.createDM();
 
-  await dm.send({
-    embeds: [
-      {
-        title: "⚠️ The seller withdrew",
-        description: [
-          `**Order Number:** ${memberWtbId}`,
-          "",
-          `**Product:** ${asText(f["Product Name"]) || "—"}`,
-          `**SKU:** ${asText(f["SKU"]) || "—"}`,
-          `**Size:** ${asText(f["Size"]) || "—"}`,
-          "",
-          "Unfortunately the seller withdrew his offer. Your WTB is still " +
-            "live and you will receive a new offer as soon as a seller " +
-            "submits one."
-        ].join("\n"),
-        color: 0xf1c40f,
-        timestamp: new Date().toISOString()
-      }
-    ]
-  });
+  await dm.send({ embeds: [withdrawnEmbed] });
 
   return { ok: true };
 }
@@ -2072,11 +2731,13 @@ async function sendMemberWtbLabelRequestToBuyer(memberWtbRecordId) {
     buyerRecord.fields?.["Discord User ID"]
   );
 
-  if (!discordUserId) {
+  // A store reads its label requests in its own labels channel.
+  const storeChannels = await resolveStoreBuyerChannels(buyerRecord);
+  const storeLabelChannelId = asText(storeChannels?.labelRequestChannelId);
+
+  if (!storeLabelChannelId && !discordUserId) {
     throw new Error("Buyer is missing Discord ID");
   }
-
-  await initKickzDealDiscord();
 
   const memberWtbId =
     asText(f["Member WTB ID"]) ||
@@ -2085,49 +2746,76 @@ async function sendMemberWtbLabelRequestToBuyer(memberWtbRecordId) {
 
   const uploadUrl = `${APP_PUBLIC_BASE_URL}/member-wtb-label-request.html?member_wtb_id=${encodeURIComponent(memberWtbRecordId)}`;
 
-  const user = await kickzDealDiscordClient.users.fetch(discordUserId);
-  const dm = await user.createDM();
+  const labelEmbed = {
+    title: "📦 Shipping Label Requested",
+    description: [
+      `**Order Number:** ${memberWtbId}`,
+      "",
+      `**Product:** ${asText(f["Product Name"]) || "—"}`,
+      `**SKU:** ${asText(f["SKU"]) || "—"}`,
+      `**Size:** ${asText(f["Size"]) || "—"}`,
+      "",
+      "The seller is ready to ship.",
+      "Please upload the shipping label and tracking number using the button below."
+    ].join("\n"),
+    color: 0xf1c40f,
+    timestamp: new Date().toISOString()
+  };
 
-  const message = await dm.send({
-    embeds: [
-      {
-        title: "📦 Shipping Label Requested",
-        description: [
-          `**Order Number:** ${memberWtbId}`,
-          "",
-          `**Product:** ${asText(f["Product Name"]) || "—"}`,
-          `**SKU:** ${asText(f["SKU"]) || "—"}`,
-          `**Size:** ${asText(f["Size"]) || "—"}`,
-          "",
-          "The seller is ready to ship.",
-          "Please upload the shipping label and tracking number using the button below."
-        ].join("\n"),
-        color: 0xf1c40f,
-        timestamp: new Date().toISOString()
-      }
-    ],
-    components: [
-      {
-        type: 1,
-        components: [
-          {
-            type: 2,
-            style: 5,
-            label: "Upload Shipping Label",
-            url: uploadUrl
-          }
-        ]
-      }
-    ]
-  });
+  // A link button carries no custom id, so it works from whichever bot
+  // posts it - nothing to route back.
+  const labelComponents = [
+    {
+      type: 1,
+      components: [
+        {
+          type: 2,
+          style: 5,
+          label: "Upload Shipping Label",
+          url: uploadUrl
+        }
+      ]
+    }
+  ];
+
+  let sentChannelId = "";
+  let sentMessageId = "";
+
+  if (storeLabelChannelId) {
+    const posted = await postStoreBuyerEmbed({
+      channelId: storeLabelChannelId,
+      embeds: [labelEmbed],
+      components: labelComponents
+    });
+
+    if (!posted.ok) {
+      throw new Error(`Could not post the label request to the store channel: ${posted.reason}`);
+    }
+
+    sentChannelId = posted.channelId;
+    sentMessageId = posted.messageId;
+  } else {
+    await initKickzDealDiscord();
+
+    const user = await kickzDealDiscordClient.users.fetch(discordUserId);
+    const dm = await user.createDM();
+
+    const message = await dm.send({
+      embeds: [labelEmbed],
+      components: labelComponents
+    });
+
+    sentChannelId = message.channelId;
+    sentMessageId = message.id;
+  }
 
   await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
     "Label Requested At": new Date().toISOString()
   });
 
   return {
-    channelId: message.channelId,
-    messageId: message.id,
+    channelId: sentChannelId,
+    messageId: sentMessageId,
     url: uploadUrl
   };
 }
@@ -3142,22 +3830,68 @@ async function disableAllMemberWtbBuyerOfferMessages(
       // embed the buyer just clicked) — re-editing it makes the embed
       // visibly flip an extra time.
       if (skipMessageId && ref.messageId === skipMessageId) continue;
+
       const channel = await kickzDealDiscordClient.channels.fetch(ref.channelId).catch(() => null);
-      if (!channel) continue;
-      const message = await channel.messages.fetch(ref.messageId).catch(() => null);
-      if (!message) continue;
-      await message.edit({
-        content: note,
-        embeds: message.embeds,
-        components: [
-          {
-            type: 1,
-            components: [
-              { type: 2, style: 2, label: "Expired", custom_id: "member_wtb_buyer_offer_expired", disabled: true }
-            ]
-          }
-        ]
-      });
+
+      const message = channel
+        ? await channel.messages.fetch(ref.messageId).catch(() => null)
+        : null;
+
+      const edited = message
+        ? await message
+            .edit({
+              content: note,
+              embeds: message.embeds,
+              components: [
+                {
+                  type: 1,
+                  components: [
+                    { type: 2, style: 2, label: "Expired", custom_id: "member_wtb_buyer_offer_expired", disabled: true }
+                  ]
+                }
+              ]
+            })
+            .then(() => true)
+            .catch(() => false)
+        : false;
+
+      // NEW - a store embed belongs to the other bot.
+      //
+      // An offer posted into a Lojiq channel was sent by the updates service,
+      // and this bot is not even a member of that server: the fetch above
+      // returns nothing, and the old code skipped it without a word. That
+      // left a superseded offer on screen with live buttons - the exact
+      // failure seen on ORD-019780, where the portal DMs were disabled and
+      // the store-channel embed was not.
+      //
+      // Discord only lets an application edit its own messages, so the only
+      // way through is to ask the owner.
+      if (!edited) {
+        const delegated = await fetch(`${AIRTABLE_DISCORD_UPDATES_URL}/counter-offer/disable`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            channel_id: ref.channelId,
+            message_id: ref.messageId,
+            note
+          })
+        }).catch((err) => {
+          console.error(
+            "Could not reach the updates service to expire a store offer embed:",
+            err.message
+          );
+
+          return null;
+        });
+
+        if (!delegated || !delegated.ok) {
+          console.error(
+            "Failed to expire MW buyer offer embed through its owner:",
+            ref.messageId,
+            delegated ? delegated.status : "-"
+          );
+        }
+      }
     } catch (err) {
       console.error("Failed to disable MW buyer offer message:", ref.messageId, err.message);
     }
@@ -5061,132 +5795,34 @@ function bindConsignmentDiscordButtons(client) {
             embeds: interaction.message.embeds,
             components: []
           }).catch(() => {});
-    
-          // A consignment-backed offer gets a confirmation request, not a channel.
-          //
-          // The buyer has just accepted, which is the moment the consignor may be
-          // asked whether he still holds the pair - the same question a store order
-          // asks. It goes to his own channel, and confirming there finalises the deal.
-          const offerForConsignment = await airtable(SELLER_OFFERS_TABLE)
-            .find(sellerOfferRecordId)
-            .catch(() => null);
 
-          if (asText(offerForConsignment?.fields?.["Consignment Inventory ID"])) {
-            const asked = await askConsignorToConfirmMemberWtbOffer({
-              memberWtbRecordId,
-              sellerOfferRecordId,
-              acceptedPayout: null
-            });
-
-            if (!asked.ok) {
-              console.error(
-                `❌ Could not ask the consignor to confirm ${sellerOfferRecordId}:`,
-                asked.reason
-              );
-
-              await safeEditInteractionMessage(interaction, {
-                content: "❌ Could not reach the consignor for confirmation.",
-                embeds: interaction.message.embeds,
-                components: []
-              }).catch(() => {});
-              
-              return;
-            }
-
-            await safeEditInteractionMessage(interaction, {
-              content:
-                "✅ Offer accepted. The consignor has been asked to confirm he still " +
-                "has the pair; you get the payment step once he does.",
-              embeds: interaction.message.embeds,
-              components: []
-            }).catch(() => {});
-            
-            return;
-          }
-          const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
-
-          if (!wtbBotBaseUrl) {
-            await safeEditInteractionMessage(interaction, {
-              content: "❌ KICKZ_WTB_BOT_BASE_URL is missing.",
-              embeds: interaction.message.embeds,
-              components: []
-            }).catch(() => {});
-            return;
-          }
-          
-          const response = await fetch(`${wtbBotBaseUrl}/member-wtb/deal-channel`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-kc-secret": process.env.KC_PORTAL_SECRET
-            },
-            body: JSON.stringify({
-              member_wtb_record_id: memberWtbRecordId,
-              seller_offer_record_id: sellerOfferRecordId
-            })
+          const result = await runMemberWtbBuyerAction({
+            action: "accept",
+            memberWtbRecordId,
+            sellerOfferRecordId
           });
-    
-          const data = await response.json().catch(() => ({}));
-    
-          if (!response.ok) {
-            console.error("accept_member_wtb_buyer_offer failed:", {
-              status: response.status,
-              data
-            });
-          
-            await safeEditInteractionMessage(interaction, {
-              content: `❌ Failed to accept offer. Status: ${response.status}. ${data.details || data.error || ""}`,
-              embeds: interaction.message.embeds,
-              components: []
-            }).catch(() => {});
-            return;
-          }
-    
+
           await safeEditInteractionMessage(interaction, {
-            content: "✅ Offer accepted. Payment will be requested once the seller confirms the deal.",
+            content: result.content,
             embeds: interaction.message.embeds,
             components: []
           }).catch(() => {});
-    
+
           return;
         }
-    
+
         if (customId.startsWith("decline_member_wtb_buyer_offer:")) {
           const memberWtbRecordId = customId.split(":")[1];
 
           await interaction.deferUpdate().catch(() => {});
 
-          // FIXED — this was a stub: it only flipped the WTB's Purchase
-          // Status and greyed the embed, but NEVER denied the seller's
-          // offer, sent the seller their Denied embed, or ran the
-          // cross-seller broadcast. So a buyer denying via DISCORD did
-          // nothing on the seller side (no Denied embed, offer didn't
-          // move to the seller's Denied pill) — while the PORTAL deny
-          // did all of it. Now routes through the SAME endpoint the
-          // Portal uses. Same Discord-vs-Portal split we keep hitting.
-          let currentSellerOfferId = "";
-          try {
-            const wtbForDecline = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
-            currentSellerOfferId = firstLinkedRecordId(wtbForDecline.fields?.["Current Lowest Seller Offer"]);
-          } catch (e) {
-            currentSellerOfferId = "";
-          }
-
-          if (currentSellerOfferId) {
-            await fetch(`${APP_PUBLIC_BASE_URL}/api/dashboard/buying-offers/${memberWtbRecordId}/deny`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "x-kc-secret": process.env.KC_PORTAL_SECRET
-              },
-              body: JSON.stringify({
-                seller_offer_record_id: currentSellerOfferId
-              })
-            }).catch((err) => console.error("Discord buyer-decline → deny endpoint failed (non-blocking):", err.message));
-          }
+          const result = await runMemberWtbBuyerAction({
+            action: "decline",
+            memberWtbRecordId
+          });
 
           await safeEditInteractionMessage(interaction, {
-            content: "❌ Offer denied.",
+            content: result.content,
             embeds: interaction.message.embeds,
             components: []
           }).catch(() => {});
@@ -5232,53 +5868,27 @@ function bindConsignmentDiscordButtons(client) {
       const rawAmount = interaction.fields.getTextInputValue("counter_price");
       const counterPrice = Number(String(rawAmount).replace(/[^\d.,-]/g, "").replace(",", "."));
 
-      if (!Number.isInteger(counterPrice) || counterPrice <= 0) {
-        await interaction.reply({
-          content: "⚠️ Please enter a valid whole-number counter.",
-          ephemeral: true
-        }).catch(() => {});
-        return;
-      }
-
-      // FIXED — same 3-second-acknowledgment issue found and fixed
-      // repeatedly elsewhere this session: this never deferred before
-      // the slow work below. This endpoint has grown significantly
-      // slower since the reengageDeniedSellers broadcast work was
-      // added (chain-tracing through every seller's history, creating
-      // fresh rounds, sending Discord DMs to multiple sellers) —
-      // confirmed via his live report: Discord showed a failure, but
-      // the counter reached seller A successfully regardless. Deferring
-      // immediately removes that race entirely.
+      // Deferred before the work below, not after.
+      //
+      // Creating a round can re-engage denied sellers - tracing every seller
+      // history, opening fresh rounds, DMing several of them - which outruns
+      // the 3-second acknowledgment window. Confirmed live: Discord showed a
+      // failure while the counter had reached seller A perfectly well.
       await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/create`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
-        },
-        body: JSON.stringify({
-          member_wtb_record_id: memberWtbRecordId,
-          seller_offer_record_id: sellerOfferRecordId,
-          price: counterPrice
-        })
+      const result = await runMemberWtbBuyerAction({
+        action: "counter",
+        memberWtbRecordId,
+        sellerOfferRecordId,
+        counterPrice
       });
 
-      const data = await response.json().catch(() => ({}));
+      await interaction.editReply({ content: result.reply }).catch(() => {});
 
-      if (!response.ok) {
-        await interaction.editReply({
-          content: `❌ ${data.error || "Failed to submit your counter."}`
-        }).catch(() => {});
-        return;
-      }
-
-      await interaction.editReply({
-        content: `✅ Your counter of ${moneySmartValue(counterPrice)} was sent to the seller(s).`
-      }).catch(() => {});
+      if (!result.ok) return;
 
       await safeEditInteractionMessage(interaction, {
-        content: `🔁 You countered with ${moneySmartValue(counterPrice)}. Waiting on the seller(s). You can still edit your counter through your dashboard.`,
+        content: result.content,
         embeds: interaction.message.embeds,
         components: []
       }).catch(() => {});
@@ -5877,141 +6487,21 @@ function bindConsignmentDiscordButtons(client) {
     if (customId.startsWith("member_wtb_buyer_counter_accept:")) {
       const counterOfferRecordId = customId.split(":")[1];
 
-      // FIXED — same 3-second-acknowledgment issue.
+      // Deferred first: the work below outruns the 3-second window.
       await interaction.deferUpdate().catch(() => {});
 
-      const counterOffer = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
-      const f = counterOffer.fields || {};
-
-      if (asText(f["Status"]) === "Accepted") {
-        // His rule: the seller's standing position stays grabbable from
-        // the buyer's Denied embed even though that round is Closed
-        // (superseded by later negotiation). Only an already-Accepted
-        // round is genuinely gone — the deal closed with someone.
-        await safeEditInteractionMessage(interaction, {
-          content: "❌ This offer is no longer available.",
-          embeds: interaction.message.embeds,
-          components: []
-        }).catch(() => {});
-        return;
-      }
-
-      await safeEditInteractionMessage(interaction, {
-        content: "⏳ Processing your acceptance...",
-        embeds: interaction.message.embeds,
-        components: []
-      }).catch(() => {});
-
-      const memberWtbRecordId = firstLinkedRecordId(f["Member WTB"]);
-      const sellerOfferRecordId = asText(f["Seller Offer Record ID"]);
-      // This round has "Seller Counter Price" set (a seller-placed
-      // round) — that IS the seller's payout directly, already in
-      // seller terms, no conversion needed (unlike Store Orders, where
-      // an extra store-vs-seller scale conversion was needed — here the
-      // seller's own counter number already means "what I want to
-      // receive").
-      const sellerCounterPrice = numberValue(f["Seller Counter Price"]);
-      const acceptedPayout = sellerCounterPrice > 0 ? sellerCounterPrice : numberValue(f["Counter Payout"]);
-      const acceptedVatType = asText(f["Counter Payout VAT Type"] || f["Seller Original VAT Type"]);
-
-      if (!memberWtbRecordId || !sellerOfferRecordId) {
-        await safeEditInteractionMessage(interaction, {
-          content: "❌ Missing linked Member WTB or Seller Offer.",
-          embeds: interaction.message.embeds,
-          components: []
-        }).catch(() => {});
-        return;
-      }
-
-      await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
-        "Status": "Accepted",
-        "Accepted At": new Date().toISOString(),
-        "Closed At": new Date().toISOString()
-      });
-
-      // A consignment-backed offer gets a confirmation request, not a channel.
-      //
-      // The buyer has just accepted, which is the moment the consignor may be
-      // asked whether he still holds the pair - the same question a store order
-      // asks. It goes to his own channel, and confirming there finalises the deal.
-      const offerForConsignment = await airtable(SELLER_OFFERS_TABLE)
-        .find(sellerOfferRecordId)
-        .catch(() => null);
-
-      if (asText(offerForConsignment?.fields?.["Consignment Inventory ID"])) {
-        const asked = await askConsignorToConfirmMemberWtbOffer({
-          memberWtbRecordId,
-          sellerOfferRecordId,
-          acceptedPayout: acceptedPayout
-        });
-
-        if (!asked.ok) {
-          console.error(
-            `❌ Could not ask the consignor to confirm ${sellerOfferRecordId}:`,
-            asked.reason
-          );
-
-          await safeEditInteractionMessage(interaction, {
-            content: "❌ Could not reach the consignor for confirmation.",
+      await runMemberWtbCounterRoundAction({
+        action: "accept",
+        counterOfferRecordId,
+        sourceMessageId: interaction.message?.id,
+        editMessage: (patch) =>
+          safeEditInteractionMessage(interaction, {
+            content: patch.content,
             embeds: interaction.message.embeds,
-            components: []
-          }).catch(() => {});
-          
-          return;
-        }
-
-        await safeEditInteractionMessage(interaction, {
-          content:
-            "✅ Counter accepted. The consignor has been asked to confirm he still " +
-            "has the pair; you get the payment step once he does.",
-          embeds: interaction.message.embeds,
-          components: []
-        }).catch(() => {});
-        
-        return;
-      }
-      const wtbBotBaseUrl = KICKZ_WTB_BOT_BASE_URL || DISCORD_BOT_BASE_URL;
-
-      if (!wtbBotBaseUrl) {
-        await safeEditInteractionMessage(interaction, {
-          content: "❌ KICKZ_WTB_BOT_BASE_URL is missing.",
-          embeds: interaction.message.embeds,
-          components: []
-        }).catch(() => {});
-        return;
-      }
-
-      const response = await fetch(`${wtbBotBaseUrl}/member-wtb/deal-channel`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-kc-secret": process.env.KC_PORTAL_SECRET
-        },
-        body: JSON.stringify({
-          member_wtb_record_id: memberWtbRecordId,
-          seller_offer_record_id: sellerOfferRecordId,
-          override_price: acceptedPayout,
-          override_vat_type: acceptedVatType
-        })
+            components: patch.components || []
+          }).catch(() => {}),
+        replyToUser: (patch) => interaction.editReply(patch)
       });
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        console.error("member_wtb_buyer_counter_accept failed:", { status: response.status, data });
-        await safeEditInteractionMessage(interaction, {
-          content: `❌ Failed to accept offer. ${data.error || ""}`,
-          embeds: interaction.message.embeds,
-          components: []
-        }).catch(() => {});
-        return;
-      }
-
-      await safeEditInteractionMessage(interaction, {
-        content: "✅ Counter offer accepted. Check the private channel that was just created for you to process the deal.",
-        embeds: interaction.message.embeds,
-        components: []
-      }).catch(() => {});
 
       return;
     }
@@ -6021,105 +6511,21 @@ function bindConsignmentDiscordButtons(client) {
     if (customId.startsWith("member_wtb_buyer_counter_deny:")) {
       const counterOfferRecordId = customId.split(":")[1];
 
-      // FIXED — same 3-second-acknowledgment issue.
+      // Deferred first: the work below outruns the 3-second window.
       await interaction.deferUpdate().catch(() => {});
 
-      const deniedRecord = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
-      const deniedFields = deniedRecord.fields || {};
-
-      await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
-        "Status": "Denied",
-        "Denied At": new Date().toISOString(),
-        "Closed At": new Date().toISOString()
+      await runMemberWtbCounterRoundAction({
+        action: "deny",
+        counterOfferRecordId,
+        sourceMessageId: interaction.message?.id,
+        editMessage: (patch) =>
+          safeEditInteractionMessage(interaction, {
+            content: patch.content,
+            embeds: interaction.message.embeds,
+            components: patch.components || []
+          }).catch(() => {}),
+        replyToUser: (patch) => interaction.editReply(patch)
       });
-
-      await safeEditInteractionMessage(interaction, {
-        content: "❌ Counter offer denied.",
-        embeds: interaction.message.embeds,
-        components: []
-      }).catch(() => {});
-
-      await disableAllMemberWtbBuyerOfferMessages(
-        firstLinkedRecordId(deniedFields["Member WTB"]),
-        "❌ You denied this in your dashboard.",
-        interaction.message?.id
-      ).catch((err) => console.error("Failed to disable buyer embeds after MW buyer-deny (non-blocking):", err.message));
-
-      // FIXED — the MW buyer-deny used to REOPEN the denied round's prior
-      // round and resend a seller embed. That (a) showed the buyer "A
-      // newer round is now active" after they'd just denied (a message
-      // meant for the seller leaked back), and (b) is exactly the
-      // spook-round "deny-reopens-prior-round" pattern we already REMOVED
-      // for Store Orders. It also never denied the OTHER sellers, so
-      // Seller A stayed Open on Current Lowest after the buyer denied the
-      // (lower) Seller B. Now mirrors the fixed Store Orders deny: no
-      // reopen — instead broadcast the buyer's floor to ALL other sellers
-      // (denying the lowest is implicitly a "no" to everyone higher).
-      try {
-        const memberWtbRecordId = firstLinkedRecordId(deniedFields["Member WTB"]);
-        const sellerRecordId = firstLinkedRecordId(deniedFields["Seller ID"]);
-
-        // First: send the DENIED seller their OWN Denied embed (their bid
-        // was rejected) with the buyer's standing position as the Accept
-        // fallback — mirrors the Store Orders deny. Without this the denied
-        // seller got no embed at all.
-        if (memberWtbRecordId && sellerRecordId) {
-          const memberWtbForDeny = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId).catch(() => null);
-          const wtbFieldsForDeny = memberWtbForDeny?.fields || {};
-          const sellerRecordForDeny = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
-          const sellerDiscordIdForDeny = asText(sellerRecordForDeny?.fields?.["Discord ID"]);
-
-          const buyerFloorForDeny = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
-          const sellerVatTypeForDeny = asText(deniedFields["Seller Original VAT Type"]);
-          const standingPayoutForDeny = Number.isFinite(buyerFloorForDeny) && buyerFloorForDeny > 0
-            ? calculateMemberWtbSellerPayout(buyerFloorForDeny, sellerVatTypeForDeny, wtbFieldsForDeny)
-            : numberValue(deniedFields["Counter Payout"]);
-
-          if (sellerDiscordIdForDeny) {
-            const deniedDiscordResult = await sendMemberWtbCounterOfferDiscordDM({
-              counterOfferRecordId,
-              sellerDiscordId: sellerDiscordIdForDeny,
-              productName: asText(wtbFieldsForDeny["Product Name"]),
-              sku: asText(wtbFieldsForDeny["SKU"]),
-              size: asText(wtbFieldsForDeny["Size"]),
-              memberWtbId: asText(wtbFieldsForDeny["Member WTB ID"]) || memberWtbRecordId,
-              payout: standingPayoutForDeny,
-              vatType: sellerVatTypeForDeny,
-              sellerOriginalPrice: numberValue(deniedFields["Seller Original Price"]),
-              sellerOriginalVatType: sellerVatTypeForDeny,
-              sellerLastOfferPrice: numberValue(deniedFields["Seller Counter Price"]),
-              deniedAmount: numberValue(deniedFields["Seller Counter Price"]) || numberValue(deniedFields["Counter Payout"])
-            }).catch((err) => {
-              console.error("Failed to send denied seller their MW Denied embed (non-blocking):", err);
-              return null;
-            });
-
-            if (deniedDiscordResult) {
-              await airtable(COUNTER_OFFERS_TABLE).update(counterOfferRecordId, {
-                "Discord Channel ID": deniedDiscordResult.channelId,
-                "Discord Message ID": deniedDiscordResult.messageId,
-                "Discord Delivery Type": deniedDiscordResult.deliveryType
-              }).catch(() => {});
-            }
-          }
-        }
-
-        if (memberWtbRecordId) {
-          const buyerFloorForBroadcast = await getBuyerHighestEverPosition("Member WTB", memberWtbRecordId);
-
-          if (Number.isFinite(buyerFloorForBroadcast) && buyerFloorForBroadcast > 0) {
-            await reengageDeniedSellers({
-              sourceType: "Member WTB",
-              recordId: memberWtbRecordId,
-              newBuyerCounterPrice: buyerFloorForBroadcast,
-              excludeSellerId: sellerRecordId,
-              isDenyBroadcast: true
-            }).catch((err) => console.error("Failed to broadcast buyer floor to other sellers after MW buyer-deny (non-blocking):", err));
-          }
-        }
-      } catch (broadcastErr) {
-        console.error("Failed to broadcast after member WTB buyer-deny (non-blocking):", broadcastErr);
-      }
 
       return;
     }
@@ -6162,86 +6568,22 @@ function bindConsignmentDiscordButtons(client) {
       const rawAmount = interaction.fields.getTextInputValue("counter_price");
       const counterPrice = Number(String(rawAmount).replace(/[^\d.,-]/g, "").replace(",", "."));
 
-      if (!Number.isInteger(counterPrice) || counterPrice <= 0) {
-        await interaction.reply({
-          content: "⚠️ Please enter a valid whole-number counter.",
-          ephemeral: true
-        }).catch(() => {});
-        return;
-      }
-
-      // FIXED — same 3-second-acknowledgment issue as the seller-facing
-      // equivalent above.
+      // Deferred first: the work below outruns the 3-second window.
       await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-      // A Retry comes from a DENIED round (the buyer coming back on the
-      // "Counter Offer Denied" embed via the Retry button). The
-      // buyer-counter endpoint requires Status=Open and would reject a
-      // denied round ("no longer open"). Detect a non-Open round and
-      // route it to the buyer retry-counter endpoint instead, which
-      // handles a denied round (reversed band + cross-seller ceiling)
-      // and needs the buyer's own seller_record_id (WTB Buyer Seller ID).
-      let buyerRetryRoundStatus = null;
-      let buyerRetrySellerRecordId = null;
-      try {
-        const buyerRetryRound = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId);
-        buyerRetryRoundStatus = asText(buyerRetryRound.fields?.["Status"]);
-        const retryMwId = firstLinkedRecordId(buyerRetryRound.fields?.["Member WTB"]);
-        if (retryMwId) {
-          const retryMwRec = await airtable(MEMBER_WTBS_TABLE).find(retryMwId).catch(() => null);
-          buyerRetrySellerRecordId = firstLinkedRecordId(retryMwRec?.fields?.["Buyer Seller ID"]);
-        }
-      } catch (err) {
-        // fall through — buyer-counter path will reject cleanly
-      }
-
-      const isBuyerRetryFromDenied = buyerRetryRoundStatus && buyerRetryRoundStatus !== "Open";
-
-      const response = isBuyerRetryFromDenied
-        ? await fetch(`${APP_PUBLIC_BASE_URL}/api/dashboard/buying-counter-offers/${counterOfferRecordId}/retry-counter`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
-            },
-            body: JSON.stringify({ price: counterPrice, seller_record_id: buyerRetrySellerRecordId })
-          })
-        : await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/${counterOfferRecordId}/buyer-counter`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
-            },
-            body: JSON.stringify({ price: counterPrice })
-          });
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        await interaction.editReply({
-          content: `❌ ${data.error || "Failed to submit your counter."}`
-        }).catch(() => {});
-        return;
-      }
-
-      await interaction.editReply({
-        content: `✅ Your counter of ${moneySmartValue(counterPrice)} was sent to the seller.`
-      }).catch(() => {});
-
-      await safeEditInteractionMessage(interaction, {
-        content: `🔁 You countered with ${moneySmartValue(counterPrice)}. Waiting on the seller.`,
-        embeds: interaction.message.embeds,
-        components: [
-          {
-            type: 1,
-            components: [
-              { type: 2, style: 3, label: "Accept", custom_id: "member_wtb_buyer_counter_accept_disabled", disabled: true },
-              { type: 2, style: 1, label: "Edit", custom_id: `member_wtb_edit:${data.counter_offer_record_id}` },
-              { type: 2, style: 4, label: "Deny", custom_id: "member_wtb_buyer_counter_deny_disabled", disabled: true }
-            ]
-          }
-        ]
-      }).catch(() => {});
+      await runMemberWtbCounterRoundAction({
+        action: "counter",
+        counterOfferRecordId,
+        counterPrice,
+        sourceMessageId: interaction.message?.id,
+        editMessage: (patch) =>
+          safeEditInteractionMessage(interaction, {
+            content: patch.content,
+            embeds: interaction.message.embeds,
+            components: patch.components || []
+          }).catch(() => {}),
+        replyToUser: (patch) => interaction.editReply(patch)
+      });
 
       return;
     }
@@ -6284,43 +6626,20 @@ function bindConsignmentDiscordButtons(client) {
       const rawAmount = interaction.fields.getTextInputValue("counter_price");
       const editedPrice = Number(String(rawAmount).replace(/[^\d.,-]/g, "").replace(",", "."));
 
-      if (!Number.isInteger(editedPrice) || editedPrice <= 0) {
-        await interaction.reply({
-          content: "⚠️ Please enter a valid whole-number counter.",
-          ephemeral: true
-        }).catch(() => {});
-        return;
-      }
-
-      const response = await fetch(`${APP_PUBLIC_BASE_URL}/api/member-wtb-counter-offers/${counterOfferRecordId}/edit`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
-        },
-        body: JSON.stringify({ price: editedPrice })
+      await runMemberWtbCounterRoundAction({
+        action: "edit",
+        counterOfferRecordId,
+        counterPrice: editedPrice,
+        sourceMessageId: interaction.message?.id,
+        editMessage: (patch) =>
+          safeEditInteractionMessage(interaction, {
+            content: patch.content,
+            embeds: interaction.message.embeds,
+            components: patch.components || []
+          }).catch(() => {}),
+        replyToUser: (patch) =>
+          interaction.reply({ ...patch, ephemeral: true })
       });
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        await interaction.reply({
-          content: `❌ ${data.error || "Failed to edit your counter."}`,
-          ephemeral: true
-        }).catch(() => {});
-        return;
-      }
-
-      await interaction.reply({
-        content: `✅ Your counter was updated to ${moneySmartValue(editedPrice)}.`,
-        ephemeral: true
-      }).catch(() => {});
-
-      await safeEditInteractionMessage(interaction, {
-        content: `✏️ You edited your counter to ${moneySmartValue(editedPrice)}.`,
-        embeds: interaction.message.embeds,
-        components: []
-      }).catch(() => {});
 
       return;
     }
@@ -15844,14 +16163,61 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
   deniedAmount,
   vatLabel
 }) {
-  await initKickzDealDiscord();
+  // NEW - a store negotiates in its own channel, not in a DM.
+  //
+  // Derived from the round itself rather than asked of the five callers: a
+  // rule that has to be passed in correctly five times is a rule that will
+  // eventually be passed in wrongly once.
+  const roundRecord = await airtable(COUNTER_OFFERS_TABLE)
+    .find(counterOfferRecordId)
+    .catch(() => null);
 
-  if (!buyerDiscordId) {
+  const roundMemberWtbId = firstLinkedRecordId(roundRecord?.fields?.["Member WTB"]);
+
+  const roundWtb = roundMemberWtbId
+    ? await airtable(MEMBER_WTBS_TABLE).find(roundMemberWtbId).catch(() => null)
+    : null;
+
+  const roundBuyerRecordId = firstLinkedRecordId(roundWtb?.fields?.["Buyer Seller ID"]);
+
+  const roundBuyerRecord = roundBuyerRecordId
+    ? await airtable(SELLERS_TABLE).find(roundBuyerRecordId).catch(() => null)
+    : null;
+
+  const storeChannels = roundBuyerRecord
+    ? await resolveStoreBuyerChannels(roundBuyerRecord)
+    : null;
+
+  const storeOfferChannelId = asText(storeChannels?.offerRequestsChannelId);
+
+  if (!storeOfferChannelId && !buyerDiscordId) {
     throw new Error("Missing buyer Discord ID");
   }
 
-  const user = await kickzDealDiscordClient.users.fetch(buyerDiscordId);
-  const dm = await user.createDM();
+  // One destination object with the shape dm.send already has, so the embed
+  // and its buttons below are literally the same for both kinds of buyer.
+  const dm = storeOfferChannelId
+    ? {
+        send: async (payload) => {
+          const posted = await postStoreBuyerEmbed({
+            channelId: storeOfferChannelId,
+            ...payload
+          });
+
+          if (!posted.ok) {
+            throw new Error(`Could not post the counter round to the store channel: ${posted.reason}`);
+          }
+
+          return { channelId: posted.channelId, id: posted.messageId };
+        }
+      }
+    : await (async () => {
+        await initKickzDealDiscord();
+
+        const user = await kickzDealDiscordClient.users.fetch(buyerDiscordId);
+
+        return user.createDM();
+      })();
 
   const closingLine = noRoomToCounter
     ? "You're now very close to each other's price — there's no room for another counter. Please accept or deny."
@@ -15962,7 +16328,7 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
   return {
     channelId: message.channelId,
     messageId: message.id,
-    deliveryType: "dm"
+    deliveryType: storeOfferChannelId ? "store_channel" : "dm"
   };
 }
 
@@ -31239,6 +31605,130 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
   }
 });
 
+/*
+ * NEW - additive only: lets the Lojiq bot run a buyer button press.
+ *
+ * A store reads its offers in its own server, where the message was posted
+ * by the updates service. Discord routes a button press to whoever posted,
+ * so that bot receives it - but it has no business deciding what an accept
+ * means. It forwards the press here, runs the returned line onto its own
+ * message, and that is the whole of its job.
+ *
+ * Same function the DM handler calls, so both bots stay in step by
+ * construction rather than by anyone remembering to update two places.
+ */
+/*
+ * NEW - additive only: the counter-round twin of the route below.
+ *
+ * A store negotiates in its own channel, so the updates service owns those
+ * embeds and receives the presses. It forwards them here, and gets back the
+ * two things a front end is allowed to decide: what the message should say
+ * now, and what to tell the person who pressed.
+ *
+ * The shared function calls editMessage more than once on the longer paths
+ * (a waiting line first, the outcome after). Only the last one is returned:
+ * the bot applies the final state in a single edit rather than replaying the
+ * flicker of a conversation it was not part of.
+ */
+app.post("/api/internal/member-wtb-counter-round-action", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+    const expected = COUNTER_OFFERS_SECRET || process.env.COUNTER_OFFERS_SECRET || "";
+
+    if (!expected || secret !== expected) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const action = asText(req.body?.action);
+
+    if (!["accept", "deny", "counter", "edit"].includes(action)) {
+      return res.status(400).json({ error: "Unknown action" });
+    }
+
+    const counterOfferRecordId = asText(req.body?.counter_offer_record_id);
+
+    if (!counterOfferRecordId) {
+      return res.status(400).json({ error: "Missing counter_offer_record_id" });
+    }
+
+    const rawCounter = req.body?.counter_price;
+
+    let edit = null;
+    let reply = null;
+
+    await runMemberWtbCounterRoundAction({
+      action,
+      counterOfferRecordId,
+      counterPrice:
+        rawCounter === undefined || rawCounter === null || rawCounter === ""
+          ? null
+          : Number(rawCounter),
+      sourceMessageId: asText(req.body?.source_message_id),
+      editMessage: async (patch) => {
+        edit = patch;
+      },
+      replyToUser: async (patch) => {
+        reply = patch;
+      }
+    });
+
+    return res.json({ ok: true, edit, reply });
+  } catch (err) {
+    console.error("/api/internal/member-wtb-counter-round-action failed:", err);
+
+    return res.status(500).json({
+      ok: false,
+      reply: { content: "❌ Something went wrong. Try again or use your dashboard." },
+      error: err.message
+    });
+  }
+});
+
+app.post("/api/internal/member-wtb-buyer-action", async (req, res) => {
+  try {
+    const secret = asText(req.headers["x-kc-secret"]);
+    const expected = COUNTER_OFFERS_SECRET || process.env.COUNTER_OFFERS_SECRET || "";
+
+    if (!expected || secret !== expected) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const action = asText(req.body?.action);
+
+    if (!["accept", "decline", "counter"].includes(action)) {
+      return res.status(400).json({ error: "Unknown action" });
+    }
+
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+
+    if (!memberWtbRecordId) {
+      return res.status(400).json({ error: "Missing member_wtb_record_id" });
+    }
+
+    const rawCounter = req.body?.counter_price;
+
+    const result = await runMemberWtbBuyerAction({
+      action,
+      memberWtbRecordId,
+      sellerOfferRecordId: asText(req.body?.seller_offer_record_id),
+      counterPrice:
+        rawCounter === undefined || rawCounter === null || rawCounter === ""
+          ? null
+          : Number(rawCounter)
+    });
+
+    return res.json(result);
+  } catch (err) {
+    console.error("/api/internal/member-wtb-buyer-action failed:", err);
+
+    return res.status(500).json({
+      ok: false,
+      content: "❌ Something went wrong. Try again or use your dashboard.",
+      error: err.message
+    });
+  }
+});
+
 app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
   try {
     const secret = asText(req.headers['x-kc-secret']);
@@ -31281,6 +31771,25 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
     const buyerRecord = await airtable(SELLERS_TABLE).find(buyerRecordId);
     const buyer = normalizeSeller(buyerRecord);
 
+    // NEW - a store reads its offers in its own channel, never in a DM.
+    //
+    // A Lojiq store is not part of Kickz Caviar. It posts want-to-buys in its
+    // own server and expects every answer to come back there, from its own
+    // bot. A DM from the Kickz Caviar bot would be the first that store ever
+    // hears of us.
+    const storeChannels = await resolveStoreBuyerChannels(buyerRecord);
+    const storeOfferChannelId = asText(storeChannels?.offerRequestsChannelId);
+
+    if (storeChannels && !storeOfferChannelId) {
+      // Every store that can reach this today has one, so this is a loud
+      // note rather than a stop: falling back to the DM keeps a deal moving
+      // that would otherwise stall in silence.
+      console.error(
+        `Store buyer ${buyerRecordId} (${storeChannels.storeName}) has no ` +
+          "Offer Requests Channel ID - falling back to a DM."
+      );
+    }
+
     const discordUserId = asText(
       buyer.discord_id ||
       buyer.discord_user_id ||
@@ -31288,7 +31797,7 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
       buyerRecord.fields?.["Discord User ID"]
     );
 
-    if (!discordUserId) {
+    if (!storeOfferChannelId && !discordUserId) {
       return res.status(400).json({ error: "Buyer is missing Discord ID" });
     }
 
@@ -31297,10 +31806,15 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
       "❌ A better or newer offer is now available."
     ).catch(() => null);
 
-    await initKickzDealDiscord();
+    let dm = null;
 
-    const user = await kickzDealDiscordClient.users.fetch(discordUserId);
-    const dm = await user.createDM();
+    if (!storeOfferChannelId) {
+      await initKickzDealDiscord();
+
+      const user = await kickzDealDiscordClient.users.fetch(discordUserId);
+
+      dm = await user.createDM();
+    }
 
     const memberWtbId =
       asText(f["Member WTB ID"]) ||
@@ -31362,52 +31876,72 @@ app.post('/api/member-wtb/send-current-offer-to-buyer', async (req, res) => {
       console.error("Failed to disable prior MW buyer embeds (non-blocking):", err.message)
     );
 
-    const message = await dm.send({
-      embeds: [embed],
-      components: [
-        {
-          type: 1,
-          components: [
-            {
-              type: 2,
-              style: 3,
-              label: `Accept ${moneySmartValue(Number(offerToBuyer))}`,
-              custom_id: `accept_member_wtb_buyer_offer:${memberWtbRecordId}:${currentSellerOfferId}`
-            },
-            {
-              type: 2,
-              style: 1,
-              label: "Counter",
-              custom_id: `counter_member_wtb_buyer:${memberWtbRecordId}:${currentSellerOfferId}`
-            },
-            {
-              type: 2,
-              style: 4,
-              label: "Deny",
-              custom_id: `decline_member_wtb_buyer_offer:${memberWtbRecordId}`
-            }
-          ]
-        }
-      ]
-    });
+    // One shape, two destinations: the store gets the identical embed and
+    // buttons a member gets, only delivered by the bot that lives in its
+    // server. The custom ids are the same, so the presses mean the same.
+    const offerComponents = [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 3,
+            label: `Accept ${moneySmartValue(Number(offerToBuyer))}`,
+            custom_id: `accept_member_wtb_buyer_offer:${memberWtbRecordId}:${currentSellerOfferId}`
+          },
+          {
+            type: 2,
+            style: 1,
+            label: "Counter",
+            custom_id: `counter_member_wtb_buyer:${memberWtbRecordId}:${currentSellerOfferId}`
+          },
+          {
+            type: 2,
+            style: 4,
+            label: "Deny",
+            custom_id: `decline_member_wtb_buyer_offer:${memberWtbRecordId}`
+          }
+        ]
+      }
+    ];
+
+    const message = storeOfferChannelId
+      ? await postStoreBuyerEmbed({
+          channelId: storeOfferChannelId,
+          embeds: [embed],
+          components: offerComponents
+        })
+      : await dm.send({ embeds: [embed], components: offerComponents });
+
+    if (storeOfferChannelId && !message.ok) {
+      return res.status(502).json({
+        error: "Failed to post the offer into the store channel",
+        details: message.reason
+      });
+    }
+
+    const sentChannelId = asText(message.channelId);
+    const sentMessageId = asText(
+      storeOfferChannelId ? message.messageId : message.id
+    );
 
     await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
-      "Buyer Offer Channel ID": message.channelId,
-      "Buyer Offer Message ID": message.id,
+      "Buyer Offer Channel ID": sentChannelId,
+      "Buyer Offer Message ID": sentMessageId,
       "Offer Sent?": true,
       "New Offer Available": false
     });
 
     await appendMemberWtbOfferMessage(memberWtbRecordId, {
-      channelId: message.channelId,
-      messageId: message.id
+      channelId: sentChannelId,
+      messageId: sentMessageId
     });
 
     return res.json({
       ok: true,
       member_wtb_record_id: memberWtbRecordId,
-      buyer_offer_channel_id: message.channelId,
-      buyer_offer_message_id: message.id
+      buyer_offer_channel_id: sentChannelId,
+      buyer_offer_message_id: sentMessageId
     });
   } catch (err) {
     console.error("Failed to send current offer to buyer:", err);
