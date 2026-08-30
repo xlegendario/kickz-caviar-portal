@@ -23,9 +23,9 @@
           </div>
         </div>
 
-        <!-- SKU en maat als eigen regels met een label ervoor. In één compacte
-             regel onder de productnaam liepen ze visueel mee met de titel en
-             moest je zoeken welk getal de maat was. -->
+        <!-- SKU and size on their own labelled rows. On one compact line under
+             the product name they read as part of the title, and you had to
+             work out which number was the size. -->
         <dl class="offer-specs">
           <div class="offer-spec"><dt>SKU</dt><dd id="offerSku">—</dd></div>
           <div class="offer-spec"><dt>Size</dt><dd id="offerSize">—</dd></div>
@@ -34,8 +34,8 @@
 
         <div id="offerLowest" class="offer-lowest hidden"></div>
 
-        <!-- Precies één van deze panelen is zichtbaar; welke hangt af van wat
-             /api/offer-page over de bezoeker teruggeeft. -->
+        <!-- Exactly one of these panels is visible. Which one depends on what
+             /api/offer-page says about the visitor. -->
         <div id="panelClosed" class="offer-panel hidden">
           <p id="closedReason"></p>
           <a class="offer-action" href="/">Browse other deals</a>
@@ -57,6 +57,28 @@
             </label>
             <button type="submit">Log in</button>
             <div class="dashboard-form-error" id="loginError"></div>
+
+            <!-- A seller who already exists but has never set a password gets
+                 in here. Without it the only way through was Create profile,
+                 which would try to register an account that is already there. -->
+            <button type="button" class="offer-secondary" id="forgotPasswordBtn">
+              First time login or forgot password?
+            </button>
+          </form>
+
+          <!-- Same endpoint and the same words as the login screen on the home
+               page. A seller who meets this twice should not read two different
+               stories about one thing. -->
+          <form id="forgotForm" class="dashboard-login-form offer-login hidden">
+            <label>
+              Email
+              <input id="forgotEmail" type="email" autocomplete="email" required />
+            </label>
+            <button type="submit">Send Password Link</button>
+            <button type="button" class="offer-secondary" id="backToLoginBtn">
+              Back to login
+            </button>
+            <div class="dashboard-form-error" id="forgotError"></div>
           </form>
         </div>
 
@@ -90,8 +112,8 @@
           <h3 class="offer-done-title">Offer placed</h3>
           <p id="doneMessage"></p>
 
-          <!-- Goud gaat naar de volgende deal, niet naar administratie: nog een
-               offer is meer waard dan het beheren van deze. -->
+          <!-- The gold button goes to the next deal, not to admin: one more
+               offer is worth more than managing this one. -->
           <a class="offer-action" href="/?tab=wtb">Browse WTBs</a>
           <a class="offer-secondary" href="/dashboard">Manage my offers</a>
         </div>
@@ -105,8 +127,8 @@
     const recordId = pathParts[2] || "";
     const here = window.location.pathname;
 
-    // Kwam deze link van een member met een eigen ref-code, dan reist die mee
-    // door registratie en koppeling zodat de uitnodiger zijn credit krijgt.
+    // If this link came from a member with his own ref code, it travels with
+    // them through registration and linking so the inviter gets his credit.
     const ref = new URLSearchParams(window.location.search).get("ref") || "";
 
     function withContext(base) {
@@ -119,9 +141,9 @@
     const show = (id) => el(id).classList.remove("hidden");
     const hide = (id) => el(id).classList.add("hidden");
 
-    // Alle drie worden altijd getoond. Wat de seller niet mag kiezen staat
-    // uitgeschakeld met de reden erbij — dat is duidelijker dan een optie
-    // weglaten, want dan vraagt hij zich af waarom hij er maar één ziet.
+    // All three are always shown. Whatever this seller may not pick is
+    // disabled with the reason beside it, which reads better than leaving an
+    // option out - then he only wonders why he can see just one.
     const ALL_VAT_TYPES = ["Margin", "VAT21", "VAT0"];
     let selectedVatType = "";
 
@@ -144,8 +166,8 @@
         show("offerImage");
       }
 
-      // Het laagste huidige bod staat ook op de Want To Buys-pagina, dus dit
-      // verraadt niets nieuws. Het inkoopplafond komt hier bewust niet in.
+      // The current lowest bid is on the Want To Buys page too, so this gives
+      // nothing away. The buying ceiling deliberately stays out of here.
       if (order.current_offer_margin) {
         el("offerLowest").textContent = "Current lowest offer: " + order.current_offer_margin;
         show("offerLowest");
@@ -222,13 +244,12 @@
           return;
         }
 
-        // Zonder gekoppelde Discord kan er bij een geaccepteerde deal geen
-        // channel met deze seller worden aangemaakt, dus dit gaat vóór het
-        // offerformulier.
+        // Without a linked Discord there is no way to open a channel with this
+        // seller once a deal is accepted, so this comes before the offer form.
         if (!viewer.discord_linked || !viewer.discord_in_server) {
-          // Zelfde formulering als de popup in het dashboard. Een seller
-          // die hier strandt en daarna daar, hoort niet twee verschillende
-          // verhalen te lezen over dezelfde regel.
+          // Same wording as the dashboard popup. A seller who runs into this
+          // here and then again there should not read two different stories
+          // about one rule.
           el("discordReason").textContent = viewer.discord_linked
             ? "You are no longer in our Discord server, so offering is paused. Being in the server is required to trade."
             : "Your profile is not linked to our Discord server. Linking is required to trade on Kickz Caviar.";
@@ -260,6 +281,49 @@
 
     el("showLoginBtn").addEventListener("click", () => {
       el("loginForm").classList.toggle("hidden");
+      el("forgotForm").classList.add("hidden");
+    });
+
+    el("forgotPasswordBtn").addEventListener("click", () => {
+      el("loginForm").classList.add("hidden");
+      el("forgotForm").classList.remove("hidden");
+      el("loginError").textContent = "";
+      el("forgotError").textContent = "";
+      el("forgotEmail").focus();
+    });
+
+    el("backToLoginBtn").addEventListener("click", () => {
+      el("forgotForm").classList.add("hidden");
+      el("loginForm").classList.remove("hidden");
+      el("forgotError").textContent = "";
+      el("loginError").textContent = "";
+    });
+
+    el("forgotForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      el("forgotError").textContent = "";
+      el("forgotError").style.color = "";
+
+      try {
+        const response = await fetch("/api/forgot-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: el("forgotEmail").value.trim() })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || data.details || "Failed to send password link");
+        }
+
+        el("forgotError").style.color = "#58d86a";
+        el("forgotError").textContent =
+          "If this email exists, a password link has been sent.";
+      } catch (err) {
+        el("forgotError").textContent = err.message;
+      }
     });
 
     el("loginForm").addEventListener("submit", async (event) => {
@@ -284,8 +348,8 @@
 
         localStorage.setItem("kc_seller", JSON.stringify(data.seller));
 
-        // Opnieuw laden in plaats van de UI bijwerken: de server bepaalt welk
-        // paneel er nu hoort, inclusief de Discord-controle.
+        // Reload rather than patch the UI: the server decides which panel
+        // belongs here now, Discord check included.
         show("offerLoading");
         showPanel(null);
         await load();
@@ -334,8 +398,8 @@
         const data = await response.json();
 
         if (!response.ok) {
-          // De Discord-gate stuurt een link mee; die tonen we als knop in
-          // plaats van als kale tekst.
+          // The Discord gate sends a link along; we show that as a button
+          // rather than as bare text.
           if (data.link_url) {
             const line = document.createElement("div");
             line.textContent = data.error;
