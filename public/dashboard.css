@@ -4449,18 +4449,6 @@ body.kc-dialog-open {
   padding: 7px 12px;
 }
 
-/* NEW - three buttons, not two.
-
-   The grid above is built for an accept with two siblings stacked beside
-   it. The consignment Accepted tab has three - Confirm, Deny and Discord -
-   so the third dropped to a second row and the whole block sat lopsided.
-   Here they stay on one line, with Confirm keeping its stacked label. */
-.dashboard-action-row.action-row-inline:has(.action-accept) {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .dashboard-action-row .action-accept .accept-kop {
   font-size: 10px;
   letter-spacing: 0.07em;
