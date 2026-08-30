@@ -27106,6 +27106,7 @@ app.get("/api/dashboard/consignment-accepted", async (req, res) => {
           "Seller ID",
           "Linked Orders",
           "Order ID",
+          "Member WTB ID",
           "Store Name",
           "Seller Offer",
           "Offer VAT Type",
@@ -27203,7 +27204,9 @@ app.get("/api/dashboard/consignment-accepted", async (req, res) => {
 
       return {
         seller_offer_record_id: record.id,
-        order_id: displayValue(f["Order ID"]),
+        // A Member WTB has no order number. Its own id is what the consignor
+        // recognises it by, and Seller Offers already looks both up.
+        order_id: displayValue(f["Order ID"]) || displayValue(f["Member WTB ID"]),
         // Airtable first so a store order reads exactly as it always did;
         // the stock row fills in for a Member WTB, which has no lookup.
         product: displayValue(f["Product Name"]) || asText(stock?.product_name),
