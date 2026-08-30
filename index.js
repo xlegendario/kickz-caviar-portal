@@ -16383,12 +16383,12 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
           "",
           denyClosingLine
         ].join("\n"),
-        // Red for a deny either way; a live counter is green in Lojiq and
-        // yellow in a member DM.
+        // Lojiq keeps one colour for the whole offer conversation and only
+        // turns red on a deny; a member DM stays yellow.
         color: isDeny
           ? 0xe74c3c
           : storeOfferChannelId
-          ? 0x2ecc71
+          ? 0x58a6ff
           : 0xf1c40f
       }
     ],
@@ -16452,7 +16452,12 @@ async function sendMemberWtbBuyerCounterOfferDiscordDM({
   return {
     channelId: message.channelId,
     messageId: message.id,
-    deliveryType: storeOfferChannelId ? "store_channel" : "dm"
+    // "Discord Delivery Type" is a single select and only knows
+    // private_channel, dm and dashboard_only. A store channel is a channel,
+    // so it reuses private_channel - inventing a value made Airtable refuse
+    // the whole write with a 422, which cost the round its message ids and
+    // therefore any chance of disabling the embed later.
+    deliveryType: storeOfferChannelId ? "private_channel" : "dm"
   };
 }
 
