@@ -8224,6 +8224,75 @@ app.post("/api/member-wtb/send-label-to-discord", async (req, res) => {
 
     const linkedInventoryUnitId = firstLinkedRecordId(f["Linked Inventory Unit"]);
 
+    // Built up here because more than one destination needs it now. A
+    // shared channel gets the whole order spelled out; a thread that is
+    // already about this one order does not need repeating.
+    const buildLabelDescription = (detailed) =>
+      detailed
+        ? [
+            `**Order:** ${memberWtbId}`,
+            `**Product:** ${asText(f["Product Name"]) || "—"}`,
+            `**SKU:** ${asText(f["SKU"]) || "—"}`,
+            `**Size:** ${asText(f["Size"]) || "—"}`,
+            "",
+            `**Tracking:**`,
+            trackingNumber,
+            "",
+            `📄 [Download Label](${labelUrl})`
+          ].join("\n")
+        : [
+            `**Order:** ${memberWtbId}`,
+            `**Tracking:**`,
+            trackingNumber,
+            "",
+            `📄 [Download Label](${labelUrl})`
+          ].join("\n");
+
+    // A Lojiq store reads this in its own server, where the Kickz Caviar
+    // bot is not a member - fetching a channel there returns nothing, and
+    // that is the "Target Discord channel not found" this used to answer
+    // with. Its own bot posts instead, into the same Labels channel the
+    // request went to, and no Kickz Caviar footer goes with it.
+    const buyerRecordId = firstLinkedRecordId(f["Buyer Seller ID"]);
+
+    if (buyerRecordId) {
+      const buyerRecord = await airtable(SELLERS_TABLE).find(buyerRecordId);
+      const storeChannels = await resolveStoreBuyerChannels(buyerRecord);
+      const storeLabelChannelId = asText(storeChannels?.labelRequestChannelId);
+
+      if (storeLabelChannelId) {
+        const posted = await postStoreBuyerEmbed({
+          channelId: storeLabelChannelId,
+          embeds: [
+            {
+              title: "📦 Shipping Label Ready",
+              description: buildLabelDescription(true),
+              color: 0x2ecc71,
+              timestamp: new Date().toISOString()
+            }
+          ]
+        });
+
+        if (!posted.ok) {
+          return res.status(502).json({
+            error: "Could not post the label to the store channel",
+            details: posted.reason
+          });
+        }
+
+        await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+          "Label Sent To Discord?": true
+        });
+
+        return res.json({
+          ok: true,
+          channel_id: posted.channelId,
+          message_id: posted.messageId,
+          target_reason: "store_label_channel"
+        });
+      }
+    }
+
     let targetChannelId = asText(f["WTB Created Channel ID"]);
     let targetReason = targetChannelId ? "wtb_created_channel" : "";
 
@@ -8270,25 +8339,7 @@ app.post("/api/member-wtb/send-label-to-discord", async (req, res) => {
       targetReason === "seller_label_channel" ||
       targetReason === "kc_label_channel";
     
-    const embedDescription = isGlobalLabelChannel
-      ? [
-          `**Order:** ${memberWtbId}`,
-          `**Product:** ${asText(f["Product Name"]) || "—"}`,
-          `**SKU:** ${asText(f["SKU"]) || "—"}`,
-          `**Size:** ${asText(f["Size"]) || "—"}`,
-          "",
-          `**Tracking:**`,
-          trackingNumber,
-          "",
-          `📄 [Download Label](${labelUrl})`
-        ].join("\n")
-      : [
-          `**Order:** ${memberWtbId}`,
-          `**Tracking:**`,
-          trackingNumber,
-          "",
-          `📄 [Download Label](${labelUrl})`
-        ].join("\n");
+    const embedDescription = buildLabelDescription(isGlobalLabelChannel);
     
     const message = await channel.send({
       embeds: [
