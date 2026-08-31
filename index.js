@@ -26328,6 +26328,28 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
       return res.status(500).json({ error: "KICKZ_WTB_BOT_BASE_URL is missing" });
     }
 
+    /*
+      Settle the round BEFORE the deal is finalised, not after.
+
+      The finalisation prices the buyer from the accepted round, and the
+      round was still Open at that moment - so it fell back to Max Price.
+      MWTB-000414 settled at 140 instead of 147.10: the consignor got his
+      negotiated 135 and we kept 5 where the margin was 12.10.
+    */
+    if (acceptedCounterOfferRecordId) {
+      const settledAt = new Date().toISOString();
+
+      await airtable(COUNTER_OFFERS_TABLE)
+        .update(acceptedCounterOfferRecordId, {
+          "Status": "Accepted",
+          "Accepted At": settledAt,
+          "Closed At": settledAt
+        })
+        .catch((err) =>
+          console.error("Could not settle the accepted round before finalising:", err)
+        );
+    }
+
     const response = await fetch(`${wtbBotBaseUrl}/member-wtb/deal-channel`, {
       method: "POST",
       headers: {
