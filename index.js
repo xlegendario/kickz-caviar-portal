@@ -619,14 +619,29 @@ async function askConsignorToConfirmMemberWtbOffer({
   const mf = memberWtb.fields || {};
   const sellerPrice = numberValue(f["Seller Offer"]);
 
-  // What we hand in as the ceiling decides which embed comes out. The
-  // buyer accepted this price, so it is at least the asking price and the
-  // function produces Confirm/Deny rather than a counter round.
-  const calculatedOfferPrice = Number.isFinite(acceptedPayout) && acceptedPayout > 0
-    ? Math.max(acceptedPayout, sellerPrice)
-    : sellerPrice;
+  /*
+    FIXED - this was Math.max(acceptedPayout, sellerPrice), on the
+    reasoning that a buyer who accepts has by definition met the asking
+    price. True of a fresh offer; false of every negotiation where the
+    seller came DOWN.
+
+    MWTB-000414: listed at 155, the consignor countered to 135, the buyer
+    accepted at 147.10 - and the max quietly restored 155. We would have
+    paid the consignor 155 and charged the store 147.10, a loss of 7.90 on
+    a pair we were meant to earn on. It sat on all four accept paths.
+
+    An accepted payout IS the deal. The max is gone, and the only thing
+    it was really there for - making the embed come out as Confirm/Deny
+    rather than a counter - is now said outright below.
+  */
+  const negotiated = Number.isFinite(acceptedPayout) && acceptedPayout > 0;
+
+  const calculatedOfferPrice = negotiated ? acceptedPayout : sellerPrice;
 
   const discordResult = await sendConsignmentOfferDiscordMessage({
+    // The seller already agreed to this number, so it is a confirmation
+    // even when it sits below his original listing.
+    forceConfirmation: negotiated,
     seller: {
       seller_record_id: sellerRecordId,
       seller_id: asText(sf["Seller ID"]),
@@ -1963,7 +1978,11 @@ async function sendConsignmentOfferDiscordMessage({
   seller,
   offer,
   calculatedOfferPrice,
-  sellerOfferRecordId = null
+  sellerOfferRecordId = null,
+  // Set when the price was settled in a negotiation. Without it the
+  // shape is decided by comparing against the listing, which reads a
+  // seller who came down as if he were being countered again.
+  forceConfirmation = false
 }) {
   await initDiscord();
 
@@ -1993,7 +2012,7 @@ async function sendConsignmentOfferDiscordMessage({
       );
 
   const isConfirmation =
-    sellerComparePrice <= Number(calculatedOfferPrice);
+    forceConfirmation || sellerComparePrice <= Number(calculatedOfferPrice);
 
   const privateChannelId = getSellerOfferChannelId(
     seller,
@@ -26212,6 +26231,37 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
             reason: asked.reason
           });
         }
+
+        /*
+          FIXED - this branch returned without ever settling the round.
+
+          The code that marks the accepted round and closes the competing
+          ones sits past the return below, so a consignment accept never
+          reached it: the round stayed Open and the row kept sitting in the
+          buyer's Offers list as if nothing had happened. MWTB-000414 did
+          exactly that, which is also how the same pair could have been
+          accepted twice.
+        */
+        if (acceptedCounterOfferRecordId) {
+          const settledAt = new Date().toISOString();
+
+          await airtable(COUNTER_OFFERS_TABLE)
+            .update(acceptedCounterOfferRecordId, {
+              "Status": "Accepted",
+              "Accepted At": settledAt,
+              "Closed At": settledAt
+            })
+            .catch((err) =>
+              console.error("Could not settle the accepted round (non-blocking):", err)
+            );
+        }
+
+        await closeCompetingCountersForMemberWtb(
+          memberWtbRecordId,
+          acceptedCounterOfferRecordId || ""
+        ).catch((err) =>
+          console.error("Failed to close competing counters (non-blocking):", err)
+        );
 
         return res.json({
           ok: true,
