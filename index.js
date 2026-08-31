@@ -8224,9 +8224,9 @@ app.post("/api/member-wtb/send-label-to-discord", async (req, res) => {
 
     const linkedInventoryUnitId = firstLinkedRecordId(f["Linked Inventory Unit"]);
 
-    // Built up here because more than one destination needs it now. A
-    // shared channel gets the whole order spelled out; a thread that is
-    // already about this one order does not need repeating.
+    // Two forms, one place. A shared channel gets the whole order spelled
+    // out; a channel that already is this one deal does not need it
+    // repeated. It used to be written out twice, once per branch.
     const buildLabelDescription = (detailed) =>
       detailed
         ? [
@@ -8248,90 +8248,100 @@ app.post("/api/member-wtb/send-label-to-discord", async (req, res) => {
             `📄 [Download Label](${labelUrl})`
           ].join("\n");
 
-    // A Lojiq store reads this in its own server, where the Kickz Caviar
-    // bot is not a member - fetching a channel there returns nothing, and
-    // that is the "Target Discord channel not found" this used to answer
-    // with. Its own bot posts instead, into the same Labels channel the
-    // request went to, and no Kickz Caviar footer goes with it.
-    const buyerRecordId = firstLinkedRecordId(f["Buyer Seller ID"]);
+    let sellerRecord = null;
 
-    if (buyerRecordId) {
-      const buyerRecord = await airtable(SELLERS_TABLE).find(buyerRecordId);
-      const storeChannels = await resolveStoreBuyerChannels(buyerRecord);
-      const storeLabelChannelId = asText(storeChannels?.labelRequestChannelId);
-
-      if (storeLabelChannelId) {
-        const posted = await postStoreBuyerEmbed({
-          channelId: storeLabelChannelId,
-          embeds: [
-            {
-              title: "📦 Shipping Label Ready",
-              description: buildLabelDescription(true),
-              color: 0x2ecc71,
-              timestamp: new Date().toISOString()
-            }
-          ]
-        });
-
-        if (!posted.ok) {
-          return res.status(502).json({
-            error: "Could not post the label to the store channel",
-            details: posted.reason
-          });
-        }
-
-        await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
-          "Label Sent To Discord?": true
-        });
-
-        return res.json({
-          ok: true,
-          channel_id: posted.channelId,
-          message_id: posted.messageId,
-          target_reason: "store_label_channel"
-        });
-      }
-    }
-
-    let targetChannelId = asText(f["WTB Created Channel ID"]);
-    let targetReason = targetChannelId ? "wtb_created_channel" : "";
-
-    if (!targetChannelId && linkedInventoryUnitId) {
+    if (linkedInventoryUnitId) {
       const inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).find(linkedInventoryUnitId);
-      const inventoryFields = inventoryUnit.fields || {};
-      const sellerRecordId = firstLinkedRecordId(inventoryFields["Seller ID"]);
+      const sellerRecordId = firstLinkedRecordId(inventoryUnit.fields?.["Seller ID"]);
 
       if (sellerRecordId) {
-        const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId);
-        targetChannelId = asText(sellerRecord.fields?.["Label Channel ID"]);
-
-        if (targetChannelId) {
-          targetReason = "seller_label_channel";
-        }
+        sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId);
       }
     }
 
-    if (!targetChannelId) {
-      targetChannelId = asText(process.env.MEMBER_WTB_KC_LABEL_CHANNEL_ID);
-      targetReason = "kc_label_channel";
+    const seller = sellerRecord ? normalizeSeller(sellerRecord) : null;
+
+    /*
+      This label is for whoever ships, so it goes where that seller already
+      reads about this deal - the same order sendMemberWtbReadyToShipToSeller
+      settled on, after the same failure.
+
+      "WTB Created Channel ID" came first here, and that was the bug. On a
+      want-to-buy that started at a Lojiq store, that field holds a channel
+      in the store own server, which the deal bot is not a member of - so
+      the fetch returned nothing and this answered 404 while the consignor,
+      who has a private channel with us, was never told at all.
+
+      His own channel therefore comes first, and a channel that cannot be
+      reached falls through to the next option rather than ending the
+      attempt. Losing the label is worse than posting it a room further out.
+    */
+    const labelChannelCandidates = [
+      {
+        channelId: asText(seller?.deal_updates_channel_id),
+        reason: "seller_deal_updates_channel",
+        bot: "main"
+      },
+      {
+        channelId: asText(f["WTB Created Channel ID"]),
+        reason: "wtb_created_channel",
+        bot: "deal"
+      },
+      {
+        channelId: asText(sellerRecord?.fields?.["Label Channel ID"]),
+        reason: "seller_label_channel",
+        bot: "deal"
+      },
+      {
+        channelId: asText(process.env.MEMBER_WTB_KC_LABEL_CHANNEL_ID),
+        reason: "kc_label_channel",
+        bot: "deal"
+      }
+    ];
+
+    let channel = null;
+    let targetReason = "";
+
+    for (const candidate of labelChannelCandidates) {
+      if (!candidate.channelId) continue;
+
+      if (candidate.bot === "main") {
+        await initDiscord();
+      } else {
+        await initKickzDealDiscord();
+      }
+
+      const client = candidate.bot === "main"
+        ? discordClient
+        : kickzDealDiscordClient;
+
+      const found = await client.channels
+        .fetch(candidate.channelId)
+        .catch(() => null);
+
+      if (found) {
+        channel = found;
+        targetReason = candidate.reason;
+        break;
+      }
+
+      console.error(
+        `⚠️ Member WTB ${memberWtbRecordId}: ${candidate.reason} ${candidate.channelId} ` +
+          "could not be fetched, trying the next option."
+      );
     }
-
-    if (!targetChannelId) {
-      return res.status(500).json({
-        error: "No target label channel found"
-      });
-    }
-
-    await initKickzDealDiscord();
-
-    const channel = await kickzDealDiscordClient.channels
-      .fetch(targetChannelId)
-      .catch(() => null);
 
     if (!channel) {
+      // Which ones were tried, because "not found" on its own has sent us
+      // looking at the wrong channel before.
+      const tried = labelChannelCandidates
+        .filter((candidate) => candidate.channelId)
+        .map((candidate) => `${candidate.reason}=${candidate.channelId}`)
+        .join(", ");
+
       return res.status(404).json({
-        error: "Target Discord channel not found",
-        details: targetChannelId
+        error: "No reachable label channel for this Member WTB",
+        details: tried || "no channel configured"
       });
     }
 
