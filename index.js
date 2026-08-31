@@ -79,6 +79,8 @@ import {
   memberWtbBuyerInvoiceAmount,
   calculateCounterPayoutForVatType,
   calculateMemberWtbBuyerEquivalent,
+  storeMarginForward,
+  storeMarginInverse,
   calculateMemberWtbSellerPayout,
   calculateStoreCounterEquivalent,
   computeSellerCounterForStoreDisplay,
@@ -16742,15 +16744,25 @@ function calculateStoreCustomOfferFromConsignmentBase(basePrice, orderFields = {
   const percentage = Number(firstLookupValue(orderFields["Offer Percentage"]));
   const margin = Number(firstLookupValue(orderFields["Offer Margin"]));
 
-  let rawOffer;
-
+  // The guards stay here because each caller answers a missing field
+  // differently; only the arithmetic is shared. See storeMarginForward.
   if (method === "Firm Range") {
     if (!Number.isFinite(margin)) return null;
-    rawOffer = base + margin;
-  } else {
-    if (!Number.isFinite(percentage)) return null;
-    rawOffer = Math.max(base + 10, base * (1 + percentage) + 5);
+  } else if (!Number.isFinite(percentage)) {
+    return null;
   }
+
+  const rawOffer = storeMarginForward({
+    base,
+    method,
+    percentage,
+    margin,
+    // Undefined until the field exists in Airtable, which reads as no cap -
+    // so this can ship before the column does.
+    cap: Number(firstLookupValue(orderFields["Margin Cap"]))
+  });
+
+  if (rawOffer === null) return null;
 
   // FIXED — a real, confirmed bug found via his live testing: this used
   // roundUpToStep (always rounds UP), but the actual "Offer To Store"
@@ -16781,26 +16793,21 @@ function calculateConsignmentBaseFromStoreOffer(storeOfferPrice, orderFields = {
   const percentage = Number(firstLookupValue(orderFields["Offer Percentage"]));
   const margin = Number(firstLookupValue(orderFields["Offer Margin"]));
 
-  let base;
-
   if (method === "Firm Range") {
     if (!Number.isFinite(margin)) return null;
-    base = store - margin;
-  } else {
-    // FIXED (again) — must invert MAX(base+10, base*(1+pct)+5). The
-    // floor branch (base+10) wins whenever base is at or below
-    // 5/percentage (solve base+10 = base*(1+pct)+5); the percentage
-    // branch wins above that threshold.
-    if (!Number.isFinite(percentage) || percentage <= 0) return null;
-
-    const threshold = 5 / percentage;
-    const candidateFromFloor = store - 10;
-    const candidateFromPercentage = (store - 5) / (1 + percentage);
-
-    base = candidateFromFloor <= threshold ? candidateFromFloor : candidateFromPercentage;
+  } else if (!Number.isFinite(percentage) || percentage <= 0) {
+    return null;
   }
 
-  return base;
+  return storeMarginInverse({
+    storePrice: store,
+    method,
+    percentage,
+    margin,
+    // Undefined until the field exists in Airtable, which reads as no cap -
+    // so this can ship before the column does.
+    cap: Number(firstLookupValue(orderFields["Margin Cap"]))
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -17011,24 +17018,21 @@ function calculateConsignmentOfferPrice(
     firstLookupValue(orderFields["Offer Margin"])
   );
 
-  let rawOffer;
-
-  if (method === "Firm Range") {
-    rawOffer = max - margin;
-  } else {
-    // FIXED — must invert MAX(base+10, base*(1+pct)+5), matching the
-    // fix in calculateConsignmentBaseFromStoreOffer. Previously used
-    // max*(1-percentage)-5, an unrelated formula.
-    if (!Number.isFinite(percentage) || percentage <= 0) {
-      return null;
-    }
-
-    const threshold = 5 / percentage;
-    const candidateFromFloor = max - 10;
-    const candidateFromPercentage = (max - 5) / (1 + percentage);
-
-    rawOffer = candidateFromFloor <= threshold ? candidateFromFloor : candidateFromPercentage;
+  if (method !== "Firm Range" && (!Number.isFinite(percentage) || percentage <= 0)) {
+    return null;
   }
+
+  const rawOffer = storeMarginInverse({
+    storePrice: max,
+    method,
+    percentage,
+    margin,
+    // Undefined until the field exists in Airtable, which reads as no cap -
+    // so this can ship before the column does.
+    cap: Number(firstLookupValue(orderFields["Margin Cap"]))
+  });
+
+  if (rawOffer === null) return null;
 
   // FIXED — this rounded UP, and this number is derived by INVERTING the
   // store's ceiling: rounding it up pushes the resulting store price back
