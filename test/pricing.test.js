@@ -34,6 +34,8 @@ import {
   memberWtbBuyerInvoiceAmount,
   calculateMemberWtbBuyerEquivalent,
   calculateMemberWtbSellerPayout,
+  storeMarginForward,
+  storeMarginInverse,
   getMemberWtbNetSalePrice,
   calculateCounterPayoutForVatType,
   calculateStoreCounterEquivalent,
@@ -589,4 +591,75 @@ test("RULE: a Margin unit is never grossed up, for any buyer", () => {
     assert.equal(memberWtbBuyerInvoiceAmount(fbp, "Margin", buyer[ctxName]), 200.00);
     assert.equal(memberWtbBuyerFacingVatType("Margin", buyer[ctxName]), "Margin");
   }
+});
+
+// =====================================================================
+// Margin Cap - the ceiling on what we add on top
+// =====================================================================
+
+test("CAP: without one, the rule is exactly what it always was", () => {
+  const oldForward = (base, pct) => Math.max(base + 10, base * (1 + pct) + 5);
+
+  for (const pct of [0.03, 0.05, 0.08, 0.12]) {
+    for (let base = 5; base <= 900; base += 2.5) {
+      assert.equal(
+        storeMarginForward({ base, method: "Percentage", percentage: pct }),
+        oldForward(base, pct),
+        `${base} at ${pct} drifted from the original formula`
+      );
+    }
+  }
+});
+
+test("CAP: it only bites once the percentage asks for more than it allows", () => {
+  const at = (base) =>
+    storeMarginForward({ base, method: "Percentage", percentage: 0.05, cap: 15 });
+
+  // Below the crossing the flat 10 and the percentage still decide.
+  assert.equal(at(100), 110);
+  assert.equal(at(150), 162.5);
+
+  // 200 * 1.05 + 5 = 215, which is exactly the cap - so nothing changes.
+  assert.equal(at(200), 215);
+
+  // Above it the cap holds the markup at 15 instead of letting it grow.
+  assert.equal(at(250), 265);
+  assert.equal(at(300), 315);
+});
+
+test("CAP: forward and inverse stay exact inverses, in every regime", () => {
+  for (const pct of [0.03, 0.05, 0.08, 0.12]) {
+    for (const cap of [0, 12, 15, 20]) {
+      for (let base = 20; base <= 700; base += 7.5) {
+        const store = storeMarginForward({
+          base, method: "Percentage", percentage: pct, cap
+        });
+
+        const back = storeMarginInverse({
+          storePrice: store, method: "Percentage", percentage: pct, cap
+        });
+
+        assert.ok(
+          Math.abs(back - base) < 0.0001,
+          `${base} at ${pct} cap ${cap}: ${store} came back as ${back}`
+        );
+      }
+    }
+  }
+});
+
+test("CAP: a Firm Range margin above the cap is never charged", () => {
+  const store = storeMarginForward({
+    base: 200, method: "Firm Range", margin: 25, cap: 15
+  });
+
+  assert.equal(store, 215, "25 on top was allowed through the 15 cap");
+
+  assert.equal(
+    storeMarginInverse({
+      storePrice: store, method: "Firm Range", margin: 25, cap: 15
+    }),
+    200,
+    "the inverse still has to land on what the seller is paid"
+  );
 });
