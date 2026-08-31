@@ -24790,7 +24790,17 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
 
     const records = await airtable(COUNTER_OFFERS_TABLE)
       .select({
-        filterByFormula: `AND(${statusFormula}, {Source Type} = 'Member WTB')`
+        // FIXED - this only matched rounds the buyer created himself in the
+        // portal. A counter that began with an Offer press carries Source Type
+        // "Seller Offer", because the system countered the consignor on his
+        // behalf - so his own standing counter appeared in no list at all.
+        // MWTB-000414: consignor at 155, we countered 140, and the buyer found
+        // it under neither Open nor Countered.
+        //
+        // Which of the two lists a round belongs in is decided below, and that
+        // reads Seller Counter Price rather than the source. So both types can
+        // safely come through here.
+        filterByFormula: `AND(${statusFormula}, OR({Source Type} = 'Member WTB', {Source Type} = 'Seller Offer'))`
       })
       .all()
       .then((records) =>
@@ -24820,7 +24830,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
     if (filter === "denied" && preFilteredByStatusRaw.length) {
       const allRoundsForMyWtbs = await airtable(COUNTER_OFFERS_TABLE)
         .select({
-          filterByFormula: `{Source Type} = 'Member WTB'`,
+          filterByFormula: `OR({Source Type} = 'Member WTB', {Source Type} = 'Seller Offer')`,
           fields: ["Member WTB", "Previous Record ID", "Created At"]
         })
         .all()
@@ -30789,6 +30799,21 @@ function getBuyingDisplayPrice(price, vatType, inventoryType, sourceType = "", o
 
   if (!Number.isFinite(n) || n <= 0) return 0;
 
+  // A store sees the margin from its own merchant record instead of the
+  // flat one. Ahead of the branch below, because that hands B2B Only and
+  // Margin Only straight back without any mark-up at all.
+  if (options?.storeMargin && cleanSourceType === "consignment") {
+    const storePrice = getStoreConsignmentShopPrice({
+      sellerPrice: options.sellerPrice,
+      vatType: cleanVatType,
+      inventoryType,
+      buyerVatRate: options.buyerVatRate,
+      storeMargin: options.storeMargin
+    });
+
+    if (storePrice !== null) return storePrice;
+  }
+
   if (inventoryType !== "all") {
     return n;
   }
@@ -30872,7 +30897,7 @@ function getBuyingDisplayPrice(price, vatType, inventoryType, sourceType = "", o
   return n;
 }
 
-function addBuyingSourceToProductMap(productMap, source, inventoryType = "all", buyerVatRate = null) {
+function addBuyingSourceToProductMap(productMap, source, inventoryType = "all", buyerVatRate = null, storeMargin = null) {
   if (!source.sku || !source.size || !source.price) return;
   if (!sourceMatchesBuyingInventoryType(source, inventoryType)) return;
 
@@ -30884,7 +30909,8 @@ function addBuyingSourceToProductMap(productMap, source, inventoryType = "all", 
     {
       sellerPrice: source.seller_price,
       markup: source.kc_markup,
-      buyerVatRate
+      buyerVatRate,
+      storeMargin
     }
   );
   
@@ -31194,11 +31220,11 @@ async function cacheConsignmentImages(consignmentRows, imageMap) {
   }
 }
 
-function buildBuyingProductsFromSources(sources, inventoryType = "all", buyerVatRate = null) {
+function buildBuyingProductsFromSources(sources, inventoryType = "all", buyerVatRate = null, storeMargin = null) {
   const productMap = new Map();
 
   (sources || []).forEach((source) => {
-    addBuyingSourceToProductMap(productMap, { ...source }, inventoryType, buyerVatRate);
+    addBuyingSourceToProductMap(productMap, { ...source }, inventoryType, buyerVatRate, storeMargin);
   });
 
   return normalizeBuyingProducts(productMap);
@@ -31274,6 +31300,108 @@ async function b2bBuyingTypeRefusal(inventoryType, sellerRecordId) {
   );
 }
 
+/*
+ * What a store adds on top, read from its own merchant record.
+ *
+ * Deliberately looked up here rather than passed in by the shop. It is the
+ * same rule that decides what the store is charged on an order, so it has
+ * to come from the same place - a caller that could name its own margin
+ * could name a smaller one.
+ *
+ * Null for anyone without a merchant, which is every Kickz Caviar member,
+ * and then nothing about the price changes.
+ */
+async function getStoreMarginForSeller(sellerRecordId) {
+  if (!sellerRecordId) return null;
+
+  const seller = await airtable(SELLERS_TABLE)
+    .find(sellerRecordId)
+    .catch(() => null);
+
+  const merchantRecordId = firstLinkedRecordId(seller?.fields?.["Merchants"]);
+
+  if (!merchantRecordId) return null;
+
+  const merchant = await airtable(MERCHANTS_TABLE)
+    .find(merchantRecordId)
+    .catch(() => null);
+
+  if (!merchant) return null;
+
+  const mf = merchant.fields || {};
+
+  return {
+    method: asText(mf["Offer Method"]),
+    percentage: Number(mf["Offer Percentage"]),
+    margin: Number(mf["Offer Margin"]),
+    cap: Number(mf["Margin Cap"])
+  };
+}
+
+/*
+ * What a store pays for a consignment pair, in the scale it is looking at.
+ *
+ * Four steps, in this order:
+ *
+ *   1. the ask, bare. A VAT21 ask carries 21% already, so it is divided out
+ *      first - otherwise the margin lands on top of tax. VAT0 and margin
+ *      goods are bare as they stand.
+ *   2. the margin, through the one shared rule, cap included.
+ *   3. the view. All Stock quotes VAT-inclusive, so it is restated at the
+ *      rate the store itself pays; B2B Only quotes bare and is left alone.
+ *      Margin goods carry no VAT in either view.
+ *   4. whole euros, upward.
+ *
+ * Upward matters. The offer side rounds to the nearest 2.50 step, so
+ * rounding the shop up keeps it at worst a euro dearer and never cheaper -
+ * and a shop that undercuts your own offer is a shop your stores will use
+ * instead of negotiating.
+ */
+function getStoreConsignmentShopPrice({
+  sellerPrice,
+  vatType,
+  inventoryType,
+  buyerVatRate,
+  storeMargin
+}) {
+  const ask = Number(sellerPrice);
+
+  if (!Number.isFinite(ask) || ask <= 0) return null;
+
+  const type = normalizeBuyingVatType(vatType);
+  const base = type === "VAT21" ? ask / 1.21 : ask;
+
+  const withMargin = storeMarginForward({
+    base,
+    method: storeMargin?.method,
+    percentage: storeMargin?.percentage,
+    margin: storeMargin?.margin,
+    cap: storeMargin?.cap
+  });
+
+  if (withMargin === null) return null;
+
+  // On the same 2.50 grid the offer side uses, BEFORE any VAT or rounding
+  // to whole euros.
+  //
+  // Without this the two can cross: a 130 margin ask at 5% comes to 141.50,
+  // which the offer rounds up to 142.50 and a plain ceil turns into 142 -
+  // fifty cents cheaper in the shop than the offer for the same pair. That is
+  // the gap a store would use instead of negotiating, and it is the whole
+  // reason this exists.
+  const onGrid = roundToNearestStep(withMargin, 2.5);
+
+  const showsVat =
+    normalizeBuyingInventoryType(inventoryType) === "all" && type !== "Margin";
+
+  if (!showsVat) return Math.ceil(onGrid);
+
+  const rawRate = Number(buyerVatRate);
+  const rate = Number.isFinite(rawRate) && rawRate > 0 ? rawRate : 0.21;
+
+  return Math.ceil(onGrid * (1 + rate));
+}
+
 async function getBuyerVatRateForSeller(sellerRecordId) {
   if (!sellerRecordId) return null;
 
@@ -31283,7 +31411,7 @@ async function getBuyerVatRateForSeller(sellerRecordId) {
   return Number.isFinite(rate) && rate > 0 ? rate : null;
 }
 
-function selectBuyingSourceFromLiveSources({ sources, sku, size, inventoryType, buyerVatRate = null }) {
+function selectBuyingSourceFromLiveSources({ sources, sku, size, inventoryType, buyerVatRate = null, storeMargin = null }) {
   const cleanSku = normalizeSku(sku);
   const cleanSize = getBuyingSizeKey(size);
   const cleanInventoryType = normalizeBuyingInventoryType(inventoryType);
@@ -31296,7 +31424,7 @@ function selectBuyingSourceFromLiveSources({ sources, sku, size, inventoryType, 
       getBuyingSizeKey(source.size) === cleanSize
     )
     .forEach((source) => {
-      addBuyingSourceToProductMap(productMap, { ...source }, cleanInventoryType, buyerVatRate);
+      addBuyingSourceToProductMap(productMap, { ...source }, cleanInventoryType, buyerVatRate, storeMargin);
     });
 
   const products = normalizeBuyingProducts(productMap);
@@ -31587,9 +31715,21 @@ app.get("/api/buying/products", async (req, res) => {
       ? rawBuyerVatRate
       : null;
 
+    // Who is looking. A store gets the mark-up from its own merchant
+    // record; anyone else - every Kickz Caviar member, and the KC Buying
+    // page itself - gets null and the flat one, exactly as before.
+    const storeMargin = await getStoreMarginForSeller(
+      asText(req.query.seller_record_id)
+    );
+
     const sources = await getBuyingMasterSources();
 
-    let products = buildBuyingProductsFromSources(sources, inventoryType, buyerVatRate);
+    let products = buildBuyingProductsFromSources(
+      sources,
+      inventoryType,
+      buyerVatRate,
+      storeMargin
+    );
 
     if (brand) {
       products = products.filter((product) => product.brand === brand);
@@ -34992,7 +35132,11 @@ app.post("/api/buying/requests", async (req, res) => {
       // Buy takes display_price straight from the chosen source, so this
       // has to be the same rate the shop showed this store - otherwise the
       // price on the button and the price on the invoice drift apart.
-      buyerVatRate: await getBuyerVatRateForSeller(sellerRecordId)
+      buyerVatRate: await getBuyerVatRateForSeller(sellerRecordId),
+
+      // Same reason as the rate above: the price on the button and the
+      // price on the invoice have to come out of the same sum.
+      storeMargin: await getStoreMarginForSeller(sellerRecordId)
     });
 
     if (!selectedSource) {
