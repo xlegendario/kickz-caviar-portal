@@ -26253,17 +26253,76 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
         .catch(() => null);
 
       /*
-        The confirmation exists for an instant Buy: nobody asked the
-        consignor anything, so we cannot assume he still holds the pair.
+        A consignor who negotiated himself is done being asked.
 
-        A consignor who countered four times has already said so. Asking
-        again reopens a settled deal - and that is where the wrong price
-        crept back in. So he only gets the question when he never moved.
+        The confirmation exists for an instant Buy: nobody asked him
+        anything, so we cannot assume he still holds the pair. Someone who
+        countered four times has already said so, and asking again reopens
+        a settled deal - which is where the wrong price crept back in.
+
+        So the deal is closed here instead, through the same function every
+        other negotiated consignment deal uses. That writes the unit at the
+        agreed payout and sends him "Time To Ship Your Item!" with the
+        label button, in his own channel. No confirmation, and no deal
+        channel opened beside the private ones he already has.
       */
       if (
         asText(offerForConsignment?.fields?.["Consignment Inventory ID"]) &&
-        !sellerNegotiatedInPerson
+        sellerNegotiatedInPerson
       ) {
+        const memberWtb = await airtable(MEMBER_WTBS_TABLE)
+          .find(memberWtbRecordId)
+          .catch(() => null);
+
+        const memberFields = memberWtb?.fields || {};
+
+        const agreedStorePrice = calculateMemberWtbBuyerEquivalent(
+          negotiatedPayout,
+          sellerVatType,
+          memberFields
+        );
+
+        const settled = await confirmConsignmentSellerOffer(sellerOfferRecordId, {
+          payout: negotiatedPayout,
+          vatType: sellerVatType,
+          storePrice: Number.isFinite(agreedStorePrice) ? agreedStorePrice : undefined,
+          storeVatType: memberWtbBuyerFacingVatType(sellerVatType, memberFields)
+        });
+
+        if (!settled?.ok) {
+          console.error(
+            `Could not settle the negotiated consignment deal ${sellerOfferRecordId}:`,
+            settled?.reason
+          );
+
+          return res.status(500).json({
+            error: "Could not close the deal with the consignor.",
+            reason: settled?.reason || "unknown"
+          });
+        }
+
+        console.log(
+          `Member WTB ${memberWtbRecordId}: settled at payout ${negotiatedPayout}, ` +
+            `store ${agreedStorePrice} - no confirmation, no deal channel`
+        );
+
+        await closeCompetingCountersForMemberWtb(
+          memberWtbRecordId,
+          acceptedCounterOfferRecordId || ""
+        ).catch((err) =>
+          console.error("Failed to close competing counters (non-blocking):", err)
+        );
+
+        return res.json({
+          ok: true,
+          consignment: true,
+          settled: true,
+          member_wtb_record_id: memberWtbRecordId,
+          seller_offer_record_id: sellerOfferRecordId
+        });
+      }
+
+      if (asText(offerForConsignment?.fields?.["Consignment Inventory ID"])) {
         const asked = await askConsignorToConfirmMemberWtbOffer({
           memberWtbRecordId,
           sellerOfferRecordId,
