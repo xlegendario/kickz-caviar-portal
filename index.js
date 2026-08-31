@@ -2746,7 +2746,14 @@ async function sendMemberWtbLabelRequestToBuyer(memberWtbRecordId) {
     asText(f["WTB ID"]) ||
     memberWtbRecordId;
 
-  const uploadUrl = `${APP_PUBLIC_BASE_URL}/member-wtb-label-request.html?member_wtb_id=${encodeURIComponent(memberWtbRecordId)}`;
+  // A Lojiq store is not a Kickz Caviar customer, so it is never sent to a
+  // Kickz Caviar page - the whole point of routing these to its own
+  // channels. The destination is the Lojiq label page it already uses for
+  // its store orders; "type" tells that page to read this one from here
+  // instead of from its own base. A member keeps the page he knows.
+  const uploadUrl = storeLabelChannelId
+    ? `${LOJIQ_WMS_BASE_URL}/label-request.html?record_id=${encodeURIComponent(memberWtbRecordId)}&type=member_wtb`
+    : `${APP_PUBLIC_BASE_URL}/member-wtb-label-request.html?member_wtb_id=${encodeURIComponent(memberWtbRecordId)}`;
 
   const labelEmbed = {
     title: "📦 Shipping Label Requested",
