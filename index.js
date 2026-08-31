@@ -3258,8 +3258,21 @@ async function createMemberWtbMolliePayment(
   });
 
   try {
-    const payment = await mollieRequest(
-      "/payments",
+    /*
+      CHANGED - a payment link, not a payment.
+
+      This url goes into a Discord message. A payment starts counting
+      down the moment it is created and, until a method is chosen, dies
+      inside the hour - so a member who opened the DM later clicked a
+      dead link. A payment link does not expire, and the payment behind
+      it is only created once he actually starts, with its own clock.
+
+      Payment links take no metadata. The order number is already in the
+      description and comes through unchanged, so the webhook reads it
+      from there - see findMemberWtbFromPaymentDescription.
+    */
+    const paymentLink = await mollieRequest(
+      "/payment-links",
       {
         method: "POST",
         body: JSON.stringify({
@@ -3275,42 +3288,33 @@ async function createMemberWtbMolliePayment(
               memberWtbRecordId
             )}`,
           webhookUrl:
-            `${APP_URL}/api/mollie/member-wtb-webhook`,
-          metadata: {
-            payment_context: "member_wtb",
-            batch_record_id: batch.id,
-            batch_id: technicalBatchId,
-            member_wtb_record_id:
-              memberWtbRecordId,
-            member_wtb_id: memberWtbId,
-            buyer_record_id: buyerRecordId,
-            trusted_buyer: options.trusted === true
-          }
+            `${APP_URL}/api/mollie/member-wtb-webhook`
         })
       }
     );
 
     const paymentUrl =
-      payment?._links?.checkout?.href || "";
+      paymentLink?._links?.paymentLink?.href || "";
 
     if (!paymentUrl) {
       throw new Error(
-        "Mollie did not return a checkout URL"
+        "Mollie did not return a payment link URL"
       );
     }
 
+    // "Mollie Payment ID" stays empty until a real payment exists; the
+    // webhook writes it as soon as one does.
     await airtable(PAYMENT_BATCHES_TABLE)
       .update(batch.id, {
         "Payment Status": "Awaiting Payment",
         "Payment Link": paymentUrl,
-        "Mollie Payment ID": payment.id
+        "Mollie Payment Link ID": paymentLink.id
       });
 
     await airtable(MEMBER_WTBS_TABLE)
       .update(memberWtbRecordId, {
         "Payment Status": "Awaiting Payment",
         "Payment Link": paymentUrl,
-        "Mollie Payment ID": payment.id,
         "Payment Batches": [batch.id]
       });
 
@@ -3321,7 +3325,7 @@ async function createMemberWtbMolliePayment(
       batch_record_id: batch.id,
       batch_id: technicalBatchId,
       payment_url: paymentUrl,
-      mollie_payment_id: payment.id,
+      mollie_payment_link_id: paymentLink.id,
       amount
     };
   } catch (err) {
@@ -3333,6 +3337,49 @@ async function createMemberWtbMolliePayment(
 
     throw err;
   }
+}
+
+/*
+ * Which want-to-buy a payment belongs to, when the payment cannot say so.
+ *
+ * Payments created from a payment link carry no metadata and no reference
+ * back to the link. The description does come through verbatim, and it
+ * already holds the order number - "Kickz Caviar MWTB-000404" - so that is
+ * what is read back here.
+ *
+ * The batch comes from the want-to-buy rather than from the payment: it is
+ * linked there, and it is the one this link was made for.
+ */
+async function findMemberWtbFromPaymentDescription(
+  description
+) {
+  // Only digits follow the prefix, so this is safe to put in a formula.
+  const match = asText(description).match(/MWTB-\d+/);
+
+  if (!match) return null;
+
+  const records = await airtable(MEMBER_WTBS_TABLE)
+    .select({
+      filterByFormula: `{Member WTB ID} = '${match[0]}'`,
+      maxRecords: 1
+    })
+    .firstPage()
+    .catch(() => []);
+
+  const memberWtb = records[0];
+
+  if (!memberWtb) return null;
+
+  const batchRecordId = firstLinkedRecordId(
+    memberWtb.fields?.["Payment Batches"]
+  );
+
+  if (!batchRecordId) return null;
+
+  return {
+    memberWtbRecordId: memberWtb.id,
+    batchRecordId
+  };
 }
 
 async function getMemberWtbCheckout(
@@ -35200,8 +35247,13 @@ app.post(
       );
 
       const metadata = payment?.metadata || {};
+      const hasMetadata =
+        Object.keys(metadata).length > 0;
 
+      // Only meaningful when there IS metadata. A payment from a link
+      // has none, and is placed by its description instead.
       if (
+        hasMetadata &&
         asText(metadata.payment_context) !==
         "member_wtb"
       ) {
@@ -35213,19 +35265,36 @@ app.post(
         return res.status(200).send("ok");
       }
 
-      const memberWtbRecordId = asText(
+      let memberWtbRecordId = asText(
         metadata.member_wtb_record_id
       );
 
-      const batchRecordId = asText(
+      let batchRecordId = asText(
         metadata.batch_record_id
       );
 
+      // Payments made before the switch still carry metadata and keep
+      // working; everything new arrives without it.
+      if (!memberWtbRecordId || !batchRecordId) {
+        const fromDescription =
+          await findMemberWtbFromPaymentDescription(
+            payment?.description
+          );
+
+        if (fromDescription) {
+          memberWtbRecordId =
+            fromDescription.memberWtbRecordId;
+          batchRecordId =
+            fromDescription.batchRecordId;
+        }
+      }
+
       if (!memberWtbRecordId || !batchRecordId) {
         console.error(
-          "Member WTB Mollie webhook missing metadata:",
+          "Member WTB Mollie webhook could not place this payment:",
           {
             paymentId,
+            description: payment?.description,
             metadata
           }
         );
