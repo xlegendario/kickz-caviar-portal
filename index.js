@@ -8509,6 +8509,14 @@ app.post("/api/member-wtb/send-label-to-discord", async (req, res) => {
     */
     const labelChannelCandidates = [
       {
+        // FIXED - the field is "Labels Channel ID", plural. Read as the
+        // singular it was always empty, so labels fell through to the deal
+        // channel. And a label belongs in the labels channel, so it leads.
+        channelId: asText(sellerRecord?.fields?.["Labels Channel ID"]),
+        reason: "seller_labels_channel",
+        bot: "main"
+      },
+      {
         channelId: asText(seller?.deal_updates_channel_id),
         reason: "seller_deal_updates_channel",
         bot: "main"
@@ -8516,11 +8524,6 @@ app.post("/api/member-wtb/send-label-to-discord", async (req, res) => {
       {
         channelId: asText(f["WTB Created Channel ID"]),
         reason: "wtb_created_channel",
-        bot: "deal"
-      },
-      {
-        channelId: asText(sellerRecord?.fields?.["Label Channel ID"]),
-        reason: "seller_label_channel",
         bot: "deal"
       },
       {
