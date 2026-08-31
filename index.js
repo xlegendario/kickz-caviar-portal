@@ -26330,6 +26330,41 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
           console.error("Failed to close competing counters (non-blocking):", err)
         );
 
+        /*
+          A store pays after delivery, so waiting for payment would leave the
+          consignor without his ship-now message for as long as the invoice is
+          open. Everywhere else this update runs from the payment webhook,
+          which is right for a member who pays up front and wrong for a store.
+
+          The distinction is the buyer: a Merchants link means a store.
+        */
+        const buyerRecordIdForUpdate = firstLinkedRecordId(memberFields["Buyer Seller ID"]);
+
+        const buyerRecordForUpdate = buyerRecordIdForUpdate
+          ? await airtable(SELLERS_TABLE).find(buyerRecordIdForUpdate).catch(() => null)
+          : null;
+
+        const buyerIsStore = buyerRecordForUpdate
+          ? Boolean(await resolveStoreBuyerChannels(buyerRecordForUpdate))
+          : false;
+
+        if (buyerIsStore) {
+          await sendMemberWtbDealUpdateAfterPayment(memberWtbRecordId).catch((err) =>
+            console.error("Failed to send the consignor his deal update (non-blocking):", err)
+          );
+
+          // Bookkeeping hangs off the same payment moment, so it never fired
+          // for a store either - nothing reached Rompslomp for a deal that is
+          // already done and shipping.
+          await sendMemberWtbPurchaseWebhook(memberWtbRecordId).catch((err) =>
+            console.error("Failed to send the purchase webhook (non-blocking):", err)
+          );
+
+          console.log(
+            `Member WTB ${memberWtbRecordId}: buyer is a store, deal update and purchase webhook sent before payment`
+          );
+        }
+
         return res.json({
           ok: true,
           consignment: true,
