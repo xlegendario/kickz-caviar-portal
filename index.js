@@ -4519,6 +4519,160 @@ async function closeCompetingMemberWtbOffers(memberWtbRecordId, winningOfferId) 
   }
 }
 
+/*
+ * A want-to-buy reaches us two ways, and the Max Price means something
+ * different in each.
+ *
+ * On an Open WTB the buyer typed a ceiling on purpose, to keep highballers
+ * out. Nothing may be put in front of him above it.
+ *
+ * A Buy/Offer on stock is the opposite: there the Max Price is simply what
+ * he bid on a listed price, and a seller coming back higher is an ordinary
+ * next move. Holding that to the same ceiling would mean a consignor could
+ * never counter at all.
+ *
+ * "Auto Accept Seller Offers?" already separates the two - it is true
+ * exactly when the buyer named a price himself - and it is the same flag
+ * the finalisation branches on, so the two cannot disagree.
+ *
+ * Returns a refusal to send back, or null when the counter is allowed. An
+ * Open WTB without a Max Price has no ceiling to enforce.
+ */
+function memberWtbCounterAboveBuyerCeiling({
+  memberFields,
+  proposedPrice,
+  sellerVatType
+}) {
+  if (memberFields?.["Auto Accept Seller Offers?"] === true) return null;
+
+  const maxPrice = Number(memberFields?.["Max Price"] || 0);
+
+  if (!Number.isFinite(maxPrice) || maxPrice <= 0) return null;
+
+  // The counter is in seller terms; the ceiling is in buyer terms. Compared
+  // on the buyer scale, which is also the number he would be shown.
+  const buyerPrice = calculateMemberWtbBuyerEquivalent(
+    proposedPrice,
+    sellerVatType,
+    memberFields
+  );
+
+  if (!Number.isFinite(buyerPrice) || buyerPrice <= maxPrice) return null;
+
+  return {
+    error:
+      `That counter puts the buyer at ${moneySmartValue(buyerPrice.toFixed(2))}, ` +
+      `above the maximum of ${moneySmartValue(maxPrice.toFixed(2))} he set for this ` +
+      "want-to-buy. Please counter lower, or deny.",
+    ceiling: maxPrice
+  };
+}
+
+/*
+ * What the buyer actually agreed to pay.
+ *
+ * Straight through that is his Max Price: he pressed Buy at it, or accepted
+ * an offer computed backwards from it, and the margin is already inside that
+ * number. Every finalisation assumed that was the only case.
+ *
+ * It stops being true the moment a seller counters and the buyer accepts the
+ * counter. What he accepted is then the payout converted to buyer terms -
+ * the exact figure his message showed him - while Max Price is a number from
+ * before the negotiation. On MWTB-000402 the gap between the two was the
+ * entire margin: the consignor countered at 120, the buyer accepted 130, and
+ * the finalisation charged him the 120 he had originally bid.
+ *
+ * So an accepted seller-side round answers first, and Max Price only when
+ * there is none - which keeps every deal that never negotiated exactly as it
+ * was.
+ */
+async function resolveMemberWtbAgreedBuyerPrice({
+  memberWtbRecordId,
+  memberFields,
+  vatType
+}) {
+  const maxPrice = Number(memberFields?.["Max Price"] || 0);
+
+  const fromMaxPrice = getMemberWtbNetSalePrice(
+    maxPrice,
+    vatType,
+    memberFields?.["Buying Inventory Filter"],
+    memberFields?.["Buyer VAT Rate"]
+  );
+
+  const acceptedRounds = await airtable(COUNTER_OFFERS_TABLE)
+    .select({
+      filterByFormula: `AND({Status} = 'Accepted', {Source Type} = 'Member WTB')`,
+      fields: [
+        "Member WTB",
+        "Counter Payout",
+        "Seller Counter Price",
+        "Counter Payout VAT Type",
+        "Accepted At"
+      ]
+    })
+    .all()
+    .catch(() => []);
+
+  // Filtered here rather than in the formula because the link field cannot
+  // be compared to a record id in one - the same approach the other round
+  // lookups in this file take.
+  const sellerRound = acceptedRounds
+    .filter((round) => firstLinkedRecordId(round.fields?.["Member WTB"]) === memberWtbRecordId)
+    .filter((round) => numberValue(round.fields?.["Seller Counter Price"]) > 0)
+    .sort(
+      (a, b) =>
+        new Date(b.fields?.["Accepted At"] || 0) - new Date(a.fields?.["Accepted At"] || 0)
+    )[0];
+
+  if (!sellerRound) {
+    return { price: fromMaxPrice, via: "max_price" };
+  }
+
+  const payout = numberValue(sellerRound.fields?.["Seller Counter Price"]);
+
+  const roundVatType =
+    asText(sellerRound.fields?.["Counter Payout VAT Type"]) || asText(vatType);
+
+  const agreed = calculateMemberWtbBuyerEquivalent(
+    payout,
+    roundVatType,
+    memberFields
+  );
+
+  if (!Number.isFinite(agreed) || agreed <= 0) {
+    return { price: fromMaxPrice, via: "max_price_fallback" };
+  }
+
+  return {
+    price: Math.round(agreed * 100) / 100,
+    via: "accepted_seller_counter"
+  };
+}
+
+/*
+ * Never book a deal that pays out at least what it charges.
+ *
+ * Deliberately not a check that the margin is exactly right - roundings
+ * legitimately move it by a euro or two. It is the floor: on MWTB-000402
+ * both numbers were 120 and nothing anywhere said so, which is the part
+ * that has to stop. Thrown before anything is written, so a wrong deal is
+ * a refusal rather than a booked one.
+ */
+function assertMemberWtbLeavesMargin({
+  memberWtbRecordId,
+  buyerPrice,
+  payout
+}) {
+  if (!Number.isFinite(payout) || payout <= 0) return;
+  if (!Number.isFinite(buyerPrice) || buyerPrice > payout) return;
+
+  throw new Error(
+    `Member WTB ${memberWtbRecordId}: refusing to book a deal with no margin - ` +
+      `buyer ${buyerPrice}, payout ${payout}`
+  );
+}
+
 async function confirmConsignmentOffer(offerId) {
   const { data: lockedOffer, error: lockError } = await supabase
     .from("consignment_offers")
@@ -4564,15 +4718,26 @@ async function confirmConsignmentOffer(offerId) {
       };
     }
   
-    const maxPrice = Number(memberFields["Max Price"] || 0);
 
     const vatType = asText(lockedOffer.vat_type);
 
-    const finalBuyingPrice = getMemberWtbNetSalePrice(
-      maxPrice,
-      vatType,
-      memberFields["Buying Inventory Filter"],
-      memberFields["Buyer VAT Rate"]
+    const agreed = await resolveMemberWtbAgreedBuyerPrice({
+      memberWtbRecordId,
+      memberFields,
+      vatType
+    });
+
+    const finalBuyingPrice = agreed.price;
+
+    assertMemberWtbLeavesMargin({
+      memberWtbRecordId,
+      buyerPrice: finalBuyingPrice,
+      payout: Number(lockedOffer.offer_price)
+    });
+
+    console.log(
+      `Member WTB ${memberWtbRecordId}: buyer price ${finalBuyingPrice} via ${agreed.via}, ` +
+        `payout ${lockedOffer.offer_price}`
     );
 
     const memberWtbId =
@@ -19340,6 +19505,16 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
         return res.status(400).json({ error: mwValidation.reason, band: mwValidation.band });
       }
 
+      const mwCeilingRefusal = memberWtbCounterAboveBuyerCeiling({
+        memberFields: mwWtbFields,
+        proposedPrice,
+        sellerVatType: mwSellerVatType
+      });
+
+      if (mwCeilingRefusal) {
+        return res.status(400).json(mwCeilingRefusal);
+      }
+
       // Close the old denied round and create the fresh retry round.
       await airtable(COUNTER_OFFERS_TABLE).update(offerId, {
         "Status": "Closed",
@@ -32021,19 +32196,35 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
         finalBuyingPrice = Math.round(finalBuyingPrice * 100) / 100;
       }
     } else {
-      const maxPrice = Number(memberFields['Max Price'] || 0);
+      // CHANGED - this settled at the Max Price on the reasoning that it
+      // was "the buyer's own figure to keep". True right up to the moment
+      // a seller counters and the buyer accepts a higher number: the
+      // agreement is then that number, and Max Price is stale. See
+      // resolveMemberWtbAgreedBuyerPrice - without a negotiated round it
+      // still answers exactly the Max Price this always used.
+      const agreed = await resolveMemberWtbAgreedBuyerPrice({
+        memberWtbRecordId,
+        memberFields,
+        vatType
+      });
 
-      finalBuyingPrice = getMemberWtbNetSalePrice(
-        maxPrice,
-        vatType,
-        memberFields["Buying Inventory Filter"],
-        memberFields["Buyer VAT Rate"]
+      finalBuyingPrice = agreed.price;
+
+      console.log(
+        `Member WTB ${memberWtbRecordId}: buyer price ${finalBuyingPrice} ` +
+          `via ${agreed.via}, payout ${purchasePrice}`
       );
     }
 
     if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) {
       return res.status(400).json({ error: 'Invalid seller offer price' });
     }
+
+    assertMemberWtbLeavesMargin({
+      memberWtbRecordId,
+      buyerPrice: finalBuyingPrice,
+      payout: purchasePrice
+    });
 
     const memberWtbId =
       asText(memberFields['Member WTB ID']) ||
@@ -33071,6 +33262,16 @@ app.post("/api/member-wtb-counter-offers/:id/seller-counter", async (req, res) =
         });
       }
       return res.status(400).json({ error: validation.reason, band: validation.band });
+    }
+
+    const ceilingRefusal = memberWtbCounterAboveBuyerCeiling({
+      memberFields: wtbFields,
+      proposedPrice,
+      sellerVatType
+    });
+
+    if (ceilingRefusal) {
+      return res.status(400).json(ceilingRefusal);
     }
 
     await airtable(COUNTER_OFFERS_TABLE).update(previousRecordId, {
