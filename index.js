@@ -31355,6 +31355,66 @@ async function getStoreMarginForSeller(sellerRecordId) {
 }
 
 /*
+ * The margin to stamp on a new Member WTB when a store is buying.
+ *
+ * The shop quotes a store its own mark-up, but every counter round after
+ * that reads "Offer Margin" off the want-to-buy - and that was written as
+ * the flat default. So the shop would promise a 5% store 27.50 on a 450
+ * pair while the negotiation settled it at 10.
+ *
+ * Returns the NET margin, because calculateMemberWtbBuyerEquivalent grosses
+ * it up itself on margin goods, exactly as the shop does. Returning the
+ * grossed figure would have it counted twice.
+ *
+ * Null for a buyer without a store margin, and then the caller keeps the
+ * default it always used.
+ */
+async function getStoreOfferMarginSnapshot({
+  sellerRecordId,
+  sellerPrice,
+  vatType
+}) {
+  const storeMargin = await getStoreMarginForSeller(sellerRecordId);
+
+  if (!storeMargin) return null;
+
+  const ask = Number(sellerPrice);
+
+  if (!Number.isFinite(ask) || ask <= 0) return null;
+
+  // Same normalisation the shop uses: a VAT21 ask carries 21% already.
+  const base = normalizeBuyingVatType(vatType) === "VAT21" ? ask / 1.21 : ask;
+
+  const withMargin = storeMarginForward({
+    base,
+    method: storeMargin.method,
+    percentage: storeMargin.percentage,
+    margin: storeMargin.margin,
+    cap: storeMargin.cap
+  });
+
+  if (withMargin === null) return null;
+
+  const net = withMargin - base;
+
+  if (!Number.isFinite(net) || net <= 0) return null;
+
+  return Math.round(net * 100) / 100;
+}
+
+/*
+ * The cheapest consignment source among the matches, which is the one the
+ * shop quoted - it sorts on price and shows the lowest. Picking any other
+ * would snapshot a margin belonging to a pair the buyer never saw.
+ */
+function cheapestConsignmentSource(sources) {
+  return (sources || [])
+    .filter((source) => asText(source.source_type) === "consignment")
+    .filter((source) => Number(source.seller_price) > 0)
+    .sort((a, b) => Number(a.seller_price) - Number(b.seller_price))[0] || null;
+}
+
+/*
  * What a store pays for a consignment pair, in the scale it is looking at.
  *
  * Four steps, in this order:
@@ -34277,7 +34337,25 @@ app.post("/api/buying/offers", async (req, res) => {
     // default now comes from the one helper that owns it, and the same
     // number is written onto the new record below so the snapshot and
     // the subtraction can never drift apart.
-    const marginForNewWtb = getMemberWtbMargin();
+    // A store keeps the mark-up the shop quoted it. Without this the shop
+    // promises a 5% store 27.50 on a 450 pair and every counter round after
+    // settles it at 10 - the shop change of tonight made that gap real for
+    // twelve stores at once.
+    //
+    // The cheapest consignment source is the one the shop showed, so it is
+    // the one the margin is taken from. No store margin, no source: the
+    // default this always used.
+    const marginSource = cheapestConsignmentSource(matchingSources);
+
+    const storeMarginSnapshot = marginSource
+      ? await getStoreOfferMarginSnapshot({
+          sellerRecordId,
+          sellerPrice: marginSource.seller_price,
+          vatType: marginSource.vat_type
+        })
+      : null;
+
+    const marginForNewWtb = storeMarginSnapshot ?? getMemberWtbMargin();
 
     const currentLowestSourcePrice = Math.max(
       0,
@@ -35189,6 +35267,12 @@ app.post("/api/buying/requests", async (req, res) => {
       `Buy Now Price: ${buyingMoneyValue(maxPrice)}`
     ].join("\n");
 
+    const buyMarginSnapshot = await getStoreOfferMarginSnapshot({
+      sellerRecordId,
+      sellerPrice: selectedSource.seller_price,
+      vatType: selectedSource.vat_type
+    });
+
     const fields = {
       "Product Name": selectedSource.product_name || product?.product_name || sku,
       "SKU": selectedSource.sku || sku,
@@ -35203,7 +35287,13 @@ app.post("/api/buying/requests", async (req, res) => {
       // so a later change to CONSIGNMENT_MARKUP would silently recalculate
       // deals that were struck under the old margin. Snapshotting it here
       // keeps a running negotiation on the number it was opened with.
-      "Offer Margin": getMemberWtbMargin(),
+      //
+      // CHANGED - and for a store that number is its own, not the flat
+      // default. The price it just pressed Buy on was quoted with its
+      // merchant mark-up, so the negotiation behind it has to use the
+      // same one. Net, because the readers gross it up themselves on
+      // margin goods.
+      "Offer Margin": buyMarginSnapshot ?? getMemberWtbMargin(),
 
       "Current Lowest Source Price": getBuyingCurrentLowestSourcePriceForMemberWtb({
         selectedSource,
