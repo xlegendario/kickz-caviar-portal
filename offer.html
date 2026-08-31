@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <link rel="icon" type="image/png" href="https://i.imgur.com/gRmfHif.png">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Place an Offer | Kickz Caviar</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/dashboard.css" />
+</head>
+<body class="dashboard-body">
+  <section class="dashboard-login-panel">
+    <div class="dashboard-login-card offer-card">
+      <img class="offer-logo" src="https://i.imgur.com/gRmfHif.png" alt="Kickz Caviar" />
+
+      <div id="offerLoading" class="offer-loading">Loading this order...</div>
+
+      <div id="offerBody" class="hidden">
+        <div class="offer-product">
+          <img id="offerImage" class="offer-product-image hidden" alt="" />
+          <div class="offer-product-info">
+            <div id="offerBrand" class="offer-product-brand"></div>
+            <h2 id="offerProduct"></h2>
+          </div>
+        </div>
+
+        <!-- SKU and size on their own labelled rows. On one compact line under
+             the product name they read as part of the title, and you had to
+             work out which number was the size. -->
+        <dl class="offer-specs">
+          <div class="offer-spec"><dt>SKU</dt><dd id="offerSku">—</dd></div>
+          <div class="offer-spec"><dt>Size</dt><dd id="offerSize">—</dd></div>
+          <div class="offer-spec"><dt>Order</dt><dd id="offerOrderId">—</dd></div>
+        </dl>
+
+        <div id="offerLowest" class="offer-lowest hidden"></div>
+
+        <!-- Exactly one of these panels is visible. Which one depends on what
+             /api/offer-page says about the visitor. -->
+        <div id="panelClosed" class="offer-panel hidden">
+          <p id="closedReason"></p>
+          <a class="offer-action" href="/">Browse other deals</a>
+        </div>
+
+        <div id="panelSignedOut" class="offer-panel hidden">
+          <p>Create your seller profile to place an offer on this order. It takes one form.</p>
+          <a class="offer-action" id="signupLink" href="/signup">Create profile &amp; offer</a>
+          <button type="button" class="offer-secondary" id="showLoginBtn">Log in</button>
+
+          <form id="loginForm" class="dashboard-login-form offer-login hidden">
+            <label>
+              Email
+              <input name="email" type="email" autocomplete="email" required />
+            </label>
+            <label>
+              Password
+              <input name="password" type="password" autocomplete="current-password" required />
+            </label>
+            <button type="submit">Log in</button>
+            <div class="dashboard-form-error" id="loginError"></div>
+
+            <!-- A seller who already exists but has never set a password gets
+                 in here. Without it the only way through was Create profile,
+                 which would try to register an account that is already there. -->
+            <button type="button" class="offer-secondary" id="forgotPasswordBtn">
+              First time login or forgot password?
+            </button>
+          </form>
+
+          <!-- Same endpoint and the same words as the login screen on the home
+               page. A seller who meets this twice should not read two different
+               stories about one thing. -->
+          <form id="forgotForm" class="dashboard-login-form offer-login hidden">
+            <label>
+              Email
+              <input id="forgotEmail" type="email" autocomplete="email" required />
+            </label>
+            <button type="submit">Send Password Link</button>
+            <button type="button" class="offer-secondary" id="backToLoginBtn">
+              Back to login
+            </button>
+            <div class="dashboard-form-error" id="forgotError"></div>
+          </form>
+        </div>
+
+        <div id="panelDiscord" class="offer-panel hidden">
+          <p id="discordReason"></p>
+          <a class="offer-action" id="discordLink" href="/auth/discord">Link Discord</a>
+        </div>
+
+        <div id="panelNoVat" class="offer-panel hidden">
+          <p id="noVatReason"></p>
+        </div>
+
+        <div id="panelOffer" class="offer-panel hidden">
+          <form id="offerForm">
+            <label class="offer-field-label" for="offerAmount">Your offer (EUR)</label>
+            <input id="offerAmount" class="offer-amount" name="offerAmount" type="text"
+                   inputmode="numeric" placeholder="Enter your offer" required />
+
+            <div class="vat-label">SELECT VAT TYPE</div>
+            <div class="vat-options offer-vat-stack" id="offerVatOptions"></div>
+
+            <p class="offer-vat-note" id="offerVatNote"></p>
+
+            <button type="submit" id="offerSubmit" class="offer-action offer-submit">Submit offer</button>
+            <div class="dashboard-form-error" id="offerError"></div>
+          </form>
+        </div>
+
+        <div id="panelDone" class="offer-panel hidden">
+          <div class="offer-done-icon">&check;</div>
+          <h3 class="offer-done-title">Offer placed</h3>
+          <p id="doneMessage"></p>
+
+          <!-- The gold button goes to the next deal, not to admin: one more
+               offer is worth more than managing this one. -->
+          <a class="offer-action" href="/?tab=wtb">Browse WTBs</a>
+          <a class="offer-secondary" href="/dashboard">Manage my offers</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    const pathParts = window.location.pathname.split("/").filter(Boolean);
+    const sourceType = pathParts[1] || "";
+    const recordId = pathParts[2] || "";
+    const here = window.location.pathname;
+
+    // If this link came from a member with his own ref code, it travels with
+    // them through registration and linking so the inviter gets his credit.
+    const ref = new URLSearchParams(window.location.search).get("ref") || "";
+
+    function withContext(base) {
+      const params = new URLSearchParams({ return: here });
+      if (ref) params.set("ref", ref);
+      return base + "?" + params.toString();
+    }
+
+    const el = (id) => document.getElementById(id);
+    const show = (id) => el(id).classList.remove("hidden");
+    const hide = (id) => el(id).classList.add("hidden");
+
+    // All three are always shown. Whatever this seller may not pick is
+    // disabled with the reason beside it, which reads better than leaving an
+    // option out - then he only wonders why he can see just one.
+    const ALL_VAT_TYPES = ["Margin", "VAT21", "VAT0"];
+    let selectedVatType = "";
+
+    function showPanel(id) {
+      for (const panel of document.querySelectorAll(".offer-panel")) {
+        panel.classList.add("hidden");
+      }
+      if (id) show(id);
+    }
+
+    function renderOrder(order) {
+      el("offerBrand").textContent = order.brand || "";
+      el("offerProduct").textContent = order.product || "Unknown product";
+      el("offerSku").textContent = order.sku || "—";
+      el("offerSize").textContent = order.size || "—";
+      el("offerOrderId").textContent = order.order_id || "—";
+
+      if (order.image_url) {
+        el("offerImage").src = order.image_url;
+        show("offerImage");
+      }
+
+      // The current lowest bid is on the Want To Buys page too, so this gives
+      // nothing away. The buying ceiling deliberately stays out of here.
+      if (order.current_offer_margin) {
+        el("offerLowest").textContent = "Current lowest offer: " + order.current_offer_margin;
+        show("offerLowest");
+      }
+    }
+
+    function renderVatOptions(allowed) {
+      const wrap = el("offerVatOptions");
+      wrap.innerHTML = "";
+      selectedVatType = allowed[0] || "";
+
+      for (const type of ALL_VAT_TYPES) {
+        const usable = allowed.includes(type);
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "vat-option" + (type === selectedVatType ? " active" : "");
+        button.textContent = type;
+        button.disabled = !usable;
+
+        if (!usable) {
+          button.title =
+            type === "Margin"
+              ? "This buyer does not accept Margin for this order."
+              : "Your profile is not registered as a company that can sell " + type + ".";
+        }
+
+        button.addEventListener("click", () => {
+          if (!usable) return;
+          selectedVatType = type;
+          for (const other of wrap.children) other.classList.toggle("active", other === button);
+        });
+
+        wrap.appendChild(button);
+      }
+
+      const blocked = ALL_VAT_TYPES.filter((t) => !allowed.includes(t));
+
+      el("offerVatNote").textContent = blocked.length
+        ? "Greyed out options do not match your VAT ID and country."
+        : "";
+    }
+
+    async function load() {
+      try {
+        const response = await fetch(
+          "/api/offer-page/" + encodeURIComponent(sourceType) + "/" + encodeURIComponent(recordId)
+        );
+        const data = await response.json();
+
+        hide("offerLoading");
+
+        if (!response.ok) {
+          el("offerProduct").textContent = data.error || "This order link is not valid.";
+          show("offerBody");
+          showPanel(null);
+          return;
+        }
+
+        renderOrder(data.order);
+        show("offerBody");
+
+        if (!data.order.is_open) {
+          el("closedReason").textContent = data.order.closed_reason;
+          showPanel("panelClosed");
+          return;
+        }
+
+        const viewer = data.viewer || {};
+
+        if (!viewer.signed_in) {
+          el("signupLink").href = withContext("/signup");
+          showPanel("panelSignedOut");
+          return;
+        }
+
+        // Without a linked Discord there is no way to open a channel with this
+        // seller once a deal is accepted, so this comes before the offer form.
+        if (!viewer.discord_linked || !viewer.discord_in_server) {
+          // Same wording as the dashboard popup. A seller who runs into this
+          // here and then again there should not read two different stories
+          // about one rule.
+          el("discordReason").textContent = viewer.discord_linked
+            ? "You are no longer in our Discord server, so offering is paused. Being in the server is required to trade."
+            : "Your profile is not linked to our Discord server. Linking is required to trade on Kickz Caviar.";
+
+          el("discordLink").textContent = viewer.discord_linked ? "Rejoin Discord" : "Link Discord";
+          el("discordLink").href = withContext("/auth/discord");
+
+          showPanel("panelDiscord");
+          return;
+        }
+
+        const vatTypes = viewer.offerable_vat_types || [];
+
+        if (!vatTypes.length) {
+          el("noVatReason").textContent =
+            viewer.no_vat_types_reason || "You cannot place an offer on this order.";
+          showPanel("panelNoVat");
+          return;
+        }
+
+        renderVatOptions(vatTypes);
+        showPanel("panelOffer");
+      } catch (err) {
+        hide("offerLoading");
+        el("offerProduct").textContent = "Could not load this order. Please try again.";
+        show("offerBody");
+      }
+    }
+
+    el("showLoginBtn").addEventListener("click", () => {
+      el("loginForm").classList.toggle("hidden");
+      el("forgotForm").classList.add("hidden");
+    });
+
+    el("forgotPasswordBtn").addEventListener("click", () => {
+      el("loginForm").classList.add("hidden");
+      el("forgotForm").classList.remove("hidden");
+      el("loginError").textContent = "";
+      el("forgotError").textContent = "";
+      el("forgotEmail").focus();
+    });
+
+    el("backToLoginBtn").addEventListener("click", () => {
+      el("forgotForm").classList.add("hidden");
+      el("loginForm").classList.remove("hidden");
+      el("forgotError").textContent = "";
+      el("loginError").textContent = "";
+    });
+
+    el("forgotForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      el("forgotError").textContent = "";
+      el("forgotError").style.color = "";
+
+      try {
+        const response = await fetch("/api/forgot-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: el("forgotEmail").value.trim(),
+            // So the reset link brings them back to this pair rather than to
+            // the dashboard. The offer page then handles the Discord step
+            // itself, with the shoe still on screen.
+            return_to: here
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || data.details || "Failed to send password link");
+        }
+
+        el("forgotError").style.color = "#58d86a";
+        el("forgotError").textContent =
+          "If this email exists, a password link has been sent.";
+      } catch (err) {
+        el("forgotError").textContent = err.message;
+      }
+    });
+
+    el("loginForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const form = event.currentTarget;
+      el("loginError").textContent = "";
+
+      try {
+        const response = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: form.elements.email.value,
+            password: form.elements.password.value
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) throw new Error(data.error || "Login failed");
+
+        localStorage.setItem("kc_seller", JSON.stringify(data.seller));
+
+        // Reload rather than patch the UI: the server decides which panel
+        // belongs here now, Discord check included.
+        show("offerLoading");
+        showPanel(null);
+        await load();
+      } catch (err) {
+        el("loginError").textContent = err.message;
+      }
+    });
+
+    el("offerAmount").addEventListener("input", (event) => {
+      event.target.value = event.target.value.replace(/\D/g, "");
+    });
+
+    el("offerForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const amount = Number(el("offerAmount").value);
+      const submit = el("offerSubmit");
+
+      el("offerError").innerHTML = "";
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        el("offerError").textContent = "Enter a whole euro amount.";
+        return;
+      }
+
+      if (!selectedVatType) {
+        el("offerError").textContent = "Select a VAT type.";
+        return;
+      }
+
+      submit.disabled = true;
+      submit.textContent = "Submitting...";
+
+      try {
+        const response = await fetch("/api/place-offer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            orderRecordId: recordId,
+            offerAmount: amount,
+            vatType: selectedVatType,
+            sourceType: sourceType === "member-wtb" ? "member_wtb" : "order"
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          // The Discord gate sends a link along; we show that as a button
+          // rather than as bare text.
+          if (data.link_url) {
+            const line = document.createElement("div");
+            line.textContent = data.error;
+            el("offerError").appendChild(line);
+
+            const link = document.createElement("a");
+            link.className = "offer-error-action";
+            link.href = withContext(data.link_url);
+            link.textContent =
+              data.code === "discord_left_server" ? "Rejoin Discord" : "Link Discord";
+            el("offerError").appendChild(link);
+            return;
+          }
+
+          const message = document.createElement("div");
+          message.textContent = data.error || "Offer failed";
+          el("offerError").appendChild(message);
+
+          if (data.details) {
+            const detail = document.createElement("div");
+            detail.className = "offer-error-detail";
+            detail.textContent = data.details;
+            el("offerError").appendChild(detail);
+          }
+
+          return;
+        }
+
+        // Wijst naar wat ze nu kunnen doen in plaats van naar wachten. Het
+        // dashboard laat een open offer aanpassen of intrekken, dus dat is de
+        // logische volgende stap.
+        el("doneMessage").innerHTML =
+          "Your offer of <strong>&euro;" + amount + "</strong> (" + selectedVatType +
+          ") is in.<br /><br />Track it from your dashboard — you can change or withdraw it " +
+          "there or respond to buyer decisions. You'll receive notifications through " +
+          "Discord whenever we get an update on your offer.";
+
+        showPanel("panelDone");
+      } catch (err) {
+        el("offerError").textContent = err.message || "Something went wrong";
+      } finally {
+        submit.disabled = false;
+        submit.textContent = "Submit offer";
+      }
+    });
+
+    load();
+  </script>
+</body>
+</html>

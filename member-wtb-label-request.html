@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="icon" type="image/png" href="https://i.imgur.com/gRmfHif.png">
+  <meta charset="UTF-8" />
+  <title>Kickz Caviar - Label Request</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <style>
+    :root {
+      --bg: #050505;
+      --panel: #111111;
+      --panel-2: #171717;
+      --border: #2a2a2a;
+      --gold: #f1c40f;
+      --gold-soft: #ffd84a;
+      --text: #ffffff;
+      --muted: #a7a7a7;
+      --danger: #ef4444;
+      --success: #22c55e;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(241, 196, 15, 0.12), transparent 32%),
+        linear-gradient(180deg, #000 0%, var(--bg) 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 80px 20px 60px;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .brand {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 22px;
+    }
+    
+    .brand-logo {
+      width: 110px;
+      height: auto;
+      display: block;
+      filter: drop-shadow(0 0 18px rgba(241, 196, 15, 0.15));
+    }
+
+    h1 {
+      margin: 0;
+      margin-top: 8px;
+      font-size: clamp(34px, 6vw, 58px);
+      line-height: 1;
+      font-weight: 900;
+      letter-spacing: -0.04em;
+    }
+
+    .subtitle {
+      margin: 16px auto 0;
+      max-width: 620px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.55;
+    }
+
+    .card {
+      background: linear-gradient(180deg, rgba(23,23,23,0.96), rgba(13,13,13,0.96));
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 24px;
+      box-shadow: 0 18px 50px rgba(0,0,0,0.38);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+
+    .field {
+      min-width: 0;
+    }
+
+    .field-label {
+      font-size: 13px;
+      font-weight: 900;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .field-value,
+    .input {
+      width: 100%;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(0,0,0,0.38);
+      color: var(--text);
+      padding: 14px 15px;
+      font-size: 15px;
+      outline: none;
+    }
+
+    .field-value {
+      min-height: 50px;
+      display: flex;
+      align-items: center;
+      word-break: break-word;
+    }
+
+    .input:focus {
+      border-color: rgba(241, 196, 15, 0.75);
+      box-shadow: 0 0 0 4px rgba(241, 196, 15, 0.12);
+    }
+
+    .input[type="file"] {
+      padding: 12px;
+      cursor: pointer;
+    }
+
+    .section-title {
+      margin: 26px 0 14px;
+      font-size: 18px;
+      font-weight: 900;
+      letter-spacing: -0.01em;
+    }
+
+    .hint {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .actions {
+      margin-top: 24px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+
+    .button {
+      cursor: pointer;
+      border-radius: 14px;
+      border: none;
+      padding: 15px 20px;
+      font-size: 15px;
+      font-weight: 900;
+      background: linear-gradient(135deg, var(--gold), var(--gold-soft));
+      color: #111;
+      min-width: 170px;
+      transition: 0.18s ease;
+    }
+
+    .button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 14px 28px rgba(241, 196, 15, 0.18);
+    }
+
+    .button:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .status-box {
+      display: none;
+      margin-bottom: 18px;
+      border-radius: 16px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      background: rgba(0,0,0,0.28);
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .status-box.visible {
+      display: block;
+    }
+
+    .status-box.success {
+      border-color: rgba(34,197,94,0.45);
+      background: rgba(34,197,94,0.10);
+      color: #bbf7d0;
+    }
+
+    .status-box.error {
+      border-color: rgba(239,68,68,0.45);
+      background: rgba(239,68,68,0.10);
+      color: #fecaca;
+    }
+
+    .toast-stack {
+      position: fixed;
+      left: 20px;
+      right: 20px;
+      bottom: 20px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      pointer-events: none;
+    }
+
+    .toast {
+      width: min(720px, 100%);
+      border-radius: 14px;
+      padding: 16px 18px;
+      box-shadow: 0 18px 42px rgba(0,0,0,0.38);
+      pointer-events: auto;
+      font-weight: 700;
+    }
+
+    .toast.success {
+      background: #dcfce7;
+      color: #14532d;
+      border-bottom: 5px solid var(--success);
+    }
+
+    .toast.error {
+      background: #fee2e2;
+      color: #7f1d1d;
+      border-bottom: 5px solid var(--danger);
+    }
+
+    @media (max-width: 760px) {
+      .wrap {
+        padding-top: 48px;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .card {
+        padding: 18px;
+        border-radius: 18px;
+      }
+
+      .actions {
+        flex-direction: column;
+      }
+
+      .button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="brand">
+        <img
+          src="https://i.imgur.com/gRmfHif.png"
+          alt="Kickz Caviar"
+          class="brand-logo"
+        />
+      </div>
+
+      <h1>Upload Shipping Label</h1>
+
+      <p class="subtitle">
+        Upload the shipping label and tracking number for this Member WTB deal.
+        Once submitted, the seller will be notified automatically.
+      </p>
+    </div>
+
+    <div id="statusBox" class="status-box">
+      Loading label request...
+    </div>
+
+    <div class="card">
+      <div class="grid">
+        <div class="field">
+          <div class="field-label">Member WTB</div>
+          <div id="memberWtbValue" class="field-value">Loading...</div>
+        </div>
+
+        <div class="field">
+          <div class="field-label">Buyer</div>
+          <div id="buyerValue" class="field-value">Loading...</div>
+        </div>
+
+        <div class="field">
+          <div class="field-label">Product</div>
+          <div id="productValue" class="field-value">Loading...</div>
+        </div>
+
+        <div class="field">
+          <div class="field-label">SKU</div>
+          <div id="skuValue" class="field-value">Loading...</div>
+        </div>
+
+        <div class="field">
+          <div class="field-label">Size</div>
+          <div id="sizeValue" class="field-value">Loading...</div>
+        </div>
+
+        <div class="field">
+          <div class="field-label">Deal Price</div>
+          <div id="priceValue" class="field-value">Loading...</div>
+        </div>
+      </div>
+
+      <div class="section-title">Shipping Details</div>
+
+      <div class="grid">
+        <div class="field">
+          <div class="field-label">Shipping Label PDF</div>
+          <input id="labelFileInput" class="input" type="file" accept="application/pdf" />
+          <div class="hint">Upload the PDF shipping label the seller should use.</div>
+        </div>
+
+        <div class="field">
+          <div class="field-label">Tracking Number</div>
+          <input id="trackingInput" class="input" type="text" placeholder="Example: 3SABCD123456789" />
+          <div class="hint">Enter the tracking number connected to this label.</div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="submitButton" class="button" type="button">
+          Submit Label
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastStack" class="toast-stack"></div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const memberWtbRecordId = params.get("member_wtb_id") || params.get("recordId") || params.get("id");
+
+    const els = {
+      statusBox: document.getElementById("statusBox"),
+      memberWtbValue: document.getElementById("memberWtbValue"),
+      buyerValue: document.getElementById("buyerValue"),
+      productValue: document.getElementById("productValue"),
+      skuValue: document.getElementById("skuValue"),
+      sizeValue: document.getElementById("sizeValue"),
+      priceValue: document.getElementById("priceValue"),
+      labelFileInput: document.getElementById("labelFileInput"),
+      trackingInput: document.getElementById("trackingInput"),
+      submitButton: document.getElementById("submitButton"),
+      toastStack: document.getElementById("toastStack")
+    };
+
+    let currentRequest = null;
+
+    function setStatus(message, type = "") {
+      els.statusBox.textContent = message;
+      els.statusBox.className = `status-box visible ${type}`.trim();
+    }
+
+    function clearStatus() {
+      els.statusBox.className = "status-box";
+      els.statusBox.textContent = "";
+    }
+
+    function showToast(message, type = "success") {
+      const toast = document.createElement("div");
+      toast.className = `toast ${type}`;
+      toast.textContent = message;
+
+      els.toastStack.appendChild(toast);
+
+      setTimeout(() => {
+        toast.remove();
+      }, 5200);
+    }
+
+    function setText(el, value) {
+      el.textContent = value || "—";
+    }
+
+    function formatEuro(value) {
+      const number = Number(value || 0);
+      if (!Number.isFinite(number) || number <= 0) return "—";
+      return `€${number.toFixed(2)}`;
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Failed to read file"));
+
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function loadRequest() {
+      if (!memberWtbRecordId) {
+        setStatus("Missing Member WTB ID in the URL.", "error");
+        els.submitButton.disabled = true;
+        return;
+      }
+
+      setStatus("Loading label request...");
+
+      const response = await fetch(`/api/member-wtb/label-request/${encodeURIComponent(memberWtbRecordId)}`);
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        setStatus(data.details || data.error || "Failed to load label request.", "error");
+        els.submitButton.disabled = true;
+        return;
+      }
+
+      currentRequest = data;
+
+      setText(els.memberWtbValue, data.member_wtb_id || data.record_id);
+      setText(els.buyerValue, data.buyer_name || data.buyer_seller_id);
+      setText(els.productValue, data.product_name);
+      setText(els.skuValue, data.sku);
+      setText(els.sizeValue, data.size);
+      setText(
+        els.priceValue,
+        formatEuro(data.invoice_price || data.final_buying_price || data.max_price)
+      );
+
+      if (data.shipping_label_url || data.tracking_number) {
+        setStatus("A label or tracking number has already been submitted for this deal. You can submit again if you need to replace it.", "success");
+      } else {
+        clearStatus();
+      }
+    }
+
+    async function submitLabel() {
+      if (!memberWtbRecordId) {
+        showToast("Missing Member WTB ID.", "error");
+        return;
+      }
+
+      const file = els.labelFileInput.files[0];
+      const trackingNumber = els.trackingInput.value.trim();
+
+      if (!file) {
+        showToast("Please upload a shipping label PDF.", "error");
+        return;
+      }
+
+      if (file.type !== "application/pdf") {
+        showToast("Shipping label must be a PDF file.", "error");
+        return;
+      }
+
+      if (!trackingNumber) {
+        showToast("Please enter a tracking number.", "error");
+        return;
+      }
+
+      els.submitButton.disabled = true;
+      els.submitButton.textContent = "Submitting...";
+
+      try {
+        const fileData = await fileToBase64(file);
+
+        const response = await fetch("/api/member-wtb/label-request-submit", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            member_wtb_record_id: memberWtbRecordId,
+            tracking_number: trackingNumber,
+            label_file: {
+              name: file.name,
+              type: file.type,
+              data: fileData
+            }
+          })
+        });
+
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(data.details || data.error || "Failed to submit label.");
+        }
+
+        showToast("Shipping label submitted successfully.", "success");
+        setStatus("Shipping label submitted successfully. The seller has been notified.", "success");
+
+        els.labelFileInput.value = "";
+      } catch (err) {
+        showToast(err.message || "Failed to submit label.", "error");
+      } finally {
+        els.submitButton.disabled = false;
+        els.submitButton.textContent = "Submit Label";
+      }
+    }
+
+    els.submitButton.addEventListener("click", submitLabel);
+
+    loadRequest().catch((err) => {
+      console.error(err);
+      setStatus(err.message || "Failed to load label request.", "error");
+      els.submitButton.disabled = true;
+    });
+  </script>
+</body>
+</html>

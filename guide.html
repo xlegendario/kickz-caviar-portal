@@ -1,0 +1,1119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" type="image/png" href="https://i.imgur.com/gRmfHif.png">
+<title>Guide &middot; Kickz Caviar</title>
+
+<style>
+  :root {
+    --bg:#050505; --panel:#101010; --panel-2:#141414; --panel-3:#161616;
+    --line:#242424; --line-soft:#1a1a1a; --line-strong:#2a2a2a;
+    --text:#ffffff; --dim:#cfcfcf; --muted:#8a8a8a;
+    --gold:#ffcc00; --gold-2:#f0a500; --gold-soft:rgba(255,204,0,.16);
+    --green:#2ecc71; --red:#e74c3c; --blurple:#5865f2;
+    --r-lg:24px; --r-md:16px; --r-sm:14px;
+    --shadow:0 10px 30px rgba(0,0,0,.38), inset 0 1px 0 rgba(255,255,255,.03);
+    --sans:Arial, Helvetica, sans-serif;
+    --mono:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing:border-box; }
+
+  body {
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--sans); font-size:16px; line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .wrap { max-width:800px; margin:0 auto; padding:54px 20px 90px; }
+
+  header.masthead {
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:var(--r-lg); box-shadow:var(--shadow);
+    padding:34px 30px 32px; display:flex; flex-direction:column; gap:14px;
+    position:relative; overflow:hidden;
+  }
+  header.masthead::before {
+    content:""; position:absolute; inset:0 0 auto 0; height:2px;
+    background:linear-gradient(90deg, var(--gold), var(--gold-2), transparent);
+  }
+
+  .eyebrow {
+    font-family:var(--mono); font-size:11px; letter-spacing:.2em;
+    text-transform:uppercase; color:var(--gold);
+  }
+
+  h1 {
+    font-size:clamp(30px,6vw,44px); font-weight:700; line-height:1.06;
+    letter-spacing:-.025em; margin:0; text-wrap:balance;
+  }
+
+  .lede { margin:0; color:var(--dim); font-size:17px; max-width:62ch; }
+
+  h2 {
+    font-size:clamp(22px,4vw,28px); font-weight:700; letter-spacing:-.02em;
+    line-height:1.2; margin:0; text-wrap:balance;
+  }
+  h2 .num {
+    font-family:var(--mono); font-size:13px; font-weight:400;
+    letter-spacing:.16em; color:var(--gold); display:block; margin-bottom:8px;
+  }
+  h3 { font-size:17px; font-weight:700; letter-spacing:-.01em; margin:0; }
+
+  section.part {
+    display:flex; flex-direction:column; gap:20px;
+    padding:54px 0 0; scroll-margin-top:18px;
+  }
+
+  p { margin:0; max-width:68ch; }
+  .muted { color:var(--muted); font-size:15px; }
+
+  .roles { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin-top:14px; }
+  a.role {
+    display:flex; flex-direction:column; gap:5px; padding:18px 19px;
+    background:var(--panel-2); border:1px solid var(--line); border-radius:var(--r-md);
+    text-decoration:none; color:inherit; transition:border-color .15s, background .15s;
+  }
+  a.role:hover { border-color:var(--gold); background:var(--panel-3); }
+  a.role:focus-visible { outline:2px solid var(--gold); outline-offset:3px; }
+  a.role strong { font-size:16px; }
+  a.role span { font-size:14px; color:var(--muted); line-height:1.5; }
+
+  ol.chain {
+    list-style:none; counter-reset:step; margin:0; padding:0;
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:var(--r-lg); box-shadow:var(--shadow); overflow:hidden;
+  }
+  ol.chain li {
+    counter-increment:step; display:grid; grid-template-columns:30px minmax(0,1fr);
+    gap:16px; padding:17px 24px; border-bottom:1px solid var(--line-soft);
+  }
+  ol.chain li:last-child { border-bottom:none; }
+  ol.chain li::before {
+    content:counter(step); font-family:var(--mono); font-size:11px;
+    color:var(--gold); background:var(--gold-soft); border-radius:8px;
+    height:24px; display:grid; place-items:center; margin-top:3px;
+  }
+  .tab { font-family:var(--mono); font-size:13.5px; color:var(--text); }
+  ol.chain .tab { font-size:14px; }
+  ol.chain p { font-size:15px; color:var(--muted); margin-top:3px; }
+  ol.chain .act { color:var(--dim); }
+
+  kbd {
+    font-family:var(--sans); font-size:12.5px; font-weight:700; letter-spacing:.02em;
+    border-radius:8px; padding:2px 9px; white-space:nowrap;
+    background:var(--panel-3); border:1px solid var(--line-strong); color:var(--dim);
+  }
+  kbd.go   { background:var(--green);   border-color:var(--green);   color:#06280f; }
+  kbd.no   { background:var(--red);     border-color:var(--red);     color:#2d0805; }
+  kbd.mid  { background:var(--blurple); border-color:var(--blurple); color:#fff; }
+  kbd.gold { background:var(--gold);    border-color:var(--gold);    color:#221a00; }
+
+  code { font-family:var(--mono); font-size:13.5px; color:var(--gold); }
+
+  .task {
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--r-md);
+    padding:21px 23px; display:flex; flex-direction:column; gap:12px; box-shadow:var(--shadow);
+  }
+  .task ol, .task ul { margin:0; padding-left:19px; display:flex; flex-direction:column; gap:8px; }
+  .task li { font-size:15px; color:var(--dim); }
+  .task li strong { color:var(--text); }
+  .task li::marker { color:var(--gold); }
+
+  .note {
+    border:1px solid var(--gold-soft); border-left:3px solid var(--gold);
+    background:rgba(255,204,0,.05); padding:15px 18px;
+    border-radius:0 var(--r-sm) var(--r-sm) 0; font-size:15px; color:var(--dim);
+  }
+  .note strong { color:var(--gold); }
+
+  .tablewrap { overflow-x:auto; border:1px solid var(--line); border-radius:var(--r-sm); background:var(--panel-2); }
+  table { border-collapse:collapse; width:100%; font-size:14.5px; min-width:440px; }
+  th, td { text-align:left; padding:11px 16px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  th { font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--gold); font-weight:400; }
+  td { color:var(--dim); }
+  tr:last-child td { border-bottom:none; }
+  td:first-child { font-family:var(--mono); font-size:13px; color:var(--text); white-space:nowrap; }
+
+  figure.shot { margin:0; display:flex; flex-direction:column; gap:10px; }
+  .shot-frame {
+    border:1.5px dashed var(--line-strong); border-radius:var(--r-sm);
+    background:var(--panel-2); min-height:140px; display:grid; place-items:center;
+    padding:24px 22px; text-align:center;
+  }
+  .shot-frame span { font-family:var(--mono); font-size:12.5px; color:var(--muted); max-width:48ch; line-height:1.7; }
+  .shot-frame b {
+    display:block; font-family:var(--mono); font-size:11px; letter-spacing:.18em;
+    text-transform:uppercase; color:var(--gold); margin-bottom:7px;
+  }
+  figure.shot img { max-width:100%; height:auto; display:block; border:1px solid var(--line); border-radius:var(--r-sm); }
+  /* A shot narrower than the column would otherwise sit against the left
+     edge, which reads as a mistake rather than a choice. */
+  figure.shot picture { width:fit-content; max-width:100%; margin:0 auto; }
+  figcaption { font-size:13.5px; color:var(--muted); line-height:1.55; }
+
+  .chain-switch { display:flex; gap:8px; flex-wrap:wrap; }
+  .chain-switch button {
+    font-family:var(--sans); font-size:13px; font-weight:700; letter-spacing:.02em;
+    padding:10px 16px; border-radius:var(--r-sm); cursor:pointer;
+    background:var(--panel-2); border:1px solid var(--line-strong); color:var(--muted);
+  }
+  .chain-switch button[aria-pressed="true"] {
+    background:var(--gold-soft); border-color:var(--gold); color:var(--gold);
+  }
+  /* .task and .chain-pane both set a display of their own, and that beats
+     the browser's default hiding. So it is spelled out here. */
+  .chain-pane[hidden], .task[hidden], .note[hidden], figure.shot[hidden] { display:none; }
+
+  footer {
+    margin-top:58px; padding-top:26px; border-top:1px solid var(--line);
+    color:var(--muted); font-size:14px;
+  }
+
+  @media (max-width:560px) {
+    .wrap { padding:34px 14px 66px; }
+    header.masthead { padding:26px 20px 24px; border-radius:var(--r-md); }
+    ol.chain li { grid-template-columns:26px minmax(0,1fr); gap:12px; padding:15px 17px; }
+    .task { padding:18px 17px; }
+  }
+
+  /* Click a screenshot to read it.
+
+     A dashboard shot is a whole screen scaled into an 800px column, which
+     makes the very thing it is meant to show unreadable. Clicking opens it
+     over the page at full size; Escape, the cross, or a click beside it
+     puts it away again.
+
+     Only above 768px. On a phone the image is already as wide as the screen
+     gets, so there is nothing to gain and a full-screen overlay would only
+     be something else to dismiss. */
+  @media (min-width: 769px) {
+    figure.shot img { cursor: zoom-in; }
+  }
+
+  .lightbox {
+    position: fixed; inset: 0; z-index: 100;
+    display: flex; align-items: center; justify-content: center;
+    padding: 32px;
+    background: rgba(0, 0, 0, .88);
+  }
+
+  .lightbox[hidden] { display: none; }
+
+  .lightbox img {
+    max-width: 96vw; max-height: 92vh;
+    width: auto; height: auto;
+    border: 1px solid var(--line); border-radius: var(--r-md);
+    cursor: zoom-out;
+  }
+
+  .lightbox-close {
+    position: absolute; top: 18px; right: 22px;
+    width: 40px; height: 40px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; cursor: pointer;
+    color: var(--text); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 999px;
+  }
+
+  .lightbox-close:hover { opacity: .85; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header class="masthead">
+  <div class="eyebrow">Kickz Caviar</div>
+  <h1>How the portal works</h1>
+  <p class="lede">Kickz Caviar gives you different ways to sell and source pairs through our network. This guide walks you through how the portal works, what each action does, and what happens next.</p>
+
+  <div class="roles">
+  <a class="role" href="#start">
+    <strong>First time here</strong>
+    <span>Account, password, Discord</span>
+  </a>
+
+  <a class="role" href="#quick">
+    <strong>Quick Deals</strong>
+    <span>Claim pairs buyers are looking for</span>
+  </a>
+
+  <a class="role" href="#wtb">
+    <strong>Want To Buys</strong>
+    <span>Offer your price on pairs buyers want</span>
+  </a>
+
+  <a class="role" href="#consignment">
+    <strong>Consignment</strong>
+    <span>Your stock, listed in stores and across our network</span>
+  </a>
+
+  <a class="role" href="#buying">
+    <strong>Buying</strong>
+    <span>Browse and source pairs across our network</span>
+  </a>
+</div>
+</header>
+
+<section class="part" id="start">
+  <h2><span class="num">01 &middot; BEFORE ANYTHING</span>Getting in</h2>
+
+  <div class="task">
+    <h3>Never dealt with us before?</h3>
+    <p>Press <kbd class="gold">Sign up</kbd> and fill in the form with your details. Company information is optional and only needs to be added if applicable.</p>
+    <p>Once your profile is created, you'll be asked to link your Discord account. Make sure to complete this step, as Discord is required to trade through Kickz Caviar.</p>
+    <figure class="shot" id="shot-1" data-shot="01">
+      <div class="shot-frame"><span><b>Screenshot 1</b>The Sign up form, filled in but not submitted.<br><br>desktop: <span style="color:var(--gold)">shot-01.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-01-mobile.png</span></span></div>
+      <figcaption>Enter your details accurately and complete the required fields to create your seller profile.</figcaption>
+    </figure>
+  </div>
+
+  <div class="task">
+    <h3>Have you sold to us before?</h3>
+    <p>Your profile already exists and your account history is linked to it. You only need to set a password to access it. <strong>Do not create a new account.</strong></p>
+    <ol>
+  <li>On the login screen, enter your email address.</li>
+  <li>Press <kbd>First time login or forgot password?</kbd>. You'll receive an email with a setup link.</li>
+  <li>Use the link to set your password, then log in to the portal.</li>
+</ol>
+    <p class="muted">Signed up by mistake? The portal tells you the profile already exists and sends you back to this button. Nothing breaks.</p>
+    <figure class="shot" id="shot-2" data-shot="02">
+      <div class="shot-frame"><span><b>Screenshot 2</b>The login screen, with the "First time login or forgot password?" button clearly in frame.<br><br>desktop: <span style="color:var(--gold)">shot-02.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-02-mobile.png</span></span></div>
+      <figcaption>Log in here if you already have an account.</figcaption>
+    </figure>
+  </div>
+
+  <div class="task">
+    <h3>Discord is required</h3>
+    <p>Discord must be linked before you can trade. Until then, actions such as claiming, offering, accepting and buying remain disabled in the portal.</p>
+    <p>Our bots keep you updated throughout the deal process, and every deal automatically gets its own dedicated Discord channel for communication and processing. That’s why Discord is an essential part of trading through the portal.</p>
+    <ol>
+  <li>A window appears with a <strong>Link Discord</strong> button. Press it to continue.</li>
+  <li>Authorize the connection through Discord.</li>
+  <li>Once connected, you'll automatically be redirected back to the portal.</li>
+</ol>
+    <p class="muted">If you leave the Discord server later, trading through the portal will be paused automatically. A <strong>Rejoin Discord</strong> button will appear, allowing you to rejoin the server and restore access in one click.</p>
+    <figure class="shot" id="shot-3" data-shot="03">
+      <div class="shot-frame"><span><b>Screenshot 3</b>The "Link your Discord" window, with the blurple Discord button.<br><br>desktop: <span style="color:var(--gold)">shot-03.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-03-mobile.png</span></span></div>
+      <figcaption>A prompt appears with a <strong>Link Discord</strong> button. Press it to continue.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="part" id="home">
+  <h2><span class="num">02 &middot; THE HOME PAGE</span>Find opportunities to sell</h2>
+  <p>Switch to <strong>Selling</strong> to see current opportunities to sell pairs through the network.</p>
+
+  <figure class="shot" id="shot-4" data-shot="04">
+    <div class="shot-frame"><span><b>Screenshot 4</b>The whole home page in Selling mode: the Deal Type and Payout View switches, the search bar, and a few deal cards below.<br><br>desktop: <span style="color:var(--gold)">shot-04.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-04-mobile.png</span></span></div>
+    <figcaption>The two switches at the top decide what you see, and in which price scale.</figcaption>
+  </figure>
+
+  <div class="task">
+    <h3>The two switches at the top</h3>
+    <ul>
+      <li><strong>Deal Type</strong> &mdash; <kbd>Quick Deals</kbd> or <kbd>Want To Buys</kbd>. Two ways to sell. Both are explained below.</li>
+      <li><strong>Payout View</strong> &mdash; <kbd>Margin / VAT21</kbd> or <kbd>VAT0</kbd>. This does not change the deal, only which payout you see. Set it to the scale you invoice in. The price on the card is the number you get.</li>
+    </ul>
+    <div class="note"><strong>Set this first.</strong> Always select the payout view that matches how you invoice. Using the wrong view means you'll be comparing offers against the wrong payout amount.</div>
+  </div>
+
+  <div class="task">
+    <h3>Finding a pair</h3>
+    <ul>
+      <li><strong>Search</strong> takes a SKU or a product name and filters while you type.</li>
+      <li><strong>All Brands</strong> narrows it to one brand.</li>
+      <li><strong>Sort</strong> gives you newest, oldest, A&ndash;Z, Z&ndash;A, and payout low&nbsp;→&nbsp;high or high&nbsp;→&nbsp;low. Payout sorting follows the scale you picked above.</li>
+      <li><strong>Cards / Table</strong> changes the layout. Table fits much more on screen when you scan a lot at once.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="part" id="quick">
+  <h2><span class="num">03 &middot; QUICK DEALS</span>Claim at a fixed payout</h2>
+  <p>A Quick Deal is a pair we need, at a payout we have already set. Nothing to negotiate. The price is on the card, and the first one to claim it gets it.</p>
+
+  <div class="task">
+    <h3>The payout goes up over time.</h3>
+    <p>Every card shows two amounts and a clock:</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>On the card</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr><td>Current</td><td>What you get if you claim right now</td></tr>
+          <tr><td>Max</td><td>The highest it will ever go</td></tr>
+          <tr><td>3h 20m left</td><td>Time until it reaches Max</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The payout increases from <strong>Current to Max over 12 hours</strong>, starting from the moment the deal appears. Once the maximum is reached, the timer will show <em>Max payout reached</em> and the payout will stop increasing.</p>
+    <p class="muted">Waiting means a higher payout, but also a higher chance that another seller claims the deal first. If you want to secure the sale, claim it early. If you're willing to risk losing the deal for a higher payout, you can wait.</p>
+    <figure class="shot" id="shot-5" data-shot="05">
+      <div class="shot-frame"><span><b>Screenshot 5</b>One Quick Deal card, close up: the Quick Deal badge, the time left, both payout boxes, and the Claim Deal button.<br><br>desktop: <span style="color:var(--gold)">shot-05.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-05-mobile.png</span></span></div>
+      <figcaption>Current payout, Max payout, and time remaining until Max is reached.</figcaption>
+    </figure>
+  </div>
+
+  <div class="task">
+    <h3>Claiming</h3>
+    <ol>
+      <li>Press <kbd class="gold">Claim Deal</kbd>.</li>
+      <li>Pick your <strong>VAT type</strong>: <kbd>Margin</kbd>, <kbd>VAT21</kbd> or <kbd>VAT0</kbd>. Select the VAT type that applies to the pair you're selling, as this determines your payout.</li>
+      <li>Confirm.</li>
+    </ol>
+    <p class="muted">A card that says <em>Claim in Progress…</em> is already being handled by someone else. Nothing is broken. It is just gone.</p>
+    <figure class="shot" id="shot-6" data-shot="06">
+      <div class="shot-frame"><span><b>Screenshot 6</b>The Confirm VAT Type window that opens after pressing Claim Deal.<br><br>desktop: <span style="color:var(--gold)">shot-06.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-06-mobile.png</span></span></div>
+      <figcaption>The VAT type directly affects your payout, so make sure it matches the VAT treatment of the pair you're selling.</figcaption>
+    </figure>
+  </div>
+
+  <div class="task">
+    <h3>What happens next?</h3>
+    <p>Your claim will appear under <span class="tab">Quick Deals → Open Claims</span> in your dashboard, and a dedicated Discord channel will automatically be created for the deal. You can open the channel directly from your dashboard or find it in our Discord server. From there it follows <a href="#chain" data-goto-chain="quick" style="color:var(--gold)">the chain</a>. </p>
+  </div>
+</section>
+
+<section class="part" id="wtb">
+  <h2><span class="num">04 &middot; WANT TO BUYS</span>Name your own price</h2>
+  <p>Want To Buys let you make your own offer. Set the price you want for the pair and the buyer can accept, decline or counter your offer. Other sellers can compete for the same WTB, while you manage the entire negotiation from your dashboard.</p>
+
+  <div class="task">
+    <h3>Making an offer</h3>
+    <ol>
+      <li>Set <strong>Deal Type</strong> to <kbd>Want To Buys</kbd>.</li>
+      <li>The card shows <strong>Current Offer</strong>— the best offer so far, or No offer yet. The amount is displayed according to your selected <strong>Payout View</strong>.</li>
+      <li>Press <kbd class="gold">Make Offer</kbd>, select the VAT type that applies to your pair, and enter your offer. Your selected VAT type determines how your offer is getting processed.</li>
+    </ol>
+    <p class="muted">Check the Payout View switch before you type a number. Your amount is read in the scale that is showing.</p>
+    <div class="note"><strong>"No offer yet" does not mean any price will be accepted.</strong> Buyers can set a maximum price when posting a request. If your offer is above that limit, it will be declined immediately — even if you're the first seller to make an offer. You can simply try again with a lower offer; the WTB remains open.</div>
+    <figure class="shot" id="shot-7" data-shot="07">
+      <div class="shot-frame"><span><b>Screenshot 7</b>A Want To Buy card showing Current Offer, plus the Make Offer window with the amount field open.<br><br>desktop: <span style="color:var(--gold)">shot-07.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-07-mobile.png</span></span></div>
+      <figcaption>You are bidding against the current lowest, not against a fixed price.</figcaption>
+    </figure>
+  </div>
+
+  <div class="task">
+    <h3>Managing your offers</h3>
+    <p>Go to <span class="tab">Want To Buys → Offers</span>. Here you'll find all the offers you've made and their current status. Use the three filters to see which offers are still open, have received a counter offer, or were denied but can still be renegotiated.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Filter</th><th>What sits there</th><th>Your move</th></tr></thead>
+        <tbody>
+          <tr><td>Open</td><td>Any offer still waiting for a response — whether it's your initial offer or a counter offer you've sent</td><td><kbd>Edit</kbd> the amount, Accept previous counter or <kbd class="no">Delete</kbd></td></tr>
+          <tr><td>Countered</td><td>The buyer responded to your offer with a counter price</td><td><kbd class="go">Accept</kbd> theirs, <kbd class="mid">Counter</kbd> again, or <kbd class="no">Deny</kbd></td></tr>
+          <tr><td>Denied</td><td>An offer or counter offer was declined</td><td><kbd>Retry</kbd> at a new price, Accept previous counter or <kbd class="no">Delete</kbd></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The columns show you exactly where each offer stands. <strong>Your Offer</strong> shows the last price you offered. <strong>Counter Offer</strong> shows the buyer's current counter when there is one, otherwise you'll see their <strong>Buyer's Last Offer</strong>. <strong>Current Lowest</strong> shows the best price currently offered by any seller, with a coloured dot indicating whether that offer is yours.</p>
+    <p class="muted">The green <kbd class="go">Accept</kbd> button already shows the buyer's offer. If you're happy with their price, simply press it to accept.</p>
+
+    <div class="note">
+  <strong>Sent a counter offer?</strong> Your offer stays under <span class="tab">Open</span> while you wait for the buyer to respond. The <span class="tab">Countered</span> tab is only for counter offers you receive from the buyer.<br><br>
+  While waiting, you can still accept the buyer's previous price. The green <kbd class="go">Accept</kbd> button shows their last offer — press it at any time to accept and close the deal immediately.
+</div>
+    <p class="muted">A denied offer doesn't have to be the end. <kbd>Retry</kbd> lets you submit a new price, which the buyer can respond to like any other offer.</p>
+    <figure class="shot" id="shot-8" data-shot="08">
+      <div class="shot-frame"><span><b>Screenshot 8</b>Want To Buys → Offers on the Open filter. Best with two rows if you have them: a plain offer, and a counter of yours showing the Accept button.<br><br>desktop: <span style="color:var(--gold)">shot-08.png</span> &nbsp;&middot;&nbsp; phone: <span style="color:var(--gold)">shot-08-mobile.png</span></span></div>
+      <figcaption>Your live offers. The second row shows a counter you sent back to the buyer. Their previous offer remains available through the green Accept button if you decide to take it after all.</figcaption>
+    </figure>
+
+    <figure class="shot" id="shot-9" data-shot="09">
+      <div class="shot-frame"><span><b>Screenshot 9</b>Want To Buys → Offers on the Countered filter, showing Your Offer next to Counter Offer, and the Accept / Counter / Deny buttons.<br><br>desktop: <span style="color:var(--gold)">shot-09.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-09-mobile.png</span></span></div>
+      <figcaption>The buyer responded with a counter offer. Their price is shown next to yours.</figcaption>
+    </figure>
+    <figure class="shot" id="shot-10" data-shot="10">
+      <div class="shot-frame"><span><b>Screenshot 10</b>The same tab switched to the Denied filter, with the Retry and Delete buttons in view.<br><br>desktop: <span style="color:var(--gold)">shot-10.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-10-mobile.png</span></span></div>
+      <figcaption>Denied is not the end. Retry with a new price, or accept the buyer’s last offer if they previously countered.</figcaption>
+    </figure>
+  </div>
+
+  <div class="task">
+  <h3>One negotiation, multiple sellers</h3>
+  <p>The buyer doesn't negotiate with every seller separately. Your offer competes with the other offers, while the buyer negotiates through one central flow based on the best price available.</p>
+  <p>If the buyer sends a counter offer, every seller still in the running receives the same counter and can respond to it. This keeps everyone in the same negotiation without separate DMs or individual price discussions.</p>
+  <p class="muted">You compete with other sellers, but the negotiation stays in one place. Everyone receives the same buyer counter and decides whether to accept it, counter it, or walk away.</p>
+</div>
+
+  <div class="task">
+  <h3>After accepting</h3>
+  <p>Once a deal is accepted, it enters <a href="#chain" data-goto-chain="wtb" style="color:var(--gold)">The Chain</a>: Accepted, Confirmed, Label Requested, Ready To Ship, Shipped, and Delivered.</p>
+</div>
+</section>
+
+<section class="part" id="consignment">
+  <h2><span class="num">05 &middot; CONSIGNMENT</span>Your stock, available to the network</h2>
+
+  <div class="task">
+  <h3>What it does</h3>
+  <p>You list your stock at your own price and make it available across the Kickz Caviar network. Buyers can discover your pairs and make offers on them, while your listings are also automatically offered on matching Want To Buys when there is an opportunity.</p>
+
+  <p>When a deal matches your price, you still confirm the sale before it moves forward. This means your stock can actively reach demand across the network without you having to constantly watch Want To Buys or place offers yourself.</p>
+
+  <p>Your listings are also be published directly on the websites of online stores connected to us, making your pairs available to their customers as part of the store's inventory. <strong>One listing, multiple ways to sell.</strong></p>
+</div>
+
+    <div class="note">
+  <strong>Price matters.</strong> Your pair is only shown on a connected store's website when your asking price fits within that store's pricing. If it doesn't, the listing won't be shown there at all. A competitive price gives your stock more exposure and more opportunities to sell.
+</div>
+
+    <p class="muted">Consignment has to be switched on for your profile. Not a consignor yet? There is a <em>Become a consignor</em> link on your dashboard to apply.</p>
+
+  <div class="task">
+  <h3>List only what you can deliver</h3>
+  <p>Consignment relies on accurate inventory. When you list a pair, buyers and connected stores treat it as available at the price you've set.</p>
+
+  <p>Keep your inventory up to date and only list pairs you can actually deliver. Repeatedly failing to confirm listed stock, or not honoring your listed price, may result in <strong>removal from the consignment network</strong>. Reliable listings are what keep the network working for everyone.</p>
+</div>
+
+  <div class="task">
+    <h3>Adding one pair</h3>
+    <ol>
+      <li><span class="tab">Consignment → Inventory</span>, then <kbd class="gold">+ Add Stock</kbd>.</li>
+      <li><strong>SKU</strong> &mdash; for example <code>DM0879-100</code>. Unknown codes are refused.</li>
+      <li><strong>VAT Type</strong> &mdash; <kbd>Margin</kbd>, <kbd>VAT21</kbd> or <kbd>VAT0</kbd>. Select the VAT type that applies to the pair you're listing.</li>
+      <li><strong>Size EU</strong>, <strong>Selling Price</strong>, <strong>Quantity</strong>. One row per size. Add as many as you like under the same SKU.</li>
+    </ol>
+    <figure class="shot" id="shot-11" data-shot="11">
+      <div class="shot-frame"><span><b>Screenshot 11</b>The Add Stock window, filled in with one SKU and two size rows.<br><br>desktop: <span style="color:var(--gold)">shot-11.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-11-mobile.png</span></span></div>
+      <figcaption>One SKU per window, as many sizes underneath as you have.</figcaption>
+    </figure>
+  </div>
+
+  <div class="task">
+    <h3>Adding stock in bulk</h3>
+    <figure class="shot" id="shot-12" data-shot="12">
+      <div class="shot-frame"><span><b>Screenshot 12</b>The Upload CSV window with both mode cards visible: Add Stock and Replace Stock.<br><br>desktop: <span style="color:var(--gold)">shot-12.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-12-mobile.png</span></span></div>
+      <figcaption>Pick the mode before the file. This is the one place where you can wipe your own inventory.</figcaption>
+    </figure>
+    <ul>
+      <li><kbd>Add Stock</kbd> adds the quantities in the file <em>on top of</em> what you have.</li>
+      <li><kbd class="no">Replace Stock</kbd> deletes your whole inventory and puts the file in its place.</li>
+    </ul>
+    <p>Press <kbd>Download CSV Template</kbd>. The columns are fixed:</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Column</th><th>Example</th></tr></thead>
+        <tbody>
+          <tr><td>SKU</td><td>DM0879-100</td></tr>
+          <tr><td>Size EU</td><td>42 &nbsp;or&nbsp; 42 2/3</td></tr>
+          <tr><td>VAT Type</td><td>Margin</td></tr>
+          <tr><td>Selling Price (Suggested)</td><td>180</td></tr>
+          <tr><td>Quantity</td><td>1</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">The same SKU and size twice in one file gets you a warning before anything is saved.</p>
+  </div>
+
+  <div class="task">
+    <h3>Changing it later</h3>
+    <ul>
+      <li><kbd>Edit</kbd> changes the selling price or the quantity of a row.</li>
+      <li><kbd class="no">Delete</kbd> removes the row.</li>
+      <li>The search box filters what is on screen: product name, SKU, size and brand at the same time.</li>
+    </ul>
+    <figure class="shot" id="shot-13" data-shot="13">
+      <div class="shot-frame"><span><b>Screenshot 13</b>The Inventory tab: a couple of rows, the Actions column with Edit and Delete, and the search box in frame.<br><br>desktop: <span style="color:var(--gold)">shot-13.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-13-mobile.png</span></span></div>
+      <figcaption>Your live list. What is here is what stores can see.</figcaption>
+    </figure>
+  </div>
+
+  <div class="task">
+    <h3>Offers arrive on their own</h3>
+    <p>This is what makes consignment different from Want To Buys. There you go looking and place an offer. Here <strong>the offers come to you</strong>. A store wants a pair you have listed, and it lands in <span class="tab">Consignment → Offers</span>.</p>
+    <p>From there it works like the Want To Buys offers tab: the same three filters, the same <kbd class="go">ACCEPT</kbd>, <kbd class="mid">Counter</kbd> and <kbd class="no">Deny</kbd>. After that comes <a href="#chain" data-goto-chain="cons" style="color:var(--gold)">the consignment chain</a>, which is one step longer than the others, because you still have to confirm you have the pair.</p>
+    <p class="muted">The count in the sidebar goes up when something needs you.</p>
+    <figure class="shot" id="shot-14" data-shot="14">
+      <div class="shot-frame"><span><b>Screenshot 14</b>Consignment → Offers on the <b>Countered</b> pill, one row with Accept / Counter / Deny in frame, sidebar visible so the counts show.<br><br>desktop: <span style="color:var(--gold)">shot-14.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-14-mobile.png</span></span></div>
+      <figcaption>These came to you. You listed the stock and a store answered.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="part" id="buying">
+  <h2><span class="num">06 &middot; BUYING</span>Sourcing pairs for yourself</h2>
+  <p>Switch the home page to <strong>Buying</strong> and you see what is available to you, instead of what we want from you.</p>
+
+  <div class="task">
+    <h3>Finding a pair</h3>
+    <p>Search by SKU or name, filter by brand, sort the same way as on the selling side. <strong>Buying Type</strong> sets the price scale you are shown: <kbd>All Types</kbd>, <kbd>B2B Only</kbd> or <kbd>Margin Only</kbd>.</p>
+    <p class="muted">B2B prices are shown without VAT and say so. Margin prices include it. Check which one you are looking at before you compare anything.</p>
+    <figure class="shot" id="shot-15" data-shot="15">
+      <div class="shot-frame"><span><b>Screenshot 15</b>The home page in Buying mode: the Buying Type selector, the search bar, and a few product cards.<br><br>desktop: <span style="color:var(--gold)">shot-15.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-15-mobile.png</span></span></div>
+      <figcaption>Same page, other direction.</figcaption>
+    </figure>
+  </div>
+
+  <div class="task">
+    <h3>Opening a product</h3>
+    <p>Click a product and you get every available size in one table. Five columns, and each one is worth reading:</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Column</th><th>What it tells you</th></tr></thead>
+        <tbody>
+          <tr><td>Size</td><td>EU size</td></tr>
+          <tr><td>Lowest Price</td><td>Cheapest one available in that size, in the scale you picked</td></tr>
+          <tr><td>ETA</td><td>How fast it ships. Normally 1&ndash;2 business days</td></tr>
+          <tr><td>Sources</td><td>How many sellers can supply it</td></tr>
+          <tr><td>Available Qty</td><td>How many pairs there are in total</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>Sources is the column most people miss.</strong> A size with several sources is much more likely to actually arrive: if the first seller cannot deliver, we can ask the others. One source is one person's word.</p>
+    <figure class="shot" id="shot-16" data-shot="16">
+      <div class="shot-frame"><span><b>Screenshot 16</b>An opened product with the size table visible: Size, Lowest Price, ETA, Sources, Available Qty, and the Buy / Offer buttons.<br><br>desktop: <span style="color:var(--gold)">shot-16.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-16-mobile.png</span></span></div>
+      <figcaption>Five numbers per size. Sources tells you how likely it is to land.</figcaption>
+    </figure>
+  </div>
+
+  <div class="task">
+    <h3>Buy or Offer</h3>
+    <ul>
+      <li><kbd class="gold">Buy</kbd> takes it at the listed price.</li>
+      <li><kbd>Offer</kbd> lets you name a lower amount and see whether anyone takes it.</li>
+    </ul>
+    <p class="muted">Neither one is final on the spot. The seller still has to confirm they really have the pair.</p>
+    <div class="note">
+      <strong>You are never leaning on one seller.</strong> Press Buy or Offer and we do not just forward it to the cheapest listing and hope. The same request goes out to every other seller who holds that size, and a want-to-buy is posted to the wider network at the same moment.<br><br>
+      So if that one listing turns out to be old, others are already working on it. That is why buying here is worth more than a screenshot of somebody's stock list.
+    </div>
+  </div>
+
+  <div class="task">
+    <h3>Not there? Post a Want To Buy</h3>
+    <p>If nobody is listing what you need, put out a request and let sellers come to you. It goes to every matching seller in our network.</p>
+    <ol>
+      <li>Press <kbd class="gold">Post WTBs</kbd>, then <kbd>+ Single WTB</kbd>. (<kbd>+ Bulk WTB</kbd> is the CSV route, below.)</li>
+      <li><strong>SKU</strong> and <strong>Size</strong>. A <strong>Max Price</strong> is optional: the most you are willing to pay. Sellers never see it. It only decides which offers reach you.</li>
+      <li><strong>Buying Type</strong> &mdash; choose which inventory types can match your Want To Buy and how your Max Price is interpreted: all inventory, B2B only, or Margin only.</li>
+    </ol>
+    <div class="note">
+  <strong>A Max Price is a ceiling, not a promise.</strong> Filling one in does not agree to anything and does not buy anything. You still decide on every offer, one by one. Leave it empty and every offer comes through, and you counter them down yourself.
+</div>
+    <p>Sourcing a whole list? <kbd>+ Bulk WTB</kbd> lets you upload a CSV with <code>SKU</code>, <code>Size</code> and an optional <code>Max Price</code>. Leave Max Price empty for any pair where you want to receive all offers, or leave the column out entirely. A CSV template is available to download.</p>
+    <figure class="shot" id="shot-17" data-shot="17">
+      <div class="shot-frame"><span><b>Screenshot 17</b>The Place Want To Buy window: SKU, Size, Max Price and Buying Type.<br><br>desktop: <span style="color:var(--gold)">shot-17.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-17-mobile.png</span></span></div>
+      <figcaption>Post once and let matching sellers across the network respond with their offers.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="part" id="buying-tabs">
+  <h2><span class="num">07 &middot; YOUR BUYING TABS</span>Track your requests and offers</h2>
+
+  <div class="task">
+    <h3>Open WTBs</h3>
+    <p><span class="tab">Buying → Open WTBs</span> shows all your active Want To Buys. If you sourced a pair elsewhere or no longer need it, simply <kbd class="no">Delete</kbd> the request. Active WTBs remain visible to sellers across the network, so keeping this list up to date prevents sellers from responding to pairs you no longer need.</p>
+    <figure class="shot" id="shot-18" data-shot="18">
+      <div class="shot-frame"><span><b>Screenshot 18</b>Buying → Open WTBs with a couple of requests and the Delete button visible.<br><br>desktop: <span style="color:var(--gold)">shot-18.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-18-mobile.png</span></span></div>
+      <figcaption>Your active Want To Buys, all managed from one place.</figcaption>
+    </figure>
+  </div>
+
+  <div class="task">
+    <h3>Offers on your requests</h3>
+    <p>Seller offers appear under <span class="tab">Buying → Offers</span>. Use the <span class="tab">Open</span>, <span class="tab">Countered</span> and <span class="tab">Denied</span> filters to keep track of each negotiation, and accept, counter or decline offers directly from your dashboard.</p>
+    <ul>
+      <li><kbd class="go">ACCEPT</kbd> accepts the seller's offer at the price shown.</li>
+      <li><kbd class="mid">Counter</kbd> sends the seller a counter offer.</li>
+      <li><kbd class="no">Deny</kbd> declines the seller's offer.</li>
+    </ul>
+  </div>
+
+  <div class="task">
+    <h3>Payments</h3>
+    <p>An accepted offer moves to <span class="tab">Buying → Payment Due</span>. A <strong>"!"</strong> appears next to the tab whenever a payment is waiting, so you can immediately see when something needs your attention.</p>
+    <ol>
+      <li>Press <kbd class="gold">Pay</kbd> and a Mollie payment page opens.</li>
+      <li>Complete the payment to move the deal forward.</li>
+    </ol>
+    <p class="muted">Each deal has its own payment link. If you close the payment page before completing it, you can simply use the Pay button again to reopen the same payment.</p>
+    <div class="note">
+      <strong>Your payment does not go directly to the seller.</strong> We hold the payment in escrow while the deal is being completed and only pay the seller once the deal has been successfully completed. This allows the seller to move forward while your payment remains protected throughout the process.
+    </div>
+    <p>After payment, you'll receive a request to provide a shipping label once the seller is ready to ship. From there, <a href="#chain" data-goto-chain="buy" style="color:var(--gold)">The Buying Chain</a> guides you through the remaining steps of the deal.</p>
+    <figure class="shot" id="shot-19" data-shot="19">
+      <div class="shot-frame"><span><b>Screenshot 19</b>Buying → Payment Due with a Pay button, sidebar in frame so the ! marker is visible.<br><br>desktop: <span style="color:var(--gold)">shot-19.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-19-mobile.png</span></span></div>
+      <figcaption>The exclamation mark shows that a payment is still due.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="part" id="chain">
+  <h2><span class="num">08 &middot; THE CHAIN</span>From agreement to completion</h2>
+  <p>The tabs in the sidebar are not categories, but steps in the deal process. A deal moves through them in order, and its current step shows you where it stands and who needs to act next. Select a deal type below to see how its Chain works.</p>
+
+  <div class="chain-switch">
+    <button type="button" data-chain="quick" aria-pressed="false">Quick Deals</button>
+    <button type="button" data-chain="wtb" aria-pressed="true">Want To Buys</button>
+    <button type="button" data-chain="cons" aria-pressed="false">Consignment</button>
+    <button type="button" data-chain="buy" aria-pressed="false">Buying</button>
+  </div>
+
+  <div class="chain-pane" data-pane="quick" hidden>
+  <ol class="chain">
+
+    <li>
+      <div>
+        <div class="tab">Open Claims</div>
+        <p>Your claim has its own Discord channel. <span class="act">Your turn:</span> press <kbd class="mid">DISCORD</kbd> in the Actions column to open it and continue the deal there.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Confirmed</div>
+        <p>The deal is confirmed. <span class="act">Your turn:</span> press <kbd class="gold">REQUEST LABEL</kbd> once the pair is ready to ship.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Label Requested</div>
+        <p>Your label request has been received. We'll prepare the shipping label for you.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Ready To Ship</div>
+        <p>Your shipping label is ready. <span class="act">Your turn:</span> <kbd>Download Label</kbd>, pack the pair as described below, and ship it.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Shipped</div>
+        <p>The pair is on its way. Press <kbd>Track</kbd> to open the carrier's tracking page. The status updates automatically.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Delivered</div>
+        <p>The pair has been delivered. The deal moves to <span class="tab">History → Sales</span>, where your payout is recorded.</p>
+      </div>
+    </li>
+
+  </ol>
+</div>
+
+  <div class="chain-pane" data-pane="wtb">
+  <ol class="chain">
+
+    <li>
+      <div>
+        <div class="tab">Offers</div>
+        <p>Your offer is waiting for the buyer's response. If they send a counter offer, <span class="act">your turn:</span> accept their price, counter it, or decline it.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Accepted</div>
+        <p>The buyer accepted your offer. <span class="act">Your turn:</span> press <kbd class="mid">DISCORD</kbd> to open the deal channel and continue from there. No additional confirmation is needed because the buyer accepted the price you offered.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Confirmed</div>
+        <p>The deal is confirmed. <span class="act">Your turn:</span> press <kbd class="gold">REQUEST LABEL</kbd> once the pair is ready to ship.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Label Requested</div>
+        <p>Your label request has been received. We'll prepare the shipping label for you.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Ready To Ship</div>
+        <p>Your shipping label is ready. <span class="act">Your turn:</span> <kbd>Download Label</kbd>, pack the pair as described below, and ship it.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Shipped</div>
+        <p>The pair is on its way. Press <kbd>Track</kbd> to open the carrier's tracking page. The status updates automatically.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Delivered</div>
+        <p>The pair has been delivered. The deal moves to <span class="tab">History → Sales</span>, where your payout is recorded.</p>
+      </div>
+    </li>
+
+  </ol>
+</div>
+
+  <div class="chain-pane" data-pane="cons" hidden>
+  <ol class="chain">
+
+    <li>
+      <div>
+        <div class="tab">Offers</div>
+        <p>A buyer has made an offer on your consignment stock. <span class="act">Your turn:</span> <kbd class="go">ACCEPT</kbd>, <kbd class="mid">Counter</kbd> or <kbd class="no">Deny</kbd>.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Accepted</div>
+        <p>A buyer accepted your listed price without any prior negotiation. <span class="act">Your turn:</span> press <kbd class="go">CONFIRM</kbd> to confirm the deal at the payout shown, or <kbd class="no">Deny</kbd> if the pair is no longer available.</p>
+        <p>If you previously sent a counter offer, this step is skipped. By countering, you've already confirmed your willingness to sell, so a buyer accepting your counter moves the deal directly to <span class="tab">Confirmed</span>.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Confirmed</div>
+        <p>The deal is confirmed. <span class="act">Your turn:</span> press <kbd class="gold">REQUEST LABEL</kbd> once the pair is ready to ship.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Label Requested</div>
+        <p>Your label request has been received. We'll prepare the shipping label for you.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Ready To Ship</div>
+        <p>Your shipping label is ready. <span class="act">Your turn:</span> <kbd>Download Label</kbd>, pack the pair as described below, and ship it.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Shipped</div>
+        <p>The pair is on its way. Press <kbd>Track</kbd> to open the carrier's tracking page. The status updates automatically.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Delivered</div>
+        <p>The pair has been delivered. The deal moves to <span class="tab">History → Sales</span>, where your payout is recorded.</p>
+      </div>
+    </li>
+
+  </ol>
+</div>
+
+  <div class="chain-pane" data-pane="buy" hidden>
+  <ol class="chain">
+
+    <li>
+      <div>
+        <div class="tab">Open WTBs</div>
+        <p>Your active Want To Buys are live across the network. No action is needed while you wait for offers. Delete any requests you no longer need.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Offers</div>
+        <p>A seller has made you an offer. <span class="act">Your turn:</span> <kbd class="go">ACCEPT</kbd>, <kbd class="mid">Counter</kbd> or <kbd class="no">Deny</kbd>.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Accepted</div>
+        <p>The deal is waiting for the seller to confirm the pair. No action is needed from you at this stage.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Payment Due</div>
+        <p>The seller has confirmed the deal. <span class="act">Your turn:</span> press <kbd class="gold">Pay</kbd> to complete the payment and move the deal forward. A <strong>!</strong> appears next to this tab whenever a payment is waiting.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Confirmed</div>
+        <p>Payment is complete and the deal is confirmed. The seller can now prepare the pair for shipping.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Label Requested</div>
+        <p>The seller is ready to ship and has requested a shipping label. <span class="act">Your turn:</span> press <kbd class="gold">Upload</kbd> to provide the label.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Ready to Ship</div>
+        <p>Your shipping label has been provided to the seller. The pair is now ready to be packed and shipped.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Shipped</div>
+        <p>The pair is on its way. Press <kbd>Track</kbd> to open the carrier's tracking page. The status updates automatically.</p>
+      </div>
+    </li>
+
+    <li>
+      <div>
+        <div class="tab">Delivered</div>
+        <p>The pair has been delivered and the deal is complete. The seller can now be paid out.</p>
+      </div>
+    </li>
+
+  </ol>
+</div>
+
+  <div class="task" data-hide-on="buy">
+  <h3>The DISCORD button</h3>
+  <p>Every deal has its own Discord channel. Press <kbd class="mid">DISCORD</kbd> in the Actions column to open the channel linked to that specific deal.</p>
+
+  <div class="chain-pane" data-pane="quick" hidden>
+    <p><strong>Quick Deals.</strong> After claiming a deal, use its Discord channel to continue the deal and handle any deal-specific communication.</p>
+  </div>
+
+  <div class="chain-pane" data-pane="wtb">
+    <p><strong>Want To Buys.</strong> Once your offer is accepted, use the deal's Discord channel to continue the deal and handle any deal-specific communication.</p>
+  </div>
+
+  <div class="chain-pane" data-pane="cons" hidden>
+    <p><strong>Consignment.</strong> Use the deal's Discord channel for communication and updates related to that specific consignment deal.</p>
+  </div>
+
+  <p class="muted">Each channel belongs to one deal, keeping its communication and updates together in one place.</p>
+</div>
+
+  <div class="note" data-hide-on="buy">
+  <strong>Packing.</strong> Use a clean shipping box without branding, remove any price stickers or unnecessary markings, and do not include anything extra in the package. Pack the pair securely and make sure the shoebox and product are well protected during transit.
+</div>
+
+  <figure class="shot" id="shot-21" data-shot="21" data-hide-on="buy">
+    <div class="shot-frame"><span><b>Screenshot 21</b>Ready To Ship with the Download Label button, and the Packaging Instructions window open.<br><br>desktop: <span style="color:var(--gold)">shot-21.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-21-mobile.png</span></span></div>
+    <figcaption>The label and the rules, in the same place.</figcaption>
+  </figure>
+
+  <div class="task">
+    <h3>Something went wrong?</h3>
+
+    <div class="chain-pane" data-pane="quick" hidden>
+  <p>Go to <span class="tab">History → Sales</span>, find the deal and press <kbd>Report Issue</kbd> to describe the problem. You can follow the issue and our response under <span class="tab">History → Issues</span>.</p>
+</div>
+
+<div class="chain-pane" data-pane="wtb">
+  <p>Go to <span class="tab">History → Sales</span>, find the deal and press <kbd>Report Issue</kbd> to describe the problem. You can follow the issue and our response under <span class="tab">History → Issues</span>.</p>
+</div>
+
+<div class="chain-pane" data-pane="cons" hidden>
+  <p>Go to <span class="tab">History → Sales</span>, find the deal and press <kbd>Report Issue</kbd> to describe the problem. You can follow the issue and our response under <span class="tab">History → Issues</span>.</p>
+</div>
+
+<div class="chain-pane" data-pane="buy" hidden>
+  <p>Go to <span class="tab">History → Buying</span>, find the purchase and press <kbd>Report Issue</kbd> to describe the problem. You can follow the issue and our response under <span class="tab">History → Issues</span>.</p>
+</div>
+  </div>
+</section>
+
+<section class="part" id="tips">
+  <h2><span class="num">09 &middot; WORTH KNOWING</span>Small things that save time</h2>
+
+  <div class="task">
+    <ul>
+
+      <li>
+        <strong>The sidebar counts are live.</strong>
+        The number next to each tab shows how many deals are currently in that step of the process.
+      </li>
+
+      <li>
+        <strong>Your search stays active when switching tabs.</strong>
+        If a tab looks unexpectedly empty, check the search box and clear it with the <kbd>&times;</kbd>.
+      </li>
+
+      <li>
+        <strong>Set your views before comparing prices.</strong>
+        Payout View controls how payouts are displayed when selling, while Buying Type determines which inventory types you see when buying.
+      </li>
+
+      <li>
+        <strong>Prices may sometimes include cents.</strong>
+        Most offers are entered as whole euros, but VAT conversions can result in amounts such as €102.10. This is normal.
+      </li>
+
+      <li>
+        <strong>Sizes are shown in EU sizing.</strong>
+        Brand-specific fractions are kept as they are, such as <code>42 2/3</code> instead of <code>42.67</code>.
+      </li>
+
+      <li>
+        <strong>Choose the correct VAT type when selling.</strong>
+        The VAT type should match the VAT treatment of the pair and directly affects how your payout is calculated.
+      </li>
+
+      <li>
+        <strong>Always respond to the current offer.</strong>
+        When an offer is replaced by a newer one, the previous offer becomes inactive and is shown in grey.
+      </li>
+
+      <li>
+        <strong>Discord actions are connected to the portal.</strong>
+        Accepting or responding to a deal through its Discord channel updates the same deal in your dashboard, so you do not need to repeat the action in the portal.
+      </li>
+
+    </ul>
+  </div>
+</section>
+
+<footer>
+  See something that does not match this guide? Let us know on Discord. The portal is continuously improving, and we'll keep this guide updated along with it.
+</footer>
+
+</div>
+
+<script>
+  // Screenshots appear as soon as the files are in /guide/.
+  //
+  // Each slot keeps its placeholder until the file actually exists, so
+  // dropping shot-04.png into the folder is all it takes - no edit here.
+  // Checked by loading it: a missing file fails, a present one does not,
+  // and that is the only question worth asking.
+  //
+  // The phone version is optional. Without it the desktop shot is shown on
+  // phones too - smaller, but present.
+  function loads(url) {
+    return new Promise((done) => {
+      const img = new Image();
+      img.onload = () => done(true);
+      img.onerror = () => done(false);
+      img.src = url;
+    });
+  }
+
+  document.querySelectorAll("figure.shot[data-shot]").forEach(async (figure) => {
+    const nr = figure.dataset.shot;
+    const desktop = "/guide/shot-" + nr + ".png";
+    const phone = "/guide/shot-" + nr + "-mobile.png";
+
+    if (!(await loads(desktop))) return;
+
+    const alt = figure.querySelector("figcaption")?.textContent.trim() || "";
+    const hasPhone = await loads(phone);
+
+    const picture = document.createElement("picture");
+
+    if (hasPhone) {
+      const source = document.createElement("source");
+      source.media = "(max-width: 620px)";
+      source.srcset = phone;
+      picture.appendChild(source);
+    }
+
+    const img = document.createElement("img");
+    img.src = desktop;
+    img.alt = alt;
+    img.loading = "lazy";
+    picture.appendChild(img);
+
+    figure.querySelector(".shot-frame")?.replaceWith(picture);
+  });
+
+  // The chains share everything but their opening steps. A switch rather
+  // than four separate lists, so nobody reads the wrong one - and the links
+  // inside the chapters set it to the right one on the way in.
+  const chainButtons = document.querySelectorAll("[data-chain]");
+  const chainPanes = document.querySelectorAll("[data-pane]");
+
+  // Blocks that do not apply to a chain disappear entirely, rather than
+  // showing a paragraph explaining that there is nothing to show.
+  const chainHideable = document.querySelectorAll("[data-hide-on]");
+
+  function showChain(which) {
+    chainButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.chain === which)));
+    chainPanes.forEach((p) => { p.hidden = p.dataset.pane !== which; });
+    chainHideable.forEach((el) => { el.hidden = el.dataset.hideOn.split(" ").includes(which); });
+  }
+
+  chainButtons.forEach((b) => b.addEventListener("click", () => showChain(b.dataset.chain)));
+
+  document.querySelectorAll("[data-goto-chain]").forEach((a) => {
+    a.addEventListener("click", () => showChain(a.dataset.gotoChain));
+  });
+
+  /* Click-to-zoom. Bound once on the page rather than per image, so a
+     screenshot that only appears later - the loader above swaps them in
+     when the files exist - is covered without rebinding anything. */
+  (function () {
+    var box = null;
+    var shown = null;
+
+    function close() {
+      if (box) box.hidden = true;
+      document.body.style.overflow = "";
+    }
+
+    function open(src, alt) {
+      if (!box) {
+        box = document.createElement("div");
+        box.className = "lightbox";
+        box.hidden = true;
+
+        shown = document.createElement("img");
+
+        var cross = document.createElement("button");
+        cross.className = "lightbox-close";
+        cross.type = "button";
+        cross.setAttribute("aria-label", "Close");
+        cross.textContent = "\u00d7";
+
+        box.appendChild(shown);
+        box.appendChild(cross);
+        document.body.appendChild(box);
+
+        // Anywhere but the image itself closes it, which is what people try
+        // first.
+        box.addEventListener("click", close);
+      }
+
+      shown.src = src;
+      shown.alt = alt || "";
+      box.hidden = false;
+
+      // Otherwise the page scrolls behind the overlay under the cursor.
+      document.body.style.overflow = "hidden";
+    }
+
+    document.addEventListener("click", function (event) {
+      if (window.innerWidth < 769) return;
+
+      var img = event.target.closest("figure.shot img");
+      if (!img) return;
+
+      open(img.currentSrc || img.src, img.alt);
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") close();
+    });
+  })();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="icon" type="image/png" href="https://i.imgur.com/gRmfHif.png">
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <title>Kickz Caviar Portal</title>
+  <link rel="stylesheet" href="/styles.css"/>
+</head>
+<body>
+
+  <header class="topbar">
+
+    <div class="topbar-row">
+  
+      <div class="brand">
+        <img
+          src="https://i.imgur.com/gRmfHif.png"
+          alt="Kickz Caviar"
+          class="kc-header-logo"
+        />
+      </div>
+  
+      <div class="header-auth">
+        <!-- Before Sign up, so someone who is not signed in yet can read how
+             this works before making a profile. New tab on purpose: the guide
+             is meant to be kept open alongside. -->
+        <a
+          class="guide-btn"
+          href="/guide"
+          target="_blank"
+          rel="noopener"
+        >
+          GUIDE
+        </a>
+        <a
+          class="signup-btn"
+          href="/signup"
+        >
+          SIGN UP
+        </a>
+  
+        <button class="login-btn" type="button">
+          LOGIN
+        </button>
+  
+        <a class="profile-btn hidden" href="/dashboard" aria-label="Open dashboard">
+          <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true">
+            <path
+              d="M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10Z"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.4"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </a>
+      </div>
+  
+    </div>
+  
+    <div class="main-toggle">
+      <button class="toggle-btn active" data-main-mode="selling">Selling</button>
+      <button class="toggle-btn" data-main-mode="buying">Buying</button>
+    </div>
+  
+  </header>
+
+  <main class="page">
+    <section class="hero">
+      <div class="hero-content">
+        <div class="hero-title-row">
+          <div class="hero-copy">
+            <h2>Sell inventory directly to Kickz Caviar</h2>
+            <p>Claim Quick Deals instantly or place offers on active Want To Buys.</p>
+          </div>
+      
+          <button class="post-wtb-card hidden" id="openMemberWtbModalBtn" type="button">
+            <span class="post-wtb-icon">+</span>
+          
+            <span class="post-wtb-copy">
+              <strong>Post WTBs</strong>
+
+              <span>Looking for a specific pairs?</span>
+              <span>Receive offers directly from sellers.</span>
+            </span>
+          </button>
+        </div>
+      
+        <p class="hero-consignor-cta hidden" id="heroConsignorCta">
+          Want to join the Kickz Caviar Consignment Network and have your stock listed directly as In-Stock items across our partner stores?
+          <a href="/consignment-application">Become a consignor now.</a>
+        </p>
+      </div>
+    </section>
+
+    <div class="market-top-row">
+      <section class="switch-group">
+        <div class="switch-label">Deal Type</div>
+    
+        <div class="market-tabs">
+          <button class="market-tab" data-market-type="quick">Quick Deals</button>
+          <button class="market-tab" data-market-type="wtb">Want To Buys</button>
+        </div>
+      </section>
+    
+      <section class="switch-group align-right">
+        <div class="switch-label">Payout View</div>
+    
+        <div class="price-view-toggle">
+          <button class="price-view-btn" data-price-view="margin">Margin / VAT21</button>
+          <button class="price-view-btn" data-price-view="vat0">VAT0</button>
+        </div>
+      </section>
+    </div>
+
+    <section class="toolbar">
+      <input id="searchInput" type="text" placeholder="Search SKU, product..." class="search-input" autocomplete="off" spellcheck="false"/>
+    
+      <select id="brandFilter" class="toolbar-select">
+        <option value="">All Brands</option>
+      </select>
+
+      <select id="sortFilter" class="toolbar-select">
+        <option value="newest">Newest → Oldest</option>
+        <option value="oldest">Oldest → Newest</option>
+        <option value="az">Alphabetical: A-Z</option>
+        <option value="za">Alphabetical: Z-A</option>
+        <option value="payout_low">Payout: Low to High</option>
+        <option value="payout_high">Payout: High to Low</option>
+      </select>
+
+      <div class="view-toggle">
+        <button class="view-btn active" data-view="cards">Cards</button>
+        <button class="view-btn" data-view="table">Table</button>
+      </div>
+    </section>
+
+    <section id="dealsGrid" class="deals-grid"></section>
+  </main>
+
+  <div id="loginModal" class="modal-backdrop hidden">
+    <div class="login-modal">
+      <button id="closeLoginModal" class="modal-close">×</button>
+  
+      <h2>Login</h2>
+  
+      <form id="loginForm">
+        <label>Email</label>
+        <input id="loginEmail" type="email" required placeholder="you@example.com" />
+      
+        <label>Password</label>
+        <input id="loginPassword" type="password" required />
+      
+        <button type="button" id="forgotPasswordBtn" class="forgot-password-btn">
+          First time login or forgot password?
+        </button>
+      
+        <button type="submit" class="modal-submit login-submit-btn">
+          LOGIN
+        </button>
+      
+        <!-- CHANGED - pointed at the Discord registration channel, from before
+               the portal had a sign-up form of its own. Someone landed in Discord
+               instead of on the form, with no way to tell that was a detour.
+               Internal page, so same tab: this is a step in a flow, not a
+               reference to keep open alongside. -->
+          <a class="modal-signup-btn" href="/signup">SIGN UP</a>
+      
+        <div id="loginError" class="login-error"></div>
+      </form>
+      
+      <form id="forgotForm" class="hidden">
+        <label>Email</label>
+        <input id="forgotEmail" type="email" required placeholder="you@example.com" />
+      
+        <button type="submit" class="modal-submit login-submit-btn">
+          Send Password Link
+        </button>
+      
+        <button type="button" id="backToLoginBtn" class="forgot-password-btn">
+          Back to login
+        </button>
+      
+        <div id="forgotError" class="login-error"></div>
+      </form>
+    </div>
+  </div>
+
+  <div id="claimModal" class="modal-backdrop hidden">
+    <div class="login-modal">
+      <button id="closeClaimModal" class="modal-close">×</button>
+  
+      <h2>Confirm VAT Type</h2>
+      <p>This affects your payout and invoice handling. Choose carefully.</p>
+
+      <div class="vat-label">SELECT VAT TYPE</div>
+  
+      <div class="vat-options">
+        <button class="vat-option active" data-vat="Margin">Margin</button>
+        <button class="vat-option" data-vat="VAT21">VAT21</button>
+        <button class="vat-option" data-vat="VAT0">VAT0</button>
+      </div>
+  
+      <button id="confirmClaimBtn" class="modal-submit">
+        Confirm Claim
+      </button>
+  
+      <div id="claimError" class="login-error"></div>
+    </div>
+  </div>
+
+  <div id="buyingProductModal" class="modal-backdrop hidden">
+    <div class="login-modal buying-product-modal">
+      <button id="closeBuyingProductModal" class="modal-close">×</button>
+  
+      <div id="buyingProductModalContent"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="buyingActionModal">
+    <div class="login-modal buying-action-modal">
+      <button class="modal-close" id="closeBuyingActionModal" type="button">×</button>
+  
+      <h2 id="buyingActionTitle">Purchase Summary</h2>
+  
+      <div id="buyingActionContent"></div>
+  
+      <div class="buying-action-buttons">
+        <button class="table-btn offer-btn" id="cancelBuyingActionBtn" type="button">Cancel</button>
+        <button class="table-btn" id="submitBuyingActionBtn" type="button">Submit</button>
+      </div>
+  
+      <div class="login-error" id="buyingActionError"></div>
+    </div>
+  </div>
+
+  <div id="memberWtbChoiceModal" class="modal-backdrop hidden">
+    <div class="login-modal">
+      <button id="closeMemberWtbChoiceModal" class="modal-close" type="button">×</button>
+  
+      <h2>Post Want To Buys</h2>
+      <p>Choose how you want to post your WTB.</p>
+  
+      <button id="openSingleMemberWtbBtn" class="modal-submit" type="button">
+        + Single WTB
+      </button>
+  
+      <button id="openBulkMemberWtbBtn" class="modal-submit" type="button" style="margin-top:12px;">
+        + Bulk WTB
+      </button>
+    </div>
+  </div>
+  
+  <div id="memberWtbModal" class="modal-backdrop hidden">
+    <div class="login-modal">
+      <button id="closeMemberWtbModal" class="modal-close" type="button">×</button>
+  
+      <h2>Place Want To Buy</h2>
+      <p>Place one request and receive offers from sellers.</p>
+  
+      <label class="offer-label">SKU</label>
+      <input id="memberWtbSkuInput" class="offer-input" type="text" placeholder="DD1391-100" />
+  
+      <label class="offer-label">SIZE</label>
+      <input id="memberWtbSizeInput" class="offer-input" type="text" placeholder="43" />
+  
+      <label class="offer-label">MAX PRICE <span class="offer-label-optional">optional</span></label>
+      <input id="memberWtbMaxPriceInput" class="offer-input" type="text" inputmode="numeric" placeholder="Leave empty for no ceiling" />
+  
+      <label class="offer-label">BUYING TYPE</label>
+      <select id="memberWtbInventoryTypeInput" class="offer-input">
+        <option value="all">All Types</option>
+        <option value="b2b">B2B Only</option>
+        <option value="private">Margin Only</option>
+      </select>
+
+      <p id="memberWtbScaleHint" class="buying-offer-scale-hint"></p>
+  
+      <button id="submitMemberWtbBtn" class="modal-submit">Submit</button>
+      <div id="memberWtbError" class="login-error"></div>
+    </div>
+  </div>
+  
+  <div id="memberWtbCsvModal" class="modal-backdrop hidden">
+    <div class="login-modal">
+      <button id="closeMemberWtbCsvModal" class="modal-close" type="button">×</button>
+  
+      <h2>Bulk Post WTBs</h2>
+      <p>Upload multiple Want To Buys using a CSV file. Columns: <strong>SKU</strong>, <strong>Size</strong>, <strong>Max Price (optional)</strong>. Leave the price empty
+        on any row you do not want a ceiling on.</p>
+  
+      <label class="offer-label">BUYING TYPE</label>
+      <select id="memberWtbCsvInventoryTypeInput" class="offer-input">
+        <option value="all">All Types</option>
+        <option value="b2b">B2B Only</option>
+        <option value="private">Margin Only</option>
+      </select>
+
+      <p id="memberWtbCsvScaleHint" class="buying-offer-scale-hint"></p>
+  
+      <a
+        id="memberWtbTemplateDownload"
+        class="member-wtb-template-btn"
+        href="/templates/member-wtb-template.csv"
+        download
+      >
+        Download CSV Template
+      </a>
+  
+      <label class="offer-label">CSV FILE</label>
+      <input id="memberWtbCsvInput" class="offer-input" type="file" accept=".csv,text/csv" />
+  
+      <button id="submitMemberWtbCsvBtn" class="modal-submit" type="button">
+        Upload CSV
+      </button>
+  
+      <div id="memberWtbCsvPreview" class="login-error" style="color:#58d86a;"></div>
+      <div id="memberWtbCsvError" class="login-error"></div>
+    </div>
+  </div>
+
+  <div id="offerModal" class="modal-backdrop hidden">
+    <div class="login-modal">
+      <button id="closeOfferModal" class="modal-close">×</button>
+  
+      <h2>Place Offer</h2>
+      <p>Enter your best offer.</p>
+  
+      <label class="offer-label">OFFER AMOUNT</label>
+      <input
+        id="offerAmountInput"
+        class="offer-input"
+        type="text"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        placeholder="Enter your offer"
+      />
+  
+      <div class="vat-label">SELECT VAT TYPE</div>
+  
+      <div class="vat-options">
+        <button class="vat-option offer-vat-option active" data-vat="Margin">Margin</button>
+        <button class="vat-option offer-vat-option" data-vat="VAT21">VAT21</button>
+        <button class="vat-option offer-vat-option" data-vat="VAT0">VAT0</button>
+      </div>
+  
+      <button id="confirmOfferBtn" class="modal-submit">Submit Offer</button>
+  
+      <div id="offerError" class="login-error"></div>
+    </div>
+  </div>
+
+  <script src="/discord-gate.js"></script>
+  <script src="/app.js?v=20260618-1"></script>
+</body>
+</html>
