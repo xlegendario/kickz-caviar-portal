@@ -35242,9 +35242,35 @@ app.post(
         );
       }
 
-      const payment = await mollieRequest(
-        `/payments/${encodeURIComponent(paymentId)}`
-      );
+      /*
+        A payment link reports under its own id.
+
+        Mollie calls this url with "pl_..." for links, and asking /payments
+        for that fails - which it did, in a loop, because a 500 tells Mollie
+        to try again. A link has no status of its own, only paidAt, so it is
+        translated into the shape the rest of this handler already reads.
+
+        Not paid yet means a customer started and did not finish. Nothing to
+        do: the link stays open and they can come back to it.
+      */
+      let payment;
+
+      if (paymentId.startsWith("pl_")) {
+        const link = await mollieRequest(
+          `/payment-links/${encodeURIComponent(paymentId)}`
+        );
+
+        payment = {
+          id: link?.id || paymentId,
+          status: link?.paidAt ? "paid" : "open",
+          description: link?.description || "",
+          metadata: {}
+        };
+      } else {
+        payment = await mollieRequest(
+          `/payments/${encodeURIComponent(paymentId)}`
+        );
+      }
 
       const metadata = payment?.metadata || {};
       const hasMetadata =
