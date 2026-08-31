@@ -26282,6 +26282,23 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
           memberFields
         );
 
+        // Settled BEFORE finalising, not after: the finalisation prices the
+        // buyer from the accepted round, so an Open round sends it back to
+        // Max Price. That is the 140 instead of 147.10.
+        if (acceptedCounterOfferRecordId) {
+          const settledAt = new Date().toISOString();
+
+          await airtable(COUNTER_OFFERS_TABLE)
+            .update(acceptedCounterOfferRecordId, {
+              "Status": "Accepted",
+              "Accepted At": settledAt,
+              "Closed At": settledAt
+            })
+            .catch((err) =>
+              console.error("Could not settle the accepted round:", err)
+            );
+        }
+
         const settled = await confirmConsignmentSellerOffer(sellerOfferRecordId, {
           payout: negotiatedPayout,
           vatType: sellerVatType,
