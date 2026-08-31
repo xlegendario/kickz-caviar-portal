@@ -28615,6 +28615,119 @@ function bindSellerOnboarding() {
 // command: that would have to be registered through guild.commands.set(),
 // which replaces EVERY command this application has in the guild -
 // including the deal bot /mystats. You call this endpoint once.
+/*
+ * Posts an embed with link buttons into a channel.
+ *
+ * A webhook cannot carry buttons - Discord only allows components on a
+ * message from an application - which is why an announcement built in
+ * Discohook can never have one. This bot is an application, so it can.
+ *
+ * Only link buttons are accepted, deliberately. Any other kind fires an
+ * interaction that something has to answer, and nothing here would; the
+ * button would sit there spinning until Discord gave up. A link needs no
+ * answer at all.
+ *
+ * Text and buttons come from the request rather than from here, so the
+ * wording of a channel can be changed without a deploy.
+ */
+app.post("/api/internal/post-embed", async (req, res) => {
+  const secret = asText(req.headers["x-kc-secret"]);
+
+  if (!process.env.KC_PORTAL_SECRET || secret !== process.env.KC_PORTAL_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const channelId = asText(req.body?.channel_id);
+  const description = asText(req.body?.description);
+
+  if (!channelId) {
+    return res.status(400).json({ error: "Missing channel_id" });
+  }
+
+  if (!description) {
+    return res.status(400).json({ error: "Missing description" });
+  }
+
+  const rawButtons = Array.isArray(req.body?.buttons) ? req.body.buttons : [];
+
+  const buttons = rawButtons
+    .map((button) => ({
+      label: asText(button?.label),
+      url: asText(button?.url)
+    }))
+    .filter((button) => button.label && /^https:\/\//.test(button.url));
+
+  if (rawButtons.length && buttons.length !== rawButtons.length) {
+    return res.status(400).json({
+      error: "Every button needs a label and an https url"
+    });
+  }
+
+  // Discord allows five per row, and a row is all this needs.
+  if (buttons.length > 5) {
+    return res.status(400).json({ error: "At most five buttons" });
+  }
+
+  try {
+    await initKickzDealDiscord();
+
+    const channel = await kickzDealDiscordClient.channels
+      .fetch(channelId)
+      .catch(() => null);
+
+    if (!channel) {
+      return res.status(404).json({
+        error: "The bot cannot see that channel",
+        details: channelId
+      });
+    }
+
+    const embed = {
+      description,
+      // The portal yellow, unless the caller wants another.
+      color: Number.isFinite(Number(req.body?.color))
+        ? Number(req.body.color)
+        : 0xffd300
+    };
+
+    const title = asText(req.body?.title);
+
+    if (title) embed.title = title;
+
+    const message = await channel.send({
+      embeds: [embed],
+      ...(buttons.length
+        ? {
+            components: [
+              {
+                type: 1,
+                // style 5 is a link button: it carries a url instead of a
+                // custom_id, and clicking it opens the page rather than
+                // calling back here.
+                components: buttons.map((button) => ({
+                  type: 2,
+                  style: 5,
+                  label: button.label,
+                  url: button.url
+                }))
+              }
+            ]
+          }
+        : {})
+    });
+
+    console.log(
+      `Posted an embed to ${channelId} with ${buttons.length} button(s): ${message.id}`
+    );
+
+    res.json({ ok: true, message_id: message.id, channel_id: channelId });
+  } catch (err) {
+    console.error("Failed to post embed:", err);
+
+    res.status(500).json({ error: "Failed to post embed", details: err.message });
+  }
+});
+
 app.post("/api/internal/post-registration-embed", async (req, res) => {
   const secret = asText(req.headers["x-kc-secret"]);
 
