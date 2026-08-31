@@ -31330,6 +31330,22 @@ async function getStoreMarginForSeller(sellerRecordId) {
 
   const mf = merchant.fields || {};
 
+  /*
+    Only a store that also receives orders through the integration.
+
+    The point of this is that the shop and an API order quote the same pair
+    the same way. A manual-only store has no API orders to agree with, so
+    there is nothing to line up and it keeps the flat mark-up.
+
+    Not left to "has a margin filled in", which was the first version: Test
+    Store Auto-Supply is manual and has 7.5% sitting in its record, so that
+    test would have handed the store margin to exactly the kind of store it
+    was meant to leave alone.
+  */
+  const intake = asText(mf["Order Intake"]).trim().toLowerCase();
+
+  if (intake !== "api" && intake !== "both" && intake !== "") return null;
+
   return {
     method: asText(mf["Offer Method"]),
     percentage: Number(mf["Offer Percentage"]),
