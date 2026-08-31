@@ -32159,7 +32159,18 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       } else if (vatType === 'VAT21') {
         finalBuyingPrice = (purchasePrice / 1.21) + offerMargin;
       } else {
-        finalBuyingPrice = offerToBuyer || purchasePrice + offerMargin;
+        // CHANGED - margin goods carry no VAT to reclaim, so the mark-up we
+        // add IS what we keep. The setting means a NET amount everywhere
+        // else - the shop quotes markup x 1.21 and so does the negotiation -
+        // and this branch was still adding it flat, earning 8.26 on a 10.
+        //
+        // Through the shared function now, so the offer the buyer was shown
+        // and the price he is charged cannot drift apart again. The Airtable
+        // "Offer To Buyer" formula still wins when it is filled, and its own
+        // Margin branch needs the same x 1.21 to agree with this.
+        finalBuyingPrice =
+          offerToBuyer ||
+          calculateMemberWtbBuyerEquivalent(purchasePrice, vatType, memberFields);
       }
 
       // CHANGED - the whole euro belongs on the invoice, not on the net.
