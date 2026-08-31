@@ -26201,6 +26201,45 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
     // type is somehow unreadable (shouldn't happen).
     const overrideVatType = sellerVatType || buyerFacingVatType;
 
+    /*
+      What the seller actually agreed to, read from the round itself.
+
+      This used to arrive as override_price from the browser. A price the
+      client names is the wrong source for what we pay a consignor, and
+      when it failed to arrive at all the code fell back to his original
+      listing - on MWTB-000414 that turned an agreed 135 into 155.
+
+      A Seller Counter Price also means something else: the seller moved
+      himself. See the branch below.
+    */
+    let negotiatedPayout = null;
+
+    if (acceptedCounterOfferRecordId) {
+      const acceptedRound = await airtable(COUNTER_OFFERS_TABLE)
+        .find(acceptedCounterOfferRecordId)
+        .catch(() => null);
+
+      const rf = acceptedRound?.fields || {};
+      const sellerCountered = numberValue(rf["Seller Counter Price"]);
+
+      negotiatedPayout = sellerCountered > 0
+        ? sellerCountered
+        : (numberValue(rf["Counter Payout"]) || null);
+
+      if (negotiatedPayout) {
+        console.log(
+          `Accept ${memberWtbRecordId}: agreed payout ${negotiatedPayout} ` +
+            `from round ${acceptedCounterOfferRecordId}` +
+            (sellerCountered > 0 ? " (seller countered himself)" : "")
+        );
+      }
+    }
+
+    // The seller moved himself, so he has already said he holds the pair.
+    const sellerNegotiatedInPerson = Number.isFinite(negotiatedPayout) &&
+      negotiatedPayout > 0 &&
+      Boolean(acceptedCounterOfferRecordId);
+
     // A consignment-backed offer gets a confirmation request, not a channel.
     //
     // The buyer has just accepted, which is the moment the consignor may be
@@ -26213,11 +26252,22 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
         .find(sellerOfferRecordId)
         .catch(() => null);
 
-      if (asText(offerForConsignment?.fields?.["Consignment Inventory ID"])) {
+      /*
+        The confirmation exists for an instant Buy: nobody asked the
+        consignor anything, so we cannot assume he still holds the pair.
+
+        A consignor who countered four times has already said so. Asking
+        again reopens a settled deal - and that is where the wrong price
+        crept back in. So he only gets the question when he never moved.
+      */
+      if (
+        asText(offerForConsignment?.fields?.["Consignment Inventory ID"]) &&
+        !sellerNegotiatedInPerson
+      ) {
         const asked = await askConsignorToConfirmMemberWtbOffer({
           memberWtbRecordId,
           sellerOfferRecordId,
-          acceptedPayout: Number(overridePrice) || null
+          acceptedPayout: negotiatedPayout || Number(overridePrice) || null
         });
 
         if (!asked.ok) {
@@ -26288,9 +26338,12 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
         member_wtb_record_id: memberWtbRecordId,
         ...(sellerOfferRecordId ? { seller_offer_record_id: sellerOfferRecordId } : {}),
         ...(acceptedCounterOfferRecordId ? { counter_offer_record_id: acceptedCounterOfferRecordId } : {}),
-        ...(overridePrice !== undefined && overridePrice !== null && overridePrice !== ""
-          ? { override_price: Number(overridePrice), override_vat_type: overrideVatType }
-          : {})
+        // The round wins over anything the browser sent.
+        ...(negotiatedPayout
+          ? { override_price: negotiatedPayout, override_vat_type: overrideVatType }
+          : overridePrice !== undefined && overridePrice !== null && overridePrice !== ""
+            ? { override_price: Number(overridePrice), override_vat_type: overrideVatType }
+            : {})
       })
     });
 
