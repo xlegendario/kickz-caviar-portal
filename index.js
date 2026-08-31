@@ -31397,6 +31397,15 @@ function getStoreConsignmentShopPrice({
 
   if (withMargin === null) return null;
 
+  // On margin goods there is no VAT to reclaim, so what we add is what we
+  // keep - a 10 earns 10, where the same 10 on a VAT21 pair sits on a net
+  // figure and is grossed up with it. Scaled here so the net margin is the
+  // same whichever regime a pair carries, which is what the flat mark-up
+  // below has always done. Left out, a store on Both saw a margin pair for
+  // 60 where a manual store saw 63, and we earned the difference less.
+  const earned =
+    type === "Margin" ? base + (withMargin - base) * 1.21 : withMargin;
+
   // On the same 2.50 grid the offer side uses, BEFORE any VAT or rounding
   // to whole euros.
   //
@@ -31405,7 +31414,7 @@ function getStoreConsignmentShopPrice({
   // fifty cents cheaper in the shop than the offer for the same pair. That is
   // the gap a store would use instead of negotiating, and it is the whole
   // reason this exists.
-  const onGrid = roundToNearestStep(withMargin, 2.5);
+  const onGrid = roundToNearestStep(earned, 2.5);
 
   const showsVat =
     normalizeBuyingInventoryType(inventoryType) === "all" && type !== "Margin";
