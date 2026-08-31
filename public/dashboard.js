@@ -370,6 +370,97 @@ let activeOfferStatusFilter = "open";
 // into that object's section totals (see setConsignmentCount).
 let dashboardPillCountsCache = {};
 
+/*
+ * The counts for the two pills you are not standing on.
+ *
+ * Loading a tab only ever learns the count of the filter it loaded, so
+ * the other two rendered blank until you had clicked them at least once.
+ * "Open 9" beside two empty pills reads as "nothing there", which is the
+ * opposite of what an unvisited pill means.
+ *
+ * So they are asked for directly. Only the counts are used - the rows
+ * themselves are not rendered - and a failure leaves that pill as it was
+ * rather than replacing a real number with a wrong one.
+ *
+ * Open is two sources merged, exactly as the loaders below do it, because
+ * a fresh offer and a seller who countered back both belong there.
+ */
+async function refreshInactivePillCounts({ cacheKey, scope }) {
+  if (!dashboardSeller?.id) return;
+
+  const isBuying = cacheKey === "buying:offers";
+
+  const scopeParam = scope ? { scope } : {};
+
+  const freshUrl = isBuying
+    ? `/api/dashboard/buying-offers?${new URLSearchParams({
+        seller_record_id: dashboardSeller.id
+      })}`
+    : `/api/dashboard/wtb-open-offers?${new URLSearchParams({
+        seller_record_id: dashboardSeller.id,
+        seller_id: dashboardSeller.seller_id,
+        ...scopeParam
+      })}`;
+
+  const roundsUrl = (filter) =>
+    isBuying
+      ? `/api/dashboard/buying-counter-offers?${new URLSearchParams({
+          seller_record_id: dashboardSeller.id,
+          filter
+        })}`
+      : `/api/dashboard/wtb-counter-offers?${new URLSearchParams({
+          seller_record_id: dashboardSeller.id,
+          filter,
+          ...scopeParam
+        })}`;
+
+  const countOf = async (url) => {
+    const response = await fetch(url);
+
+    if (!response.ok) throw new Error(`count request failed: ${response.status}`);
+
+    const data = await response.json();
+
+    return Number(data.count) || (data.items || []).length;
+  };
+
+  const counters = {
+    open: async () => {
+      const [fresh, rounds] = await Promise.all([
+        countOf(freshUrl),
+        countOf(roundsUrl("open"))
+      ]);
+
+      return fresh + rounds;
+    },
+    countered: () => countOf(roundsUrl("countered")),
+    denied: () => countOf(roundsUrl("denied"))
+  };
+
+  const inactive = Object.keys(counters).filter(
+    (key) => key !== activeOfferStatusFilter
+  );
+
+  await Promise.all(
+    inactive.map(async (key) => {
+      try {
+        const count = await counters[key]();
+
+        dashboardPillCountsCache[cacheKey] = {
+          ...(dashboardPillCountsCache[cacheKey] || {}),
+          [key]: count
+        };
+
+        document
+          .querySelectorAll(`[data-pill-count-key="${cacheKey}:${key}"]`)
+          .forEach((el) => { el.textContent = count; });
+      } catch (err) {
+        console.error(`Could not count the ${key} offers:`, err);
+      }
+    })
+  );
+}
+
 const dashboardTitle = document.getElementById("dashboardTitle");
 const dashboardSellerName = document.getElementById("dashboardSellerName");
 const dashboardSellerId = document.getElementById("dashboardSellerId");
@@ -4539,6 +4630,8 @@ async function loadDashboardData() {
         .querySelectorAll('[data-pill-count-key="buying:offers:open"]')
         .forEach((el) => { el.textContent = count; });
 
+      refreshInactivePillCounts({ cacheKey: "buying:offers" });
+
       return;
     }
 
@@ -4576,6 +4669,8 @@ async function loadDashboardData() {
     document
       .querySelectorAll(`[data-pill-count-key="buying:offers:${activeOfferStatusFilter}"]`)
       .forEach((el) => { el.textContent = count; });
+
+    refreshInactivePillCounts({ cacheKey: "buying:offers" });
 
     return;
   }
@@ -4641,6 +4736,8 @@ async function loadDashboardData() {
         open: count
       };
 
+      refreshInactivePillCounts({ cacheKey: pillCacheKey, scope: offerScope });
+
       // REVERTED - this used to write the Open pill count over the
       // section total, and that is what made the badge lie.
       //
@@ -4704,6 +4801,8 @@ async function loadDashboardData() {
     document
       .querySelectorAll(`[data-pill-count-key="${pillCacheKey}:${activeOfferStatusFilter}"]`)
       .forEach((el) => { el.textContent = count; });
+
+    refreshInactivePillCounts({ cacheKey: pillCacheKey, scope: offerScope });
 
     return;
   }
