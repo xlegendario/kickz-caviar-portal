@@ -2644,11 +2644,16 @@ function firstLinkedRecordId(value) {
  * sent something else entirely for the exact same moment. Same sender, same
  * question, two shapes.
  *
- * "compact" is kept because callers pass it, but it no longer changes the
- * wording: a shared deal channel and a private one both want the whole
- * story, and the difference was never worth two versions to maintain.
+ * One difference remains, and it earns its place: a seller who is being
+ * written to in a channel we just made for him has probably never sold
+ * through us before, so he gets the packaging rules with it. A consignor
+ * with his own channels has heard them.
+ *
+ * The flag used to be called "compact" and decided a whole second layout.
+ * It now says what it means - the channel is fresh - and only adds those
+ * three lines.
  */
-function buildMemberWtbReadyToShipEmbed({ memberFields, payout, compact = false }) {
+function buildMemberWtbReadyToShipEmbed({ memberFields, payout, freshChannel = false }) {
   const memberWtbId =
     asText(memberFields["Member WTB ID"]) ||
     asText(memberFields["WTB ID"]) ||
@@ -2677,7 +2682,16 @@ function buildMemberWtbReadyToShipEmbed({ memberFields, payout, compact = false 
       "**Price**",
       `${moneySmartValue(Number(payout || 0).toFixed(2))} (${vatType})`,
       "",
-      "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
+      "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible.",
+      ...(freshChannel
+        ? [
+            "",
+            "📬 **Packaging Instructions**",
+            "Use a clean, unbranded box.",
+            "Remove all price tags.",
+            "No extra items inside."
+          ]
+        : [])
     ].join("\n"),
     color: 0x2ecc71,
     footer: {
@@ -2693,7 +2707,7 @@ async function sendMemberWtbReadyToShipToChannel({
   memberWtbRecordId,
   memberFields,
   payout,
-  compact = false
+  freshChannel = false
 }) {
   const confirmedLine =
     `✅ Your Deal For ${asText(memberFields["SKU"]) || "—"} - ` +
@@ -2707,7 +2721,7 @@ async function sendMemberWtbReadyToShipToChannel({
       buildMemberWtbReadyToShipEmbed({
         memberFields,
         payout,
-        compact
+        freshChannel
       })
     ],
     components: [
@@ -3030,7 +3044,7 @@ async function sendMemberWtbDealUpdate(memberWtbRecordId) {
         memberWtbRecordId,
         memberFields: f,
         payout,
-        compact: true
+        freshChannel: true
       });
     }
 
@@ -3116,7 +3130,7 @@ async function sendMemberWtbDealUpdate(memberWtbRecordId) {
     memberWtbRecordId,
     memberFields: f,
     payout,
-    compact: true
+    freshChannel: true
   });
 
   const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
