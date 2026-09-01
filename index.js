@@ -34,8 +34,6 @@ import {
   verifySession
 } from "./lib/auth.js";
 
-
-
 import { discordMembershipGuard } from "./lib/discordGate.js";
 
 import {
@@ -10931,6 +10929,46 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         `from ${best.row.seller_id} (inventory ${best.row.id}) → Seller Offer ${createdOffer.id}` +
         (holdFromStore ? " [held from store]" : "")
     );
+
+    /*
+      The first offer on a want-to-buy that never named a ceiling.
+
+      A store that posts one without a Max Price gives us nothing to
+      derive its mark-up from at creation, so the field is left empty and
+      every reader falls back to the flat default. This is the first
+      moment a base exists: the seller has named a price, so the store
+      rule can finally be applied to something.
+
+      Written once and only while blank - a running negotiation keeps the
+      number it opened with, and a later seller asking more must not
+      quietly move what we earn.
+    */
+    if (source.kind === "member_wtb" && !numberValue(orderFields["Offer Margin"])) {
+      const wtbBuyerRecordId = firstLinkedRecordId(orderFields["Buyer Seller ID"]);
+
+      const firstOfferMargin = wtbBuyerRecordId
+        ? await getStoreOfferMarginSnapshot({
+            sellerRecordId: wtbBuyerRecordId,
+            sellerPrice: best.sellerPrice,
+            vatType: best.row.vat_type
+          })
+        : null;
+
+      if (firstOfferMargin) {
+        await airtable(MEMBER_WTBS_TABLE)
+          .update(source.recordId, { "Offer Margin": firstOfferMargin })
+          .catch((err) =>
+            console.error("Could not stamp the store margin on the want-to-buy:", err)
+          );
+
+        orderFields["Offer Margin"] = firstOfferMargin;
+
+        console.log(
+          `Member WTB ${source.recordId}: no ceiling was given, so the store margin ` +
+            `${firstOfferMargin} is taken from the first offer of ${best.sellerPrice}`
+        );
+      }
+    }
 
     const baseResponse = {
       ok: true,
@@ -31592,20 +31630,23 @@ async function getStoreMarginForSeller(sellerRecordId) {
   const mf = merchant.fields || {};
 
   /*
-    Only a store that also receives orders through the integration.
+    CHANGED - this used to refuse a store whose Order Intake was "Manual".
 
-    The point of this is that the shop and an API order quote the same pair
-    the same way. A manual-only store has no API orders to agree with, so
-    there is nothing to line up and it keeps the flat mark-up.
+    That gate existed because the first version keyed on "has a margin filled
+    in", and Test Store Auto-Supply was manual with 7.5% in its record - so
+    that test would have handed the store margin to exactly the kind of store
+    it was meant to leave alone. Reading Order Intake instead fixed that, but
+    it also settled a question nobody had asked: whether a manual store may
+    have its own mark-up at all. It may. A store that sells at high prices is
+    worth a wider margin whether its orders arrive through the integration or
+    by hand.
 
-    Not left to "has a margin filled in", which was the first version: Test
-    Store Auto-Supply is manual and has 7.5% sitting in its record, so that
-    test would have handed the store margin to exactly the kind of store it
-    was meant to leave alone.
+    No gate is needed now that the fields decide. storeMarginForward returns
+    null when there is no method, no percentage and no flat margin, and every
+    caller already falls back to the flat mark-up on null - which is what all
+    three manual stores have today, so nothing moves until their fields are
+    filled in.
   */
-  const intake = asText(mf["Order Intake"]).trim().toLowerCase();
-
-  if (intake !== "api" && intake !== "both" && intake !== "") return null;
 
   return {
     method: asText(mf["Offer Method"]),
@@ -31668,6 +31709,94 @@ async function getStoreOfferMarginSnapshot({
  * shop quoted - it sorts on price and shows the lowest. Picking any other
  * would snapshot a margin belonging to a pair the buyer never saw.
  */
+/*
+ * What the shop quotes for this pair, to this buyer.
+ *
+ * The lowest of what every matching source would be priced at, which is
+ * exactly what the shop puts on the card - it sorts on price and shows the
+ * cheapest. Run through the same function the product list uses, so the
+ * number here and the number on screen cannot be two different sums.
+ *
+ * Needed because Buy reads display_price off a source the shop already
+ * priced, while Offer filters its own list and has no such field.
+ */
+/*
+ * The margin hidden inside a store's own Max Price.
+ *
+ * On an open want-to-buy there is no source yet, so the margin cannot be
+ * read off a pair. But the store typed a ceiling, and its own rule inverts:
+ * what a seller may receive for that ceiling is storeMarginInverse, and the
+ * difference is what we keep.
+ *
+ * Net, like everywhere else - the readers gross it up themselves on margin
+ * goods.
+ *
+ * Null without a store, without a rule, or without a ceiling. Then the
+ * field is left empty and the first seller offer decides, which is the only
+ * moment a base exists at all.
+ */
+async function getStoreMarginFromCeiling({ sellerRecordId, maxPrice }) {
+  const ceiling = Number(maxPrice);
+
+  if (!Number.isFinite(ceiling) || ceiling <= 0) return null;
+
+  const storeMargin = await getStoreMarginForSeller(sellerRecordId);
+
+  if (!storeMargin) return null;
+
+  const base = storeMarginInverse({
+    storePrice: ceiling,
+    method: storeMargin.method,
+    percentage: storeMargin.percentage,
+    margin: storeMargin.margin,
+    cap: storeMargin.cap
+  });
+
+  if (!Number.isFinite(base) || base <= 0) return null;
+
+  /*
+    Divided by 1.21, because this field is always a NET margin.
+
+    storeMarginInverse undoes the mark-up rule, which knows nothing about
+    VAT - so the difference it leaves is what we keep GROSS. Every reader
+    then grosses it up again on margin goods, and the ceiling is overshot:
+    a store ceiling of 143 came out at 145.43, with 21% counted twice.
+  */
+  const net = (ceiling - base) / 1.21;
+
+  if (!Number.isFinite(net) || net <= 0) return null;
+
+  return Math.round(net * 100) / 100;
+}
+
+function getBuyingShopPriceForSources({
+  sources,
+  inventoryType,
+  buyerVatRate,
+  storeMargin
+}) {
+  const priced = (sources || [])
+    .map((source) =>
+      getBuyingDisplayPrice(
+        source.price,
+        source.vat_type,
+        inventoryType,
+        source.source_type,
+        {
+          sellerPrice: source.seller_price,
+          markup: source.kc_markup,
+          buyerVatRate,
+          storeMargin
+        }
+      )
+    )
+    .filter((price) => Number.isFinite(price) && price > 0);
+
+  if (!priced.length) return null;
+
+  return Math.min(...priced);
+}
+
 function cheapestConsignmentSource(sources) {
   return (sources || [])
     .filter((source) => asText(source.source_type) === "consignment")
@@ -34618,6 +34747,22 @@ app.post("/api/buying/offers", async (req, res) => {
 
     const marginForNewWtb = storeMarginSnapshot ?? getMemberWtbMargin();
 
+    // What this buyer would have paid without negotiating - the ceiling that
+    // belongs in Max Price. Priced through the same function the shop uses,
+    // so the two cannot answer differently for the same pair.
+    const shopPriceForOffer = getBuyingShopPriceForSources({
+      sources: matchingSources,
+      inventoryType,
+      buyerVatRate: await getBuyerVatRateForSeller(sellerRecordId),
+      storeMargin: await getStoreMarginForSeller(sellerRecordId)
+    });
+
+    if (shopPriceForOffer) {
+      console.log(
+        `Offer on ${sku} / ${size}: bid ${offerPrice}, shop price ${shopPriceForOffer} becomes the ceiling`
+      );
+    }
+
     const currentLowestSourcePrice = Math.max(
       0,
       Math.round(offerPrice - marginForNewWtb)
@@ -34639,7 +34784,24 @@ app.post("/api/buying/offers", async (req, res) => {
       "Brand": asText(product.brand),
       "Date": new Date().toISOString(),
 
-      "Max Price": offerPrice,
+      /*
+        CHANGED - was the buyer's own bid.
+
+        Max Price is a ceiling: the point above which no seller offer is
+        worth having, because the buyer would simply buy the pair
+        instead. That ceiling is the shop price, not what he opened the
+        bidding at - his bid is the opening position and lives on the
+        round as "Store Counter Price".
+
+        With the bid in here a seller could never be held to anything
+        sensible: offer 120 on a pair listed at 143 and the ceiling
+        became 120, so 143 - the price he could have paid without
+        negotiating at all - was out of reach.
+
+        Falls back to the bid when the shop cannot be priced, which is
+        what it always was.
+      */
+      "Max Price": shopPriceForOffer || offerPrice,
       // NEW — this block never wrote "Offer Margin", so the field stayed
       // blank and every reader silently fell back to 10. Writing the
       // same value the budget above was derived from makes the snapshot
@@ -34794,6 +34956,19 @@ async function createOpenMemberWtb({
     String(rawMaxPrice).trim() !== "";
 
   const maxPrice = hasMaxPrice ? Number(rawMaxPrice) : null;
+
+  // A store ceiling implies a margin; see getStoreMarginFromCeiling.
+  const openWtbMargin = await getStoreMarginFromCeiling({
+    sellerRecordId,
+    maxPrice
+  });
+
+  // Whether this buyer has a mark-up of its own at all. Only then is an
+  // empty margin meaningful - it says "a rule exists, we just have no base
+  // to apply it to yet", and the first offer fills it. For a member or a
+  // manual store there is nothing to wait for, so they keep the flat
+  // default they have always been given.
+  const buyerHasStoreRule = Boolean(await getStoreMarginForSeller(sellerRecordId));
   const inventoryType =
     normalizeBuyingInventoryType(rawInventoryType);
 
@@ -34933,9 +35108,25 @@ async function createOpenMemberWtb({
     "Date": new Date().toISOString(),
 
     "Max Price": maxPrice,
-    // Was a literal 10, which would have ignored CONSIGNMENT_MARKUP and
-    // left this third creation route disagreeing with the other two.
-    "Offer Margin": getMemberWtbMargin(),
+
+    /*
+      CHANGED - was always the flat default.
+
+      A store negotiates on its own mark-up, and every counter round
+      reads this field, so writing 10 here quietly settled a 5% store at
+      10 no matter what the shop had quoted it.
+
+      With a ceiling the margin follows from it. Without one - Max Price
+      is optional on an open want-to-buy - the field is deliberately left
+      EMPTY rather than filled with a guess: every reader falls back to
+      the default while it is blank, so nothing changes until the first
+      seller offer gives us a base to work from and fills it in.
+    */
+    ...(openWtbMargin
+      ? { "Offer Margin": openWtbMargin }
+      : buyerHasStoreRule
+        ? {}
+        : { "Offer Margin": getMemberWtbMargin() }),
     "Current Lowest Source Price": maxPrice,
 
     "Fulfillment Status": "Outsource",
