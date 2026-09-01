@@ -2635,51 +2635,53 @@ function firstLinkedRecordId(value) {
   return "";
 }
 
+/*
+ * The same embed a store order gets, so a consignor reads one message and
+ * not two dialects of it.
+ *
+ * It used to have its own layout - "Ready To Ship", labelled lines, a
+ * payout instead of a price - while sendConsignmentDealUpdateDiscordMessage
+ * sent something else entirely for the exact same moment. Same sender, same
+ * question, two shapes.
+ *
+ * "compact" is kept because callers pass it, but it no longer changes the
+ * wording: a shared deal channel and a private one both want the whole
+ * story, and the difference was never worth two versions to maintain.
+ */
 function buildMemberWtbReadyToShipEmbed({ memberFields, payout, compact = false }) {
-  if (compact) {
-    return {
-      title: "📦 Ready to Ship",
-      description: [
-        "💶 **Payout**",
-        `Final payout: ${moneySmartValue(Number(payout || 0).toFixed(2))}`,
-        "",
-        "📦 **Next Step**",
-        "Click **Request Label** when you are ready to ship.",
-        "",
-        "📬 **Packaging Instructions**",
-        "Use a clean, unbranded box.",
-        "Remove all price tags.",
-        "No extra items inside."
-      ].join("\n"),
-      color: 0x2ecc71,
-      footer: {
-        text: "Kickz Caviar"
-      }
-    };
-  }
-
   const memberWtbId =
     asText(memberFields["Member WTB ID"]) ||
     asText(memberFields["WTB ID"]) ||
     "Member WTB";
 
+  const vatType =
+    asText(firstLookupValue(memberFields["VAT Type"])) || "—";
+
+  const sellerId = asText(firstLookupValue(memberFields["Current Lowest Seller ID"]));
+
   return {
-    title: "📦 Ready To Ship",
+    title: "📦 Time To Ship Your Item!",
     description: [
-      `**Member WTB:** ${memberWtbId}`,
+      "**Item Details:**",
+      asText(memberFields["Product Name"]) || "—",
       "",
-      `**Product:** ${asText(memberFields["Product Name"]) || "—"}`,
-      `**SKU:** ${asText(memberFields["SKU"]) || "—"}`,
-      `**Size:** ${asText(memberFields["Size"]) || "—"}`,
-      `**Brand:** ${asText(memberFields["Brand"]) || "—"}`,
+      "**SKU**",
+      asText(memberFields["SKU"]) || "—",
       "",
-      `**Final payout:** ${moneySmartValue(Number(payout || 0).toFixed(2))}`,
+      "**Size**",
+      asText(memberFields["Size"]) || "—",
       "",
-      "Click **Request Label** when you are ready to ship."
+      "**Order**",
+      memberWtbId,
+      "",
+      "**Price**",
+      `${moneySmartValue(Number(payout || 0).toFixed(2))} (${vatType})`,
+      "",
+      "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
     ].join("\n"),
     color: 0x2ecc71,
     footer: {
-      text: "Kickz Caviar"
+      text: sellerId ? `SellerID: ${sellerId}` : "Kickz Caviar"
     },
     timestamp: new Date().toISOString()
   };
@@ -2693,8 +2695,14 @@ async function sendMemberWtbReadyToShipToChannel({
   payout,
   compact = false
 }) {
+  const confirmedLine =
+    `✅ Your Deal For ${asText(memberFields["SKU"]) || "—"} - ` +
+    `${asText(memberFields["Size"]) || "—"} Has Been Confirmed!`;
+
   const message = await channel.send({
-    content: sellerDiscordId ? `<@${sellerDiscordId}>` : null,
+    content: sellerDiscordId
+      ? `<@${sellerDiscordId}> ${confirmedLine}`
+      : confirmedLine,
     embeds: [
       buildMemberWtbReadyToShipEmbed({
         memberFields,
