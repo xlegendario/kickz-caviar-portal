@@ -815,6 +815,112 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
   const orderFields = orderRecord.fields || {};
   const clientCountry = asText(orderFields["Client Country"]);
 
+  /*
+    NEW - additive only: an order can only be confirmed once.
+
+    The guard further up is per Seller Offer, which is enough while exactly
+    one consignor is asked. The SneakerAsk consignment flow asks every holder
+    of the pair at once so the first Confirm wins, and then two people
+    clicking within a second of each other would each pass their own guard:
+    two Inventory Units, two stock write-offs, one order.
+
+    Reads "Linked Inventory Unit" on the ORDER - the reverse of the
+    "Unfulfilled Orders Log" link createConsignmentInventoryUnitFromOffer
+    writes on the unit - so it sees a unit created through any route, not
+    just this one. "already_confirmed" is a reason the callers already
+    render as "This match was already confirmed."
+  */
+  if (firstLinkedRecordId(orderFields["Linked Inventory Unit"])) {
+    return { ok: false, reason: "already_confirmed" };
+  }
+
+  /*
+    NEW - additive only: and a claim, because the read above is not enough.
+
+    Two consignors clicking within the same second both read an order with no
+    unit on it and both walk on. That was unlikely while one consignor was
+    asked; it is ordinary once a sale pings everyone holding the pair.
+
+    Airtable has no conditional write, so this claims by writing and reading
+    back. Last write wins the field, so of two racers the later one owns it
+    and the earlier one finds a stranger's id and stops. Exactly one walks on.
+
+    Fails OPEN on purpose. If "Consignment Claim" does not exist yet the
+    update throws, and refusing every consignment confirmation in production
+    over a missing field would be far worse than the narrow race this closes -
+    the guard above still stands either way.
+  */
+  /*
+    A claim goes stale.
+
+    Everything after this point can throw - Supabase, the unit builder, the
+    stock write-off - and a claim left behind by a run that died would lock
+    the order out of being confirmed by anyone, ever. A claim is therefore
+    only binding for as long as one confirmation can plausibly take; after
+    that the next consignor simply overwrites it.
+  */
+  const CLAIM_TTL_MS = 2 * 60 * 1000;
+
+  const [claimedBy, , claimedAtRaw] =
+    asText(orderFields["Consignment Claim"]).split(":");
+
+  const claimedAt = Number(claimedAtRaw);
+
+  const claimIsLive =
+    Number.isFinite(claimedAt) && Date.now() - claimedAt < CLAIM_TTL_MS;
+
+  if (claimedBy && claimedBy !== sellerOfferRecordId && claimIsLive) {
+    return { ok: false, reason: "already_confirmed" };
+  }
+
+  /*
+    The claim carries a token, not just the offer id.
+
+    Without it two clicks on the SAME button write the same value, both read
+    their own value back, and both walk on - which is the likelier accident
+    of the two, because a button that looks like it did nothing gets pressed
+    again. A fresh token per attempt means the second write always displaces
+    the first, so one of the two always loses.
+  */
+  const claimToken = `${sellerOfferRecordId}:${crypto.randomUUID()}:${Date.now()}`;
+
+  let claimOk = true;
+
+  try {
+    await airtable(ORDERS_TABLE).update(orderRecordId, {
+      "Consignment Claim": claimToken
+    });
+
+    // Long enough that a competing click has landed its own write before we
+    // look, short enough to sit inside a deferred Discord interaction.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    const reread = await airtable(ORDERS_TABLE).find(orderRecordId);
+
+    if (asText(reread.fields?.["Consignment Claim"]) !== claimToken) {
+      return { ok: false, reason: "already_confirmed" };
+    }
+
+    if (firstLinkedRecordId(reread.fields?.["Linked Inventory Unit"])) {
+      return { ok: false, reason: "already_confirmed" };
+    }
+  } catch (err) {
+    claimOk = false;
+
+    console.error(
+      `Consignment claim on order ${orderRecordId} could not be written, ` +
+        `falling back to the linked-unit check only:`,
+      err.message
+    );
+  }
+
+  if (!claimOk) {
+    console.warn(
+      "Add a single line text field \"Consignment Claim\" to Unfulfilled " +
+        "Orders Log to close the simultaneous-confirm race."
+    );
+  }
+
   const sellerPrice = agreed && Number.isFinite(Number(agreed.payout))
     ? Number(agreed.payout)
     : numberValue(f["Seller Offer"]);
@@ -833,9 +939,22 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
 
   // A negotiated deal already has an agreed store price; only an
   // un-negotiated one is derived from his listing price.
+  /*
+    NEW - additive only: a SneakerAsk consignment order has no price to
+    derive. Every other store order is quoted from the consignor's price
+    plus the store's margin, but here SneakerAsk's buyer has already paid,
+    and that amount was written onto the order the moment the sale came in.
+    Recomputing it from whichever consignor happened to accept would quote
+    a different number than the one we were actually paid.
+  */
+  const isFixedStorePriceOrder =
+    asText(orderFields["Order Source"]) === "SneakerAsk Consignment";
+
   const customOffer = agreed && Number.isFinite(Number(agreed.storePrice))
     ? Number(agreed.storePrice)
-    : calculateStoreCustomOfferFromConsignmentBase(storeBasePrice, orderFields);
+    : isFixedStorePriceOrder
+      ? numberValue(orderFields["Custom Offer"])
+      : calculateStoreCustomOfferFromConsignmentBase(storeBasePrice, orderFields);
 
   const offerVatType = asText(agreed?.storeVatType)
     || getStoreOfferVatTypeFromConsignmentVat(vatType, clientCountry);
@@ -888,6 +1007,57 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
   await writeOffConsignmentUnit(inventoryRow.id, "store order");
 
   await closeConsignmentRoundsForSellerOffer(sellerOfferRecordId, "Accepted");
+
+  /*
+    NEW - additive only: a SneakerAsk consignment order has to be walked
+    into the automation engine by hand.
+
+    Every other consignment confirmation happens on an order that is already
+    sitting at "Outsource", which is a status calculateLinkedUnitPrice acts
+    on, so linking the unit is enough to get the price written. These sit at
+    "SneakerAsk Processing", which nothing recognises - deliberately, because
+    that is what kept the normal flow off them while we waited on consignors.
+    So without this the deal would end here: a unit linked to an order with
+    no Final Buying Price on it.
+
+    TWO writes, not one. The engine listens to a view that a record enters
+    the moment "Automation Engine Enabled" goes true, and Airtable reports
+    entering a view as a CREATED record. calculateLinkedUnitPrice only
+    listens to changes. Turning the flag on and setting the status in one
+    update can therefore arrive as a create and be skipped in silence; done
+    separately, the second write is unambiguously a change to a record that
+    is already inside the view.
+
+    Non-blocking on purpose. The unit and the stock decrement above are the
+    deal and must stand; a failure here leaves an order that needs its status
+    moved by hand, which is visible, rather than a consignor whose pair was
+    taken twice.
+  */
+  if (isFixedStorePriceOrder) {
+    try {
+      await airtable(ORDERS_TABLE).update(orderRecordId, {
+        "Automation Engine Enabled": true
+      });
+
+      // Enough of a gap that Airtable sends the two as separate events.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      await airtable(ORDERS_TABLE).update(orderRecordId, {
+        "Fulfillment Status": "Confirmed"
+      });
+
+      console.log(
+        `✅ SneakerAsk order ${orderRecordId} moved to Confirmed; ` +
+          "calculateLinkedUnitPrice can now price the unit."
+      );
+    } catch (err) {
+      console.error(
+        `❌ SneakerAsk order ${orderRecordId} kept its unit but could NOT be ` +
+          `moved to Confirmed - set the status by hand:`,
+        err.message
+      );
+    }
+  }
 
   // Same stale-embed sweep the regular flow fires: the store's "Offer
   // Request" embed is now dead and must stop being clickable.
@@ -5018,9 +5188,102 @@ async function confirmConsignmentOffer(offerId) {
   };
 }
 
+/*
+ * A SneakerAsk consignment order already has its label.
+ *
+ * Every other order asks the store to produce one, which is a request that
+ * sits in a Discord channel until someone answers it. SneakerAsk issues the
+ * DPD label at the moment their buyer pays, and the poller stored it on the
+ * order - so there is nobody to ask, only a PDF to fetch.
+ *
+ * Handed to the WMS rather than written here: it is the side that uploads to
+ * R2 and fills "Shipping Label URL (Permanent)", and their link is not
+ * permanent. Everything after that is the normal machinery -
+ * sendShippingLabelToDiscord posts "Shipping Label Ready" to the consignor
+ * and the order moves to Ready to Ship.
+ */
+async function attachSneakerAskShippingLabel(orderRecordId, orderFields) {
+  const labelUrl = asText(orderFields["SneakerAsk Label URL"]);
+  const trackingNumber = asText(orderFields["SneakerAsk Tracking"]);
+  const orderId = displayValue(orderFields["Order ID"]) || orderRecordId;
+
+  if (!labelUrl) {
+    throw new Error(`No SneakerAsk label URL on ${orderId}`);
+  }
+
+  const existingLabel = orderFields["Shipping Label"];
+
+  if (Array.isArray(existingLabel) && existingLabel.length) {
+    console.log(`Label already attached for ${orderId}, nothing to fetch.`);
+
+    return { ok: true, already: true };
+  }
+
+  const response = await fetch(labelUrl);
+
+  if (!response.ok) {
+    throw new Error(
+      `SneakerAsk label download failed for ${orderId}: ${response.status}`
+    );
+  }
+
+  const pdfBuffer = Buffer.from(await response.arrayBuffer());
+
+  const fileName = `sneakerask-${sanitizeForFileName(orderId)}.pdf`;
+
+  const submitResponse = await fetch(
+    `${LOJIQ_WMS_BASE_URL.replace(/\/$/, "")}/api/label-request-submit`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        record_id: orderRecordId,
+        type: "store_order",
+        tracking_number: trackingNumber,
+        file_name: fileName,
+        file_data_url: `data:application/pdf;base64,${pdfBuffer.toString("base64")}`
+      })
+    }
+  );
+
+  const submitData = await submitResponse.json().catch(() => ({}));
+
+  if (!submitResponse.ok) {
+    throw new Error(
+      `WMS refused the SneakerAsk label for ${orderId}: ` +
+        `${submitResponse.status} ${JSON.stringify(submitData)}`
+    );
+  }
+
+  console.log(
+    `📦 SneakerAsk label attached for ${orderId} (tracking ${trackingNumber || "none"}).`
+  );
+
+  return { ok: true };
+}
+
+function sanitizeForFileName(value) {
+  return String(value || "label").replace(/[^A-Za-z0-9._-]+/g, "-");
+}
+
 async function requestConsignmentShippingLabel(orderRecordId) {
   if (!orderRecordId) {
     throw new Error("Missing orderRecordId");
+  }
+
+  /*
+    NEW - additive only: SneakerAsk consignment orders never ask a store for
+    a label, because they already carry one. Any other order falls through to
+    exactly what it did before.
+  */
+  const orderRecord = await airtable(ORDERS_TABLE)
+    .find(orderRecordId)
+    .catch(() => null);
+
+  const orderFields = orderRecord?.fields || {};
+
+  if (asText(orderFields["Order Source"]) === "SneakerAsk Consignment") {
+    return await attachSneakerAskShippingLabel(orderRecordId, orderFields);
   }
 
   // FIXED — this only set the status and posted nothing, so pressing
@@ -8634,6 +8897,152 @@ app.post("/api/member-wtb/send-label-to-discord", async (req, res) => {
 
     res.status(500).json({
       error: "Failed to send Member WTB label to Discord",
+      details: err.message
+    });
+  }
+});
+
+/*
+ * A pair sold on SneakerAsk: ask everyone who holds it.
+ *
+ * The sneakerask-consignment service decides WHO is asked and for HOW MUCH -
+ * it is the side that knows what the pair was sold for and what the budget
+ * therefore is. This endpoint is the sending half, because Discord and the
+ * Seller Offers table live here and a second sender would drift.
+ *
+ * Every request goes out as a confirmation, never as a counter round. The
+ * price is not negotiable on our side: SneakerAsk's buyer has already paid,
+ * so a Counter button would offer the consignor a conversation that cannot
+ * lead anywhere. forceConfirmation is what removes it.
+ *
+ * One failure does not stop the rest. Asking four consignors and having the
+ * third one's Discord channel be missing must still leave three live options,
+ * so failures are collected and returned rather than thrown.
+ */
+app.post("/api/sneakerask/ask-consignors", async (req, res) => {
+  const secret = asText(req.headers["x-kc-secret"]);
+
+  if (!process.env.COUNTER_OFFERS_SECRET || secret !== process.env.COUNTER_OFFERS_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const orderRecordId = asText(req.body?.order_record_id);
+  const requests = Array.isArray(req.body?.requests) ? req.body.requests : [];
+
+  if (!orderRecordId) {
+    return res.status(400).json({ error: "Missing order_record_id" });
+  }
+
+  if (!requests.length) {
+    return res.status(400).json({ error: "No requests to send" });
+  }
+
+  try {
+    const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
+    const of = orderRecord.fields || {};
+    const orderId = asText(of["Order ID"]) || orderRecordId;
+
+    const sent = [];
+    const failed = [];
+
+    for (const request of requests) {
+      const sellerRecordId = asText(request?.seller_record_id);
+      const inventoryId = asText(request?.inventory_id);
+      const askAmount = numberValue(request?.ask_amount);
+      const vatType = asText(request?.vat_type);
+      const ownAsk = numberValue(request?.own_ask) || askAmount;
+
+      if (!sellerRecordId || !inventoryId || !(askAmount > 0) || !vatType) {
+        failed.push({ inventory_id: inventoryId, reason: "incomplete request" });
+        continue;
+      }
+
+      try {
+        const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId);
+        const sf = sellerRecord.fields || {};
+
+        /*
+          "Seller Offer" is the amount he gets paid.
+
+          confirmConsignmentSellerOffer reads this field into the Inventory
+          Unit's Purchase Price, so it has to be the same number his embed
+          shows him. That is why askAmount feeds both and nothing recomputes
+          it in between.
+        */
+        const createdOffer = await airtable(SELLER_OFFERS_TABLE).create({
+          "Seller ID": [sellerRecordId],
+          "Linked Orders": [orderRecordId],
+          "Seller Offer": askAmount,
+          "Offer VAT Type": vatType,
+          "Offer Cost (Normalized)": numberValue(request?.normalized) || askAmount,
+          "Offer Date": new Date().toISOString(),
+          "Consignment Inventory ID": inventoryId
+        });
+
+        const discordResult = await sendConsignmentOfferDiscordMessage({
+          forceConfirmation: true,
+          seller: {
+            seller_record_id: sellerRecordId,
+            seller_id: asText(sf["Seller ID"]),
+            discord_id: asText(sf["Discord ID"]),
+            consignment_offer_channel_id: asText(sf["Consignment Offer Channel ID"]),
+            consignment_confirmation_channel_id: asText(sf["Consignment Confirmation Channel ID"])
+          },
+          offer: {
+            id: createdOffer.id,
+            order_record_id: orderRecordId,
+            order_id: orderId,
+            source_type: "order",
+            seller_record_id: sellerRecordId,
+            seller_id: asText(sf["Seller ID"]),
+            product_name: asText(request?.product_name) || asText(of["Product Name"]),
+            sku: asText(request?.sku) || asText(of["SKU"]),
+            size: asText(request?.size) || asText(of["Size"]),
+            brand: asText(request?.brand) || asText(of["Brand"]),
+            vat_type: vatType,
+
+            // What he asked versus what we are asking him for. On a
+            // confirmation these are the same number; on an over-budget
+            // consignor they are not, and he should see both.
+            seller_price: ownAsk,
+            offer_price: askAmount
+          },
+          calculatedOfferPrice: askAmount,
+          sellerOfferRecordId: createdOffer.id
+        });
+
+        await rememberConsignmentConfirmMessage(createdOffer.id, discordResult);
+
+        sent.push({
+          seller_offer_record_id: createdOffer.id,
+          seller_id: asText(sf["Seller ID"]),
+          inventory_id: inventoryId,
+          ask_amount: askAmount,
+          channel_id: discordResult?.channelId || null,
+          delivery: discordResult?.deliveryType || null
+        });
+
+        console.log(
+          `📩 SneakerAsk consignor request for ${orderId}: ` +
+            `${moneySmartValue(askAmount)} ${vatType} to ${asText(sf["Seller ID"])} ` +
+            `(inventory ${inventoryId}) → Seller Offer ${createdOffer.id}`
+        );
+      } catch (err) {
+        console.error(
+          `Failed to ask consignor ${sellerRecordId} for ${orderId}:`,
+          err.message
+        );
+
+        failed.push({ inventory_id: inventoryId, reason: err.message });
+      }
+    }
+
+    return res.json({ ok: true, order_id: orderId, sent, failed });
+  } catch (err) {
+    console.error("ask-consignors failed:", err);
+
+    return res.status(500).json({
+      error: "Failed to ask consignors",
       details: err.message
     });
   }
