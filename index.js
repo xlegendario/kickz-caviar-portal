@@ -2572,15 +2572,26 @@ async function sendConsignmentOfferDiscordMessage({
   
         color: isConfirmation ? 0x2ecc71 : 0xf1c40f,
   
+        /*
+          The VAT type belongs beside the amount, the way a store order's
+          counter embed already shows it.
+
+          Both numbers are in the consignor's own scale, so one tag covers
+          them - but without it he is reading a bare figure and has to
+          remember which of his three VAT types this pair sits under before
+          he can tell whether the offer is any good.
+        */
         fields: [
           {
             name: "Your Price",
-            value: `${moneySmartValue(Number(offer.seller_price).toFixed(2))}`,
+            value: `${moneySmartValue(Number(offer.seller_price).toFixed(2))}` +
+              (offer.vat_type ? ` · ${offer.vat_type}` : ""),
             inline: true
           },
           {
             name: isConfirmation ? "Matched At" : "Our Offer",
-            value: `${moneySmartValue(Number(offer.offer_price).toFixed(2))}`,
+            value: `${moneySmartValue(Number(offer.offer_price).toFixed(2))}` +
+              (offer.vat_type ? ` · ${offer.vat_type}` : ""),
             inline: true
           }
         ],
