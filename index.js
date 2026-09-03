@@ -580,6 +580,194 @@ async function writeOffConsignmentUnit(consignmentInventoryId, context = "") {
  * embed - it decides confirmation vs counter from the price it is handed,
  * so handing it the accepted amount produces exactly the Confirm/Deny pair.
  */
+/*
+ * The same budget, expressed in one consignor's own VAT scale.
+ *
+ * getConsignmentComparePrice multiplies a VAT0 ask by 1.21 to make it
+ * comparable; this is the way back. A Margin or VAT21 consignor is paid the
+ * number itself.
+ */
+function consignmentAmountForVatType(normalizedAmount, vatType) {
+  return asText(vatType) === "VAT0"
+    ? Number(normalizedAmount) / 1.21
+    : Number(normalizedAmount);
+}
+
+/*
+ * Everyone else holding this pair, asked at the same price.
+ *
+ * The buyer has agreed a number and one consignor has been asked to confirm.
+ * If he no longer has it or simply does not look at Discord, the deal sits
+ * there while other people are holding the same pair - so they are asked too
+ * and the first to say yes gets it.
+ *
+ * Every one of them is offered EXACTLY the budget, never their own lower
+ * asking price. Two reasons, and the second is the one that bites: a record
+ * cheaper than the one the deal was struck on would drop the rollups on the
+ * order, look to computeAndPushLowestOffer like a better market price had
+ * appeared, and push a fresh offer at a buyer who has already said yes.
+ *
+ * The embed shape still comes out right on its own. Someone asking less than
+ * the budget reads as a confirmation, someone asking more reads as an offer
+ * with his own price beside ours - and neither carries a Counter button,
+ * because source_type is member_wtb. The cheapest consignor's own Seller
+ * Offer is the ceiling anyway: validateNextCounterPriceWithCrossSellerCeiling
+ * refuses anything above it with "the gap is too small for another step".
+ *
+ * Non-blocking everywhere it is called. The consignor who was already asked
+ * is the deal; failing to reach the spares must not undo that.
+ */
+/*
+ * How many consignors still owe us an answer on this want-to-buy.
+ *
+ * Live means: a consignment offer on this want-to-buy that has not been
+ * withdrawn and has not already produced a unit. The offer that has just
+ * been denied is marked Withdrawn before this runs, so it does not count
+ * itself.
+ */
+async function countLiveConsignmentRequestsForMemberWtb(memberWtbRecordId) {
+  const memberWtb = await airtable(MEMBER_WTBS_TABLE)
+    .find(memberWtbRecordId)
+    .catch(() => null);
+
+  const offerIds = Array.isArray(memberWtb?.fields?.["Seller Offers"])
+    ? memberWtb.fields["Seller Offers"]
+    : [];
+
+  let live = 0;
+
+  for (const offerId of offerIds) {
+    const offer = await airtable(SELLER_OFFERS_TABLE).find(offerId).catch(() => null);
+
+    if (!offer) continue;
+
+    const of = offer.fields || {};
+
+    if (!asText(of["Consignment Inventory ID"])) continue;
+    if (of["Withdrawn?"]) continue;
+    if (firstLinkedRecordId(of["Linked Inventory Unit"])) continue;
+
+    live += 1;
+  }
+
+  return live;
+}
+
+async function askOtherConsignorsForMemberWtb({
+  memberWtbRecordId,
+  memberFields,
+  askedInventoryId,
+  budgetNormalized
+}) {
+  const sku = asText(memberFields["SKU"]);
+  const size = asText(memberFields["Size"]);
+
+  if (!sku || !size || !(budgetNormalized > 0)) {
+    return { ok: false, reason: "missing_sku_size_or_budget" };
+  }
+
+  const { data: holders, error } = await supabase
+    .from("consignment_inventory")
+    .select("id, sku, size, vat_type, selling_price_suggested, quantity, seller_id, seller_record_id, product_name, brand")
+    .eq("sku", sku)
+    .eq("size", size)
+    .gt("quantity", 0);
+
+  if (error) throw error;
+
+  const others = (holders || []).filter(
+    (row) => asText(row.id) !== asText(askedInventoryId) && row.seller_record_id
+  );
+
+  if (!others.length) return { ok: true, asked: [] };
+
+  const memberWtbId = asText(memberFields["Member WTB ID"]) || memberWtbRecordId;
+  const asked = [];
+
+  for (const row of others) {
+    try {
+      const ownAsk = Number(row.selling_price_suggested);
+      const theirAmount = Number(
+        consignmentAmountForVatType(budgetNormalized, row.vat_type).toFixed(2)
+      );
+
+      if (!(theirAmount > 0)) continue;
+
+      const sellerRecord = await airtable(SELLERS_TABLE)
+        .find(row.seller_record_id)
+        .catch(() => null);
+
+      if (!sellerRecord) continue;
+
+      const sf = sellerRecord.fields || {};
+
+      const createdOffer = await airtable(SELLER_OFFERS_TABLE).create({
+        "Seller ID": [row.seller_record_id],
+        "Member WTBs": [memberWtbRecordId],
+        "Seller Offer": theirAmount,
+        "Offer VAT Type": asText(row.vat_type),
+        "Offer Cost (Normalized)": Number(budgetNormalized.toFixed(2)),
+        "Offer Date": new Date().toISOString(),
+        "Consignment Inventory ID": row.id
+      });
+
+      const discordResult = await sendConsignmentOfferDiscordMessage({
+        seller: {
+          seller_record_id: row.seller_record_id,
+          seller_id: asText(sf["Seller ID"]),
+          discord_id: asText(sf["Discord ID"]),
+          consignment_offer_channel_id: asText(sf["Consignment Offer Channel ID"]),
+          consignment_confirmation_channel_id: asText(sf["Consignment Confirmation Channel ID"])
+        },
+        offer: {
+          id: createdOffer.id,
+          order_record_id: null,
+          member_wtb_record_id: memberWtbRecordId,
+          order_id: memberWtbId,
+          source_type: "member_wtb",
+          seller_record_id: row.seller_record_id,
+          seller_id: asText(sf["Seller ID"]),
+          product_name: asText(row.product_name) || asText(memberFields["Product Name"]),
+          sku,
+          size,
+          brand: asText(row.brand) || asText(memberFields["Brand"]),
+          vat_type: asText(row.vat_type),
+
+          // What he asks versus what we pay. Equal or better than his ask
+          // reads as a match; worse reads as an offer, which is the truth.
+          seller_price: Number.isFinite(ownAsk) && ownAsk > 0 ? ownAsk : theirAmount,
+          offer_price: theirAmount
+        },
+        calculatedOfferPrice: theirAmount,
+        sellerOfferRecordId: createdOffer.id
+      });
+
+      await rememberConsignmentConfirmMessage(createdOffer.id, discordResult);
+
+      asked.push({
+        seller_offer_record_id: createdOffer.id,
+        seller_id: asText(sf["Seller ID"]),
+        inventory_id: row.id,
+        amount: theirAmount
+      });
+
+      console.log(
+        `📩 Member WTB ${memberWtbId}: also asked ${asText(sf["Seller ID"])} ` +
+          `${moneySmartValue(theirAmount.toFixed(2))} ${asText(row.vat_type)} ` +
+          `(inventory ${row.id}) -> Seller Offer ${createdOffer.id}`
+      );
+    } catch (err) {
+      // One consignor's channel being gone must still leave the others asked.
+      console.error(
+        `Could not ask consignor ${row.seller_id} for Member WTB ${memberWtbId}:`,
+        err.message
+      );
+    }
+  }
+
+  return { ok: true, asked };
+}
+
 async function askConsignorToConfirmMemberWtbOffer({
   memberWtbRecordId,
   sellerOfferRecordId,
@@ -669,6 +857,31 @@ async function askConsignorToConfirmMemberWtbOffer({
 
   await rememberConsignmentConfirmMessage(sellerOfferRecordId, discordResult);
 
+  /*
+    NEW - additive only: and everyone else who holds this pair.
+
+    One consignor was a single point of failure. The buyer has agreed a price
+    and cannot be kept waiting because the cheapest holder is asleep, so the
+    others are asked at the same number and the first to say yes gets it.
+
+    Non-blocking: the consignor above has been asked and that is the deal.
+    Whatever happens here must not undo it.
+  */
+  askOtherConsignorsForMemberWtb({
+    memberWtbRecordId,
+    memberFields: mf,
+    askedInventoryId: inventoryId,
+    budgetNormalized: getConsignmentComparePrice(
+      calculatedOfferPrice,
+      asText(f["Offer VAT Type"])
+    )
+  }).catch((err) =>
+    console.error(
+      `Failed to ask the other consignors for Member WTB ${memberWtbRecordId} (non-blocking):`,
+      err.message
+    )
+  );
+
   console.log(
     `📩 Consignment confirmation asked for Member WTB ${memberWtbRecordId} ` +
       `(seller offer ${sellerOfferRecordId}, ${moneySmartValue(sellerPrice)} ` +
@@ -728,6 +941,84 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
   const memberWtbRecordIdForConfirm = firstLinkedRecordId(f["Member WTBs"]);
 
   if (!orderRecordId && memberWtbRecordIdForConfirm) {
+    /*
+      NEW - additive only: the same two locks the store-order path got, on
+      the want-to-buy side.
+
+      Until now exactly one consignor was ever asked about a Member WTB, so
+      the per-Seller-Offer guard above was enough. Once a buyer's accept asks
+      every holder of the pair at once, two of them clicking within a second
+      of each other would each pass their own guard and each get a unit made
+      for the same want-to-buy.
+
+      Guard one reads the unit on the WANT-TO-BUY, so it sees a unit created
+      through any route. Guard two claims by writing and reading back, since
+      Airtable has no conditional write: last write wins the field, so of two
+      racers exactly one walks on. The token makes two clicks on the SAME
+      button lose one of the pair too, which is the likelier accident.
+
+      The claim goes stale after two minutes. Everything below can throw, and
+      a claim left behind by a run that died would lock the want-to-buy out
+      of ever being confirmed.
+
+      Fails OPEN if "Consignment Claim" does not exist yet: refusing every
+      confirmation in production over a missing field is worse than the
+      narrow race this closes, and guard one still stands.
+    */
+    const memberWtbForClaim = await airtable(MEMBER_WTBS_TABLE)
+      .find(memberWtbRecordIdForConfirm)
+      .catch(() => null);
+
+    if (firstLinkedRecordId(memberWtbForClaim?.fields?.["Linked Inventory Unit"])) {
+      return { ok: false, reason: "already_confirmed" };
+    }
+
+    const MEMBER_WTB_CLAIM_TTL_MS = 2 * 60 * 1000;
+
+    const [wtbClaimedBy, , wtbClaimedAtRaw] =
+      asText(memberWtbForClaim?.fields?.["Consignment Claim"]).split(":");
+
+    const wtbClaimedAt = Number(wtbClaimedAtRaw);
+
+    const wtbClaimIsLive =
+      Number.isFinite(wtbClaimedAt) &&
+      Date.now() - wtbClaimedAt < MEMBER_WTB_CLAIM_TTL_MS;
+
+    if (wtbClaimedBy && wtbClaimedBy !== sellerOfferRecordId && wtbClaimIsLive) {
+      return { ok: false, reason: "already_confirmed" };
+    }
+
+    const wtbClaimToken = `${sellerOfferRecordId}:${crypto.randomUUID()}:${Date.now()}`;
+
+    try {
+      await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordIdForConfirm, {
+        "Consignment Claim": wtbClaimToken
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 700));
+
+      const reread = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordIdForConfirm);
+
+      if (asText(reread.fields?.["Consignment Claim"]) !== wtbClaimToken) {
+        return { ok: false, reason: "already_confirmed" };
+      }
+
+      if (firstLinkedRecordId(reread.fields?.["Linked Inventory Unit"])) {
+        return { ok: false, reason: "already_confirmed" };
+      }
+    } catch (err) {
+      console.error(
+        `Consignment claim on Member WTB ${memberWtbRecordIdForConfirm} could not ` +
+          `be written, falling back to the linked-unit check only:`,
+        err.message
+      );
+
+      console.warn(
+        "Add a single line text field \"Consignment Claim\" to Member WTBs to " +
+          "close the simultaneous-confirm race."
+      );
+    }
+
     const processResponse = await fetch(
       `${APP_PUBLIC_BASE_URL}/api/member-wtb/process-seller-offer`,
       {
@@ -1843,9 +2134,9 @@ async function notifyBuyerConsignmentWithdrawn(memberWtbRecordId) {
       `**SKU:** ${asText(f["SKU"]) || "—"}`,
       `**Size:** ${asText(f["Size"]) || "—"}`,
       "",
-      "Unfortunately the seller withdrew his offer. Your WTB is still " +
-        "live and you will receive a new offer as soon as a seller " +
-        "submits one."
+      "The seller withdrew his offer. Your WTB remains live at the price " +
+        "you agreed, and is waiting for another consignor or seller to " +
+        "step in."
     ].join("\n"),
     color: 0xf1c40f,
     timestamp: new Date().toISOString()
@@ -1966,6 +2257,47 @@ async function denyConsignmentSellerOffer(sellerOfferRecordId) {
   const deniedMemberWtbId = firstLinkedRecordId(offerRecord.fields?.["Member WTBs"]);
 
   if (deniedMemberWtbId) {
+    /*
+      CHANGED - additive guard only: a round ends on the LAST no, not the first.
+
+      A buyer's accept now asks every consignor holding the pair, so a deny
+      by one of them is not the end of anything while the others are still
+      deciding. Telling the buyer at that point would be wrong four times
+      over on four consignors, and the replacement offer would price itself
+      off the NEXT consignor while that same consignor is already holding an
+      offer from us at the old, lower budget - two prices for one pair, from
+      us, to one person.
+
+      Nothing is hidden from the buyer by waiting. After an accept the
+      counter round is already "Accepted", and closeConsignmentRoundsForSellerOffer
+      only touches rounds that are still Open - so no Denied pill appears in
+      the portal either. This message is the only signal there is, which is
+      exactly why it should arrive once, when it is actually true.
+
+      A count that fails is treated as none left, so the buyer hears
+      something rather than nothing.
+    */
+    const stillDeciding = await countLiveConsignmentRequestsForMemberWtb(
+      deniedMemberWtbId
+    ).catch((err) => {
+      console.error(
+        `Could not count live consignment requests for ${deniedMemberWtbId}:`,
+        err.message
+      );
+
+      return 0;
+    });
+
+    if (stillDeciding > 0) {
+      console.log(
+        `↩️ Consignment deny on Member WTB ${deniedMemberWtbId}: ${stillDeciding} ` +
+          "consignor(s) still deciding, so the buyer is not told and no " +
+          "replacement offer is made yet."
+      );
+
+      return { ok: true, seller_offer_record_id: sellerOfferRecordId };
+    }
+
     await notifyBuyerConsignmentWithdrawn(deniedMemberWtbId).catch((err) =>
       console.error(
         `Failed to tell the buyer of ${deniedMemberWtbId} that the seller withdrew:`,
