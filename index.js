@@ -13603,12 +13603,22 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
 
       const consignmentOfferIdForCounter = asText(f["Seller Offer Record ID"]);
 
+      // Lifted out of the block below so the fan-out further down can still
+      // see it. Reading it from inside would be a temporal dead zone waiting
+      // to happen - the same shape of bug that silently broke every open
+      // want-to-buy until 3 September.
+      let consignmentInventoryIdForCounter = "";
+
       if (consignmentOfferIdForCounter) {
         const offerForCounter = await airtable(SELLER_OFFERS_TABLE)
           .find(consignmentOfferIdForCounter)
           .catch(() => null);
 
-        if (asText(offerForCounter?.fields?.["Consignment Inventory ID"])) {
+        consignmentInventoryIdForCounter = asText(
+          offerForCounter?.fields?.["Consignment Inventory ID"]
+        );
+
+        if (consignmentInventoryIdForCounter) {
           const consignorForCounter = await airtable(SELLERS_TABLE)
             .find(firstLinkedRecordId(f["Seller ID"]))
             .catch(() => null);
@@ -13649,6 +13659,37 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
           "Discord Delivery Type": discordResult.deliveryType
         });
       }
+
+      /*
+        NEW - additive only: and everyone else holding this pair.
+
+        A counter is a commitment too - the store has named a number it will
+        pay - so the same reasoning as the accept path applies: one consignor
+        is one point of failure. The others are asked at the countered payout
+        and the first to say yes ends it.
+
+        They get the offer without a Counter button. The consignor this round
+        belongs to keeps his, because he has a real Counter Offers round to
+        counter within; the others are being handed a number to take or
+        leave, and the ceiling would refuse them anything above it anyway.
+
+        Non-blocking, like everywhere else this runs: the round above is the
+        deal in progress and must stand whatever happens here.
+      */
+      askOtherConsignorsForOrder({
+        orderRecordId: linkedOrderId,
+        orderFields,
+        askedInventoryId: consignmentInventoryIdForCounter,
+        budgetNormalized: getConsignmentComparePrice(
+          recomputedPayout,
+          sellerVatType
+        )
+      }).catch((err) =>
+        console.error(
+          `Failed to ask the other consignors after a store counter on ${linkedOrderId} (non-blocking):`,
+          err.message
+        )
+      );
     }
 
     // NEW — close the Deny-after-own-counter leak at the per-round
