@@ -9875,32 +9875,19 @@ function normalizeWtbSize(value) {
 /*
  * One want-to-buy is one pair in one size.
  *
- * This used to accept any run of letters, digits and spaces, which let
- * "36 X3 37 X5 38 X5 39 X5" through as a single size on MWTB-000442 - four
- * sizes and eighteen pairs in one record, which nothing downstream can act
- * on: the offer, the consignor match and the inventory unit all assume one.
+ * Delegates to isUsableConsignmentSize instead of carrying its own copy of
+ * the rule. The old test here accepted any run of letters, digits and
+ * spaces, which let "36 X3 37 X5 38 X5 39 X5" through as a single size on
+ * MWTB-000442 - four sizes and eighteen pairs in one record, which nothing
+ * downstream can act on.
  *
- * The three shapes below cover every size in live consignment stock (checked
- * against all 66 of them, none refused): plain and half sizes, the region
- * thirds Adidas and New Balance use, and clothing letters.
+ * That function is the stricter and better-worn of the two: only .5 as a
+ * half size and only thirds as fractions, which is what shoes actually come
+ * in. Checked against all 78 EU sizes in the Size Normalization table, none
+ * refused.
  */
 function isValidWtbSize(size) {
-  const value = asText(size).trim().toUpperCase();
-
-  if (!value) return false;
-
-  // 44, 8.5, 44.5
-  if (/^\d{1,2}(\.\d)?$/.test(value)) return true;
-
-  // 41 1/3, 40 2/3, 39 1/2
-  if (/^\d{1,2} \d\/\d$/.test(value)) return true;
-
-  // S, M, L, XL, XXL, L/XL
-  if (/^(XXS|XS|S|M|L|XL|XXL|XXXL)(\/(XXS|XS|S|M|L|XL|XXL|XXXL))?$/.test(value)) {
-    return true;
-  }
-
-  return false;
+  return isUsableConsignmentSize(size);
 }
 
 // Is this a size we can actually match stock on?
@@ -9916,7 +9903,7 @@ function isUsableConsignmentSize(size) {
 
   if (/^\d{1,2}(\.5)?$/.test(clean)) return true;      // 42, 42.5, 9
   if (/^\d{1,2} [12]\/3$/.test(clean)) return true;     // 37 1/3, 38 2/3
-  if (/^(XXS|XS|S|M|L|XL|XXL|XXXL)$/.test(clean)) return true;
+  if (/^(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL)$/.test(clean)) return true;
   if (/^(S\/M|M\/L|L\/XL)$/.test(clean)) return true;
 
   return false;
