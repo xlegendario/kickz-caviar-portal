@@ -11902,10 +11902,41 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     // agreeing to anything at or below it. Without one there is no such
     // agreement, so nothing may be asked of the consignor until the buyer
     // has accepted. That path does not exist yet, so this stays as it was.
+    /*
+      FIXED - the ceiling came from Max Price, which on an Offer is NOT what
+      the buyer offered.
+
+      /api/buying/offers writes `"Max Price": shopPriceForOffer || offerPrice`
+      - the shop price he would have paid without negotiating. A buyer who
+        offers 300 on a pair listed at 378 therefore left Max Price at 378,
+      and this line then allowed the consignor 378 - 12.10 = 365.90. His own
+      365 fits under that, so he would have been sent a confirmation and, with
+      Auto Accept on, we would have bought at 365 to sell at 300. Sixty-five
+      euros a pair, silently.
+
+      It never fired only because the line above this one threw first
+      (see the orderFields note). Fixing that crash removed the accident that
+      was holding this back, which is how it surfaced.
+
+      "Current Lowest Source Price" is the number to use: the code that writes
+      it calls it "our budget - the buyer's price minus our margin", and every
+      route sets it. A Buy on a consignment source puts the consignor's own
+      price there, an Offer puts the offer minus the margin, and a Buy on any
+      other source puts the price minus ten.
+
+      Max Price stays the fallback for a plainly posted want-to-buy, which has
+      no budget of its own - there the ceiling IS what the buyer named.
+    */
+    const memberWtbBudget = numberValue(
+      sourceRecord?.fields?.["Current Lowest Source Price"]
+    );
+
     const calculatedOfferPrice = source.kind === "member_wtb"
-      ? (Number.isFinite(maximumBuyingPrice) && maximumBuyingPrice > 0
-          ? Math.max(0, maximumBuyingPrice - getMemberWtbMargin(orderFields) * 1.21)
-          : null)
+      ? (Number.isFinite(memberWtbBudget) && memberWtbBudget > 0
+          ? memberWtbBudget
+          : (Number.isFinite(maximumBuyingPrice) && maximumBuyingPrice > 0
+              ? Math.max(0, maximumBuyingPrice - getMemberWtbMargin(orderFields) * 1.21)
+              : null))
       : calculateConsignmentOfferPrice(maximumBuyingPrice, orderFields);
 
 
