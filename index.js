@@ -9872,8 +9872,35 @@ function normalizeWtbSize(value) {
     .toUpperCase();
 }
 
+/*
+ * One want-to-buy is one pair in one size.
+ *
+ * This used to accept any run of letters, digits and spaces, which let
+ * "36 X3 37 X5 38 X5 39 X5" through as a single size on MWTB-000442 - four
+ * sizes and eighteen pairs in one record, which nothing downstream can act
+ * on: the offer, the consignor match and the inventory unit all assume one.
+ *
+ * The three shapes below cover every size in live consignment stock (checked
+ * against all 66 of them, none refused): plain and half sizes, the region
+ * thirds Adidas and New Balance use, and clothing letters.
+ */
 function isValidWtbSize(size) {
-  return /^[A-Z0-9./ -]+$/.test(size) && /[A-Z0-9]/.test(size);
+  const value = asText(size).trim().toUpperCase();
+
+  if (!value) return false;
+
+  // 44, 8.5, 44.5
+  if (/^\d{1,2}(\.\d)?$/.test(value)) return true;
+
+  // 41 1/3, 40 2/3, 39 1/2
+  if (/^\d{1,2} \d\/\d$/.test(value)) return true;
+
+  // S, M, L, XL, XXL, L/XL
+  if (/^(XXS|XS|S|M|L|XL|XXL|XXXL)(\/(XXS|XS|S|M|L|XL|XXL|XXXL))?$/.test(value)) {
+    return true;
+  }
+
+  return false;
 }
 
 // Is this a size we can actually match stock on?
@@ -36002,6 +36029,28 @@ async function createOpenMemberWtb({
 
   const sku = normalizeSku(rawSku);
   const size = getBuyingSizeKey(rawSize);
+
+  /*
+    NEW - additive only: one want-to-buy is one pair in one size.
+
+    The CSV route has checked this for a while; typed entry never did, which
+    is how MWTB-000442 arrived with "36 X3 37 X5 38 X5 39 X5" in the size
+    field. Nothing downstream can act on that - the offer, the consignor
+    match and the inventory unit each assume a single pair - so it is refused
+    here rather than turned into a record nobody can fulfil.
+  */
+  if (size && !isValidWtbSize(size)) {
+    const sizeError = new Error(
+      `"${asText(rawSize)}" is not a single size. One want-to-buy is one pair ` +
+        "in one size - post a separate one for each size you need."
+    );
+
+    // The route reads this; without it a member's typo is logged as a server
+    // fault and reads that way to him too.
+    sizeError.statusCode = 400;
+
+    throw sizeError;
+  }
 
   // CHANGED - a want-to-buy may be posted without a ceiling.
   //
