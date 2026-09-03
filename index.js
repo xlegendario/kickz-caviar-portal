@@ -11684,8 +11684,30 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       number it opened with, and a later seller asking more must not
       quietly move what we earn.
     */
-    if (source.kind === "member_wtb" && !numberValue(orderFields["Offer Margin"])) {
-      const wtbBuyerRecordId = firstLinkedRecordId(orderFields["Buyer Seller ID"]);
+    /*
+      FIXED - this read "orderFields", which does not exist yet at this point.
+
+      A `const orderFields` is declared further down in the same block, so the
+      name resolved to a binding still in its temporal dead zone and every
+      call threw "Cannot access 'orderFields' before initialization". The
+      Seller Offer had already been created by then, so the offer existed
+      while the want-to-buy never got its Current Lowest fields and the buyer
+      was never shown anything - a posted WTB that silently did nothing.
+      Found on MWTB-000426 and MWTB-000427, 3 September.
+
+      Both fields it wants live on the Member WTB, which is exactly what
+      sourceRecord holds here, and which the update three lines down already
+      writes back to.
+    */
+    const memberWtbFieldsForMargin = sourceRecord?.fields || {};
+
+    if (
+      source.kind === "member_wtb" &&
+      !numberValue(memberWtbFieldsForMargin["Offer Margin"])
+    ) {
+      const wtbBuyerRecordId = firstLinkedRecordId(
+        memberWtbFieldsForMargin["Buyer Seller ID"]
+      );
 
       const firstOfferMargin = wtbBuyerRecordId
         ? await getStoreOfferMarginSnapshot({
@@ -11702,7 +11724,9 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
             console.error("Could not stamp the store margin on the want-to-buy:", err)
           );
 
-        orderFields["Offer Margin"] = firstOfferMargin;
+        // Same fix: keep the in-memory copy of the WANT-TO-BUY in step with
+        // what was just written to it, so anything below reads the new margin.
+        memberWtbFieldsForMargin["Offer Margin"] = firstOfferMargin;
 
         console.log(
           `Member WTB ${source.recordId}: no ceiling was given, so the store margin ` +
