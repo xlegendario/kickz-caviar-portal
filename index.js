@@ -669,6 +669,136 @@ async function countLiveConsignmentRequestsForMemberWtb(memberWtbRecordId) {
   return live;
 }
 
+/*
+ * Everyone else holding this pair, on a STORE order.
+ *
+ * The store has accepted, and the consignor the auto-offer came from has been
+ * asked to confirm. He is one person: if he no longer has the pair, or simply
+ * does not look at Discord today, the order waits on him while other people
+ * are holding the same thing. So they are asked too, and the first Confirm
+ * wins.
+ *
+ * Same rule as the want-to-buy side: everyone is offered EXACTLY the budget
+ * the deal was struck on, never their own lower asking price. A cheaper
+ * record of our own making would drop the order's rollups and read to
+ * computeAndPushLowestOffer as a better market price appearing, which would
+ * push a fresh offer at a store that has already said yes.
+ *
+ * No Counter button: these are Seller Offers, and that button's handler only
+ * understands the old Supabase rows. They accept the number or they do not.
+ * The cheapest consignor's own offer is the ceiling in any case.
+ */
+async function askOtherConsignorsForOrder({
+  orderRecordId,
+  orderFields,
+  askedInventoryId,
+  budgetNormalized
+}) {
+  const sku = asText(orderFields["SKU"]) || asText(orderFields["SKU (Soft)"]);
+  const size = asText(orderFields["Size"]);
+
+  if (!sku || !size || !(budgetNormalized > 0)) {
+    return { ok: false, reason: "missing_sku_size_or_budget" };
+  }
+
+  const { data: holders, error } = await supabase
+    .from("consignment_inventory")
+    .select("id, sku, size, vat_type, selling_price_suggested, quantity, seller_id, seller_record_id, product_name, brand")
+    .eq("sku", sku)
+    .eq("size", size)
+    .gt("quantity", 0);
+
+  if (error) throw error;
+
+  const others = (holders || []).filter(
+    (row) => asText(row.id) !== asText(askedInventoryId) && row.seller_record_id
+  );
+
+  if (!others.length) return { ok: true, asked: [] };
+
+  const orderId = asText(orderFields["Order ID"]) || orderRecordId;
+  const asked = [];
+
+  for (const row of others) {
+    try {
+      const ownAsk = Number(row.selling_price_suggested);
+      const theirAmount = Number(
+        consignmentAmountForVatType(budgetNormalized, row.vat_type).toFixed(2)
+      );
+
+      if (!(theirAmount > 0)) continue;
+
+      const sellerRecord = await airtable(SELLERS_TABLE)
+        .find(row.seller_record_id)
+        .catch(() => null);
+
+      if (!sellerRecord) continue;
+
+      const sf = sellerRecord.fields || {};
+
+      const createdOffer = await airtable(SELLER_OFFERS_TABLE).create({
+        "Seller ID": [row.seller_record_id],
+        "Linked Orders": [orderRecordId],
+        "Seller Offer": theirAmount,
+        "Offer VAT Type": asText(row.vat_type),
+        "Offer Cost (Normalized)": Number(budgetNormalized.toFixed(2)),
+        "Offer Date": new Date().toISOString(),
+        "Consignment Inventory ID": row.id
+      });
+
+      const discordResult = await sendConsignmentOfferDiscordMessage({
+        allowCounter: false,
+        seller: {
+          seller_record_id: row.seller_record_id,
+          seller_id: asText(sf["Seller ID"]),
+          discord_id: asText(sf["Discord ID"]),
+          consignment_offer_channel_id: asText(sf["Consignment Offer Channel ID"]),
+          consignment_confirmation_channel_id: asText(sf["Consignment Confirmation Channel ID"])
+        },
+        offer: {
+          id: createdOffer.id,
+          order_record_id: orderRecordId,
+          order_id: orderId,
+          source_type: "order",
+          seller_record_id: row.seller_record_id,
+          seller_id: asText(sf["Seller ID"]),
+          product_name: asText(row.product_name) || asText(orderFields["Product Name"]),
+          sku,
+          size,
+          brand: asText(row.brand) || asText(orderFields["Brand"]),
+          vat_type: asText(row.vat_type),
+          seller_price: Number.isFinite(ownAsk) && ownAsk > 0 ? ownAsk : theirAmount,
+          offer_price: theirAmount
+        },
+        calculatedOfferPrice: theirAmount,
+        sellerOfferRecordId: createdOffer.id
+      });
+
+      await rememberConsignmentConfirmMessage(createdOffer.id, discordResult);
+
+      asked.push({
+        seller_offer_record_id: createdOffer.id,
+        seller_id: asText(sf["Seller ID"]),
+        inventory_id: row.id,
+        amount: theirAmount
+      });
+
+      console.log(
+        `📩 Order ${orderId}: also asked ${asText(sf["Seller ID"])} ` +
+          `${moneySmartValue(theirAmount.toFixed(2))} ${asText(row.vat_type)} ` +
+          `(inventory ${row.id}) -> Seller Offer ${createdOffer.id}`
+      );
+    } catch (err) {
+      console.error(
+        `Could not ask consignor ${row.seller_id} for order ${orderId}:`,
+        err.message
+      );
+    }
+  }
+
+  return { ok: true, asked };
+}
+
 async function askOtherConsignorsForMemberWtb({
   memberWtbRecordId,
   memberFields,
@@ -2495,6 +2625,16 @@ async function sendConsignmentOfferDiscordMessage({
   offer,
   calculatedOfferPrice,
   sellerOfferRecordId = null,
+  /*
+    NEW - additive: whether this consignor may counter.
+
+    The Counter button posts `counter_consignment_offer:<id>`, and that
+    handler reads a Supabase consignment_offers row. An offer that lives as
+    a Seller Offer has no such row, so the button would carry an Airtable id
+    into a handler that cannot use it. Callers that create Seller Offers pass
+    false; everyone else keeps exactly what they had.
+  */
+  allowCounter = true,
   // Set when the price was settled in a negotiation. Without it the
   // shape is decided by comparing against the listing, which reads a
   // seller who came down as if he were being countered again.
@@ -2638,7 +2778,7 @@ async function sendConsignmentOfferDiscordMessage({
             label: isConfirmation ? "Confirm" : "Accept",
             custom_id: confirmCustomId
           },
-          ...(!isConfirmation && asText(offer.source_type) !== "member_wtb"
+          ...(allowCounter && !isConfirmation && asText(offer.source_type) !== "member_wtb"
             ? [
                 {
                   type: 2,
@@ -13946,6 +14086,34 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
             await rememberConsignmentConfirmMessage(
               sellerOfferRecordIdForGuard,
               guardDiscordResult
+            );
+
+            /*
+              NEW - additive only: and everyone else holding this pair.
+
+              The store has committed to a price and exactly one consignor has
+              been asked to confirm it. That one person is a single point of
+              failure - he may have sold the pair elsewhere, or simply not be
+              looking - and the order sits still meanwhile. So the other
+              holders are asked at the same number and the first Confirm wins.
+
+              Non-blocking: the consignor above is the deal and the response
+              below is already decided. Whatever happens here must not undo
+              either.
+            */
+            askOtherConsignorsForOrder({
+              orderRecordId: linkedOrderId,
+              orderFields: orderRecord.fields || {},
+              askedInventoryId: consignmentInventoryId,
+              budgetNormalized: getConsignmentComparePrice(
+                sellerPriceForGuard,
+                asText(inventoryRowForGuard.vat_type)
+              )
+            }).catch((err) =>
+              console.error(
+                `Failed to ask the other consignors for order ${linkedOrderId} (non-blocking):`,
+                err.message
+              )
             );
 
             // The store has acted, so its Offer Request embed must stop
