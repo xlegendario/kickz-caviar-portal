@@ -261,6 +261,24 @@ const memberWtbModal = document.getElementById("memberWtbModal");
 const closeMemberWtbModal = document.getElementById("closeMemberWtbModal");
 const submitMemberWtbBtn = document.getElementById("submitMemberWtbBtn");
 const memberWtbSkuInput = document.getElementById("memberWtbSkuInput");
+/*
+  Mirrors isUsableConsignmentSize in kickz-caviar-portal/index.js.
+
+  The server refuses these too, so this is only here to answer before a round
+  trip. If that function changes, change this - and the copy in
+  lojiq-client-portal/public/shop.html.
+*/
+function isSingleWtbSize(value) {
+  const clean = String(value || "").trim().toUpperCase();
+
+  if (/^\d{1,2}(\.5)?$/.test(clean)) return true;        // 42, 42.5, 9
+  if (/^\d{1,2} [12]\/3$/.test(clean)) return true;       // 37 1/3, 38 2/3
+  if (/^(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL)$/.test(clean)) return true;
+  if (/^(S\/M|M\/L|L\/XL)$/.test(clean)) return true;
+
+  return false;
+}
+
 const memberWtbSizeInput = document.getElementById("memberWtbSizeInput");
 const memberWtbMaxPriceInput = document.getElementById("memberWtbMaxPriceInput");
 const memberWtbInventoryTypeInput = document.getElementById("memberWtbInventoryTypeInput");
@@ -290,9 +308,9 @@ let buyingInventoryType = localStorage.getItem("kc_buying_inventory_type") || "a
 if (!["all", "b2b", "private"].includes(buyingInventoryType)) {
   buyingInventoryType = "all";
 }
-// Deep-link naar een tab: /?tab=wtb of /?tab=quick. Zonder dit opent de site
-// altijd op wat er in localStorage staat, en kon je vanuit Discord dus niet
-// rechtstreeks naar de WTB's linken.
+// Deep link to a tab: /?tab=wtb or /?tab=quick. Without this the site always
+// opens on whatever localStorage holds, so a Discord message could not link
+// straight to the want-to-buys.
 const kcTabParam = new URLSearchParams(window.location.search).get("tab");
 
 let currentType =
@@ -306,8 +324,8 @@ if (!["quick", "wtb"].includes(currentType)) {
   currentType = "quick";
 }
 
-// Een deep-link naar de WTB's moet ook de Selling-sectie openen; anders sta je
-// in Buying en zie je de tab niet eens.
+// A deep link to the want-to-buys has to open the Selling section too;
+// otherwise you land in Buying and never see the tab at all.
 if (kcTabParam === "wtb" || kcTabParam === "quick") {
   currentMainMode = "selling";
   localStorage.setItem("kc_main_mode", "selling");
@@ -1134,6 +1152,15 @@ submitMemberWtbBtn?.addEventListener("click", async () => {
     memberWtbError.textContent = "Enter a SKU and a size.";
     return;
   }
+  // One want-to-buy is one pair in one size. Someone once typed
+  // "36 X3 37 X5 38 X5 39 X5" here and it became a single record nothing
+  // downstream could fulfil. The server refuses this too; saying it here
+  // saves a round trip and reads better than a failed submit.
+  if (!isSingleWtbSize(size)) {
+    memberWtbError.textContent =
+      "Enter one size, like 43, 44.5 or 41 1/3. Post a separate want-to-buy for each size you need.";
+    return;
+  }
 
   // Typed but unusable is still an error - only a genuinely empty field
   // means "no ceiling".
@@ -1860,9 +1887,8 @@ loginForm.addEventListener("submit", async (event) => {
     updateLoginState();
     closeModal();
 
-    // Herinnering aan de Discord-koppeling. Zie public/discord-gate.js; hij
-    // wacht een halve minuut, zodat dit niet meteen over het inlogscherm
-    // heen valt.
+    // Reminder to link Discord. See public/discord-gate.js; it waits half a
+    // minute so this does not land straight on top of the sign-in screen.
     window.kcDiscordGate?.schedule(data.seller);
     
     if (pendingBuyingProductKey) {
@@ -2059,8 +2085,8 @@ confirmClaimBtn.addEventListener("click", async () => {
   
     showSuccessToast("Deal claimed successfully");
   } catch (err) {
-    // Staat het Discord-venster al open, dan is dit dezelfde melding een
-    // tweede keer - en die staat dan onder een venster dat hem afdekt.
+    // If the Discord dialog is already open this is the same message twice,
+    // and the second one sits underneath a dialog that covers it.
     claimError.textContent = window.kcDiscordGate?.isOpen() ? "" : err.message;
   } finally {
     confirmClaimBtn.disabled = false;
@@ -2146,13 +2172,12 @@ confirmOfferBtn.addEventListener("click", async () => {
     const data = await response.json();
     if (!response.ok) {
       const failure = new Error(data.error || data.details || "Offer failed");
-      // De Discord-gate stuurt een code en een link mee; zonder deze twee
-      // regels blijft daar alleen kale tekst van over en kan de seller er
-      // niets mee.
+      // The Discord gate sends a code and a link along; without these two
+      // lines only bare text survives and the seller can do nothing with it.
       failure.code = data.code || "";
-      // De nieuwe middleware onderscheidt "nooit gekoppeld" van "eruit
-      // gestapt" via reason; zonder deze regel valt dat verschil weg en
-      // staat er "Link Discord" op een knop die "Rejoin" hoort te zeggen.
+      // The middleware tells "never linked" apart from "left the server" via
+      // reason; without this line that difference is lost and a button reads
+      // "Link Discord" where it should say "Rejoin".
       failure.reason = data.reason || "";
       failure.details = data.details || "";
       failure.linkUrl = data.link_url || "";
@@ -2165,9 +2190,9 @@ confirmOfferBtn.addEventListener("click", async () => {
     await loadDeals(currentType);
     showSuccessToast("Offer submitted successfully");
   } catch (err) {
-    // Opende het gedeelde Discord-venster al? Dan hier niets meer tonen.
-    // Anders staat dezelfde melding twee keer op het scherm, en dekt de
-    // onderste de knop af die het probleem oplost.
+    // Did the shared Discord dialog already open? Then show nothing here.
+    // Otherwise the same message is on screen twice, and the lower one covers
+    // the button that fixes the problem.
     if (err.linkUrl && window.kcDiscordGate?.isOpen()) {
       offerError.textContent = "";
     } else if (err.linkUrl) {
@@ -2188,22 +2213,22 @@ confirmOfferBtn.addEventListener("click", async () => {
       link.className = "offer-error-action";
       link.href = err.linkUrl;
 
-      // Het Discord-logo erbij, net als in het dashboard en op de
-      // offer-pagina. Dit was een kale gouden knop, en goud is de kleur van
-      // onze eigen acties - deze stuurt je ergens anders heen.
+      // The Discord logo alongside it, same as in the dashboard and on the
+      // offer page. This was a plain gold button, and gold is the colour of
+      // our own actions - this one sends you somewhere else.
       link.innerHTML =
         '<svg viewBox="0 0 127.14 96.36" aria-hidden="true" focusable="false">' +
         '<path fill="currentColor" d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22h0C129.24,52.84,122.09,29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,46,96.12,53,91.08,65.69,84.69,65.69Z"/></svg>' +
         "<span></span>";
 
-      // Twee redenen om geweigerd te worden, twee codes: de oude guard stuurt
-      // discord_left_server, de nieuwe middleware discord_not_linked met een
-      // reason erbij. Allebei nakijken, anders leest iemand die de server
-      // heeft verlaten "Link Discord" terwijl hij al gekoppeld is.
-      const eruitGestapt =
+      // Two reasons to be refused, two codes: the older guard sends
+      // discord_left_server, the middleware sends discord_not_linked with a
+      // reason attached. Check both, or someone who left the server reads
+      // "Link Discord" while they are already linked.
+      const leftServer =
         err.code === "discord_left_server" || err.reason === "left_server";
 
-      link.querySelector("span").textContent = eruitGestapt
+      link.querySelector("span").textContent = leftServer
         ? "Rejoin Discord"
         : "Link Discord";
 
@@ -2244,11 +2269,11 @@ function showSuccessToast(message) {
 // than to whatever opens it, so this sits in one place for every dialog in
 // this portal.
 (function () {
-  const VENSTERS = ".modal-backdrop";
-  const SLUITKNOPPEN = ".modal-close";
+  const DIALOGS = ".modal-backdrop";
+  const CLOSE_BUTTONS = ".modal-close";
 
   function openDialogs() {
-    return Array.from(document.querySelectorAll(VENSTERS))
+    return Array.from(document.querySelectorAll(DIALOGS))
       .filter((v) => getComputedStyle(v).display !== "none" && !v.classList.contains("hidden"));
   }
 
@@ -2261,7 +2286,7 @@ function showSuccessToast(message) {
   // Watch only the dialogs, not the whole page: the tables change classes
   // constantly and none of that needs to trigger anything here.
   const observer = new MutationObserver(syncOpenState);
-  document.querySelectorAll(VENSTERS).forEach((v) => {
+  document.querySelectorAll(DIALOGS).forEach((v) => {
     observer.observe(v, { attributes: true, attributeFilter: ["class", "style"] });
   });
 
@@ -2274,7 +2299,7 @@ function showSuccessToast(message) {
     // Close the topmost dialog through its own close button, so whatever
     // cleanup is attached to it still runs.
     const topDialog = open[open.length - 1];
-    const btnEl = topDialog.querySelector(SLUITKNOPPEN);
+    const btnEl = topDialog.querySelector(CLOSE_BUTTONS);
 
     if (btnEl) {
       btnEl.click();
@@ -2288,9 +2313,9 @@ function showSuccessToast(message) {
 
   syncOpenState();
 })();
-// Sessie-revalidatie. localStorage ("kc_seller") overleeft het verlopen of
-// wissen van de sessiecookie, waardoor de UI ingelogd bleef lijken terwijl elke
-// schrijfactie een 401 kreeg. Deze check brengt beide weer in lijn.
+// Session revalidation. localStorage ("kc_seller") outlives the session
+// cookie expiring or being cleared, which left the UI looking signed in while
+// every write got a 401. This check brings the two back in line.
 (async () => {
   if (!currentSeller) return;
 
@@ -2313,11 +2338,12 @@ function showSuccessToast(message) {
       localStorage.setItem("kc_seller", JSON.stringify(currentSeller));
       updateLoginState();
 
-      // Bewust op wat de server zojuist zei, niet op localStorage: wie na
-      // het inloggen uit de server stapt staat daar nog als lid in.
+      // Deliberately on what the server just said, not on localStorage:
+      // someone who leaves the server after signing in still shows as a
+      // member there.
       window.kcDiscordGate?.schedule(data.seller);
     }
   } catch (err) {
-    // Netwerkfout: laat de bestaande staat met rust.
+    // Network error: leave the existing state alone.
   }
 })();
