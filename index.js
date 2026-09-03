@@ -442,7 +442,23 @@ async function initKickzDealDiscord() {
 // same two IDs are what a later sweep needs to disable this embed if the
 // order goes to a regular seller instead.
 async function rememberConsignmentConfirmMessage(sellerOfferRecordId, discordResult) {
-  if (!discordResult?.messageId) return;
+  /*
+    A missing message id was silent, which cost half an hour of looking for
+    a bug that was not there: an offer with no id turned out to have been
+    denied, and denyConsignmentSellerOffer deliberately clears both fields.
+    An id that never arrives in the first place is a different matter - the
+    sweep would then be unable to disable that embed - so it says so now.
+  */
+  if (!discordResult?.messageId) {
+    console.error(
+      `No Discord message id came back for Seller Offer ${sellerOfferRecordId} ` +
+        `(channel ${discordResult?.channelId || "unknown"}, delivery ` +
+        `${discordResult?.deliveryType || "unknown"}). The embed cannot be ` +
+        "disabled later."
+    );
+
+    return;
+  }
 
   await airtable(SELLER_OFFERS_TABLE).update(sellerOfferRecordId, {
     "Consignment Confirm Channel ID": asText(discordResult.channelId),
