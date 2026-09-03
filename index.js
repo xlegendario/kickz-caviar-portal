@@ -12383,6 +12383,38 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       }
     }
 
+    /*
+      NEW - additive only: and everyone else holding this pair.
+
+      A buyer who pressed Buy or made an Offer has named a number, which is
+      exactly what engageConsignorNow means here - and it is why the consignor
+      above was spoken to at all. One consignor is one point of failure, so
+      the others are asked at the same budget and the first Confirm wins.
+
+      Deliberately NOT for a plainly posted want-to-buy: engageConsignorNow is
+      false there, nothing was said to anyone, and a Max Price is a ceiling
+      rather than an agreement. Those fan out later, when the buyer accepts -
+      see askConsignorToConfirmMemberWtbOffer.
+
+      Store orders fan out from the store-accept and store-counter paths
+      instead, because that is where their commitment lands.
+
+      Non-blocking: the consignor above is the offer the buyer is waiting on.
+    */
+    if (engageConsignorNow && source.kind === "member_wtb" && calculatedOfferPrice > 0) {
+      askOtherConsignorsForMemberWtb({
+        memberWtbRecordId: source.recordId,
+        memberFields: sourceRecord?.fields || {},
+        askedInventoryId: best.row.id,
+        budgetNormalized: calculatedOfferPrice
+      }).catch((err) =>
+        console.error(
+          `Failed to ask the other consignors for ${source.recordId} (non-blocking):`,
+          err.message
+        )
+      );
+    }
+
     res.json({
       ...baseResponse,
       is_confirmation: isConfirmation,
