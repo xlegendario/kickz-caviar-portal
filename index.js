@@ -11586,10 +11586,12 @@ app.post("/api/internal/member-wtb-payment-gate", async (req, res) => {
      * agreed to. A want-to-buy with a 200 ceiling filled at 117.44 was
      * charged 200.
      *
-     * The agreed figure is on the record: the payout the claiming seller took,
-     * converted to the buyer's side of the same deal by the helper every other
-     * route uses for exactly this. Written only when the field is still empty,
-     * so a price set elsewhere is never overwritten.
+     * So the same question process-seller-offer asks is asked here, through
+     * the same function: what does the buyer owe, given what this seller is
+     * paid. On an open want-to-buy that is the payout plus the margin; on one
+     * the buyer negotiated it is the figure he agreed to, untouched by the
+     * rounding that shaved the seller's side. Written only when the field is
+     * still empty, so a price set elsewhere is never overwritten.
      */
     const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
     const memberFields = memberWtb.fields || {};
@@ -11597,11 +11599,12 @@ app.post("/api/internal/member-wtb-payment-gate", async (req, res) => {
     const claimedPayout = numberValue(memberFields["Claimed Seller Payout"]);
 
     if (claimedPayout > 0 && !(numberValue(memberFields["Final Buying Price"]) > 0)) {
-      const buyerPrice = calculateMemberWtbBuyerEquivalent(
-        claimedPayout,
-        asText(memberFields["Claimed Seller VAT Type"]),
-        memberFields
-      );
+      const buyerPrice = await resolveMemberWtbBuyerPrice({
+        memberWtbRecordId,
+        memberFields,
+        purchasePrice: claimedPayout,
+        vatType: asText(memberFields["Claimed Seller VAT Type"])
+      });
 
       if (numberValue(buyerPrice) > 0) {
         await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
@@ -34407,6 +34410,118 @@ function getBuyingCurrentLowestSourcePriceForMemberWtb({
   return Math.round(sellerPrice || displayPrice);
 }
 
+/*
+ * What the buyer owes for a want-to-buy, given what the seller is paid.
+ *
+ * Lifted out of process-seller-offer unchanged so a snapshot can ask the same
+ * question. A snapshot never passes through that endpoint, and the copy of
+ * this rule it would otherwise need is exactly the kind of second opinion
+ * that drifts: one of the two gets a VAT fix or a rounding fix and the other
+ * quietly keeps charging the old number.
+ *
+ * The two branches are not interchangeable. An open want-to-buy is priced
+ * forward from the seller's payout plus the margin; one the buyer has
+ * negotiated settles at the figure he actually agreed to, which is why an
+ * accepted counter is not recomputed here.
+ */
+async function resolveMemberWtbBuyerPrice({
+  memberWtbRecordId,
+  memberFields,
+  purchasePrice,
+  vatType
+}) {
+  const isOpenWtbFlow = memberFields['Auto Accept Seller Offers?'] !== true;
+
+  let finalBuyingPrice;
+
+  if (isOpenWtbFlow) {
+    // FIXED — was Number(memberFields['Offer Margin'] || 10), which
+    // read the right field but with two problems: an empty lookup
+    // array is truthy in JS, so Number([]) silently produced a margin
+    // of 0; and a configured 0 was taken literally where Airtable's
+    // IF({Offer Margin}, {Offer Margin}, 10) falls back to 10. Now
+    // goes through the one shared helper the negotiation side uses,
+    // so this number can never drift from the counter prices the
+    // buyer and seller were actually shown.
+    const offerMargin = getMemberWtbMargin(memberFields);
+    const offerToBuyer = Number(memberFields['Offer To Buyer'] || 0);
+
+    if (vatType === 'VAT0') {
+      finalBuyingPrice = purchasePrice + offerMargin;
+    } else if (vatType === 'VAT21') {
+      finalBuyingPrice = (purchasePrice / 1.21) + offerMargin;
+    } else {
+      // CHANGED - margin goods carry no VAT to reclaim, so the mark-up we
+      // add IS what we keep. The setting means a NET amount everywhere
+      // else - the shop quotes markup x 1.21 and so does the negotiation -
+      // and this branch was still adding it flat, earning 8.26 on a 10.
+      //
+      // Through the shared function now, so the offer the buyer was shown
+      // and the price he is charged cannot drift apart again. The Airtable
+      // "Offer To Buyer" formula still wins when it is filled, and its own
+      // Margin branch needs the same x 1.21 to agree with this.
+      finalBuyingPrice =
+        offerToBuyer ||
+        calculateMemberWtbBuyerEquivalent(purchasePrice, vatType, memberFields);
+    }
+
+    // CHANGED - the whole euro belongs on the invoice, not on the net.
+    //
+    // The shop and the denial fallback both quote this pair at 153, which
+    // is the amount including VAT. This variable is the NET figure, and
+    // the invoice is 1.21 times it for a Dutch buyer. Rounding the net
+    // would have produced 126 x 1.21 = 152,46 - a whole euro nowhere and
+    // still not the number the buyer was shown.
+    //
+    // So the gross is rounded and the net carried back from it. That keeps
+    // net x 1.21 exactly equal to the invoice, so the VAT line stays right
+    // instead of being a cent off.
+    //
+    // Only this consignment branch. The else below settles at the Max
+    // Price the buyer typed himself, which is his own figure to keep.
+    const grossToBuyer = memberWtbBuyerInvoiceAmount(
+      finalBuyingPrice,
+      vatType,
+      memberFields
+    );
+
+    if (Number.isFinite(grossToBuyer) && grossToBuyer > 0) {
+      const roundedGross = Math.ceil(grossToBuyer);
+
+      const carriesDutchVat =
+        (vatType === 'VAT0' || vatType === 'VAT21') &&
+        !memberWtbIsReverseCharge(memberFields);
+
+      finalBuyingPrice = carriesDutchVat
+        ? Math.round((roundedGross / 1.21) * 100) / 100
+        : roundedGross;
+    } else {
+      finalBuyingPrice = Math.round(finalBuyingPrice * 100) / 100;
+    }
+  } else {
+    // CHANGED - this settled at the Max Price on the reasoning that it
+    // was "the buyer's own figure to keep". True right up to the moment
+    // a seller counters and the buyer accepts a higher number: the
+    // agreement is then that number, and Max Price is stale. See
+    // resolveMemberWtbAgreedBuyerPrice - without a negotiated round it
+    // still answers exactly the Max Price this always used.
+    const agreed = await resolveMemberWtbAgreedBuyerPrice({
+      memberWtbRecordId,
+      memberFields,
+      vatType
+    });
+
+    finalBuyingPrice = agreed.price;
+
+    console.log(
+      `Member WTB ${memberWtbRecordId}: buyer price ${finalBuyingPrice} ` +
+        `via ${agreed.via}, payout ${purchasePrice}`
+    );
+  }
+
+  return finalBuyingPrice;
+}
+
 app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
   try {
     const secret = asText(req.headers['x-kc-secret']);
@@ -34476,94 +34591,12 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
     // override only if the record's own type is somehow blank.
     const vatType = asText(offerFields['Offer VAT Type']) || overrideVatTypeForProcessing;
 
-    const isOpenWtbFlow = memberFields['Auto Accept Seller Offers?'] !== true;
-
-    let finalBuyingPrice;
-
-    if (isOpenWtbFlow) {
-      // FIXED — was Number(memberFields['Offer Margin'] || 10), which
-      // read the right field but with two problems: an empty lookup
-      // array is truthy in JS, so Number([]) silently produced a margin
-      // of 0; and a configured 0 was taken literally where Airtable's
-      // IF({Offer Margin}, {Offer Margin}, 10) falls back to 10. Now
-      // goes through the one shared helper the negotiation side uses,
-      // so this number can never drift from the counter prices the
-      // buyer and seller were actually shown.
-      const offerMargin = getMemberWtbMargin(memberFields);
-      const offerToBuyer = Number(memberFields['Offer To Buyer'] || 0);
-
-      if (vatType === 'VAT0') {
-        finalBuyingPrice = purchasePrice + offerMargin;
-      } else if (vatType === 'VAT21') {
-        finalBuyingPrice = (purchasePrice / 1.21) + offerMargin;
-      } else {
-        // CHANGED - margin goods carry no VAT to reclaim, so the mark-up we
-        // add IS what we keep. The setting means a NET amount everywhere
-        // else - the shop quotes markup x 1.21 and so does the negotiation -
-        // and this branch was still adding it flat, earning 8.26 on a 10.
-        //
-        // Through the shared function now, so the offer the buyer was shown
-        // and the price he is charged cannot drift apart again. The Airtable
-        // "Offer To Buyer" formula still wins when it is filled, and its own
-        // Margin branch needs the same x 1.21 to agree with this.
-        finalBuyingPrice =
-          offerToBuyer ||
-          calculateMemberWtbBuyerEquivalent(purchasePrice, vatType, memberFields);
-      }
-
-      // CHANGED - the whole euro belongs on the invoice, not on the net.
-      //
-      // The shop and the denial fallback both quote this pair at 153, which
-      // is the amount including VAT. This variable is the NET figure, and
-      // the invoice is 1.21 times it for a Dutch buyer. Rounding the net
-      // would have produced 126 x 1.21 = 152,46 - a whole euro nowhere and
-      // still not the number the buyer was shown.
-      //
-      // So the gross is rounded and the net carried back from it. That keeps
-      // net x 1.21 exactly equal to the invoice, so the VAT line stays right
-      // instead of being a cent off.
-      //
-      // Only this consignment branch. The else below settles at the Max
-      // Price the buyer typed himself, which is his own figure to keep.
-      const grossToBuyer = memberWtbBuyerInvoiceAmount(
-        finalBuyingPrice,
-        vatType,
-        memberFields
-      );
-
-      if (Number.isFinite(grossToBuyer) && grossToBuyer > 0) {
-        const roundedGross = Math.ceil(grossToBuyer);
-
-        const carriesDutchVat =
-          (vatType === 'VAT0' || vatType === 'VAT21') &&
-          !memberWtbIsReverseCharge(memberFields);
-
-        finalBuyingPrice = carriesDutchVat
-          ? Math.round((roundedGross / 1.21) * 100) / 100
-          : roundedGross;
-      } else {
-        finalBuyingPrice = Math.round(finalBuyingPrice * 100) / 100;
-      }
-    } else {
-      // CHANGED - this settled at the Max Price on the reasoning that it
-      // was "the buyer's own figure to keep". True right up to the moment
-      // a seller counters and the buyer accepts a higher number: the
-      // agreement is then that number, and Max Price is stale. See
-      // resolveMemberWtbAgreedBuyerPrice - without a negotiated round it
-      // still answers exactly the Max Price this always used.
-      const agreed = await resolveMemberWtbAgreedBuyerPrice({
-        memberWtbRecordId,
-        memberFields,
-        vatType
-      });
-
-      finalBuyingPrice = agreed.price;
-
-      console.log(
-        `Member WTB ${memberWtbRecordId}: buyer price ${finalBuyingPrice} ` +
-          `via ${agreed.via}, payout ${purchasePrice}`
-      );
-    }
+    const finalBuyingPrice = await resolveMemberWtbBuyerPrice({
+      memberWtbRecordId,
+      memberFields,
+      purchasePrice,
+      vatType
+    });
 
     if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) {
       return res.status(400).json({ error: 'Invalid seller offer price' });
