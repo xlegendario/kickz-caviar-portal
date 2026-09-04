@@ -688,6 +688,117 @@ async function countLiveConsignmentRequestsForMemberWtb(memberWtbRecordId) {
  * understands the old Supabase rows. They accept the number or they do not.
  * The cheapest consignor's own offer is the ceiling in any case.
  */
+/*
+ * Take the snapshot down the moment the pair is actually spoken for.
+ *
+ * The bot sweeps for this too, but a sweep runs every couple of minutes and
+ * that is a couple of minutes in which a seller can press Claim on a deal
+ * that is already gone - and get refused for his trouble. So it is closed
+ * here, where we know, and the sweep is only the net for whatever this
+ * misses.
+ *
+ * Non-blocking and deliberately quiet: the deal is done by the time this
+ * runs, and a snapshot left standing is a nuisance, not a broken deal.
+ */
+const DEAL_BOT_BASE_URL = process.env.DEAL_BOT_BASE_URL || "";
+
+/*
+ * Put a snapshot up, or refresh the one already standing.
+ *
+ * A snapshot is the same price the consignors are being offered, but open to
+ * any seller rather than only the people already holding the pair. It exists
+ * because a buyer has just committed to a number and we would rather fill the
+ * order today than wait out whoever happens to have it in stock.
+ *
+ * Posted only while the deal is nobody's. That is a whitelist and not a list
+ * of exclusions on purpose: "Outsource" is the one status that means we are
+ * still looking for a supplier, and naming it is safer than trying to name
+ * every status that means we are not. A store accepting a seller's bid, for
+ * instance, leaves the order at "Confirmed" with no unit and no claim channel
+ * yet - an exclusion list would have missed it and advertised a deal that was
+ * already spoken for.
+ *
+ * The bot decides whether this becomes a new message or an edit of the one
+ * already up, and holds it back to the morning if it is the middle of the
+ * night. Nothing here needs to know which of those it is.
+ */
+async function createSnapshotForRecord({ recordId, source, price }) {
+  if (!DEAL_BOT_BASE_URL || !recordId) return { ok: false, reason: "not_configured" };
+
+  const amount = Number(price);
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { ok: false, reason: "no_price" };
+  }
+
+  const tableName = source === "member_wtb" ? MEMBER_WTBS_TABLE : ORDERS_TABLE;
+
+  const record = await airtable(tableName).find(recordId).catch(() => null);
+
+  if (!record) return { ok: false, reason: "record_not_found" };
+
+  const f = record.fields || {};
+
+  if (asText(f["Fulfillment Status"]) !== "Outsource") {
+    return { ok: false, reason: "not_outsource" };
+  }
+
+  if (firstLinkedRecordId(f["Linked Inventory Unit"])) {
+    return { ok: false, reason: "already_supplied" };
+  }
+
+  if (asText(f["Claimed Channel ID"])) {
+    return { ok: false, reason: "already_claimed" };
+  }
+
+  const response = await fetch(
+    `${DEAL_BOT_BASE_URL.replace(/\/$/, "")}/snapshot-deal/create`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recordId, source, price: amount })
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Deal bot refused the snapshot: ${response.status} ${await response.text()}`);
+  }
+
+  const data = await response.json().catch(() => ({}));
+
+  console.log(
+    `Snapshot ${data.queued ? "queued" : data.refreshed ? "refreshed" : "posted"} ` +
+      `for ${recordId} (${tableName}) at ${amount}.`
+  );
+
+  return { ok: true, ...data };
+}
+
+/*
+ * The same call, wrapped so a caller can forget about it.
+ *
+ * Every place this runs from has already done the thing that matters - a
+ * consignor has been asked, a counter has been sent - and a snapshot is the
+ * extra chance on top. It must never be the reason one of those fails.
+ */
+function offerSnapshotFor({ recordId, source, price }) {
+  createSnapshotForRecord({ recordId, source, price }).catch((err) =>
+    console.error(`Snapshot for ${recordId} failed (non-blocking):`, err.message)
+  );
+}
+
+function closeSnapshotForRecord({ recordId, source, status = "Claimed" }) {
+  if (!DEAL_BOT_BASE_URL || !recordId) return;
+
+  fetch(`${DEAL_BOT_BASE_URL.replace(/\/$/, "")}/snapshot-deal/close`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ recordId, source, status })
+  }).catch((err) =>
+    console.error(`Failed to close the snapshot for ${recordId} (non-blocking):`, err.message)
+  );
+}
+
 async function askOtherConsignorsForOrder({
   orderRecordId,
   orderFields,
@@ -1013,6 +1124,14 @@ async function askConsignorToConfirmMemberWtbOffer({
     Non-blocking: the consignor above has been asked and that is the deal.
     Whatever happens here must not undo it.
   */
+  // And the same price, open to any seller. See createSnapshotForRecord
+  // for when this is allowed to go out at all.
+  offerSnapshotFor({
+    recordId: memberWtbRecordId,
+    source: "member_wtb",
+    price: getConsignmentComparePrice(calculatedOfferPrice, asText(f["Offer VAT Type"]))
+  });
+
   askOtherConsignorsForMemberWtb({
     memberWtbRecordId,
     memberFields: mf,
@@ -1207,6 +1326,11 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
     // also what getConsignmentPendingConfirmOfferIds uses to decide an offer
     // is no longer waiting on an answer, so leaving it empty kept a finished
     // deal counted as pending in the badges.
+    closeSnapshotForRecord({
+      recordId: memberWtbRecordIdForConfirm,
+      source: "member_wtb"
+    });
+
     if (processData.inventory_unit_record_id) {
       await airtable(SELLER_OFFERS_TABLE).update(sellerOfferRecordId, {
         "Linked Inventory Unit": [processData.inventory_unit_record_id]
@@ -1432,6 +1556,9 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
   };
 
   const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer(offerLike);
+
+  // The pair has a supplier now, so nobody should still be able to claim it.
+  closeSnapshotForRecord({ recordId: orderRecordId, source: "order" });
 
   // Record the result on the Seller Offer itself — this is what the
   // idempotency guard above reads on a second click.
@@ -12416,6 +12543,12 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       Non-blocking: the consignor above is the offer the buyer is waiting on.
     */
     if (engageConsignorNow && source.kind === "member_wtb" && calculatedOfferPrice > 0) {
+      offerSnapshotFor({
+        recordId: source.recordId,
+        source: "member_wtb",
+        price: calculatedOfferPrice
+      });
+
       askOtherConsignorsForMemberWtb({
         memberWtbRecordId: source.recordId,
         memberFields: sourceRecord?.fields || {},
@@ -13722,6 +13855,12 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
         Non-blocking, like everywhere else this runs: the round above is the
         deal in progress and must stand whatever happens here.
       */
+      offerSnapshotFor({
+        recordId: linkedOrderId,
+        source: "order",
+        price: getConsignmentComparePrice(recomputedPayout, sellerVatType)
+      });
+
       askOtherConsignorsForOrder({
         orderRecordId: linkedOrderId,
         orderFields,
@@ -14188,6 +14327,15 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
               below is already decided. Whatever happens here must not undo
               either.
             */
+            offerSnapshotFor({
+              recordId: linkedOrderId,
+              source: "order",
+              price: getConsignmentComparePrice(
+                sellerPriceForGuard,
+                asText(inventoryRowForGuard.vat_type)
+              )
+            });
+
             askOtherConsignorsForOrder({
               orderRecordId: linkedOrderId,
               orderFields: orderRecord.fields || {},
