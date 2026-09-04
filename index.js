@@ -11554,6 +11554,40 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
 // Takes a single sku or a list. The list is for the sync, which walks
 // thousands of products per run; calling per product would cost as much
 // HTTP traffic as it saves.
+/*
+ * Ask for the payment link on a want-to-buy that was filled outside the
+ * offer flow.
+ *
+ * Every other route that supplies one - from our own stock, or through
+ * process-seller-offer - runs this gate itself, right after it confirms the
+ * purchase. A snapshot claim does not pass through any of them: the deal is
+ * struck in Discord and the unit is created by a scenario, so nothing on this
+ * side ever gets the chance.
+ *
+ * The result was a deal that looked finished and could not be paid for. The
+ * gate is safe to ask for twice - it reuses a live payment rather than making
+ * a second one - so the caller does not have to know whether it already ran.
+ */
+app.post("/api/internal/member-wtb-payment-gate", async (req, res) => {
+  try {
+    const memberWtbRecordId = String(req.body?.member_wtb_record_id || "").trim();
+
+    if (!memberWtbRecordId) {
+      return res.status(400).json({ error: "member_wtb_record_id is required" });
+    }
+
+    const paymentGate = await handleMemberWtbPaymentGate(memberWtbRecordId);
+
+    return res.json({ ok: true, payment_gate: paymentGate });
+  } catch (err) {
+    console.error("Member WTB payment gate failed:", err);
+
+    return res
+      .status(err.statusCode || 500)
+      .json({ error: "Failed to run the payment gate", details: err.message });
+  }
+});
+
 app.post("/api/internal/resolve-sku", async (req, res) => {
   try {
     const secret = asText(req.headers["x-kc-secret"]);
