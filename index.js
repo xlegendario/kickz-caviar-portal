@@ -11576,6 +11576,45 @@ app.post("/api/internal/member-wtb-payment-gate", async (req, res) => {
       return res.status(400).json({ error: "member_wtb_record_id is required" });
     }
 
+    /*
+     * Work out what the buyer owes before asking for the money.
+     *
+     * Final Buying Price is normally written by process-seller-offer, which a
+     * snapshot never passes through, so the field is empty here. The amount
+     * helper falls back through Invoice Price to Final Buying Price to Max
+     * Price - and Max Price is the ceiling the buyer set, not the number he
+     * agreed to. A want-to-buy with a 200 ceiling filled at 117.44 was
+     * charged 200.
+     *
+     * The agreed figure is on the record: the payout the claiming seller took,
+     * converted to the buyer's side of the same deal by the helper every other
+     * route uses for exactly this. Written only when the field is still empty,
+     * so a price set elsewhere is never overwritten.
+     */
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+    const memberFields = memberWtb.fields || {};
+
+    const claimedPayout = numberValue(memberFields["Claimed Seller Payout"]);
+
+    if (claimedPayout > 0 && !(numberValue(memberFields["Final Buying Price"]) > 0)) {
+      const buyerPrice = calculateMemberWtbBuyerEquivalent(
+        claimedPayout,
+        asText(memberFields["Claimed Seller VAT Type"]),
+        memberFields
+      );
+
+      if (numberValue(buyerPrice) > 0) {
+        await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+          "Final Buying Price": buyerPrice
+        });
+
+        console.log(
+          `Member WTB ${memberWtbRecordId}: buyer price set to ${buyerPrice} ` +
+            `from a claimed payout of ${claimedPayout}.`
+        );
+      }
+    }
+
     const paymentGate = await handleMemberWtbPaymentGate(memberWtbRecordId);
 
     return res.json({ ok: true, payment_gate: paymentGate });
