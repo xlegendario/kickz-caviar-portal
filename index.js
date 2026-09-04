@@ -723,6 +723,15 @@ const DEAL_BOT_BASE_URL = process.env.DEAL_BOT_BASE_URL || "";
  * night. Nothing here needs to know which of those it is.
  */
 async function createSnapshotForRecord({ recordId, source, price }) {
+  /*
+    The price must be the number a consignor is offered, not the raw budget.
+
+    getConsignmentSellerOfferPrice rounds down to the EUR 2.50 grid, so a
+    budget of 129 reaches a consignor as 127.50. A snapshot advertising the
+    unrounded 129 would sit 1.50 above what the people already holding the
+    pair were asked for - and they would simply claim the snapshot instead of
+    answering their own offer. Callers pass it through that same function.
+  */
   if (!DEAL_BOT_BASE_URL || !recordId) return { ok: false, reason: "not_configured" };
 
   const amount = Number(price);
@@ -1129,7 +1138,10 @@ async function askConsignorToConfirmMemberWtbOffer({
   offerSnapshotFor({
     recordId: memberWtbRecordId,
     source: "member_wtb",
-    price: getConsignmentComparePrice(calculatedOfferPrice, asText(f["Offer VAT Type"]))
+    price: getConsignmentSellerOfferPrice(
+      getConsignmentComparePrice(calculatedOfferPrice, asText(f["Offer VAT Type"])),
+      "Margin"
+    )
   });
 
   askOtherConsignorsForMemberWtb({
@@ -12546,7 +12558,7 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       offerSnapshotFor({
         recordId: source.recordId,
         source: "member_wtb",
-        price: calculatedOfferPrice
+        price: getConsignmentSellerOfferPrice(calculatedOfferPrice, "Margin")
       });
 
       askOtherConsignorsForMemberWtb({
@@ -13858,7 +13870,10 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
       offerSnapshotFor({
         recordId: linkedOrderId,
         source: "order",
-        price: getConsignmentComparePrice(recomputedPayout, sellerVatType)
+        price: getConsignmentSellerOfferPrice(
+          getConsignmentComparePrice(recomputedPayout, sellerVatType),
+          "Margin"
+        )
       });
 
       askOtherConsignorsForOrder({
@@ -14330,9 +14345,12 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
             offerSnapshotFor({
               recordId: linkedOrderId,
               source: "order",
-              price: getConsignmentComparePrice(
-                sellerPriceForGuard,
-                asText(inventoryRowForGuard.vat_type)
+              price: getConsignmentSellerOfferPrice(
+                getConsignmentComparePrice(
+                  sellerPriceForGuard,
+                  asText(inventoryRowForGuard.vat_type)
+                ),
+                "Margin"
               )
             });
 
