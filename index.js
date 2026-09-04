@@ -19331,6 +19331,64 @@ function getTimeToMax(startTime) {
   return `${hours}h ${minutes}m left`;
 }
 
+/*
+ * A snapshot, as a card on the selling page.
+ *
+ * Deliberately flat compared to the two beside it. A quick deal climbs
+ * towards a maximum and a want-to-buy invites an offer, so both carry a
+ * range and a clock to reason about. A snapshot is one price, take it or
+ * leave it, and the only thing that moves is the hour running out.
+ *
+ * Both tables produce this, because a snapshot on a store order and one on
+ * a want-to-buy are the same offer to a seller - the difference is ours to
+ * carry, not his to read.
+ *
+ * The stored price is the Margin figure. A VAT0 seller invoices without VAT,
+ * so his side of the same deal is that number over 1.21 - the conversion the
+ * Discord embed already shows, kept identical here so the two cannot quote
+ * different amounts for one pair.
+ */
+function normalizeSnapshotDeal(record, sourceType) {
+  const f = record.fields || {};
+
+  const price = numberValue(f["Snapshot Price"]);
+  const isMemberWtb = sourceType === "member_wtb";
+
+  return {
+    id: record.id,
+    source_type: sourceType,
+    deal_type: "snapshot",
+    order_id: displayValue(isMemberWtb ? f["Member WTB ID"] : f["Order ID"]) || record.id,
+    product: displayValue(f["Product Name"]),
+    sku: displayValue(f["SKU"]) || displayValue(f["SKU (Soft)"]),
+    size: displayValue(f["Size"]),
+    brand: displayValue(f["Brand"]),
+    image_url: getImageUrl(f["Picture"]),
+    auto_offer_accept: "No",
+    fulfillment_status: displayValue(f["Fulfillment Status"]),
+    outsource_start_time: displayValue(isMemberWtb ? f["Date"] : f["Outsource Start Time"]),
+    time_to_max: "",
+    current_payout_margin: price > 0 ? moneyValue(price) : "",
+    max_payout_margin: "",
+    current_payout_vat0:
+      price > 0 ? moneyValue(Math.round((price / 1.21) * 100) / 100) : "",
+    max_payout_vat0: "",
+    current_offer_margin: "",
+    current_offer_vat0: "",
+    snapshot_expires_at: displayValue(f["Snapshot Expires At"]),
+    /*
+     * No VAT restriction travels with the card.
+     *
+     * Which scales a seller may claim in is a fact about his own company,
+     * not about this deal, and the page already answers it: the session
+     * carries his allowed types and applyVatRestrictions greys out the rest
+     * wherever a VAT choice appears. Sending a second opinion along with
+     * every card would be one more copy of that rule to drift.
+     */
+    raw_date: displayValue(isMemberWtb ? f["Date"] : f["Outsource Start Time"])
+  };
+}
+
 async function normalizeDeal(record, dealType) {
   const f = record.fields || {};
 
@@ -31632,6 +31690,67 @@ app.post("/api/reset-password", async (req, res) => {
   }
 });
 
+/*
+ * Claiming a snapshot from the selling page.
+ *
+ * A pass-through, like the quick deal claim beside it. The bot owns the
+ * Discord side of a claim - the private channel, the embed, closing the
+ * snapshot that is still up - so doing any of it here would be a second
+ * copy of a thing that has to happen exactly once.
+ *
+ * Which table the snapshot came from travels with it, because a snapshot on
+ * a store order and one on a want-to-buy look identical to a seller and are
+ * stored in different places.
+ */
+app.post("/api/claim-snapshot", async (req, res) => {
+  try {
+    const {
+      recordId,
+      sourceType,
+      sellerRecordId,
+      sellerId,
+      sellerDiscordId,
+      vatType
+    } = req.body || {};
+
+    const botBaseUrl = process.env.KICKZ_BOT_BASE_URL;
+
+    if (!botBaseUrl) {
+      return res.status(500).json({ error: "Missing KICKZ_BOT_BASE_URL" });
+    }
+
+    const response = await fetch(
+      `${botBaseUrl.replace(/\/$/, "")}/snapshot-deal/claim`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recordId,
+          source: sourceType === "member_wtb" ? "member_wtb" : "order",
+          sellerRecordId,
+          sellerId,
+          sellerDiscordId,
+          vatType
+        })
+      }
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: data.error || "Claim failed"
+      });
+    }
+
+    return res.json(data);
+  } catch (err) {
+    console.error("Snapshot claim failed:", err);
+
+    return res.status(500).json({ error: "Failed to claim this snapshot" });
+  }
+});
+
 app.post("/api/claim-deal", async (req, res) => {
   try {
     const {
@@ -32261,6 +32380,8 @@ app.get("/api/brands", async (req, res) => {
           )
         )
       )`;
+    } else if (type === "snapshot") {
+      formula = `AND({Snapshot Status} = 'Active', {Brand} != '')`;
     } else {
       return res.status(400).json({ error: "Invalid deal type" });
     }
@@ -32272,8 +32393,21 @@ app.get("/api/brands", async (req, res) => {
       })
       .all();
 
+    // Snapshots live on both tables, so the filter above them has to offer
+    // the brands from both. Left alone for the other two types, which only
+    // ever come from orders.
+    const snapshotWtbRecords =
+      type === "snapshot"
+        ? await airtable(MEMBER_WTBS_TABLE)
+            .select({
+              fields: ["Brand"],
+              filterByFormula: `AND({Snapshot Status} = 'Active', {Brand} != '')`
+            })
+            .all()
+        : [];
+
     const brands = [...new Set(
-      records
+      [...records, ...snapshotWtbRecords]
         .map((record) => displayValue(record.fields?.["Brand"]))
         .filter(Boolean)
     )].sort((a, b) => a.localeCompare(b));
@@ -32318,6 +32452,16 @@ app.get("/api/deals", async (req, res) => {
           )
         )
       )`;
+    } else if (type === "snapshot") {
+      /*
+       * Only the ones actually up.
+       *
+       * "Active" is written when the embed is posted and cleared the moment
+       * it is claimed, expires or is overtaken, so it is the same truth the
+       * Discord side works from. A queued snapshot is held back for the
+       * morning and has nothing behind it yet, which is why it is not here.
+       */
+      formula = `{Snapshot Status} = 'Active'`;
     } else {
       return res.status(400).json({
         error: "Invalid deal type"
@@ -32386,7 +32530,9 @@ app.get("/api/deals", async (req, res) => {
     }
     
     if (sort === "payout_low" || sort === "payout_high") {
-      if (type === "quick") {
+      if (type === "snapshot") {
+        sortField = "Snapshot Price";
+      } else if (type === "quick") {
         sortField =
           priceView === "vat0"
             ? "Outsource Buying Price (VAT 0%)"
@@ -32425,8 +32571,63 @@ app.get("/api/deals", async (req, res) => {
     }
     
     const records = airtableData.records || [];
-    let deals = await Promise.all(records.map((record) => normalizeDeal(record, type)));
+    let deals = type === "snapshot"
+      ? records.map((record) => normalizeSnapshotDeal(record, "order"))
+      : await Promise.all(records.map((record) => normalizeDeal(record, type)));
     
+    /*
+     * The want-to-buy half of the snapshot list.
+     *
+     * A snapshot lives on both tables and reads the same to a seller, so the
+     * two halves are merged the way the want-to-buys already are. Newest
+     * first regardless of the chosen sort: these expire within the hour, and
+     * the one posted a minute ago is the one still worth claiming.
+     *
+     * No first-page guard like the block below needs, because a snapshot list
+     * is a handful of rows at most and never pages.
+     */
+    if (type === "snapshot" && !offset) {
+      const snapshotWtbRecords = await airtable(MEMBER_WTBS_TABLE)
+        .select({
+          fields: [
+            "Member WTB ID",
+            "Product Name",
+            "SKU",
+            "Size",
+            "Brand",
+            "Picture",
+            "Date",
+            "Fulfillment Status",
+            "Snapshot Price",
+            "Snapshot Expires At",
+            "Buyer Seller ID"
+          ],
+          filterByFormula: `{Snapshot Status} = 'Active'`
+        })
+        .all();
+
+      // A seller never sees a snapshot on his own want-to-buy, for the same
+      // reason he never sees his own want-to-buys in the list beside it.
+      const snapshotViewerId = asText(readSession(req, SESSION_SECRET)?.rid);
+
+      const visibleSnapshotRecords = snapshotViewerId
+        ? snapshotWtbRecords.filter(
+            (record) =>
+              !linkedRecordIncludes(record.fields?.["Buyer Seller ID"], snapshotViewerId)
+          )
+        : snapshotWtbRecords;
+
+      deals = [
+        ...deals,
+        ...visibleSnapshotRecords.map((record) =>
+          normalizeSnapshotDeal(record, "member_wtb")
+        )
+      ].sort(
+        (a, b) =>
+          new Date(b.raw_date || 0).getTime() - new Date(a.raw_date || 0).getTime()
+      );
+    }
+
     // Only on the first page. Paging runs on Airtable's offset for the store
     // orders alone, so appending the want-to-buys to every page showed the
     // same ones again each time the reader scrolled.
