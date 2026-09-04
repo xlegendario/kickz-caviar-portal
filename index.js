@@ -19172,6 +19172,46 @@ async function loadOrderFieldsMap(orderRecordIds) {
   return orderMap;
 }
 
+/*
+ * The same for want-to-buys, so a deal that came from one can be shown
+ * beside the orders instead of in a section of its own.
+ *
+ * A snapshot claimed on a want-to-buy produces an Inventory Unit linked to
+ * Member WTBs rather than to an order, and the Quick Deals tabs read
+ * everything they display off the linked order. Without this they would show
+ * a row with a price and nothing else - no order number, no link to the
+ * channel the seller is standing in.
+ */
+async function loadMemberWtbFieldsMap(memberWtbRecordIds) {
+  const uniqueIds = [...new Set(memberWtbRecordIds)].filter(Boolean);
+  const wtbMap = new Map();
+
+  for (let i = 0; i < uniqueIds.length; i += 25) {
+    const batch = uniqueIds.slice(i, i + 25);
+
+    const formula = `OR(${batch
+      .map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`)
+      .join(",")})`;
+
+    const records = await airtable(MEMBER_WTBS_TABLE)
+      .select({
+        fields: [
+          "Member WTB ID",
+          "Claimed Channel ID",
+          "Snapshot Status"
+        ],
+        filterByFormula: formula
+      })
+      .all();
+
+    records.forEach((record) => {
+      wtbMap.set(record.id, record.fields || {});
+    });
+  }
+
+  return wtbMap;
+}
+
 function normalizeDashboardOpenClaim(record) {
   const f = record.fields || {};
   const channelId = displayValue(f["Claimed Channel ID"]);
@@ -25227,6 +25267,9 @@ app.get("/api/dashboard/quick-confirmed", async (req, res) => {
           "Item ID",
           "Type",
           "Fulfillment Status (UOL)",
+          "Fulfillment Status (MWTB)",
+          "Member WTBs",
+          "Member WTB ID",
           "Seller Offer",
           "Unfulfilled Orders Log",
           "Product Name",
@@ -25240,7 +25283,7 @@ app.get("/api/dashboard/quick-confirmed", async (req, res) => {
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Fulfillment Status (UOL)} = 'Allocated'
+          OR({Fulfillment Status (UOL)} = 'Allocated', {Fulfillment Status (MWTB)} = 'Allocated')
         )`
       })
       .all();
@@ -25264,16 +25307,55 @@ app.get("/api/dashboard/quick-confirmed", async (req, res) => {
 
     const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
-    const items = filteredInventory.map((record) => {
+    // Snapshot claims on a want-to-buy hang off Member WTBs instead of an
+    // order, and everything shown below is read off the parent record.
+    const linkedWtbIds = [
+      ...new Set(
+        filteredInventory
+          .map((record) => firstLinkedRecordId(record.fields?.["Member WTBs"]))
+          .filter(Boolean)
+      )
+    ];
+
+    const wtbMap = await loadMemberWtbFieldsMap(linkedWtbIds);
+
+
+    /*
+     * Of the want-to-buys, only the ones a seller took off a snapshot.
+     *
+     * Widening the query above admits every unit hanging off a want-to-buy,
+     * and most of those were filled long before snapshots existed. They
+     * belong in the Want To Buys tab and would otherwise turn up here as
+     * well. A claimed snapshot is the one case that has no offer behind it
+     * and no home of its own, which is why it is shown beside the quick
+     * deals it behaves exactly like.
+     */
+    const dashboardInventory = filteredInventory.filter((record) => {
+      const wtbId = firstLinkedRecordId(record.fields?.["Member WTBs"]);
+
+      if (!wtbId) return true;
+
+      return displayValue(wtbMap.get(wtbId)?.["Snapshot Status"]) === "Claimed";
+    });
+
+    const items = dashboardInventory.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
       const orderFields = orderMap.get(linkedOrderId) || {};
-      const channelId = displayValue(orderFields["Claimed Channel ID"]);
+      const linkedWtbId = firstLinkedRecordId(f["Member WTBs"]);
+      const wtbFields = linkedWtbId ? wtbMap.get(linkedWtbId) || {} : {};
+
+      const channelId =
+        displayValue(orderFields["Claimed Channel ID"]) ||
+        displayValue(wtbFields["Claimed Channel ID"]);
 
       return {
         id: record.id,
-        order_id: displayValue(orderFields["Order ID"]),
+        order_id:
+          displayValue(orderFields["Order ID"]) ||
+          displayValue(wtbFields["Member WTB ID"]),
         order_record_id: linkedOrderId,
+        member_wtb_record_id: linkedWtbId || "",
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
@@ -25321,6 +25403,9 @@ app.get("/api/dashboard/quick-label-requested", async (req, res) => {
           "Item ID",
           "Type",
           "Fulfillment Status (UOL)",
+          "Fulfillment Status (MWTB)",
+          "Member WTBs",
+          "Member WTB ID",
           "Seller Offer",
           "Unfulfilled Orders Log",
           "Product Name",
@@ -25334,7 +25419,7 @@ app.get("/api/dashboard/quick-label-requested", async (req, res) => {
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Fulfillment Status (UOL)} = 'Requested Label'
+          OR({Fulfillment Status (UOL)} = 'Requested Label', {Fulfillment Status (MWTB)} = 'Requested Label')
         )`
       })
       .all();
@@ -25358,15 +25443,53 @@ app.get("/api/dashboard/quick-label-requested", async (req, res) => {
 
     const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
-    const items = filteredInventory.map((record) => {
+    // Snapshot claims on a want-to-buy hang off Member WTBs instead of an
+    // order, and everything shown below is read off the parent record.
+    const linkedWtbIds = [
+      ...new Set(
+        filteredInventory
+          .map((record) => firstLinkedRecordId(record.fields?.["Member WTBs"]))
+          .filter(Boolean)
+      )
+    ];
+
+    const wtbMap = await loadMemberWtbFieldsMap(linkedWtbIds);
+
+
+    /*
+     * Of the want-to-buys, only the ones a seller took off a snapshot.
+     *
+     * Widening the query above admits every unit hanging off a want-to-buy,
+     * and most of those were filled long before snapshots existed. They
+     * belong in the Want To Buys tab and would otherwise turn up here as
+     * well. A claimed snapshot is the one case that has no offer behind it
+     * and no home of its own, which is why it is shown beside the quick
+     * deals it behaves exactly like.
+     */
+    const dashboardInventory = filteredInventory.filter((record) => {
+      const wtbId = firstLinkedRecordId(record.fields?.["Member WTBs"]);
+
+      if (!wtbId) return true;
+
+      return displayValue(wtbMap.get(wtbId)?.["Snapshot Status"]) === "Claimed";
+    });
+
+    const items = dashboardInventory.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
       const orderFields = orderMap.get(linkedOrderId) || {};
-      const channelId = displayValue(orderFields["Claimed Channel ID"]);
+      const linkedWtbId = firstLinkedRecordId(f["Member WTBs"]);
+      const wtbFields = linkedWtbId ? wtbMap.get(linkedWtbId) || {} : {};
+
+      const channelId =
+        displayValue(orderFields["Claimed Channel ID"]) ||
+        displayValue(wtbFields["Claimed Channel ID"]);
 
       return {
         id: record.id,
-        order_id: displayValue(orderFields["Order ID"]),
+        order_id:
+          displayValue(orderFields["Order ID"]) ||
+          displayValue(wtbFields["Member WTB ID"]),
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
@@ -25414,6 +25537,9 @@ app.get("/api/dashboard/quick-ready-to-ship", async (req, res) => {
           "Item ID",
           "Type",
           "Fulfillment Status (UOL)",
+          "Fulfillment Status (MWTB)",
+          "Member WTBs",
+          "Member WTB ID",
           "Seller Offer",
           "Unfulfilled Orders Log",
           "Product Name",
@@ -25427,7 +25553,7 @@ app.get("/api/dashboard/quick-ready-to-ship", async (req, res) => {
         filterByFormula: `AND(
           LEFT({Item ID} & '', 4) = 'OUT-',
           {Type} = 'Custom',
-          {Fulfillment Status (UOL)} = 'Ready to Ship'
+          OR({Fulfillment Status (UOL)} = 'Ready to Ship', {Fulfillment Status (MWTB)} = 'Ready to Ship')
         )`
       })
       .all();
@@ -25451,11 +25577,47 @@ app.get("/api/dashboard/quick-ready-to-ship", async (req, res) => {
 
     const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
-    const items = filteredInventory.map((record) => {
+    // Snapshot claims on a want-to-buy hang off Member WTBs instead of an
+    // order, and everything shown below is read off the parent record.
+    const linkedWtbIds = [
+      ...new Set(
+        filteredInventory
+          .map((record) => firstLinkedRecordId(record.fields?.["Member WTBs"]))
+          .filter(Boolean)
+      )
+    ];
+
+    const wtbMap = await loadMemberWtbFieldsMap(linkedWtbIds);
+
+
+    /*
+     * Of the want-to-buys, only the ones a seller took off a snapshot.
+     *
+     * Widening the query above admits every unit hanging off a want-to-buy,
+     * and most of those were filled long before snapshots existed. They
+     * belong in the Want To Buys tab and would otherwise turn up here as
+     * well. A claimed snapshot is the one case that has no offer behind it
+     * and no home of its own, which is why it is shown beside the quick
+     * deals it behaves exactly like.
+     */
+    const dashboardInventory = filteredInventory.filter((record) => {
+      const wtbId = firstLinkedRecordId(record.fields?.["Member WTBs"]);
+
+      if (!wtbId) return true;
+
+      return displayValue(wtbMap.get(wtbId)?.["Snapshot Status"]) === "Claimed";
+    });
+
+    const items = dashboardInventory.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
       const orderFields = orderMap.get(linkedOrderId) || {};
-      const channelId = displayValue(orderFields["Claimed Channel ID"]);
+      const linkedWtbId = firstLinkedRecordId(f["Member WTBs"]);
+      const wtbFields = linkedWtbId ? wtbMap.get(linkedWtbId) || {} : {};
+
+      const channelId =
+        displayValue(orderFields["Claimed Channel ID"]) ||
+        displayValue(wtbFields["Claimed Channel ID"]);
       const permanentLabelUrl =
         displayValue(orderFields["Shipping Label URL (Permanent)"]);
       
@@ -25467,7 +25629,9 @@ app.get("/api/dashboard/quick-ready-to-ship", async (req, res) => {
 
       return {
         id: record.id,
-        order_id: displayValue(orderFields["Order ID"]),
+        order_id:
+          displayValue(orderFields["Order ID"]) ||
+          displayValue(wtbFields["Member WTB ID"]),
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
@@ -25516,6 +25680,9 @@ app.get("/api/dashboard/quick-shipped", async (req, res) => {
           "Item ID",
           "Type",
           "Fulfillment Status (UOL)",
+          "Fulfillment Status (MWTB)",
+          "Member WTBs",
+          "Member WTB ID",
           "Shipping Status",
           "Seller Offer",
           "Unfulfilled Orders Log",
@@ -25554,16 +25721,54 @@ app.get("/api/dashboard/quick-shipped", async (req, res) => {
 
     const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
-    const items = filteredInventory.map((record) => {
+    // Snapshot claims on a want-to-buy hang off Member WTBs instead of an
+    // order, and everything shown below is read off the parent record.
+    const linkedWtbIds = [
+      ...new Set(
+        filteredInventory
+          .map((record) => firstLinkedRecordId(record.fields?.["Member WTBs"]))
+          .filter(Boolean)
+      )
+    ];
+
+    const wtbMap = await loadMemberWtbFieldsMap(linkedWtbIds);
+
+
+    /*
+     * Of the want-to-buys, only the ones a seller took off a snapshot.
+     *
+     * Widening the query above admits every unit hanging off a want-to-buy,
+     * and most of those were filled long before snapshots existed. They
+     * belong in the Want To Buys tab and would otherwise turn up here as
+     * well. A claimed snapshot is the one case that has no offer behind it
+     * and no home of its own, which is why it is shown beside the quick
+     * deals it behaves exactly like.
+     */
+    const dashboardInventory = filteredInventory.filter((record) => {
+      const wtbId = firstLinkedRecordId(record.fields?.["Member WTBs"]);
+
+      if (!wtbId) return true;
+
+      return displayValue(wtbMap.get(wtbId)?.["Snapshot Status"]) === "Claimed";
+    });
+
+    const items = dashboardInventory.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
       const orderFields = orderMap.get(linkedOrderId) || {};
-      const channelId = displayValue(orderFields["Claimed Channel ID"]);
+      const linkedWtbId = firstLinkedRecordId(f["Member WTBs"]);
+      const wtbFields = linkedWtbId ? wtbMap.get(linkedWtbId) || {} : {};
+
+      const channelId =
+        displayValue(orderFields["Claimed Channel ID"]) ||
+        displayValue(wtbFields["Claimed Channel ID"]);
       const trackingUrl = displayValue(orderFields["Tracking URL"]);
 
       return {
         id: record.id,
-        order_id: displayValue(orderFields["Order ID"]),
+        order_id:
+          displayValue(orderFields["Order ID"]) ||
+          displayValue(wtbFields["Member WTB ID"]),
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
@@ -25612,6 +25817,9 @@ app.get("/api/dashboard/quick-delivered", async (req, res) => {
           "Item ID",
           "Type",
           "Fulfillment Status (UOL)",
+          "Fulfillment Status (MWTB)",
+          "Member WTBs",
+          "Member WTB ID",
           "Shipping Status",
           "Payment Status",
           "Seller Offer",
@@ -25654,16 +25862,54 @@ app.get("/api/dashboard/quick-delivered", async (req, res) => {
 
     const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
-    const items = filteredInventory.map((record) => {
+    // Snapshot claims on a want-to-buy hang off Member WTBs instead of an
+    // order, and everything shown below is read off the parent record.
+    const linkedWtbIds = [
+      ...new Set(
+        filteredInventory
+          .map((record) => firstLinkedRecordId(record.fields?.["Member WTBs"]))
+          .filter(Boolean)
+      )
+    ];
+
+    const wtbMap = await loadMemberWtbFieldsMap(linkedWtbIds);
+
+
+    /*
+     * Of the want-to-buys, only the ones a seller took off a snapshot.
+     *
+     * Widening the query above admits every unit hanging off a want-to-buy,
+     * and most of those were filled long before snapshots existed. They
+     * belong in the Want To Buys tab and would otherwise turn up here as
+     * well. A claimed snapshot is the one case that has no offer behind it
+     * and no home of its own, which is why it is shown beside the quick
+     * deals it behaves exactly like.
+     */
+    const dashboardInventory = filteredInventory.filter((record) => {
+      const wtbId = firstLinkedRecordId(record.fields?.["Member WTBs"]);
+
+      if (!wtbId) return true;
+
+      return displayValue(wtbMap.get(wtbId)?.["Snapshot Status"]) === "Claimed";
+    });
+
+    const items = dashboardInventory.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
       const orderFields = orderMap.get(linkedOrderId) || {};
-      const channelId = displayValue(orderFields["Claimed Channel ID"]);
+      const linkedWtbId = firstLinkedRecordId(f["Member WTBs"]);
+      const wtbFields = linkedWtbId ? wtbMap.get(linkedWtbId) || {} : {};
+
+      const channelId =
+        displayValue(orderFields["Claimed Channel ID"]) ||
+        displayValue(wtbFields["Claimed Channel ID"]);
       const trackingUrl = displayValue(orderFields["Tracking URL"]);
 
       return {
         id: record.id,
-        order_id: displayValue(orderFields["Order ID"]),
+        order_id:
+          displayValue(orderFields["Order ID"]) ||
+          displayValue(wtbFields["Member WTB ID"]),
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
