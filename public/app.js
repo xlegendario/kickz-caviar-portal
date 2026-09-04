@@ -907,7 +907,12 @@ dealsGrid.addEventListener("click", (event) => {
     const dealId = dealButton.dataset.dealId;
     if (!dealId) return;
 
-    if (dealButton.dataset.dealAction === "claim") openClaimModal(dealId);
+    const action = dealButton.dataset.dealAction;
+
+    // A snapshot is claimed, not offered on, so it opens the same dialog a
+    // quick deal does - including the VAT restrictions and the Discord check
+    // that already live there.
+    if (action === "claim" || action === "snapshot") openClaimModal(dealId);
     else openOfferFlow(dealId);
 
     return;
@@ -1396,10 +1401,52 @@ async function loadDeals(type = "quick", reset = true) {
     }
   }
 }
+/*
+ * How long a snapshot still has, in words.
+ *
+ * Rendered once rather than ticked. The hour is a deadline and not a
+ * stopwatch: a seller needs to know whether he has fifty minutes or four,
+ * and the list reloads often enough that a stale minute costs nothing. A
+ * second-by-second timer on every card would be motion for its own sake.
+ */
+function snapshotTimeLeft(expiresAt) {
+  const end = new Date(expiresAt || 0).getTime();
+
+  if (!Number.isFinite(end) || end <= 0) return "Live";
+
+  const minutes = Math.floor((end - Date.now()) / 60000);
+
+  if (minutes <= 0) return "Ending now";
+  if (minutes < 60) return `${minutes}m left`;
+
+  return "1h left";
+}
+
 function renderDealCard(deal) {
-  const isQuick = (deal.deal_type || currentType) === "quick";
+  const dealType = deal.deal_type || currentType;
+  const isQuick = dealType === "quick";
+  const isSnapshot = dealType === "snapshot";
   const isClaimProcessing = deal.fulfillment_status === "Claim Processing";
-  const payoutHtml = isQuick
+  /*
+   * One box, not two.
+   *
+   * A quick deal shows Current beside Max because the payout climbs towards
+   * it, and a want-to-buy shows what the competition is at. A snapshot has
+   * neither: it is one number for one hour, and a second box would only
+   * invite the reader to look for a better one that is not coming.
+   */
+  const payoutHtml = isSnapshot
+    ? `
+      <div class="deal-payouts">
+        <div class="payout-box">
+          <span class="payout-label">Payout</span>
+          <span class="payout-value">
+            ${escapeHtml(priceView === "vat0" ? deal.current_payout_vat0 || "-" : deal.current_payout_margin || "-")}
+          </span>
+        </div>
+      </div>
+    `
+    : isQuick
     ? `
       <div class="deal-payouts">
         <div class="payout-box">
@@ -1446,14 +1493,20 @@ function renderDealCard(deal) {
       </div>
       <div class="deal-body">
         <div class="deal-top">
-          <span class="deal-badge ${isQuick ? "quick" : "offer"}">
-            ${isQuick ? "Quick Deal" : "Want To Buy"}
+          <span class="deal-badge ${isSnapshot ? "snapshot" : isQuick ? "quick" : "offer"}">
+            ${isSnapshot ? "Snapshot" : isQuick ? "Quick Deal" : "Want To Buy"}
           </span>
           <span class="deal-time">
             <!-- FIXED (A5) - no fallback here, so a missing time_to_max put
                  the literal word "undefined" on the card. The Buying card
                  right next to it guards every field with || "-". -->
-            ${isQuick ? escapeHtml(deal.time_to_max || "-") : "Offer Eligible"}
+            ${
+              isSnapshot
+                ? escapeHtml(snapshotTimeLeft(deal.snapshot_expires_at))
+                : isQuick
+                ? escapeHtml(deal.time_to_max || "-")
+                : "Offer Eligible"
+            }
           </span>
         </div>
         <h3 class="deal-title">
@@ -1469,13 +1522,21 @@ function renderDealCard(deal) {
              a data attribute plus one delegated listener; this now does the
              same. -->
         <button
-          class="deal-btn ${!isQuick ? "offer-btn" : ""} ${isClaimProcessing ? "disabled-btn" : ""}"
+          class="deal-btn ${!isQuick && !isSnapshot ? "offer-btn" : ""} ${isClaimProcessing ? "disabled-btn" : ""}"
           type="button"
           ${isClaimProcessing ? "disabled" : ""}
           data-deal-id="${escapeHtml(deal.id || "")}"
-          data-deal-action="${isQuick ? "claim" : "offer"}"
+          data-deal-action="${isSnapshot ? "snapshot" : isQuick ? "claim" : "offer"}"
         >
-          ${isClaimProcessing ? "Claim in Progress..." : isQuick ? "Claim Deal" : "Make Offer"}
+          ${
+            isClaimProcessing
+              ? "Claim in Progress..."
+              : isSnapshot
+              ? "Claim Snapshot"
+              : isQuick
+              ? "Claim Deal"
+              : "Make Offer"
+          }
         </button>
       </div>
     </article>
@@ -1497,6 +1558,7 @@ function renderDealTable(deals) {
       </div>
       ${deals.map((deal) => {
         const isQuick = (deal.deal_type || currentType) === "quick";
+        const isSnapshot = (deal.deal_type || currentType) === "snapshot";
         const isClaimProcessing = deal.fulfillment_status === "Claim Processing";
         return `
           <div class="table-row">
@@ -1538,19 +1600,21 @@ function renderDealTable(deals) {
                 : "<div></div>"
             }
             ${
-              isQuick
+              isSnapshot
+                ? `<div>${snapshotTimeLeft(deal.snapshot_expires_at)}</div>`
+                : isQuick
                 ? `<div>${deal.time_to_max || "-"}</div>`
                 : "<div></div>"
             }
             <div>
               <button
-                class="table-btn ${!isQuick ? "offer-btn" : ""} ${isClaimProcessing ? "disabled-btn" : ""}"
+                class="table-btn ${!isQuick && !isSnapshot ? "offer-btn" : ""} ${isClaimProcessing ? "disabled-btn" : ""}"
                 type="button"
                 ${isClaimProcessing ? "disabled" : ""}
                 onclick="${
                   isClaimProcessing
                     ? ""
-                    : isQuick
+                    : isQuick || isSnapshot
                       ? `openClaimModal('${deal.id}')`
                       : `openOfferFlow('${deal.id}')`
                 }"
@@ -1558,9 +1622,11 @@ function renderDealTable(deals) {
                 ${
                   isClaimProcessing
                     ? "In Progress"
-                    : isQuick
+                    : isSnapshot
                       ? "Claim"
-                      : "Offer"
+                      : isQuick
+                        ? "Claim"
+                        : "Offer"
                 }
               </button>
             </div>
@@ -1965,7 +2031,11 @@ function openClaimModal(dealId) {
   // now refuses to proceed on a deal that isn't genuinely a Quick
   // Deal (deal_type !== "quick"), rather than trusting the button
   // that was clicked.
-  if (selectedDeal.deal_type && selectedDeal.deal_type !== "quick") {
+  if (
+    selectedDeal.deal_type &&
+    selectedDeal.deal_type !== "quick" &&
+    selectedDeal.deal_type !== "snapshot"
+  ) {
     showAlert("This listing is a Want To Buy, not a Quick Deal. Please refresh and use Make Offer instead.");
     selectedDeal = null;
     loadDeals(currentType, true);
@@ -2055,19 +2125,33 @@ confirmClaimBtn.addEventListener("click", async () => {
   claimError.textContent = "";
   
   try {
-    const response = await fetch("/api/claim-deal", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        recordId: selectedDeal.id,
-        sellerRecordId: currentSeller.id,
-        sellerId: currentSeller.seller_id,
-        sellerDiscordId: currentSeller.discord_id,
-        vatType: selectedVatType
-      })
-    });
+    /*
+     * Same dialog, two destinations.
+     *
+     * A quick deal and a snapshot ask the seller exactly the same question,
+     * so they share this modal - but they are settled by different code, and
+     * a snapshot has to say which table it came from because it can be
+     * either a store order or a want-to-buy.
+     */
+    const isSnapshotClaim = selectedDeal.deal_type === "snapshot";
+
+    const response = await fetch(
+      isSnapshotClaim ? "/api/claim-snapshot" : "/api/claim-deal",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          recordId: selectedDeal.id,
+          sellerRecordId: currentSeller.id,
+          sellerId: currentSeller.seller_id,
+          sellerDiscordId: currentSeller.discord_id,
+          vatType: selectedVatType,
+          ...(isSnapshotClaim ? { sourceType: selectedDeal.source_type } : {})
+        })
+      }
+    );
   
     const data = await response.json();
   
