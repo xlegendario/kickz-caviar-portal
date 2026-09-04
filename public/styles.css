@@ -376,6 +376,18 @@ body {
   color: #ffcc00;
 }
 
+/*
+ * Green, where the other two are gold and blue.
+ *
+ * A snapshot is the only card on this page that expires within the hour, so
+ * it has to read as different at a glance rather than as a third shade of
+ * the same thing.
+ */
+.deal-badge.snapshot {
+  background: rgba(46, 204, 113, 0.16);
+  color: #4ade80;
+}
+
 .deal-badge.offer {
   background: rgba(0, 153, 255, 0.14);
   color: #58b5ff;
@@ -1394,10 +1406,18 @@ body.modal-open {
     line-height: 1.35;
   }
 
+  /*
+   * Stacked on a phone, both full width.
+   *
+   * Two columns worked while Deal Type had two buttons. A third turns them
+   * into slivers, and the payout view is not a filter to be tucked away -
+   * a seller picking the wrong VAT scale is the one mistake here that costs
+   * real money, so it stays as prominent as the deal type above it.
+   */
   .market-top-row {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
+    grid-template-columns: 1fr;
+    gap: 14px;
     margin-bottom: 18px;
   }
 
@@ -2533,7 +2553,7 @@ body.kc-dialog-open {
   }
 }
 
-/* Foutmelding van de Discord-gate: tekst plus een knop die het meteen oplost. */
+/* The Discord gate's error text, with a button that resolves it on the spot. */
 .offer-error-detail {
   margin-top: 6px;
   color: #b9b9b9;
@@ -2542,13 +2562,13 @@ body.kc-dialog-open {
   line-height: 1.45;
 }
 
-/* CHANGED - dit was een gouden knop, en dat is de kleur van onze eigen
-   acties. Deze knop stuurt je naar Discord, en die herken je sneller aan
-   hun huisstijl dan aan de onze. Zelfde knop als in het dashboard en op de
-   offer-pagina, zodat het overal dezelfde handeling lijkt.
+/* CHANGED - this used to be a gold button, and gold is the colour of our
+   own actions. This button sends you to Discord, and people recognise that
+   faster by their branding than by ours. Same button as in the dashboard
+   and on the offer page, so it reads as one action everywhere.
 
-   De regels staan hier omdat de home page alleen styles.css laadt; in
-   dashboard.css staat dezelfde definitie voor de andere twee. */
+   The rules live here because the home page loads only styles.css; the
+   same definition sits in dashboard.css for the other two. */
 .offer-error-action {
   display: inline-flex;
   align-items: center;
@@ -2574,9 +2594,9 @@ body.kc-dialog-open {
   flex: 0 0 auto;
 }
 
-/* De guide staat naast Sign up en Login maar vraagt niet om dezelfde
-   aandacht: dit is naslag, geen stap in een flow. Zelfde vorm en hoogte als
-   zijn buren, rustiger van kleur. */
+/* The guide sits beside Sign up and Login but does not ask for the same
+   attention: it is reference, not a step in a flow. Same shape and height
+   as its neighbours, quieter in colour. */
 .guide-btn {
   padding: 0 16px;
   border: 1px solid #242424;
