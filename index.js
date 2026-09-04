@@ -19343,10 +19343,15 @@ function getTimeToMax(startTime) {
  * a want-to-buy are the same offer to a seller - the difference is ours to
  * carry, not his to read.
  *
- * The stored price is the Margin figure. A VAT0 seller invoices without VAT,
- * so his side of the same deal is that number over 1.21 - the conversion the
- * Discord embed already shows, kept identical here so the two cannot quote
- * different amounts for one pair.
+ * The stored price is the Margin figure, and a VAT0 seller invoices without
+ * VAT, so his side of the same deal is that number over 1.21 - rounded down
+ * to the EUR 2.50 grid, through the same function that prices a consignor's
+ * offer.
+ *
+ * FIXED - this divided and left it there, so a card promised EUR 105.37 on a
+ * snapshot that pays EUR 105.00. The grid is not cosmetic: the consignors
+ * already holding the pair were offered a grid number, and a snapshot paying
+ * a euro more would have them ignore their own offer and claim this instead.
  */
 function normalizeSnapshotDeal(record, sourceType) {
   const f = record.fields || {};
@@ -19368,10 +19373,11 @@ function normalizeSnapshotDeal(record, sourceType) {
     fulfillment_status: displayValue(f["Fulfillment Status"]),
     outsource_start_time: displayValue(isMemberWtb ? f["Date"] : f["Outsource Start Time"]),
     time_to_max: "",
-    current_payout_margin: price > 0 ? moneyValue(price) : "",
+    current_payout_margin:
+      price > 0 ? moneyValue(getConsignmentSellerOfferPrice(price, "Margin")) : "",
     max_payout_margin: "",
     current_payout_vat0:
-      price > 0 ? moneyValue(Math.round((price / 1.21) * 100) / 100) : "",
+      price > 0 ? moneyValue(getConsignmentSellerOfferPrice(price, "VAT0")) : "",
     max_payout_vat0: "",
     current_offer_margin: "",
     current_offer_vat0: "",
