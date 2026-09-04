@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="icon" href="https://i.imgur.com/gRmfHif.png">
+  <link rel="icon" type="image/png" href="https://i.imgur.com/gRmfHif.png">
 <title>Guide &middot; Kickz Caviar</title>
 
 <style>
@@ -315,7 +315,7 @@
   <div class="task">
     <h3>The two switches at the top</h3>
     <ul>
-      <li><strong>Deal Type</strong> &mdash; <kbd>Quick Deals</kbd> or <kbd>Want To Buys</kbd>. Two ways to sell. Both are explained below.</li>
+      <li><strong>Deal Type</strong> &mdash; <kbd>Snapshot Deals</kbd>, <kbd>Quick Deals</kbd> or <kbd>Want To Buys</kbd>. Three ways to sell. All three are explained below.</li>
       <li><strong>Payout View</strong> &mdash; <kbd>Margin / VAT21</kbd> or <kbd>VAT0</kbd>. This does not change the deal, only which payout you see. Set it to the scale you invoice in. The price on the card is the number you get.</li>
     </ul>
     <div class="note"><strong>Set this first.</strong> Always select the payout view that matches how you invoice. Using the wrong view means you'll be comparing offers against the wrong payout amount.</div>
@@ -333,7 +333,7 @@
 </section>
 
 <section class="part" id="quick">
-  <h2><span class="num">03 &middot; QUICK DEALS</span>Claim at a fixed payout</h2>
+  <h2><span class="num">03 &middot; QUICK &amp; SNAPSHOT DEALS</span>Claim at a fixed payout</h2>
   <p>A Quick Deal is a pair we need, at a payout we have already set. Nothing to negotiate. The price is on the card, and the first one to claim it gets it.</p>
 
   <div class="task">
@@ -369,6 +369,28 @@
       <div class="shot-frame"><span><b>Screenshot 6</b>The Confirm VAT Type window that opens after pressing Claim Deal.<br><br>desktop: <span style="color:var(--gold)">shot-06.png</span> &nbsp;·&nbsp; phone: <span style="color:var(--gold)">shot-06-mobile.png</span></span></div>
       <figcaption>The VAT type directly affects your payout, so make sure it matches the VAT treatment of the pair you're selling.</figcaption>
     </figure>
+  </div>
+
+  <div class="task">
+    <h3>Snapshot Deals</h3>
+    <p>A Snapshot is a pair we need <strong>today</strong>. A buyer has already agreed a price, and rather than wait for whoever happens to have the pair sitting in stock, we put it in front of everyone at once.</p>
+    <p>It works like a Quick Deal, with two differences:</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th></th><th>Quick Deal</th><th>Snapshot Deal</th></tr></thead>
+        <tbody>
+          <tr><td>Payout</td><td>Climbs from Current to Max</td><td>One fixed amount</td></tr>
+          <tr><td>How long</td><td>Stays up until claimed</td><td>One hour, then it is gone</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Because the payout never moves, there is nothing to gain by waiting. The card shows one amount and the time left on the hour. Snapshots only appear between <strong>10:00 and 22:00</strong>, so one that would otherwise land in the middle of the night is held back until the morning.</p>
+    <p class="muted">The same deal is posted in Discord at the same moment. Whoever claims first gets it, from either side, and the other one closes immediately.</p>
+    <figure class="shot" id="shot-22" data-shot="22">
+      <div class="shot-frame"><span><b>Screenshot 22</b>One Snapshot Deal card, close up: the green Snapshot badge, the time left, the single payout box, and the Claim Snapshot button.<br><br>desktop: <span style="color:var(--gold)">shot-22.png</span> &nbsp;&middot;&nbsp; phone: <span style="color:var(--gold)">shot-22-mobile.png</span></span></div>
+      <figcaption>One price, one hour. There is no Max to wait for.</figcaption>
+    </figure>
+    <p>Claiming is the same as a Quick Deal: press <kbd class="gold">Claim Snapshot</kbd>, pick your VAT type, confirm. After that it follows exactly the same route, under <span class="tab">Quick Deals</span> in your dashboard.</p>
   </div>
 
   <div class="task">
@@ -649,7 +671,7 @@
   <p>The tabs in the sidebar are not categories, but steps in the deal process. A deal moves through them in order, and its current step shows you where it stands and who needs to act next. Select a deal type below to see how its Chain works.</p>
 
   <div class="chain-switch">
-    <button type="button" data-chain="quick" aria-pressed="false">Quick Deals</button>
+    <button type="button" data-chain="quick" aria-pressed="false">Quick/Snapshot Deals</button>
     <button type="button" data-chain="wtb" aria-pressed="true">Want To Buys</button>
     <button type="button" data-chain="cons" aria-pressed="false">Consignment</button>
     <button type="button" data-chain="buy" aria-pressed="false">Buying</button>
