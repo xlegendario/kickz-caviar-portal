@@ -116,6 +116,9 @@ const {
   RESET_EMAIL_FROM,
   APP_PUBLIC_BASE_URL = "https://kickz-caviar-portal.onrender.com",
   LOJIQ_WMS_BASE_URL = "https://lojiq-wms.onrender.com",
+  // The consignment service running in Woovin mode. Only it holds their
+  // token, so label downloads are asked of it rather than done here.
+  WOOVIN_SERVICE_BASE_URL = "https://woovin-consignment.onrender.com",
   SELLER_SIGNUP_URL = "https://discord.com/channels/922818998163361792/1444130166703128676",
   DISCORD_BOT_BASE_URL,
   KICKZ_WTB_BOT_BASE_URL,
@@ -1520,8 +1523,17 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
     Recomputing it from whichever consignor happened to accept would quote
     a different number than the one we were actually paid.
   */
-  const isFixedStorePriceOrder =
-    asText(orderFields["Order Source"]) === "SneakerAsk Consignment";
+  /*
+   * CHANGED - every marketplace, not just SneakerAsk.
+   *
+   * Woovin works the same way: their buyer has already paid, that amount was
+   * written onto the order when the sale came in, and recomputing it from
+   * whichever consignor accepts would quote a number we were never paid.
+   *
+   * Read off the Marketplace column rather than by listing sources, so a
+   * third marketplace needs no change here at all.
+   */
+  const isFixedStorePriceOrder = Boolean(asText(orderFields["Marketplace"]));
 
   const customOffer = agreed && Number.isFinite(Number(agreed.storePrice))
     ? Number(agreed.storePrice)
@@ -5840,6 +5852,57 @@ async function confirmConsignmentOffer(offerId) {
  * sendShippingLabelToDiscord posts "Shipping Label Ready" to the consignor
  * and the order moves to Ready to Ship.
  */
+/*
+ * Ask the consignment service for a Woovin label.
+ *
+ * It is the only side holding Woovin's token, so it downloads the PDF and
+ * submits it to the WMS itself. Everything after that is the machinery every
+ * other label goes through: R2, the permanent URL, the Discord message and
+ * the move to Ready to Ship.
+ *
+ * A 409 means Woovin has not produced the label yet, which is a wait rather
+ * than a failure - their order has to reach processing first.
+ */
+async function requestWoovinShippingLabel(orderRecordId, orderFields) {
+  const saleId = asText(orderFields["Marketplace Sale ID"]);
+  const orderId = displayValue(orderFields["Order ID"]) || orderRecordId;
+
+  if (!saleId) {
+    throw new Error(`No Marketplace Sale ID on ${orderId}`);
+  }
+
+  const existingLabel = orderFields["Shipping Label"];
+
+  if (Array.isArray(existingLabel) && existingLabel.length) {
+    console.log(`Label already attached for ${orderId}, nothing to fetch.`);
+    return { ok: true, already: true };
+  }
+
+  const response = await fetch(
+    `${WOOVIN_SERVICE_BASE_URL.replace(/\/$/, "")}/woovin/label`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-kc-secret": process.env.COUNTER_OFFERS_SECRET || ""
+      },
+      body: JSON.stringify({ order_record_id: orderRecordId, sale_id: saleId })
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      `Woovin label for ${orderId} failed: ${response.status} ${data.error || ""}`
+    );
+  }
+
+  console.log(`Woovin label attached for ${orderId}.`);
+
+  return { ok: true, ...data };
+}
+
 async function attachSneakerAskShippingLabel(orderRecordId, orderFields) {
   const labelUrl = asText(orderFields["SneakerAsk Label URL"]);
   const trackingNumber = asText(orderFields["SneakerAsk Tracking"]);
@@ -5920,8 +5983,24 @@ async function requestConsignmentShippingLabel(orderRecordId) {
 
   const orderFields = orderRecord?.fields || {};
 
-  if (asText(orderFields["Order Source"]) === "SneakerAsk Consignment") {
+  const marketplace = asText(orderFields["Marketplace"]);
+
+  if (marketplace === "SneakerAsk") {
     return await attachSneakerAskShippingLabel(orderRecordId, orderFields);
+  }
+
+  /*
+   * Woovin's label is behind their token, which lives in the consignment
+   * service and nowhere else. So this asks that service to fetch it and hand
+   * it to the WMS - the same ending as every other label, only the errand is
+   * run by the side that can.
+   *
+   * Their label is generated the moment their order enters processing, so
+   * unlike a store order there is nobody to wait for: press the button and
+   * it is there.
+   */
+  if (marketplace === "Woovin") {
+    return await requestWoovinShippingLabel(orderRecordId, orderFields);
   }
 
   // FIXED — this only set the status and posted nothing, so pressing
