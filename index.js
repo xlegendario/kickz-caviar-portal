@@ -10116,6 +10116,35 @@ function isValidWtbSize(size) {
 //
 // "355" is the failure this exists for: it looks like a number, passes any
 // digits-only test, and is invisible forever after. 52 rows had it.
+/*
+ * Tidy a size before judging it.
+ *
+ * Consignors write the same shoe several ways. "EU 44" is a size with a
+ * scale glued to the front, and "44 1/2" is a half size written as a
+ * fraction - which no brand uses. adidas runs in thirds (44, 44 2/3,
+ * 45 1/3) and everybody else in halves written with a dot, so a "1/2" is
+ * always the decimal in disguise.
+ *
+ * Sixty-one rows carried that notation before this existed. Nothing broke
+ * loudly: they simply never matched a marketplace size, so those pairs were
+ * quietly never listed, and a sale would have found no holder while the shoe
+ * sat right there.
+ *
+ * Thirds are left exactly as they are. Both we and the marketplaces write
+ * those as "43 1/3", and there is no decimal that means the same thing.
+ *
+ * Correcting rather than refusing: a consignor who types "44 1/2" means 44.5
+ * and telling him his size is unusable helps nobody.
+ */
+function normalizeConsignmentSize(size) {
+  return asText(size)
+    .trim()
+    .replace(/^(EU|US|UK)\s+/i, "")
+    .replace(/\s*1\/2$/, ".5")
+    .replace(",", ".")
+    .replace(/\.0$/, "");
+}
+
 function isUsableConsignmentSize(size) {
   const clean = asText(size).trim().toUpperCase();
 
@@ -10341,7 +10370,7 @@ app.post("/api/consignment/inventory/manual", async (req, res) => {
     const sellerRecordId = asText(req.body?.seller_record_id);
     const sellerId = asText(req.body?.seller_id);
     const sku = asText(req.body?.sku).toUpperCase();
-    const size = asText(req.body?.size);
+    let size = asText(req.body?.size);
     const vatType = asText(req.body?.vat_type);
     const sellingPriceSuggested = Number(req.body?.selling_price_suggested);
     const quantity = Number(req.body?.quantity);
@@ -10353,6 +10382,10 @@ app.post("/api/consignment/inventory/manual", async (req, res) => {
     if (!["Margin", "VAT0", "VAT21"].includes(vatType)) {
       return res.status(400).json({ error: "VAT Type must be Margin, VAT0 or VAT21" });
     }
+
+    // Corrected before it is judged: "EU 44" and "44 1/2" are this size
+    // written differently, not a different size.
+    size = normalizeConsignmentSize(size);
 
     if (!isUsableConsignmentSize(size)) {
       return res.status(400).json({
@@ -10455,6 +10488,11 @@ function collectConsignmentCsvProblems(rows, { allowZeroQuantity }) {
     }
 
     seen.add(key);
+
+    // Same correction the manual route makes, so a file and a form behave
+    // alike. Written back onto the row, because everything downstream reads
+    // it from here.
+    row.size = normalizeConsignmentSize(row.size);
 
     if (!isUsableConsignmentSize(row.size)) {
       problems.push(`${label}: ${consignmentSizeError(row.size)}`);
