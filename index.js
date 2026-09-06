@@ -799,6 +799,84 @@ function offerSnapshotFor({ recordId, source, price }) {
   );
 }
 
+/*
+ * The last rung of the ladder for a marketplace order.
+ *
+ * A marketplace sale that reaches Outsource goes out as a quick deal first,
+ * priced from 90% of the buying budget and climbing to the whole of it over
+ * twelve hours. That is the profitable window: a seller who takes it early
+ * leaves us most of the margin, and one who takes it late leaves us the ten
+ * or thirty euros we would have made from a consignor anyway.
+ *
+ * When those twelve hours pass with nobody taking it, the choice is no longer
+ * between a good deal and a better one. It is between breaking even and
+ * losing the sale, shipping late, and taking the hit to the marketplace
+ * performance score that decides whether we win the next one. So a snapshot
+ * goes out at the full budget.
+ *
+ * Deliberately time-driven rather than hung off the move to Outsource. There
+ * are two ways an order gets there - a consignor saying no, and the timeout
+ * sweep - and a rule that lives on one of them silently does not apply to the
+ * other. This runs on the clock and covers both, and everything that arrives
+ * later.
+ */
+const SNAPSHOT_ESCALATION_HOURS = Number(
+  process.env.MARKETPLACE_SNAPSHOT_ESCALATION_HOURS || 12
+);
+
+const SNAPSHOT_ESCALATION_INTERVAL_MS = 10 * 60 * 1000;
+
+async function escalateMarketplaceDealsToSnapshot() {
+  if (!DEAL_BOT_BASE_URL) return;
+
+  /*
+   * Only what has run out of quick-deal time and has nobody on it.
+   *
+   * The budget is what marks an order as a marketplace one; a Shopify order
+   * has none and keeps its own escalation. A snapshot that has already been
+   * posted, claimed or closed leaves a Snapshot Status behind, so an empty
+   * one is the only state that has never been offered.
+   */
+  const formula = `AND(
+    {Fulfillment Status} = 'Outsource',
+    {Marketplace Buying Budget} > 0,
+    {Snapshot Status} = '',
+    {Claimed Channel ID} = '',
+    {Outsource Start Time} != '',
+    DATETIME_DIFF(NOW(), {Outsource Start Time}, 'hours') >= ${SNAPSHOT_ESCALATION_HOURS}
+  )`;
+
+  const records = await airtable(ORDERS_TABLE)
+    .select({
+      fields: ["Order ID", "Marketplace Buying Budget", "Linked Inventory Unit"],
+      filterByFormula: formula,
+      maxRecords: 50
+    })
+    .all()
+    .catch((err) => {
+      console.error("Snapshot escalation could not read orders:", err.message);
+      return [];
+    });
+
+  for (const record of records) {
+    // A unit already on the order means somebody supplied it between the
+    // query and now. Cheap to check, and the alternative is advertising a
+    // pair we have.
+    if (firstLinkedRecordId(record.fields?.["Linked Inventory Unit"])) continue;
+
+    const budget = Number(record.fields?.["Marketplace Buying Budget"]);
+
+    if (!Number.isFinite(budget) || budget <= 0) continue;
+
+    console.log(
+      `📸 Escalating ${record.fields?.["Order ID"] || record.id} to a snapshot ` +
+        `at ${budget} after ${SNAPSHOT_ESCALATION_HOURS}h on Outsource.`
+    );
+
+    offerSnapshotFor({ recordId: record.id, source: "order", price: budget });
+  }
+}
+
 function closeSnapshotForRecord({ recordId, source, status = "Claimed" }) {
   if (!DEAL_BOT_BASE_URL || !recordId) return;
 
@@ -32482,19 +32560,25 @@ app.get("/api/brands", async (req, res) => {
 
     let formula;
 
+    // The same two rules the deals list uses. They have to match exactly, or
+    // the brand filter offers a brand that has no deals behind it.
     if (type === "quick") {
       formula = `AND(
         OR(
           {Fulfillment Status} = 'Outsource',
           {Fulfillment Status} = 'Claim Processing'
         ),
-        {Auto Offer Accept?} = 'Yes',
+        OR(
+          {Auto Offer Accept?} = 'Yes',
+          {Marketplace Buying Budget} > 0
+        ),
         {Brand} != ''
       )`;
     } else if (type === "wtb") {
       formula = `AND(
         {Fulfillment Status} = 'Outsource',
         {Brand} != '',
+        NOT({Marketplace Buying Budget} > 0),
         OR(
           {Auto Offer Accept?} = 'No',
           AND(
@@ -32557,16 +32641,40 @@ app.get("/api/deals", async (req, res) => {
     let formula;
 
     if (type === "quick") {
+      /*
+       * A marketplace order is a quick deal by nature.
+       *
+       * Its price is not negotiable: SneakerAsk, Woovin or bol have already
+       * committed an amount to us, and Marketplace Buying Budget is what is
+       * left of it after our margin. So there is nothing to bid on, and the
+       * first seller to take it at that price gets it.
+       *
+       * Read from the budget rather than from Auto Offer Accept, because that
+       * flag lives on the merchant and SneakerAsk needs it OFF for its
+       * ordinary store orders. One field, two meanings, would have forced a
+       * choice between two flows that have nothing to do with each other.
+       */
       formula = `AND(
         OR(
           {Fulfillment Status} = 'Outsource',
           {Fulfillment Status} = 'Claim Processing'
         ),
-        {Auto Offer Accept?} = 'Yes'
+        OR(
+          {Auto Offer Accept?} = 'Yes',
+          {Marketplace Buying Budget} > 0
+        )
       )`;
     } else if (type === "wtb") {
+      /*
+       * And never in here.
+       *
+       * Bidding exists so an order can go ABOVE the maximum buying price when
+       * nothing else will fill it. On a marketplace order anything above the
+       * budget is a loss, so an open offer round can only cost money.
+       */
       formula = `AND(
         {Fulfillment Status} = 'Outsource',
+        NOT({Marketplace Buying Budget} > 0),
         OR(
           {Auto Offer Accept?} = 'No',
           AND(
@@ -38563,6 +38671,19 @@ app.listen(PORT, () => {
         reconcileGuildMembership();
         qualifyReferrals();
       }, MEMBERSHIP_RECONCILE_INTERVAL_MS);
+
+      /*
+       * Every ten minutes is often enough for a twelve hour deadline, and
+       * light enough that it is one Airtable read. Started here rather than
+       * at the top of the file because a snapshot needs the Discord bot to
+       * post it.
+       */
+      escalateMarketplaceDealsToSnapshot();
+
+      setInterval(
+        () => escalateMarketplaceDealsToSnapshot(),
+        SNAPSHOT_ESCALATION_INTERVAL_MS
+      );
     })
     .catch((err) => {
       console.error("Failed to init Kickz Deal Discord bot on startup:", err);
