@@ -5024,10 +5024,31 @@ async function handleMemberWtbPaymentGate(
     buyerFields["Merchants"].length > 0;
 
   if (lojiqStoreBuyer) {
-    // "Pending" is not in alreadyProcessedStatuses above, because on the
-    // Mollie side it means "not asked yet". Here it means "asked, through
-    // the portal", so a second call must not run the deal update twice.
-    if (currentPaymentStatus === "Pending") {
+    /*
+      FIXED - this guard read the status, and the status is "Pending" before
+      anything has happened at all.
+
+      The reasoning was sound: on the Mollie side "Pending" means not asked
+      yet, here it means asked through the portal, so a second call must not
+      send the consignor his shipping step twice. What it missed is that a
+      want-to-buy born of a buyer's offer is CREATED with Payment Status
+      "Pending" - so the very first call looked like the second one, and the
+      branch below never ran.
+
+      A store never leaves "Pending" either, because it settles a batch of
+      rows in its own portal rather than one by one. So for a store buyer
+      the guard was permanent: no purchase webhook, and no Ready To Ship
+      embed for the consignor, ever.
+
+      MWTB-000456 (07-09-2026): deal closed, unit created, and SamSupplyWest
+      got nothing while MWTB-000415 - a Mollie buyer, who does reach "Paid"
+      - got his embed the same week. That difference is what gave this away.
+
+      So the marker is the thing itself: the stamp sendMemberWtbDealUpdate-
+      AfterPayment writes once it has actually sent the step. Idempotent for
+      the reason the status never was.
+    */
+    if (asText(fields["Ready To Ship Sent At"])) {
       return {
         status: "already_processed",
         payment_status: currentPaymentStatus
@@ -5584,9 +5605,29 @@ async function resolveMemberWtbAgreedBuyerPrice({
     memberFields?.["Buyer VAT Rate"]
   );
 
+  /*
+    CHANGED - "Member WTB" was not the only kind of round that settles one.
+
+    A round the SELLER opened carries Source Type "Seller Offer" and puts
+    what he is paid in "Counter Payout"; only a round the BUYER opened uses
+    "Seller Counter Price". Asking for one shape found nothing on the other,
+    and nothing here means the ceiling below - which is the buyer's limit,
+    not the price anyone agreed to.
+
+    MWTB-000456 (07-09-2026): bid 133, consignor accepted 122.50, buyer
+    invoiced 148 because that was the shop price he had chosen not to pay.
+    MWTB-000404 went the same way for 12.50.
+
+    This is the same failure the payment gate already guards against on the
+    snapshot route, where the comment records a 200 ceiling filled at
+    117.44 and charged at 200. Third route, same ending.
+  */
   const acceptedRounds = await airtable(COUNTER_OFFERS_TABLE)
     .select({
-      filterByFormula: `AND({Status} = 'Accepted', {Source Type} = 'Member WTB')`,
+      filterByFormula: `AND(
+        {Status} = 'Accepted',
+        OR({Source Type} = 'Member WTB', {Source Type} = 'Seller Offer')
+      )`,
       fields: [
         "Member WTB",
         "Counter Payout",
@@ -5603,7 +5644,11 @@ async function resolveMemberWtbAgreedBuyerPrice({
   // lookups in this file take.
   const sellerRound = acceptedRounds
     .filter((round) => firstLinkedRecordId(round.fields?.["Member WTB"]) === memberWtbRecordId)
-    .filter((round) => numberValue(round.fields?.["Seller Counter Price"]) > 0)
+    .filter(
+      (round) =>
+        numberValue(round.fields?.["Seller Counter Price"]) > 0 ||
+        numberValue(round.fields?.["Counter Payout"]) > 0
+    )
     .sort(
       (a, b) =>
         new Date(b.fields?.["Accepted At"] || 0) - new Date(a.fields?.["Accepted At"] || 0)
@@ -5613,7 +5658,18 @@ async function resolveMemberWtbAgreedBuyerPrice({
     return { price: fromMaxPrice, via: "max_price" };
   }
 
-  const payout = numberValue(sellerRound.fields?.["Seller Counter Price"]);
+  /*
+    Whichever of the two the round actually carries.
+
+    Both are the consignor's payout in his own VAT terms, which is what
+    calculateMemberWtbBuyerEquivalent below expects. "Store Counter Price"
+    on a seller round is deliberately NOT it: on that shape it holds the
+    ceiling the negotiation was allowed to reach, which is how 148 got here
+    in the first place.
+  */
+  const payout =
+    numberValue(sellerRound.fields?.["Seller Counter Price"]) ||
+    numberValue(sellerRound.fields?.["Counter Payout"]);
 
   const roundVatType =
     asText(sellerRound.fields?.["Counter Payout VAT Type"]) || asText(vatType);
@@ -36791,9 +36847,25 @@ app.post("/api/buying/offers", async (req, res) => {
       );
     }
 
+    /*
+      FIXED - the margin came off flat, and on this scale it is worth 1.21x.
+
+      This budget is what a consignor is eventually offered, and the buyer
+      price is rebuilt from it by calculateMemberWtbBuyerEquivalent, which
+      adds margin * 1.21 for every VAT type. Subtracting a flat margin here
+      and adding a grossed-up one there does not cancel: on a 10 the
+      consignor was offered 2.10 too much and we netted 8.26 instead of 10.
+
+      MWTB-000456 (07-09-2026): bid 133, consignor offered 122.50 where 120
+      was the number that leaves us the tenner.
+
+      The same arithmetic already sits a few hundred lines up, in the
+      fallback this field overrides - maximumBuyingPrice - margin * 1.21.
+      They now agree instead of disagreeing by a fifth of the margin.
+    */
     const currentLowestSourcePrice = Math.max(
       0,
-      Math.round(offerPrice - marginForNewWtb)
+      Math.round((offerPrice - marginForNewWtb * 1.21) * 100) / 100
     );
 
     const internalNotes = [
