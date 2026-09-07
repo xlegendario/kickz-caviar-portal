@@ -3692,6 +3692,30 @@ async function sendMemberWtbLabelRequestToBuyer(memberWtbRecordId) {
     ? `${LOJIQ_WMS_BASE_URL}/label-request.html?record_id=${encodeURIComponent(memberWtbRecordId)}&type=member_wtb`
     : `${APP_PUBLIC_BASE_URL}/member-wtb-label-request.html?member_wtb_id=${encodeURIComponent(memberWtbRecordId)}`;
 
+  /*
+   * Which courier the label has to be for.
+   *
+   * A store buying an order gets this on its label request, resolved from
+   * the consignor's country through the Label Request Routing table. A store
+   * buying a Member WTB got the same request without it, so it had to guess
+   * or ask - and a label for the wrong courier is a pair that cannot be
+   * collected.
+   *
+   * Same two values and the same fallback sentence as postLabelRequestForOrder,
+   * so the two kinds of request read alike. Non-blocking: a routing table we
+   * cannot read must not hold up a label the seller is waiting on, and the
+   * lines are simply left out.
+   */
+  const sellerCountryCode = await getSellerCountryCodeForMemberWtb(f).catch(() => "");
+
+  const { preferredCourier, instructionText } = await getPreferredCourierForCountryCode(
+    sellerCountryCode
+  ).catch(() => ({ preferredCourier: "", instructionText: "" }));
+
+  const courierInstruction =
+    instructionText ||
+    (preferredCourier ? `Please provide a ${preferredCourier} label.` : "");
+
   const labelEmbed = {
     title: "📦 Shipping Label Requested",
     description: [
@@ -3700,8 +3724,10 @@ async function sendMemberWtbLabelRequestToBuyer(memberWtbRecordId) {
       `**Product:** ${asText(f["Product Name"]) || "—"}`,
       `**SKU:** ${asText(f["SKU"]) || "—"}`,
       `**Size:** ${asText(f["Size"]) || "—"}`,
+      ...(preferredCourier ? [`**Preferred Courier:** ${preferredCourier}`] : []),
       "",
       "The seller is ready to ship.",
+      ...(courierInstruction ? [courierInstruction] : []),
       "Please upload the shipping label and tracking number using the button below."
     ].join("\n"),
     // Green next to the other Lojiq label messages; yellow in a member DM.
@@ -24496,6 +24522,40 @@ async function getPreferredCourierForCountryCode(countryCode) {
     preferredCourier: asText(records[0].fields["Preferred Courier"]),
     instructionText: asText(records[0].fields["Instruction Text"])
   };
+}
+
+/*
+ * The same question as getSellerCountryCodeForOrder, asked of a Member WTB.
+ *
+ * A store order carries the consignor on the order itself. A Member WTB does
+ * not: the consignor arrives with the unit that fills it, so the country the
+ * courier routing turns on is read off the linked Inventory Unit.
+ *
+ * The warehouse-seller rule is kept because it is the same rule - those four
+ * ship from our own warehouse and route as Dutch whatever their record says.
+ *
+ * Returns "" for KC-owned stock, which has no consignor to ship it and needs
+ * no courier line.
+ */
+async function getSellerCountryCodeForMemberWtb(memberWtbFields) {
+  const unitId = firstLinkedRecordId(memberWtbFields?.["Linked Inventory Unit"]);
+
+  if (!unitId) return "";
+
+  const unit = await airtable(INVENTORY_UNITS_TABLE).find(unitId).catch(() => null);
+  const sellerRecordId = firstLinkedRecordId(unit?.fields?.["Seller ID"]);
+
+  if (!sellerRecordId) return "";
+
+  const seller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+
+  if (!seller) return "";
+
+  const sellerCode = asText(seller.fields["Seller ID"]).trim().toUpperCase();
+
+  if (WAREHOUSE_SELLER_CODES.includes(sellerCode)) return "NL";
+
+  return asText(seller.fields["Country Code"]);
 }
 
 // NEW — was the body of POST /api/dashboard/request-label, pulled out so
