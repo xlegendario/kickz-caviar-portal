@@ -20580,16 +20580,31 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         ? `OR(${escapedIdList(values).map((v) => `{${field}} = ${v}`).join(", ")}, FALSE())`
         : "FALSE()";
 
-    const statusCheckOrderMap = orderIdsForStatusCheck.length
-      ? await loadOrderFieldsMap(orderIdsForStatusCheck)
-      : new Map();
+    /*
+      CHANGED - these two waited for each other and had no reason to.
 
-    let memberWtbStatusMap = new Map();
-    if (memberWtbIdsForStatusCheck.length) {
-      const mwtbRecords = await findRecordsByIds(MEMBER_WTBS_TABLE, memberWtbIdsForStatusCheck);
-      memberWtbStatusMap = new Map(mwtbRecords.map((r) => [r.id, asText(r.fields?.["Fulfillment Status"])]));
+      One looks up the orders a round belongs to, the other the want-to-buys.
+      A round is one or the other, so on any given screen one of these two is
+      usually empty, and neither reads anything the other writes.
+
+      It is worth the two lines. A single lookup from the server costs 400 to
+      500 ms - against 190 from a laptop - so running them in a row was half a
+      second of the tab doing nothing.
+    */
+    const [statusCheckOrderMap, mwtbRecords] = await Promise.all([
+      orderIdsForStatusCheck.length
+        ? loadOrderFieldsMap(orderIdsForStatusCheck)
+        : new Map(),
+      memberWtbIdsForStatusCheck.length
+        ? findRecordsByIds(MEMBER_WTBS_TABLE, memberWtbIdsForStatusCheck)
+        : []
+    ]);
+
+    const memberWtbStatusMap = new Map(
+      mwtbRecords.map((r) => [r.id, asText(r.fields?.["Fulfillment Status"])])
+    );
+
     stageTimings.t3_wtb_status = Date.now() - stageStartedAt;
-    }
 
     // NEW — additive only: builds "am I still the lowest seller" for
     // Member WTB, which never existed before (only Store Orders had an
@@ -29628,6 +29643,63 @@ app.get("/api/dashboard/counts", async (req, res) => {
       )
     )`;
 
+    /*
+      The work that used to sit in a queue at the end of this route.
+
+      Seven things were awaited one after another below, none of which reads
+      anything the others write. From this server a single Airtable request
+      costs 400 to 500 ms, so seven in a row is most of what the badges cost.
+
+      Started here and awaited where they were already awaited, so nothing
+      below moves and nothing changes order. They simply run while the rest
+      of the route does its own work.
+    */
+    const consignmentOfferIdsPromise = getConsignmentSellerOfferIds();
+    const pendingConfirmOfferIdsPromise = getConsignmentPendingConfirmOfferIds();
+
+    const wtbAcceptedRoundsPromise = airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `{Status} = 'Accepted'`,
+        fields: ["Order", "Seller ID"]
+      })
+      .all();
+
+    /*
+      This one is only awaited when there are accepted orders to check, so on
+      a quiet screen nothing ever looks at it. A promise that fails with
+      nobody watching is an unhandled rejection, and the process would take
+      that personally. The empty catch marks it as watched; the real one
+      still throws where it is awaited, into the route's own handler.
+    */
+    wtbAcceptedRoundsPromise.catch(() => {});
+
+    const consignmentAcceptedPromise = airtable(SELLER_OFFERS_TABLE)
+      .select({
+        fields: ["Seller ID", "Linked Inventory Unit"],
+        filterByFormula: `AND(
+          {Consignment Inventory ID} != '',
+          {Consignment Confirm Message ID} != '',
+          NOT({Withdrawn?}),
+          NOT({Denied?})
+        )`
+      })
+      .all()
+      .catch(() => []);
+
+    const buyingRecordsPromise = airtable(MEMBER_WTBS_TABLE)
+      .select({
+        fields: [
+          "Buyer Seller ID",
+          "Fulfillment Status",
+          "Payment Status",
+          "Shipping Status",
+          "Current Lowest Offer"
+        ]
+      })
+      .all();
+
+    const trustedBuyerPromise = isTrustedBuyer(sellerRecordId);
+
     const [
       openClaimsRecords,
       inventoryUnitsForCounts,
@@ -29851,8 +29923,8 @@ app.get("/api/dashboard/counts", async (req, res) => {
     // deleted in Airtable, so a badge could sit there counting an offer on
     // a want-to-buy that no longer exists.
     const [consignmentOfferIds, pendingConfirmOfferIds] = await Promise.all([
-      getConsignmentSellerOfferIds(),
-      getConsignmentPendingConfirmOfferIds()
+      consignmentOfferIdsPromise,
+      pendingConfirmOfferIdsPromise
     ]);
 
     // FIXED - one negotiation was counted twice.
@@ -29920,12 +29992,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
     if (wtbAcceptedOrderIds.length) {
       const wtbAcceptedOrderIdSet = new Set(wtbAcceptedOrderIds);
 
-      const wtbAcceptedRounds = await airtable(COUNTER_OFFERS_TABLE)
-        .select({
-          filterByFormula: `{Status} = 'Accepted'`,
-          fields: ["Order", "Seller ID"]
-        })
-        .all();
+      const wtbAcceptedRounds = await wtbAcceptedRoundsPromise;
 
       for (const round of wtbAcceptedRounds) {
         const roundOrderId = firstLinkedRecordId(round.fields?.["Order"]);
@@ -30003,18 +30070,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
       for the same tab is how a badge and a list start disagreeing.
     */
     const consignmentAcceptedCount = (
-      await airtable(SELLER_OFFERS_TABLE)
-        .select({
-          fields: ["Seller ID", "Linked Inventory Unit"],
-          filterByFormula: `AND(
-            {Consignment Inventory ID} != '',
-            {Consignment Confirm Message ID} != '',
-            NOT({Withdrawn?}),
-            NOT({Denied?})
-          )`
-        })
-        .all()
-        .catch(() => [])
+      await consignmentAcceptedPromise.catch(() => [])
     ).filter(
       (record) =>
         linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId) &&
@@ -30052,17 +30108,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
       (r) => consignmentShippingIs(r, "Delivered") && unitStatus(r, "Payment Status") === "To Pay"
     );
 
-    const buyingRecords = await airtable(MEMBER_WTBS_TABLE)
-      .select({
-        fields: [
-          "Buyer Seller ID",
-          "Fulfillment Status",
-          "Payment Status",
-          "Shipping Status",
-          "Current Lowest Offer"
-        ]
-      })
-      .all();
+    const buyingRecords = await buyingRecordsPromise;
     
     const myBuyingRecords = buyingRecords.filter((record) =>
       linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
@@ -30094,7 +30140,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
     //
     // They now read the single definition in BUYING_TAB_FILTERS that the
     // list endpoints use, so a badge cannot disagree with the list under it.
-    const buyingTrustedBuyer = await isTrustedBuyer(sellerRecordId);
+    const buyingTrustedBuyer = await trustedBuyerPromise;
 
     const buyingTabCount = (tabKey) =>
       myBuyingRecords.filter((record) =>
