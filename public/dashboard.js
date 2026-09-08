@@ -325,11 +325,19 @@ const skeletonColumns = [
 // reads as such if the consignor can see his own asking price next to the
 // payout, so this one tab carries an extra column. Everywhere else keeps
 // skeletonColumns.
+/*
+ * CHANGED - "Your Price" is gone.
+ *
+ * The note above said Accepted needs the asking price beside the payout so
+ * the question reads as "your price was accepted". By the time a row reaches
+ * this tab that price has been agreed, and the only number that still means
+ * anything is what you are being paid. Two amounts side by side on a settled
+ * deal reads as a choice, and there is none left to make.
+ */
 const consignmentAcceptedColumns = [
   "Product",
   "Size",
   "Order ID",
-  "Your Price",
   "Payout",
   "VAT Type",
   "Date",
@@ -2172,7 +2180,6 @@ function renderConsignmentAcceptedRows(items) {
       <td class="dashboard-product-col">${dashboardProductCell(item)}</td>
       <td class="dashboard-size-col">${escapeHtml(item.size || "-")}</td>
       <td>${escapeHtml(item.order_id || "-")}</td>
-      <td>${amountForColumn(item.your_price)}</td>
       <td>${amountForColumn(item.payout)}</td>
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
