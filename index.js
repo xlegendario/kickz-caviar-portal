@@ -920,125 +920,63 @@ async function askOtherConsignorsForOrder({
   const orderId = asText(orderFields["Order ID"]) || orderRecordId;
   const asked = [];
 
+  /*
+    CHANGED - this wrote OUR budget into their "Seller Offer" and asked them
+    to take it or leave it. Both halves of that were wrong.
+
+    That field is what a consignor asks for the pair, and the cross-seller
+    comparison reads it as such. Filling it with our own bid put us in the
+    market as though a seller had offered it, so on MWTB-000468 a consignor
+    asking 115 was told he was beaten at 107.90 - the buyer's 120 with our
+    margin taken off, standing in the name of a consignor whose listing is
+    180.
+
+    What that costs is the pair, not the margin. Our cut comes off the top
+    either way. A consignor who believes someone has already undercut him
+    walks away instead of offering, and then there is nothing to buy.
+
+    Take it or leave it was the other half. A consignor reached this way
+    could not counter, because there was no round to counter on.
+
+    Both are fixed the same way, by doing what the auto-offer route already
+    does for the cheapest holder: his own price goes in the offer, and ours
+    goes in a round beside it. If his price already fits the budget there is
+    nothing to negotiate and he gets the confirmation, exactly as before.
+  */
   for (const row of others) {
     try {
       const ownAsk = Number(row.selling_price_suggested);
+      const vatType = asText(row.vat_type);
+
+      /*
+        A listing with no price of its own is skipped rather than asked.
+
+        It used to fall back to our budget, and that is the fallback that put
+        our own number in the market. There is nothing to compare a priceless
+        listing against, so there is nothing honest to write.
+      */
+      if (!(ownAsk > 0)) {
+        console.error(
+          `Skipped consignor ${row.seller_id} on ${memberWtbId}: ` +
+            `inventory ${row.id} has no asking price.`
+        );
+        continue;
+      }
+
+      const ownAskNormalized = getConsignmentComparePrice(ownAsk, vatType);
+
+      // What we can pay him, in his own VAT scale - the number his embed
+      // shows and the one a round would pay out.
       const theirAmount = Number(
-        consignmentAmountForVatType(budgetNormalized, row.vat_type).toFixed(2)
+        consignmentAmountForVatType(budgetNormalized, vatType).toFixed(2)
       );
 
       if (!(theirAmount > 0)) continue;
 
-      const sellerRecord = await airtable(SELLERS_TABLE)
-        .find(row.seller_record_id)
-        .catch(() => null);
-
-      if (!sellerRecord) continue;
-
-      const sf = sellerRecord.fields || {};
-
-      const createdOffer = await airtable(SELLER_OFFERS_TABLE).create({
-        "Seller ID": [row.seller_record_id],
-        "Linked Orders": [orderRecordId],
-        "Seller Offer": theirAmount,
-        "Offer VAT Type": asText(row.vat_type),
-        "Offer Cost (Normalized)": Number(budgetNormalized.toFixed(2)),
-        "Offer Date": new Date().toISOString(),
-        "Consignment Inventory ID": row.id
-      });
-
-      const discordResult = await sendConsignmentOfferDiscordMessage({
-        allowCounter: false,
-        seller: {
-          seller_record_id: row.seller_record_id,
-          seller_id: asText(sf["Seller ID"]),
-          discord_id: asText(sf["Discord ID"]),
-          consignment_offer_channel_id: asText(sf["Consignment Offer Channel ID"]),
-          consignment_confirmation_channel_id: asText(sf["Consignment Confirmation Channel ID"])
-        },
-        offer: {
-          id: createdOffer.id,
-          order_record_id: orderRecordId,
-          order_id: orderId,
-          source_type: "order",
-          seller_record_id: row.seller_record_id,
-          seller_id: asText(sf["Seller ID"]),
-          product_name: asText(row.product_name) || asText(orderFields["Product Name"]),
-          sku,
-          size,
-          brand: asText(row.brand) || asText(orderFields["Brand"]),
-          vat_type: asText(row.vat_type),
-          seller_price: Number.isFinite(ownAsk) && ownAsk > 0 ? ownAsk : theirAmount,
-          offer_price: theirAmount
-        },
-        calculatedOfferPrice: theirAmount,
-        sellerOfferRecordId: createdOffer.id
-      });
-
-      await rememberConsignmentConfirmMessage(createdOffer.id, discordResult);
-
-      asked.push({
-        seller_offer_record_id: createdOffer.id,
-        seller_id: asText(sf["Seller ID"]),
-        inventory_id: row.id,
-        amount: theirAmount
-      });
-
-      console.log(
-        `📩 Order ${orderId}: also asked ${asText(sf["Seller ID"])} ` +
-          `${moneySmartValue(theirAmount.toFixed(2))} ${asText(row.vat_type)} ` +
-          `(inventory ${row.id}) -> Seller Offer ${createdOffer.id}`
-      );
-    } catch (err) {
-      console.error(
-        `Could not ask consignor ${row.seller_id} for order ${orderId}:`,
-        err.message
-      );
-    }
-  }
-
-  return { ok: true, asked };
-}
-
-async function askOtherConsignorsForMemberWtb({
-  memberWtbRecordId,
-  memberFields,
-  askedInventoryId,
-  budgetNormalized
-}) {
-  const sku = asText(memberFields["SKU"]);
-  const size = asText(memberFields["Size"]);
-
-  if (!sku || !size || !(budgetNormalized > 0)) {
-    return { ok: false, reason: "missing_sku_size_or_budget" };
-  }
-
-  const { data: holders, error } = await supabase
-    .from("consignment_inventory")
-    .select("id, sku, size, vat_type, selling_price_suggested, quantity, seller_id, seller_record_id, product_name, brand")
-    .eq("sku", sku)
-    .eq("size", size)
-    .gt("quantity", 0);
-
-  if (error) throw error;
-
-  const others = (holders || []).filter(
-    (row) => asText(row.id) !== asText(askedInventoryId) && row.seller_record_id
-  );
-
-  if (!others.length) return { ok: true, asked: [] };
-
-  const memberWtbId = asText(memberFields["Member WTB ID"]) || memberWtbRecordId;
-  const asked = [];
-
-  for (const row of others) {
-    try {
-      const ownAsk = Number(row.selling_price_suggested);
-      const theirAmount = Number(
-        consignmentAmountForVatType(budgetNormalized, row.vat_type).toFixed(2)
-      );
-
-      if (!(theirAmount > 0)) continue;
+      // Same test the auto-offer route uses: both sides on the shared scale.
+      // His price fits, so there is nothing to negotiate - only the question
+      // of whether he still has the pair.
+      const isConfirmation = ownAskNormalized <= budgetNormalized;
 
       const sellerRecord = await airtable(SELLERS_TABLE)
         .find(row.seller_record_id)
@@ -1051,57 +989,138 @@ async function askOtherConsignorsForMemberWtb({
       const createdOffer = await airtable(SELLER_OFFERS_TABLE).create({
         "Seller ID": [row.seller_record_id],
         "Member WTBs": [memberWtbRecordId],
-        "Seller Offer": theirAmount,
-        "Offer VAT Type": asText(row.vat_type),
-        "Offer Cost (Normalized)": Number(budgetNormalized.toFixed(2)),
+        "Seller Offer": ownAsk,
+        "Offer VAT Type": vatType,
+        "Offer Cost (Normalized)": Number(ownAskNormalized.toFixed(2)),
         "Offer Date": new Date().toISOString(),
         "Consignment Inventory ID": row.id
       });
 
-      const discordResult = await sendConsignmentOfferDiscordMessage({
-        seller: {
-          seller_record_id: row.seller_record_id,
-          seller_id: asText(sf["Seller ID"]),
-          discord_id: asText(sf["Discord ID"]),
-          consignment_offer_channel_id: asText(sf["Consignment Offer Channel ID"]),
-          consignment_confirmation_channel_id: asText(sf["Consignment Confirmation Channel ID"])
-        },
-        offer: {
-          id: createdOffer.id,
-          order_record_id: null,
-          member_wtb_record_id: memberWtbRecordId,
-          order_id: memberWtbId,
-          source_type: "member_wtb",
-          seller_record_id: row.seller_record_id,
-          seller_id: asText(sf["Seller ID"]),
-          product_name: asText(row.product_name) || asText(memberFields["Product Name"]),
-          sku,
-          size,
-          brand: asText(row.brand) || asText(memberFields["Brand"]),
-          vat_type: asText(row.vat_type),
+      if (isConfirmation) {
+        const discordResult = await sendConsignmentOfferDiscordMessage({
+          seller: {
+            seller_record_id: row.seller_record_id,
+            seller_id: asText(sf["Seller ID"]),
+            discord_id: asText(sf["Discord ID"]),
+            consignment_offer_channel_id: asText(sf["Consignment Offer Channel ID"]),
+            consignment_confirmation_channel_id: asText(sf["Consignment Confirmation Channel ID"])
+          },
+          offer: {
+            id: createdOffer.id,
+            order_record_id: null,
+            member_wtb_record_id: memberWtbRecordId,
+            order_id: memberWtbId,
+            source_type: "member_wtb",
+            seller_record_id: row.seller_record_id,
+            seller_id: asText(sf["Seller ID"]),
+            product_name: asText(row.product_name) || asText(memberFields["Product Name"]),
+            sku,
+            size,
+            brand: asText(row.brand) || asText(memberFields["Brand"]),
+            vat_type: vatType,
 
-          // What he asks versus what we pay. Equal or better than his ask
-          // reads as a match; worse reads as an offer, which is the truth.
-          seller_price: Number.isFinite(ownAsk) && ownAsk > 0 ? ownAsk : theirAmount,
-          offer_price: theirAmount
-        },
-        calculatedOfferPrice: theirAmount,
-        sellerOfferRecordId: createdOffer.id
-      });
+            // He asked for less than we budgeted, so he is paid his own
+            // price. That is also what "Seller Offer" now holds, which is
+            // what the confirm reads into the Inventory Unit.
+            seller_price: ownAsk,
+            offer_price: ownAsk
+          },
+          calculatedOfferPrice: ownAsk,
+          sellerOfferRecordId: createdOffer.id
+        });
 
-      await rememberConsignmentConfirmMessage(createdOffer.id, discordResult);
+        await rememberConsignmentConfirmMessage(createdOffer.id, discordResult);
+      } else {
+        /*
+          His price is above the budget, so this is a negotiation and it gets
+          a round - the same record the cheapest holder gets, so he lands on
+          the same embed with the same Counter button.
+        */
+        const createdRound = await airtable(COUNTER_OFFERS_TABLE).create({
+          "Member WTB": [memberWtbRecordId],
+          "Seller ID": [row.seller_record_id],
+          "Source Type": "Seller Offer",
+          "Seller Offer Record ID": createdOffer.id,
+
+          "Seller Original Price": ownAsk,
+          "Seller Original VAT Type": vatType,
+
+          "Store Counter Price": numberValue(memberFields["Max Price"]),
+
+          "Counter Payout": theirAmount,
+          "Counter Payout VAT Type": vatType,
+
+          "Status": "Open",
+          "Created At": new Date().toISOString()
+        });
+
+        const consignorDiscordId = asText(sf["Discord ID"]);
+
+        // An offer, not a confirmation, so this resolves to his offer
+        // channel rather than his confirmation channel.
+        const consignorOfferChannelId = getSellerOfferChannelId(
+          {
+            consignment_offer_channel_id: asText(sf["Consignment Offer Channel ID"]),
+            consignment_confirmation_channel_id: asText(sf["Consignment Confirmation Channel ID"])
+          },
+          false
+        );
+
+        if (consignorDiscordId || consignorOfferChannelId) {
+          const roundDiscordResult = await sendMemberWtbCounterOfferDiscordDM({
+            counterOfferRecordId: createdRound.id,
+            sellerDiscordId: consignorDiscordId,
+            memberWtbId,
+            productName: asText(row.product_name) || asText(memberFields["Product Name"]),
+            sku,
+            size,
+            payout: theirAmount,
+            vatType,
+            sellerOriginalPrice: ownAsk,
+            sellerOriginalVatType: vatType,
+            sellerLastOfferPrice: ownAsk,
+            channelId: consignorOfferChannelId || null
+          }).catch((err) => {
+            console.error(
+              `Failed to notify consignor ${row.seller_id} about a round on ${memberWtbId} (non-blocking):`,
+              err.message
+            );
+            return null;
+          });
+
+          // Without these the embed can never be disabled or updated later,
+          // and a stale round sits in the channel with live buttons.
+          if (roundDiscordResult?.messageId) {
+            await airtable(COUNTER_OFFERS_TABLE).update(createdRound.id, {
+              "Discord Channel ID": roundDiscordResult.channelId,
+              "Discord Message ID": roundDiscordResult.messageId,
+              "Discord Delivery Type": roundDiscordResult.deliveryType
+            }).catch((err) =>
+              console.error(
+                `Failed to store Discord IDs on round ${createdRound.id} (non-blocking):`,
+                err.message
+              )
+            );
+          }
+        } else {
+          console.error(
+            `Consignor ${row.seller_id} on ${memberWtbId} has neither an offer ` +
+              "channel nor a Discord ID - nobody was asked."
+          );
+        }
+      }
 
       asked.push({
         seller_offer_record_id: createdOffer.id,
         seller_id: asText(sf["Seller ID"]),
         inventory_id: row.id,
-        amount: theirAmount
+        amount: isConfirmation ? ownAsk : theirAmount
       });
 
       console.log(
-        `📩 Member WTB ${memberWtbId}: also asked ${asText(sf["Seller ID"])} ` +
-          `${moneySmartValue(theirAmount.toFixed(2))} ${asText(row.vat_type)} ` +
-          `(inventory ${row.id}) -> Seller Offer ${createdOffer.id}`
+        `Member WTB ${memberWtbId}: also asked ${asText(sf["Seller ID"])} ` +
+          `${moneySmartValue((isConfirmation ? ownAsk : theirAmount).toFixed(2))} ${vatType} ` +
+          `(inventory ${row.id}, asks ${moneySmartValue(ownAsk)}) -> Seller Offer ${createdOffer.id}`
       );
     } catch (err) {
       // One consignor's channel being gone must still leave the others asked.
@@ -1274,6 +1293,44 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
   // not produce a second Inventory Unit or decrement the stock twice.
   if (firstLinkedRecordId(f["Linked Inventory Unit"])) {
     return { ok: false, reason: "already_confirmed" };
+  }
+
+  /*
+    NEW - a Confirm button cannot settle an offer that is being negotiated.
+
+    This reads "Seller Offer" straight into the Inventory Unit's purchase
+    price, which is right when that field is the whole deal: he asked, it fit
+    the budget, he confirms, we pay what he asked. It is wrong the moment a
+    round exists, because then the agreed number lives on the round and the
+    offer holds his opening price.
+
+    That gap is reachable through a stale embed. A Confirm sent before a
+    round existed keeps its buttons, and pressing it afterwards would pay the
+    asking price instead of the agreed one - on MWTB-000468 that is 180
+    against a buyer paying 120.
+
+    Only when nobody passed an agreed amount. The accept paths do, and they
+    are the ones that settle a round; refusing them here would break the
+    very flow this protects.
+  */
+  if (!agreed) {
+    const openRounds = await airtable(COUNTER_OFFERS_TABLE)
+      .select({
+        filterByFormula: `AND({Status} = 'Open', {Seller Offer Record ID} = '${escapeFormulaValue(sellerOfferRecordId)}')`,
+        fields: ["Counter Offer ID"],
+        maxRecords: 1
+      })
+      .firstPage()
+      .catch(() => []);
+
+    if (openRounds.length) {
+      console.log(
+        `Confirm refused on ${sellerOfferRecordId}: round ` +
+          `${asText(openRounds[0].fields?.["Counter Offer ID"]) || openRounds[0].id} is still open.`
+      );
+
+      return { ok: false, reason: "under_negotiation" };
+    }
   }
 
   const orderRecordId = firstLinkedRecordId(f["Linked Orders"]);
@@ -22752,6 +22809,43 @@ async function verifyStoreOwnsOrderForRound(orderRecordId, requestedStoreName) {
   return displayValue(order.fields?.["Store Name"]) === asText(requestedStoreName);
 }
 
+/*
+ * One table scan per screen instead of one per row.
+ *
+ * getCurrentGlobalLowestNormalized reads three tables whole and filters them
+ * in JS, and the Offers tab calls it once per row. Ten rows meant thirty full
+ * scans of the same three tables to draw one screen, which is where the four
+ * seconds went. What each row needs out of them differs; what it fetches does
+ * not, because the queries are keyed on the table and the source type alone.
+ *
+ * Deliberately NOT a timed cache. Rows are mapped concurrently, so sharing
+ * the request already in flight is enough to collapse them into one, and the
+ * entry is dropped the moment it settles. The next load therefore starts
+ * fresh, and nobody can be shown a price that has already moved - which is
+ * exactly the trap a few seconds of TTL would set on a page where people edit
+ * their offer and reload to check it.
+ *
+ * Keyed by table and source type. A store order and a want-to-buy read
+ * different link fields, so they must not share an answer.
+ */
+const inFlightTableScans = new Map();
+
+function scanTableOnce(key, run) {
+  const running = inFlightTableScans.get(key);
+
+  if (running) return running;
+
+  // Cleared on failure too. A scan that threw must not be handed to the next
+  // caller as though it were an answer.
+  const scan = run().finally(() => {
+    inFlightTableScans.delete(key);
+  });
+
+  inFlightTableScans.set(key, scan);
+
+  return scan;
+}
+
 async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSellerId) {
   const linkField = sourceType === "Member WTB" ? "Member WTBs" : "Linked Orders";
   const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
@@ -22768,41 +22862,57 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
     return asText(vatType) === "VAT0" ? p * 1.21 : p;
   };
 
-  const [rawOffers, activeCounters, allRoundsAnyStatus] = await Promise.all([
-    airtable(SELLER_OFFERS_TABLE)
-      .select({ fields: [linkField, "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
-      .all()
-      .then((records) =>
-        records.filter(
-          (r) =>
-            !r.fields?.["Delete Offer"] &&
-            firstLinkedRecordId(r.fields?.[linkField]) === recordId
-        )
-      ),
-    airtable(COUNTER_OFFERS_TABLE)
-      .select({
-        filterByFormula: `AND({Status} = 'Open', {Source Type} = '${escapeFormulaValue(sourceType)}')`,
-        fields: [counterLinkField, "Seller ID", "Counter Payout", "Counter Payout VAT Type", "Seller Original VAT Type", "Seller Counter Price"]
-      })
-      .all()
-      .then((records) => records.filter((r) => firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId)),
-    // NEW — additive only: a real, confirmed bug found via his live
-    // testing — after a seller's round is Denied, they have NO Open
-    // round left at all, so the chain-trace starting point below
-    // (previously only looked at Open rounds) never even started,
-    // silently falling all the way back to their raw, very-first
-    // listing instead of chain-tracing to their true last countered
-    // position. Fetches every round regardless of status, so each
-    // seller's MOST RECENT round (whatever its status) can serve as
-    // the chain-trace starting point.
-    airtable(COUNTER_OFFERS_TABLE)
-      .select({
-        filterByFormula: `{Source Type} = '${escapeFormulaValue(sourceType)}'`,
-        fields: [counterLinkField, "Seller ID", "Created At", "Seller Counter Price", "Previous Record ID"]
-      })
-      .all()
-      .then((records) => records.filter((r) => firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId))
+  /*
+    CHANGED - the three scans go through scanTableOnce, and the per-record
+    filtering moved out of them.
+
+    It used to sit inside the .then of each fetch, which tied the fetch to one
+    record and made every row fetch again. The queries never depended on the
+    record: they are keyed on the table and the source type, and the record is
+    only used to pick rows out of the answer. Splitting the two is what lets
+    the rows share one scan.
+  */
+  const [allOffers, allOpenRounds, allRounds] = await Promise.all([
+    scanTableOnce(`offers:${sourceType}`, () =>
+      airtable(SELLER_OFFERS_TABLE)
+        .select({ fields: [linkField, "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
+        .all()
+    ),
+    scanTableOnce(`open-rounds:${sourceType}`, () =>
+      airtable(COUNTER_OFFERS_TABLE)
+        .select({
+          filterByFormula: `AND({Status} = 'Open', {Source Type} = '${escapeFormulaValue(sourceType)}')`,
+          fields: [counterLinkField, "Seller ID", "Counter Payout", "Counter Payout VAT Type", "Seller Original VAT Type", "Seller Counter Price"]
+        })
+        .all()
+    ),
+    // Every round regardless of status, because a seller whose round was
+    // denied has no Open one left and the chain-trace below still has to find
+    // where he actually stood. Without it the trace never starts and falls
+    // all the way back to his first listing.
+    scanTableOnce(`all-rounds:${sourceType}`, () =>
+      airtable(COUNTER_OFFERS_TABLE)
+        .select({
+          filterByFormula: `{Source Type} = '${escapeFormulaValue(sourceType)}'`,
+          fields: [counterLinkField, "Seller ID", "Created At", "Seller Counter Price", "Previous Record ID"]
+        })
+        .all()
+    )
   ]);
+
+  const rawOffers = allOffers.filter(
+    (r) =>
+      !r.fields?.["Delete Offer"] &&
+      firstLinkedRecordId(r.fields?.[linkField]) === recordId
+  );
+
+  const activeCounters = allOpenRounds.filter(
+    (r) => firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId
+  );
+
+  const allRoundsAnyStatus = allRounds.filter(
+    (r) => firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId
+  );
 
   // PERF — in-memory chain-trace over allRoundsAnyStatus (already fetched
   // above), replacing the per-hop Airtable .find() walk of
