@@ -12193,22 +12193,38 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     // getConsignmentComparePrice is the identical normalization the
     // Seller Offers side stores in "Offer Cost (Normalized)", so the
     // same consignment row wins as before.
-    // Stock this record has already asked and been refused on.
-    //
-    // The duplicate guard further down deliberately ignores Withdrawn and
-    // Denied offers, so without this the picker keeps landing on the same
-    // cheapest consignor: he says no, we ask him again, forever. Skipping
-    // him here is what lets the next-cheapest source get a turn.
-    //
-    // Member WTBs only. A store order that was refused may legitimately be
-    // asked again later - its price and ceiling move - and that behaviour is
-    // left exactly as it was.
+    /*
+      Stock this record has already been asked about.
+    
+      CHANGED - was only the stock that had SAID NO. That was enough while
+      this route asked one consignor and stopped: skipping a refusal let the
+      next-cheapest have a turn.
+    
+      It is not enough now that the caller asks every consignor in turn. With
+      only refusals skipped, the second call lands on the same cheapest source
+      again and creates a second round for a seller who is already holding
+      one. Skipping everyone already asked is what makes the walk down the
+      list terminate.
+    
+      Why it matters: on MWTB-000459 two consignors five euro apart got two
+      different embeds. The cheapest was asked through this route and could
+      counter; the other fell through to the older path, which only offers
+      take it or leave it. Same order, same question, two answers.
+    
+      Member WTBs only. A store order that was refused may legitimately be
+      asked again later - its price and ceiling move - and that behaviour is
+      left exactly as it was.
+    */
     const refusedInventoryIds = new Set();
 
     if (source.kind === "member_wtb") {
       const refused = await airtable(SELLER_OFFERS_TABLE)
         .select({
-          filterByFormula: `OR({Withdrawn?}, {Denied?})`,
+          // Narrowed to this want-to-buy rather than read whole. Dropping the
+          // status filter widened it to every offer ever made, and the caller
+          // now runs this several times per record - so without a formula it
+          // would page the entire table five times over for one order.
+          filterByFormula: `FIND('${escapeFormulaValue(source.recordId)}', ARRAYJOIN({${source.offerLink}}))`,
           fields: ["Consignment Inventory ID", source.offerLink]
         })
         .all()
@@ -12230,7 +12246,7 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       if (refusedInventoryIds.size) {
         console.log(
           `ℹ️ Member WTB ${source.recordId}: skipping ${refusedInventoryIds.size} ` +
-            "consignment source(s) that already said no."
+            "consignment source(s) that have already been asked."
         );
       }
     }
@@ -34722,33 +34738,70 @@ function calculateMemberWtbConsignorOfferPrice({
 // once reached a consignor with nothing to do with the deal (24-08-2026):
 // the endpoint searched stock for what it was told, not for what the
 // Member WTB actually asks for.
+/*
+ * Ask every consignor who has the pair, not only the cheapest.
+ *
+ * CHANGED - this called the auto-offer once. That route picks the cheapest
+ * source and stops, so one consignor was asked through it and the rest fell
+ * through to the older Supabase path, which can only say yes or no. On
+ * MWTB-000459 that put two consignors five euro apart on two different
+ * embeds: one could counter, one could not, on the same order.
+ *
+ * The route itself is untouched. It still answers about one consignor per
+ * call - seventy lines downstream depend on that - so this simply calls it
+ * again, and the widened skip list inside makes each call land on the next
+ * source down. It ends when there is nothing left, which the route reports
+ * as a 404.
+ *
+ * The FIRST failure still throws, because that is what the caller falls back
+ * on. A later one just means the list ran out, and the offers already made
+ * must not be undone by it.
+ */
+const MAX_CONSIGNORS_ASKED = 5;
+
 async function createMemberWtbAutoOffer(memberWtbRecordId) {
   const record = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
   const f = record.fields || {};
 
-  const response = await fetch(`http://localhost:${PORT}/api/consignment/auto-offer/create`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
-    },
-    body: JSON.stringify({
-      member_wtb_record_id: memberWtbRecordId,
-      sku: asText(f["SKU"]),
-      size: asText(f["Size"]),
-      maximum_buying_price: numberValue(f["Max Price"])
-    })
-  });
+  const made = [];
 
-  const data = await response.json().catch(() => ({}));
+  for (let round = 0; round < MAX_CONSIGNORS_ASKED; round += 1) {
+    const response = await fetch(`http://localhost:${PORT}/api/consignment/auto-offer/create`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-kc-secret": process.env.KC_PORTAL_SECRET || ""
+      },
+      body: JSON.stringify({
+        member_wtb_record_id: memberWtbRecordId,
+        sku: asText(f["SKU"]),
+        size: asText(f["Size"]),
+        maximum_buying_price: numberValue(f["Max Price"])
+      })
+    });
 
-  if (!response.ok) {
-    const error = new Error(data.details || data.error || `Auto-offer failed: ${response.status}`);
-    error.payload = data;
-    throw error;
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      if (!made.length) {
+        const error = new Error(data.details || data.error || `Auto-offer failed: ${response.status}`);
+        error.payload = data;
+        throw error;
+      }
+
+      break;
+    }
+
+    made.push(data);
   }
 
-  return data;
+  console.log(
+    `Member WTB ${memberWtbRecordId}: asked ${made.length} consignor(s) ` +
+      `(${made.map((d) => d.seller_id).filter(Boolean).join(", ") || "none named"}).`
+  );
+
+  // The first one, so every existing caller reads what it always read.
+  return { ...made[0], asked: made.length, all: made };
 }
 
 async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
