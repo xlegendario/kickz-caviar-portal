@@ -20453,6 +20453,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         )`
       })
       .all();
+    stageTimings.t1_hoofdvraag = Date.now() - stageStartedAt;
 
     const scope = asText(req.query.scope);
     const consignmentOfferIds = await getConsignmentSellerOfferIds();
@@ -20522,6 +20523,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         filterByFormula: `OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')`,
         fields: ["Seller ID", "Previous Record ID", "Created At"]
       });
+    stageTimings.t2_alle_rondes = Date.now() - stageStartedAt;
 
       const siblingsByPrevId = new Map();
       // NEW — also track which round IDs are referenced as SOMEONE's
@@ -20631,6 +20633,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         .select({ filterByFormula: mwtbFormula, fields: ["Fulfillment Status"] })
         .all();
       memberWtbStatusMap = new Map(mwtbRecords.map((r) => [r.id, asText(r.fields?.["Fulfillment Status"])]));
+    stageTimings.t3_wtb_status = Date.now() - stageStartedAt;
     }
 
     // NEW — additive only: builds "am I still the lowest seller" for
@@ -20675,6 +20678,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
             records.filter((r) => memberWtbIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Member WTB"])))
           )
       ]);
+    stageTimings.t4_concurrenten_mwtb = Date.now() - stageStartedAt;
 
       // FIXED — corrects my own previous mistake this same session: I'd
       // switched this to use Counter Payout for EVERY active round,
@@ -20736,6 +20740,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
         .then((records) =>
           records.filter((r) => memberWtbIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Member WTB"])))
         );
+    stageTimings.t5_mwtb_rondes = Date.now() - stageStartedAt;
       const latestAnyStatusRoundBySeller = new Map();
       const latestAnyStatusCreatedBySeller = new Map();
       for (const r of allMwRoundsForCompeting) {
@@ -20823,6 +20828,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
             records.filter((r) => orderIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Order"])))
           )
       ]);
+    stageTimings.t6_concurrenten_orders = Date.now() - stageStartedAt;
 
       const sellerIdsWithGenuineCounterForOrders = new Set(
         competingCounterRoundsForOrders
@@ -20910,6 +20916,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       const previousRecords = await airtable(COUNTER_OFFERS_TABLE)
         .select({ filterByFormula: previousFormula, fields: ["Store Counter Price", "Counter Payout", "Seller Counter Price"] })
         .all();
+    stageTimings.t7_vorige_rondes = Date.now() - stageStartedAt;
       // FIXED — "Buyer's Last Offer" must show what the SELLER would
       // actually receive, not the raw store-side price. "Store Counter
       // Price" is what the store pays; "Counter Payout" is that same
