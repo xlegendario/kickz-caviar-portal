@@ -9276,6 +9276,34 @@ const COOKIE_SECURE = (process.env.NODE_ENV || "") === "production";
  * watched before it can lock anybody out; on "strict" it refuses. Same switch,
  * one behaviour, nothing to remember separately.
  */
+/*
+ * A route only another service should be calling.
+ *
+ * Three of these create consignment offers or hand back somebody's open ones
+ * and check nothing at all: the automation engine and the updates bot reach
+ * them over the public hostname without a header, so anyone who knows the
+ * path can do the same.
+ *
+ * Neither caller sends x-kc-secret today, so refusing outright would take
+ * production down the moment it deployed. It follows AUTH_ENFORCE like
+ * everything else here: on "warn" it logs who called without one, on "strict"
+ * it refuses. Both services have to start sending the header before that flag
+ * is turned, and the warn lines are how you know when they do.
+ */
+function serviceCallRefusal(req) {
+  const presented = String(req.get("x-kc-secret") || "");
+
+  if (presented && KC_SERVICE_SECRETS.some((secret) => secret && presented === secret)) {
+    return null;
+  }
+
+  console.warn(`[auth:service] ${req.method} ${req.path} - called without a service secret`);
+
+  if (AUTH_ENFORCE === "strict") return { error: "Not allowed", status: 401 };
+
+  return null;
+}
+
 function sellerIdentityForRead(req) {
   const asked = asText(req.query?.seller_record_id);
   const session = asText(req.sellerSession?.rid);
@@ -12182,6 +12210,12 @@ app.post("/api/consignment/stock-levels/repair", async (req, res) => {
 
 app.post("/api/consignment/auto-offer/create", async (req, res) => {
   try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
     const orderRecordId = asText(req.body?.order_record_id);
     const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
     const sku = asText(req.body?.sku).toUpperCase();
@@ -15826,6 +15860,12 @@ app.post("/api/counter-offers/:id/edit", async (req, res) => {
 // ---------------------------------------------------------------------
 app.get("/api/consignment/offers/active-for-order", async (req, res) => {
   try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
     const orderRecordId = asText(req.query.order_record_id);
 
     if (!orderRecordId) {
@@ -15852,6 +15892,12 @@ app.get("/api/consignment/offers/active-for-order", async (req, res) => {
 
 app.post("/api/consignment/offers/create", async (req, res) => {
   try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
     const orderRecordId = asText(req.body?.order_record_id);
     const orderId = asText(req.body?.order_id);
     const sku = asText(req.body?.sku).toUpperCase();
