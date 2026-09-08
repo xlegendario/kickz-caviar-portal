@@ -34437,8 +34437,33 @@ app.get("/api/buying/products", async (req, res) => {
 
     const sources = await getBuyingMasterSources();
 
+    /*
+      A consignor does not see his own pairs in the shop.
+
+      A store can be both sides at once - it buys here and consigns to us -
+      and its own stock sitting in this catalogue shows it two numbers at
+      once: what we pay it and what we ask for the same pair. That is our
+      margin, quoted back to the one person it should not be quoted to.
+
+      It also stops him bidding on his own stock, which is the honest way to
+      describe it to him and is worth having on its own. A want-to-buy for a
+      pair you are holding means your stock is wrong, not that you need one.
+
+      The same seller_record_id the mark-up is resolved from, so the KC Buying
+      page and the Lojiq shop are covered by this one filter - the shop passes
+      it through to here already. Left out, which is any caller that does not
+      say who is looking, nothing is hidden and the answer is what it was.
+    */
+    const viewerSellerRecordId = asText(req.query.seller_record_id);
+
+    const visibleSources = viewerSellerRecordId
+      ? sources.filter(
+          (source) => asText(source.seller_record_id) !== viewerSellerRecordId
+        )
+      : sources;
+
     let products = buildBuyingProductsFromSources(
-      sources,
+      visibleSources,
       inventoryType,
       buyerVatRate,
       storeMargin
