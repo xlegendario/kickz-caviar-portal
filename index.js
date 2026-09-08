@@ -13234,22 +13234,29 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     }
 
     /*
-      NEW - additive only: and everyone else holding this pair.
+      And the same price, open to any seller.
 
-      A buyer who pressed Buy or made an Offer has named a number, which is
-      exactly what engageConsignorNow means here - and it is why the consignor
-      above was spoken to at all. One consignor is one point of failure, so
-      the others are asked at the same budget and the first Confirm wins.
+      CHANGED - this used to ALSO ask every other consignor holding the pair,
+      through askOtherConsignorsForMemberWtb. That path writes OUR budget into
+      their "Seller Offer" field, because it creates no round to carry the
+      number anywhere else. The cross-seller comparison reads that field as
+      what a seller asks for the pair, so our own bid ended up competing with
+      the consignors as though a seller had made it.
 
-      Deliberately NOT for a plainly posted want-to-buy: engageConsignorNow is
-      false there, nothing was said to anyone, and a Max Price is a ceiling
-      rather than an agreement. Those fan out later, when the buyer accepts -
-      see askConsignorToConfirmMemberWtbOffer.
+      MWTB-000468: SE-00001 asks 115 and was shown as beaten at 107.90. That
+      107.90 is the buyer's 120 with our margin taken off - our bid, standing
+      in the name of a consignor whose own listing is 180.
 
-      Store orders fan out from the store-accept and store-counter paths
-      instead, because that is where their commitment lands.
+      Nobody gets asked less because of this. createMemberWtbAutoOffer calls
+      this route again until the list runs out, and every one of those calls
+      makes a real round: the consignor's own price in "Seller Offer", ours in
+      "Counter Payout", and a Counter button on the embed. The fan-out was the
+      older second way of doing the same thing and it got there first, which
+      is also why the loop kept skipping people who by then held a Seller
+      Offer they never made.
 
-      Non-blocking: the consignor above is the offer the buyer is waiting on.
+      The snapshot stays. It is one open price to any seller, not an offer
+      written in somebody's name, so it never enters that comparison.
     */
     if (engageConsignorNow && source.kind === "member_wtb" && calculatedOfferPrice > 0) {
       offerSnapshotFor({
@@ -13257,18 +13264,6 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         source: "member_wtb",
         price: getConsignmentSellerOfferPrice(calculatedOfferPrice, "Margin")
       });
-
-      askOtherConsignorsForMemberWtb({
-        memberWtbRecordId: source.recordId,
-        memberFields: sourceRecord?.fields || {},
-        askedInventoryId: best.row.id,
-        budgetNormalized: calculatedOfferPrice
-      }).catch((err) =>
-        console.error(
-          `Failed to ask the other consignors for ${source.recordId} (non-blocking):`,
-          err.message
-        )
-      );
     }
 
     res.json({
