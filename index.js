@@ -8293,10 +8293,31 @@ function bindConsignmentDiscordButtons(client) {
         console.error("Failed to post denied KC Member WTB to WTB bot:", err);
       }
       
+      /*
+        CHANGED - this asked the consignors through the older Supabase route
+        while the two shop routes had already moved to the auto-offer. Same
+        want-to-buy, different stage, different embed: whoever was asked here
+        got Accept or Deny, and whoever was asked at creation got a Counter
+        Offers round with a Counter button.
+
+        Now it is the same order of preference as everywhere else - the newer
+        route first, the old one only if it fails. That fallback is the point
+        of keeping it: a consignor who is never asked looks exactly like a
+        quiet week.
+      */
       try {
-        await sendMemberWtbConsignmentRequests(memberWtbRecordId);
+        await createMemberWtbAutoOffer(memberWtbRecordId);
       } catch (err) {
-        console.error("Failed to send consignment requests after KC deny:", err);
+        console.error(
+          "Auto-offer after KC deny failed, falling back to consignment requests:",
+          err.message
+        );
+
+        try {
+          await sendMemberWtbConsignmentRequests(memberWtbRecordId);
+        } catch (fallbackErr) {
+          console.error("Failed to send consignment requests after KC deny:", fallbackErr);
+        }
       }
     
       await safeEditInteractionMessage(interaction, {
