@@ -9258,6 +9258,51 @@ const KC_SERVICE_SECRETS = [
 ];
 const COOKIE_SECURE = (process.env.NODE_ENV || "") === "production";
 
+/*
+ * Whose consignment data a READ is allowed to return.
+ *
+ * sellerIdentityGuard already does this for writes, but only for the body -
+ * it looks for sellerRecordId there and never at the query string. Three
+ * reads take the identity from the URL instead, so a consignor's stock, his
+ * prices and his open offers came back to whoever typed someone else's record
+ * id after the question mark.
+ *
+ * The rule is the one the guard uses: a signed-in browser is whoever the
+ * cookie says, never whoever the URL says. A service identifies itself with
+ * the same x-kc-secret header the write side already accepts.
+ *
+ * Refusal follows AUTH_ENFORCE, exactly like the guard. On "warn" it logs and
+ * lets the request through on the id it was given, so this can ship and be
+ * watched before it can lock anybody out; on "strict" it refuses. Same switch,
+ * one behaviour, nothing to remember separately.
+ */
+function sellerIdentityForRead(req) {
+  const asked = asText(req.query?.seller_record_id);
+  const session = asText(req.sellerSession?.rid);
+
+  if (session) {
+    if (asked && asked !== session) {
+      console.warn(`[auth:read] ${req.path} - session ${session} asked for ${asked}`);
+
+      if (AUTH_ENFORCE === "strict") return { error: "Not your record", status: 403 };
+    }
+
+    return { sellerRecordId: session };
+  }
+
+  const presented = String(req.get("x-kc-secret") || "");
+
+  if (presented && KC_SERVICE_SECRETS.some((secret) => secret && presented === secret)) {
+    return { sellerRecordId: asked };
+  }
+
+  console.warn(`[auth:read] ${req.path} - no session, url claims ${asked || "nothing"}`);
+
+  if (AUTH_ENFORCE === "strict") return { error: "Not signed in", status: 401 };
+
+  return { sellerRecordId: asked };
+}
+
 if (!SESSION_SECRET) {
   throw new Error("Missing SESSION_SECRET");
 }
@@ -10085,7 +10130,13 @@ app.post("/api/make/consignor-activated", async (req, res) => {
 
 app.get("/api/consignment/inventory", async (req, res) => {
   try {
-    const sellerRecordId = asText(req.query.seller_record_id);
+    const identity = sellerIdentityForRead(req);
+
+    if (identity.error) {
+      return res.status(identity.status).json({ error: identity.error });
+    }
+
+    const sellerRecordId = identity.sellerRecordId;
 
     if (!sellerRecordId) {
       return res.status(400).json({
@@ -11341,7 +11392,13 @@ app.post("/api/consignment/inventory/csv-replace", async (req, res) => {
 
 app.get("/api/consignment/csv-import/latest", async (req, res) => {
   try {
-    const sellerRecordId = asText(req.query.seller_record_id);
+    const identity = sellerIdentityForRead(req);
+
+    if (identity.error) {
+      return res.status(identity.status).json({ error: identity.error });
+    }
+
+    const sellerRecordId = identity.sellerRecordId;
 
     if (!sellerRecordId) {
       return res.status(400).json({ error: "Missing seller_record_id" });
@@ -12272,8 +12329,32 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       }
     }
 
+    /*
+      Never offer a buyer his own pair.
+
+      A store can be both: it buys from us through Lojiq and consigns to us
+      through Kickz Caviar, and the seller record carries Consignor? and
+      Merchants side by side precisely so it can. Nothing here excluded it,
+      so a store that wanted a pair it happened to be holding would have been
+      offered that pair back - and the embed puts his consignment price next
+      to what he is being asked to pay, which is our margin written out.
+
+      Member WTBs only, and only when we know who is buying. A store order
+      names a merchant rather than a seller record and cannot collide this
+      way.
+    */
+    const buyerSellerRecordId =
+      source.kind === "member_wtb"
+        ? firstLinkedRecordId(sourceRecord?.fields?.["Buyer Seller ID"])
+        : null;
+
     const best = (inventoryRows || [])
       .filter((row) => !refusedInventoryIds.has(row.id))
+      .filter(
+        (row) =>
+          !buyerSellerRecordId ||
+          asText(row.seller_record_id) !== buyerSellerRecordId
+      )
       .map((row) => {
         const sellerPrice = Number(row.selling_price_suggested);
 
@@ -15979,7 +16060,13 @@ app.post("/api/consignment/offers/create", async (req, res) => {
 
 app.get("/api/consignment/offers", async (req, res) => {
   try {
-    const sellerRecordId = asText(req.query.seller_record_id);
+    const identity = sellerIdentityForRead(req);
+
+    if (identity.error) {
+      return res.status(identity.status).json({ error: identity.error });
+    }
+
+    const sellerRecordId = identity.sellerRecordId;
     // NEW — additive only: supports the merged "Offers" tab with
     // Open/Counter/Denied pills. Defaults to "open" so any existing
     // caller that doesn't pass this keeps working unchanged.
