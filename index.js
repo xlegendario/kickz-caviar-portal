@@ -2801,6 +2801,78 @@ if (!RESET_EMAIL_FROM) {
 
 sgMail.setApiKey(SENDGRID_API_KEY);
 
+/*
+ * Is this consignor a Lojiq store?
+ *
+ * The Merchants link is what marks one, the same link the payment side uses
+ * to settle through Open Payments and the buying side uses to route messages
+ * into its own server. Reused here rather than given a flag of its own, so
+ * the three cannot drift apart.
+ *
+ * It matters because a store must never hear from the Kickz Caviar bot. Its
+ * consignment channels live in the Lojiq server, where that bot cannot post
+ * at all - so the message has to be handed to the one that can.
+ *
+ * Cached for a minute: a single offer round can ask this several times and
+ * the answer does not change between them.
+ */
+const storeConsignorCache = new Map();
+
+async function isStoreConsignor(sellerRecordId) {
+  const id = asText(sellerRecordId);
+
+  if (!id) return false;
+
+  const cached = storeConsignorCache.get(id);
+
+  if (cached && Date.now() - cached.at < 60000) return cached.store;
+
+  const record = await airtable(SELLERS_TABLE).find(id).catch(() => null);
+
+  const store =
+    Array.isArray(record?.fields?.["Merchants"]) &&
+    record.fields["Merchants"].length > 0;
+
+  storeConsignorCache.set(id, { at: Date.now(), store });
+
+  return store;
+}
+
+/*
+ * Post into a Lojiq channel, through the bot that lives there.
+ *
+ * Discord only lets an application edit and act on its own messages, which
+ * is why nothing with a button goes down this road. A store answers in its
+ * portal; what arrives here is a notice that something needs answering.
+ */
+async function postLojiqConsignorEmbed({ channelId, content, embeds }) {
+  if (!AIRTABLE_DISCORD_UPDATES_URL) {
+    return { ok: false, reason: "no_updates_service_url" };
+  }
+
+  const secret = COUNTER_OFFERS_SECRET || process.env.COUNTER_OFFERS_SECRET || "";
+
+  const response = await fetch(
+    `${AIRTABLE_DISCORD_UPDATES_URL}/post-member-wtb-store-message`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(secret ? { "x-kc-secret": secret } : {})
+      },
+      body: JSON.stringify({ channel_id: channelId, content, embeds, components: [] })
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(`Lojiq bot refused the consignor message: ${data.error || response.status}`);
+  }
+
+  return { ok: true, channelId: data.channel_id, messageId: data.message_id };
+}
+
 function getSellerOfferChannelId(sellerRow, isConfirmation) {
   if (!sellerRow) return null;
 
@@ -2904,10 +2976,20 @@ async function sendConsignmentOfferDiscordMessage({
     isConfirmation
   );
 
+  // Asked before the channel is fetched, not after: a Lojiq channel is not
+  // one this bot can see, so fetching it would throw before the branch that
+  // knows what to do with it is ever reached.
+  const storeConsignor = await isStoreConsignor(
+    seller?.id || offer?.seller_record_id
+  ).catch(() => false);
+
   let target = null;
   let deliveryType = "private_channel";
 
-  if (privateChannelId) {
+  if (privateChannelId && storeConsignor) {
+    // Delivered further down, by the bot that lives in that server.
+    target = null;
+  } else if (privateChannelId) {
     target = await discordClient.channels.fetch(privateChannelId);
 
     if (!target) {
@@ -2988,6 +3070,38 @@ async function sendConsignmentOfferDiscordMessage({
         timestamp: new Date().toISOString()
       };
 
+  /*
+    A Lojiq store hears about this in its own server, in its own colours.
+
+    Its consignment channel ids sit on the seller record like everybody
+    else's - what differs is only who delivers, because the Kickz Caviar bot
+    is not in that server and the fetch above would have thrown.
+
+    No buttons on this one, and that is not a shortcut. Discord only lets the
+    application that posted a message act on its components, and the one
+    posting here is the Lojiq bot, which knows nothing about counter offers.
+    A store answers in its portal; this is the notice that there is something
+    to answer. Carrying an accept path here as well would be two ways to say
+    yes to one offer, which is how a pair gets promised twice.
+  */
+  if (storeConsignor && deliveryType === "private_channel") {
+    const posted = await postLojiqConsignorEmbed({
+      channelId: privateChannelId,
+      content: isConfirmation
+        ? `Match found for ${offer.sku} / ${offer.size}`
+        : `Offer sent for ${offer.sku} / ${offer.size}`,
+      // Lojiq blue. The yellow belongs to a brand this store is not supposed
+      // to be looking at in the first place.
+      embeds: [{ ...embed, color: 0x2F80ED }]
+    });
+
+    return {
+      channelId: posted.channelId || privateChannelId,
+      messageId: posted.messageId || null,
+      deliveryType: "lojiq_channel"
+    };
+  }
+
   const message = await target.send({
     content: deliveryType === "dm"
       ? null
@@ -3057,10 +3171,18 @@ async function sendConsignmentCounterOfferDiscordMessage({
 
   const privateChannelId = getSellerOfferChannelId(seller, false);
 
+  // Same reason as the offer above: a Lojiq channel is not one this bot can
+  // see, so whether it is a store has to be settled before the fetch.
+  const storeConsignor = await isStoreConsignor(
+    seller?.id || offer?.seller_record_id
+  ).catch(() => false);
+
   let target = null;
   let deliveryType = "private_channel";
 
-  if (privateChannelId) {
+  if (privateChannelId && storeConsignor) {
+    target = null;
+  } else if (privateChannelId) {
     target = await discordClient.channels.fetch(privateChannelId);
     if (!target) {
       throw new Error(`Discord channel not found: ${privateChannelId}`);
@@ -3124,6 +3246,20 @@ async function sendConsignmentCounterOfferDiscordMessage({
     ].join("\n"),
     color: 0xf1c40f
   };
+
+  if (storeConsignor && deliveryType === "private_channel") {
+    const posted = await postLojiqConsignorEmbed({
+      channelId: privateChannelId,
+      content: `We countered on ${offer.sku} / ${offer.size}`,
+      embeds: [{ ...embed, color: 0x2F80ED }]
+    });
+
+    return {
+      channelId: posted.channelId || privateChannelId,
+      messageId: posted.messageId || null,
+      deliveryType: "lojiq_channel"
+    };
+  }
 
   const message = await target.send({
     content: deliveryType === "dm" ? null : undefined,
@@ -5381,10 +5517,66 @@ async function sendConsignmentDealUpdateDiscordMessage({
     return null;
   }
 
-  const channel = await discordClient.channels.fetch(channelId);
-  if (!channel) throw new Error(`Deal Updates channel not found: ${channelId}`);
+  /*
+    A Lojiq store gets its shipping step in its own server.
+
+    This one matters most of the three: without it a store that accepted an
+    offer is simply never told to ship, and the Kickz Caviar bot cannot tell
+    it because it cannot see the channel. It would throw here, and the deal
+    would sit finished and silent - which is exactly the failure the comments
+    further down this function were written about.
+
+    Its Request Label button is dropped for the same reason as the other two:
+    only the app that posted a message can act on its buttons. A store asks
+    for its label in the portal.
+  */
+  const storeConsignor = await isStoreConsignor(seller?.id).catch(() => false);
+
+  const channel = storeConsignor
+    ? null
+    : await discordClient.channels.fetch(channelId);
+
+  if (!storeConsignor && !channel) {
+    throw new Error(`Deal Updates channel not found: ${channelId}`);
+  }
 
   const price = Number(offer.offer_price || 0);
+
+  const shippingEmbed = {
+    title: "📦 Time To Ship Your Item!",
+    description: [
+      "**Item Details:**",
+      offer.product_name || "—",
+      "",
+      "**SKU**",
+      offer.sku || "—",
+      "",
+      "**Size**",
+      offer.size || "—",
+      "",
+      "**Price**",
+      `${moneySmartValue(Number(offer.offer_price || 0).toFixed(2))} (${offer.vat_type || "—"})`,
+      "",
+      "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
+    ].join("\n"),
+    color: 0x2F80ED,
+    footer: { text: `SellerID: ${offer.seller_id}` },
+    timestamp: new Date().toISOString()
+  };
+
+  if (storeConsignor) {
+    const posted = await postLojiqConsignorEmbed({
+      channelId,
+      content: `Your deal for ${offer.sku} - ${offer.size} has been confirmed`,
+      embeds: [shippingEmbed]
+    });
+
+    return {
+      channelId: posted.channelId || channelId,
+      messageId: posted.messageId || null,
+      deliveryType: "lojiq_channel"
+    };
+  }
 
   const message = await channel.send({
     content: `✅ Your Deal For ${offer.sku} - ${offer.size} Has Been Confirmed!`,
@@ -29893,6 +30085,14 @@ app.get("/api/dashboard/consignment-accepted", async (req, res) => {
           "Product Name",
           "SKU",
           "Size",
+          // The same three as a Member WTB knows them. On a want-to-buy the
+          // plain fields are empty - they are lookups through Linked Orders and
+          // there is no order - so the row came back with no product, no size
+          // and no code. The fallback below reaches for the consignment row,
+          // which is gone the moment the pair is sold.
+          "Product Name (MWTB)",
+          "SKU (MWTB)",
+          "Size (MWTB)",
           "Brand",
           "Consignment Inventory ID",
           "Consignment Confirm Channel ID",
@@ -29988,9 +30188,18 @@ app.get("/api/dashboard/consignment-accepted", async (req, res) => {
         order_id: displayValue(f["Order ID"]) || displayValue(f["Member WTB ID"]),
         // Airtable first so a store order reads exactly as it always did;
         // the stock row fills in for a Member WTB, which has no lookup.
-        product: displayValue(f["Product Name"]) || asText(stock?.product_name),
-        sku: displayValue(f["SKU"]) || asText(stock?.sku),
-        size: displayValue(f["Size"]) || asText(stock?.size),
+        product:
+          displayValue(f["Product Name"]) ||
+          displayValue(f["Product Name (MWTB)"]) ||
+          asText(stock?.product_name),
+        sku:
+          displayValue(f["SKU"]) ||
+          displayValue(f["SKU (MWTB)"]) ||
+          asText(stock?.sku),
+        size:
+          displayValue(f["Size"]) ||
+          displayValue(f["Size (MWTB)"]) ||
+          asText(stock?.size),
         brand: displayValue(f["Brand"]) || asText(stock?.brand),
         // What he listed it for, next to what he gets - the whole point of
         // this tab is that his own price came back accepted.
