@@ -22393,16 +22393,49 @@ async function shouldNotifyStoreOfSellerDeny({
   return { notify, otherSellerBest, ownNormalized };
 }
 
+/*
+ * The last price this seller actually named, tracing back through the rounds.
+ *
+ * CHANGED - this walked the chain with one Airtable lookup per hop, up to
+ * fifteen of them, one after another. The Offers tab calls it once per row.
+ *
+ * That is where the four seconds were. Measured on the live server: the same
+ * request four times in a row stayed at 4.1 seconds even with every table
+ * read already held in memory, because none of the time was in the reads. A
+ * row two hops deep costs two round trips that nothing can overlap, and a row
+ * with a long history costs fifteen.
+ *
+ * The whole rounds table is 219 rows over three pages, about 700 ms, and it
+ * is held and shared like every other scan - so one read answers every hop of
+ * every row, and the second caller within the hold pays nothing at all.
+ *
+ * The tracing itself is unchanged: from the starting round, hop back over
+ * "Previous Record ID" until a round names a real Seller Counter Price. It
+ * still gives up after fifteen hops and still answers null when the chain
+ * leads somewhere this table does not have.
+ */
 async function findSellersTrueLastCounter(startRoundId, maxHops = 15) {
+  const rounds = await scanTable(COUNTER_OFFERS_TABLE, {
+    fields: ["Seller Counter Price", "Previous Record ID"]
+  });
+
+  const byId = new Map(rounds.map((round) => [round.id, round]));
+
   let currentId = startRoundId;
+
   for (let hop = 0; hop < maxHops && currentId; hop++) {
-    const round = await airtable(COUNTER_OFFERS_TABLE).find(currentId).catch(() => null);
+    const round = byId.get(currentId);
+
     if (!round) return null;
+
     const f = round.fields || {};
     const sellerCounter = numberValue(f["Seller Counter Price"]);
+
     if (sellerCounter > 0) return sellerCounter;
+
     currentId = asText(f["Previous Record ID"]) || null;
   }
+
   return null;
 }
 
