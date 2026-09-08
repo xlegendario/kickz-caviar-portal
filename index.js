@@ -29361,53 +29361,59 @@ app.get("/api/dashboard/counts", async (req, res) => {
       return res.status(400).json({ error: "Missing seller_record_id" });
     }
 
-    async function loadInventoryCount(formula, requireEmptySellerOffer = true) {
-      const records = await airtable(INVENTORY_UNITS_TABLE)
-        .select({
-          fields: ["Seller ID", "Seller Offer"],
-          filterByFormula: formula
-        })
-        .all();
+    /*
+      CHANGED - eleven of the sixteen queries below were one query each, over
+      the same table, differing only in which status they asked for.
 
-      return records.filter((record) => {
-        const f = record.fields || {};
+      Airtable allows five requests a second per base. Sixteen queries is
+      about twenty-two requests once paging is counted, so more than three
+      seconds of this endpoint was spent waiting in line rather than waiting
+      on anything slow. That is what made every badge on the dashboard take
+      four seconds to appear.
 
-        return (
-          linkedRecordIncludes(f["Seller ID"], sellerRecordId) &&
-          (!requireEmptySellerOffer || linkedRecordIsEmpty(f["Seller Offer"]))
-        );
-      }).length;
-    }
+      Measured before changing anything, because the obvious merge is a trap:
 
-    async function loadMemberWtbCount(formula) {
-      const records = await airtable(MEMBER_WTBS_TABLE)
-        .select({
-          fields: ["Buyer Seller ID"],
-          filterByFormula: formula
-        })
-        .all();
-    
-      return records.filter((record) =>
-        linkedRecordIncludes(record.fields?.["Buyer Seller ID"], sellerRecordId)
-      ).length;
-    }
+        every OUT- custom unit          3314 rows   34 pages   9918 ms
+        the eleven, one query each       707 rows   15 pages    ~4000 ms
+        the eleven merged, filters kept  364 rows    4 pages    1284 ms
+
+      Dropping the filters to merge them costs ten seconds. Keeping every
+      restriction that made each of them small, and merging only the status
+      question, costs one. So the OR below carries each original formula
+      whole, including the "To Pay" on delivered and the "Troubled" on paid
+      history - those two are what keep it at four pages instead of thirty.
+
+      Nothing about the counting changed. Each of the eleven still applies its
+      own rule, now to rows already in memory, and the seller filters they
+      always did are untouched.
+    */
+    const COUNTS_INVENTORY_FORMULA = `AND(
+      LEFT({Item ID} & '', 4) = 'OUT-',
+      {Type} = 'Custom',
+      OR(
+        {Fulfillment Status (UOL)} = 'Allocated',
+        {Fulfillment Status (UOL)} = 'Requested Label',
+        {Fulfillment Status (UOL)} = 'Ready to Ship',
+        {Fulfillment Status (MWTB)} = 'Allocated',
+        {Fulfillment Status (MWTB)} = 'Requested Label',
+        {Fulfillment Status (MWTB)} = 'Ready to Ship',
+        {Shipping Status} = 'Shipped',
+        {Shipping Status (MWTB)} = 'Shipped',
+        AND(
+          OR({Shipping Status} = 'Delivered', {Shipping Status (MWTB)} = 'Delivered'),
+          {Payment Status} = 'To Pay'
+        ),
+        AND({Payment Status} = 'Paid', {Issue Status} = 'Troubled')
+      )
+    )`;
 
     const [
       openClaimsRecords,
-      quickConfirmed,
-      quickLabelRequested,
-      quickReadyToShip,
-      quickShipped,
-      quickDelivered,
+      inventoryUnitsForCounts,
+      consignmentUnitsForCounts,
       wtbOpenOffersRecords,
       wtbCounterOffersRecords,
       wtbAcceptedRecords,
-      wtbConfirmedRecords,
-      wtbLabelRequestedRecords,
-      wtbReadyToShipRecords,
-      wtbShippedRecords,
-      wtbDeliveredRecords,
-      historyIssuesRecords,
       historyCompletedRecords
     ] = await Promise.all([
       airtable(ORDERS_TABLE)
@@ -29417,11 +29423,55 @@ app.get("/api/dashboard/counts", async (req, res) => {
         })
         .all(),
 
-      loadInventoryCount(`AND(LEFT({Item ID} & '', 4) = 'OUT-', {Type} = 'Custom', {Fulfillment Status (UOL)} = 'Allocated')`),
-      loadInventoryCount(`AND(LEFT({Item ID} & '', 4) = 'OUT-', {Type} = 'Custom', {Fulfillment Status (UOL)} = 'Requested Label')`),
-      loadInventoryCount(`AND(LEFT({Item ID} & '', 4) = 'OUT-', {Type} = 'Custom', {Fulfillment Status (UOL)} = 'Ready to Ship')`),
-      loadInventoryCount(`AND(LEFT({Item ID} & '', 4) = 'OUT-', {Type} = 'Custom', {Shipping Status} = 'Shipped')`),
-      loadInventoryCount(`AND(LEFT({Item ID} & '', 4) = 'OUT-', {Type} = 'Custom', {Shipping Status} = 'Delivered', {Payment Status} = 'To Pay')`),
+      scanTable(INVENTORY_UNITS_TABLE, {
+        fields: [
+          "Seller ID",
+          "Seller Offer",
+          "Fulfillment Status (UOL)",
+          "Fulfillment Status (MWTB)",
+          "Shipping Status",
+          "Shipping Status (MWTB)",
+          "Payment Status",
+          "Issue Status"
+        ],
+        filterByFormula: COUNTS_INVENTORY_FORMULA
+      }),
+
+      /*
+        The consignment badges, the same way.
+
+        These were five more calls, and awaited one after another rather than
+        together, so they cost five round trips in series at the end of an
+        endpoint that had already spent three seconds queueing. Merged they
+        are 95 rows on one page, measured at 734 ms.
+      */
+      scanTable(INVENTORY_UNITS_TABLE, {
+        fields: [
+          "Seller ID",
+          "Fulfillment Status (UOL)",
+          "Fulfillment Status (MWTB)",
+          "Shipping Status",
+          "Shipping Status (MWTB)",
+          "Payment Status"
+        ],
+        filterByFormula: `AND(
+          {Type} = 'Consignment',
+          OR(
+            {Fulfillment Status (UOL)} = 'Allocated',
+            {Fulfillment Status (MWTB)} = 'Allocated',
+            {Fulfillment Status (UOL)} = 'Requested Label',
+            {Fulfillment Status (MWTB)} = 'Requested Label',
+            {Fulfillment Status (UOL)} = 'Ready to Ship',
+            {Fulfillment Status (MWTB)} = 'Ready to Ship',
+            {Shipping Status} = 'Shipped',
+            {Shipping Status (MWTB)} = 'Shipped',
+            AND(
+              OR({Shipping Status} = 'Delivered', {Shipping Status (MWTB)} = 'Delivered'),
+              {Payment Status} = 'To Pay'
+            )
+          )
+        )`
+      }),
 
       airtable(SELLER_OFFERS_TABLE)
         .select({
@@ -29456,7 +29506,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
           )`
         })
         .all(),
-      
+
       airtable(SELLER_OFFERS_TABLE)
         .select({
           fields: [
@@ -29476,110 +29526,10 @@ app.get("/api/dashboard/counts", async (req, res) => {
         })
         .all(),
 
+      // Stays a query of its own. It asks for every paid unit of ONE seller,
+      // which the merged read above does not cover and must not: without the
+      // seller in the formula that is the whole paid history of the base.
       airtable(INVENTORY_UNITS_TABLE)
-      .select({
-        fields: [
-          "Seller ID",
-          "Seller Offer",
-          "Fulfillment Status (MWTB)"
-        ],
-        filterByFormula: `AND(
-          LEFT({Item ID} & '', 4) = 'OUT-',
-          {Type} = 'Custom',
-          OR(
-            {Fulfillment Status (UOL)} = 'Allocated',
-            {Fulfillment Status (MWTB)} = 'Allocated'
-          )
-        )`
-      })
-      .all(),
-
-      airtable(INVENTORY_UNITS_TABLE)
-      .select({
-        fields: [
-          "Seller ID",
-          "Seller Offer",
-          "Fulfillment Status (MWTB)"
-        ],
-        filterByFormula: `AND(
-          LEFT({Item ID} & '', 4) = 'OUT-',
-          {Type} = 'Custom',
-          OR(
-            {Fulfillment Status (UOL)} = 'Requested Label',
-            {Fulfillment Status (MWTB)} = 'Requested Label'
-          )
-        )`
-      })
-      .all(),
-
-      airtable(INVENTORY_UNITS_TABLE)
-      .select({
-        fields: [
-          "Seller ID",
-          "Seller Offer",
-          "Fulfillment Status (MWTB)"
-        ],
-        filterByFormula: `AND(
-          LEFT({Item ID} & '', 4) = 'OUT-',
-          {Type} = 'Custom',
-          OR(
-            {Fulfillment Status (UOL)} = 'Ready to Ship',
-            {Fulfillment Status (MWTB)} = 'Ready to Ship'
-          )
-        )`
-      })
-      .all(),
-
-      airtable(INVENTORY_UNITS_TABLE)
-      .select({
-        fields: [
-          "Seller ID",
-          "Seller Offer",
-          "Shipping Status (MWTB)"
-        ],
-        filterByFormula: `AND(
-          LEFT({Item ID} & '', 4) = 'OUT-',
-          {Type} = 'Custom',
-          OR(
-            {Shipping Status} = 'Shipped',
-            {Shipping Status (MWTB)} = 'Shipped'
-          )
-        )`
-      })
-      .all(),
-
-      airtable(INVENTORY_UNITS_TABLE)
-      .select({
-        fields: [
-          "Seller ID",
-          "Seller Offer",
-          "Shipping Status (MWTB)"
-        ],
-        filterByFormula: `AND(
-          LEFT({Item ID} & '', 4) = 'OUT-',
-          {Type} = 'Custom',
-          OR(
-            {Shipping Status} = 'Delivered',
-            {Shipping Status (MWTB)} = 'Delivered'
-          ),
-          {Payment Status} = 'To Pay'
-        )`
-      })
-      .all(),
-
-      airtable(INVENTORY_UNITS_TABLE)
-      .select({
-        fields: ["Seller ID"],
-        filterByFormula: `AND(
-          LEFT({Item ID} & '', 4) = 'OUT-',
-          {Type} = 'Custom',
-          {Payment Status} = 'Paid',
-          {Issue Status} = 'Troubled'
-        )`
-      })
-      .all(),
-    
-    airtable(INVENTORY_UNITS_TABLE)
         .select({
           fields: ["Seller ID (Lookup)"],
           filterByFormula: `AND(
@@ -29591,6 +29541,78 @@ app.get("/api/dashboard/counts", async (req, res) => {
         })
         .all()
     ]);
+
+    /*
+      The eleven, now read off the set above.
+
+      Each predicate is the JS twin of the formula it replaces, and reads its
+      fields through displayValue for the same reason the rest of this
+      endpoint does: several of these are lookups, so the raw value is an
+      array rather than a string.
+    */
+    const unitStatus = (record, field) => displayValue(record.fields?.[field]);
+
+    const unitsWhere = (predicate) => inventoryUnitsForCounts.filter(predicate);
+
+    // The Quick Deals badges: this seller's units, and only the ones that did
+    // not come from a Seller Offer. Same two rules loadInventoryCount applied.
+    const quickCount = (predicate) =>
+      unitsWhere(
+        (record) =>
+          predicate(record) &&
+          linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId) &&
+          linkedRecordIsEmpty(record.fields?.["Seller Offer"])
+      ).length;
+
+    const quickConfirmed = quickCount((r) => unitStatus(r, "Fulfillment Status (UOL)") === "Allocated");
+    const quickLabelRequested = quickCount((r) => unitStatus(r, "Fulfillment Status (UOL)") === "Requested Label");
+    const quickReadyToShip = quickCount((r) => unitStatus(r, "Fulfillment Status (UOL)") === "Ready to Ship");
+    const quickShipped = quickCount((r) => unitStatus(r, "Shipping Status") === "Shipped");
+
+    const quickDelivered = quickCount(
+      (r) =>
+        unitStatus(r, "Shipping Status") === "Delivered" &&
+        unitStatus(r, "Payment Status") === "To Pay"
+    );
+
+    // The Want To Buys badges. These keep their own visibility rule, applied
+    // further down by isVisibleMemberWtbInventory, so they stay records.
+    const wtbConfirmedRecords = unitsWhere(
+      (r) =>
+        unitStatus(r, "Fulfillment Status (UOL)") === "Allocated" ||
+        unitStatus(r, "Fulfillment Status (MWTB)") === "Allocated"
+    );
+
+    const wtbLabelRequestedRecords = unitsWhere(
+      (r) =>
+        unitStatus(r, "Fulfillment Status (UOL)") === "Requested Label" ||
+        unitStatus(r, "Fulfillment Status (MWTB)") === "Requested Label"
+    );
+
+    const wtbReadyToShipRecords = unitsWhere(
+      (r) =>
+        unitStatus(r, "Fulfillment Status (UOL)") === "Ready to Ship" ||
+        unitStatus(r, "Fulfillment Status (MWTB)") === "Ready to Ship"
+    );
+
+    const wtbShippedRecords = unitsWhere(
+      (r) =>
+        unitStatus(r, "Shipping Status") === "Shipped" ||
+        unitStatus(r, "Shipping Status (MWTB)") === "Shipped"
+    );
+
+    const wtbDeliveredRecords = unitsWhere(
+      (r) =>
+        (unitStatus(r, "Shipping Status") === "Delivered" ||
+          unitStatus(r, "Shipping Status (MWTB)") === "Delivered") &&
+        unitStatus(r, "Payment Status") === "To Pay"
+    );
+
+    const historyIssuesRecords = unitsWhere(
+      (r) =>
+        unitStatus(r, "Payment Status") === "Paid" &&
+        unitStatus(r, "Issue Status") === "Troubled"
+    );
 
     const openClaims = openClaimsRecords.filter((record) =>
       linkedRecordIncludes(record.fields?.["Claimed Seller ID"], sellerRecordId)
@@ -29777,60 +29799,35 @@ app.get("/api/dashboard/counts", async (req, res) => {
         !firstLinkedRecordId(record.fields?.["Linked Inventory Unit"])
     ).length;
 
-    const consignmentConfirmedCount = await loadInventoryCount(
-      `AND(
-        {Type} = 'Consignment',
-        OR(
-          {Fulfillment Status (UOL)} = 'Allocated',
-          {Fulfillment Status (MWTB)} = 'Allocated'
-        )
-      )`,
-      false
-    );
-    
-    const consignmentLabelRequestedCount = await loadInventoryCount(
-      `AND(
-        {Type} = 'Consignment',
-        OR(
-          {Fulfillment Status (UOL)} = 'Requested Label',
-          {Fulfillment Status (MWTB)} = 'Requested Label'
-        )
-      )`,
-      false
-    );
-    
-    const consignmentReadyToShipCount = await loadInventoryCount(
-      `AND(
-        {Type} = 'Consignment',
-        OR(
-          {Fulfillment Status (UOL)} = 'Ready to Ship',
-          {Fulfillment Status (MWTB)} = 'Ready to Ship'
-        )
-      )`,
-      false
-    );
-    
-    const consignmentShippedCount = await loadInventoryCount(
-      `AND(
-        {Type} = 'Consignment',
-        OR(
-          {Shipping Status} = 'Shipped',
-          {Shipping Status (MWTB)} = 'Shipped'
-        )
-      )`,
-      false
-    );
-    
-    const consignmentDeliveredCount = await loadInventoryCount(
-      `AND(
-        {Type} = 'Consignment',
-        OR(
-          {Shipping Status} = 'Delivered',
-          {Shipping Status (MWTB)} = 'Delivered'
-        ),
-        {Payment Status} = 'To Pay'
-      )`,
-      false
+    /*
+      The consignment badges, read off the merged fetch above rather than
+      five more calls. Only the seller rule applies here - a consignment unit
+      always comes from a Seller Offer, so the emptiness check the Quick Deals
+      badges make would drop every one of them. That is why these passed
+      false for it.
+    */
+    const consignmentCount = (predicate) =>
+      consignmentUnitsForCounts.filter(
+        (record) =>
+          predicate(record) &&
+          linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+      ).length;
+
+    const consignmentStatusIs = (record, value) =>
+      unitStatus(record, "Fulfillment Status (UOL)") === value ||
+      unitStatus(record, "Fulfillment Status (MWTB)") === value;
+
+    const consignmentShippingIs = (record, value) =>
+      unitStatus(record, "Shipping Status") === value ||
+      unitStatus(record, "Shipping Status (MWTB)") === value;
+
+    const consignmentConfirmedCount = consignmentCount((r) => consignmentStatusIs(r, "Allocated"));
+    const consignmentLabelRequestedCount = consignmentCount((r) => consignmentStatusIs(r, "Requested Label"));
+    const consignmentReadyToShipCount = consignmentCount((r) => consignmentStatusIs(r, "Ready to Ship"));
+    const consignmentShippedCount = consignmentCount((r) => consignmentShippingIs(r, "Shipped"));
+
+    const consignmentDeliveredCount = consignmentCount(
+      (r) => consignmentShippingIs(r, "Delivered") && unitStatus(r, "Payment Status") === "To Pay"
     );
 
     const buyingRecords = await airtable(MEMBER_WTBS_TABLE)
