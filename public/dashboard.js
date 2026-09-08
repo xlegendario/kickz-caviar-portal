@@ -2184,11 +2184,12 @@ function renderConsignmentAcceptedRows(items) {
       <td>${escapeHtml(item.vat_type || "-")}</td>
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
+        <div class="dashboard-action-row">
         <button
-          class="dashboard-confirm-btn"
+          class="dashboard-confirm-btn action-accept"
           type="button"
           data-consignment-confirm="${escapeHtml(item.seller_offer_record_id)}"
-        >Confirm ${escapeHtml(amountForButton(item.payout))}</button>
+        ><span class="accept-kop">CONFIRM</span><span class="accept-amount">${escapeHtml(amountForButton(item.payout))}</span></button>
         <button
           class="dashboard-deny-btn"
           type="button"
@@ -2206,6 +2207,7 @@ function renderConsignmentAcceptedRows(items) {
             `
             : ""
         }
+        </div>
       </td>
     </tr>
   `).join("");
