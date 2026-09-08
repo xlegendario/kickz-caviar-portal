@@ -965,11 +965,19 @@ async function askOtherConsignorsForOrder({
 
       const ownAskNormalized = getConsignmentComparePrice(ownAsk, vatType);
 
-      // What we can pay him, in his own VAT scale - the number his embed
-      // shows and the one a round would pay out.
-      const theirAmount = Number(
-        consignmentAmountForVatType(budgetNormalized, vatType).toFixed(2)
-      );
+      /*
+        What we can pay him, in his own VAT scale.
+
+        CHANGED - this used consignmentAmountForVatType, which converts and
+        stops. The auto-offer route uses getConsignmentSellerOfferPrice, which
+        converts and then rounds down to the nearest 2.50.
+
+        Same budget, two answers. On MWTB-000468 the cheapest consignor was
+        offered 107.50 and the spare 107.90, forty cents apart for the same
+        pair on the same deal. One rule, in one place, so they cannot drift
+        again.
+      */
+      const theirAmount = getConsignmentSellerOfferPrice(budgetNormalized, vatType);
 
       if (!(theirAmount > 0)) continue;
 
@@ -986,6 +994,23 @@ async function askOtherConsignorsForOrder({
 
       const sf = sellerRecord.fields || {};
 
+      /*
+        Held from the buyer, on purpose.
+
+        The old code sidestepped this by writing our budget in the price
+        field: a record at our own number can never look like a better market
+        price. Writing his real asking price brings that risk back, and a
+        spare asking LESS than the deal was struck on would drop the rollups
+        and read to computeAndPushLowestOffer as a cheaper seller appearing.
+        It would then push a fresh, lower offer at a buyer who has already
+        said yes.
+
+        "Hold From Store?" is the mechanism that already exists for exactly
+        this. It keeps a record out of the three Lowest Seller Offer rollups
+        while leaving it readable, so the cross-seller comparison and the
+        bot's undercut check still see his true price. The buyer sees
+        nothing until one of these spares actually confirms.
+      */
       const createdOffer = await airtable(SELLER_OFFERS_TABLE).create({
         "Seller ID": [row.seller_record_id],
         "Member WTBs": [memberWtbRecordId],
@@ -993,7 +1018,8 @@ async function askOtherConsignorsForOrder({
         "Offer VAT Type": vatType,
         "Offer Cost (Normalized)": Number(ownAskNormalized.toFixed(2)),
         "Offer Date": new Date().toISOString(),
-        "Consignment Inventory ID": row.id
+        "Consignment Inventory ID": row.id,
+        "Hold From Store?": true
       });
 
       if (isConfirmation) {
@@ -20383,12 +20409,10 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       // Fetches without ID-based formula matching and filters by
       // Seller ID in JS instead, the same reliable pattern used
       // elsewhere in this file.
-      const allRoundsForSeller = await airtable(COUNTER_OFFERS_TABLE)
-        .select({
-          filterByFormula: `OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')`,
-          fields: ["Seller ID", "Previous Record ID", "Created At"]
-        })
-        .all();
+      const allRoundsForSeller = await scanTable(COUNTER_OFFERS_TABLE, {
+        filterByFormula: `OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')`,
+        fields: ["Seller ID", "Previous Record ID", "Created At"]
+      });
 
       const siblingsByPrevId = new Map();
       // NEW — also track which round IDs are referenced as SOMEONE's
@@ -20487,9 +20511,9 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       };
 
       const [competingSellerOffers, competingCounterRounds] = await Promise.all([
-        airtable(SELLER_OFFERS_TABLE)
-          .select({ fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
-          .all()
+        scanTable(SELLER_OFFERS_TABLE, {
+          fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"]
+        })
           .then((records) =>
             records.filter(
               (r) =>
@@ -20497,12 +20521,10 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
                 memberWtbIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Member WTBs"]))
             )
           ),
-        airtable(COUNTER_OFFERS_TABLE)
-          .select({
-            filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Member WTB')`,
-            fields: ["Member WTB", "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
-          })
-          .all()
+        scanTable(COUNTER_OFFERS_TABLE, {
+          filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Member WTB')`,
+          fields: ["Member WTB", "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
+        })
           .then((records) =>
             records.filter((r) => memberWtbIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Member WTB"])))
           )
@@ -20561,12 +20583,10 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       // getCurrentGlobalLowestNormalized: pick each seller's MOST RECENT
       // round of ANY status as the chain-trace start point. Only fills
       // sellers not already covered by an Open round above.
-      const allMwRoundsForCompeting = await airtable(COUNTER_OFFERS_TABLE)
-        .select({
-          filterByFormula: `{Source Type} = 'Member WTB'`,
-          fields: ["Member WTB", "Seller ID", "Created At"]
-        })
-        .all()
+      const allMwRoundsForCompeting = await scanTable(COUNTER_OFFERS_TABLE, {
+        filterByFormula: `{Source Type} = 'Member WTB'`,
+        fields: ["Member WTB", "Seller ID", "Created At"]
+      })
         .then((records) =>
           records.filter((r) => memberWtbIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Member WTB"])))
         );
@@ -20638,9 +20658,9 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       };
 
       const [competingSellerOffersForOrders, competingCounterRoundsForOrders] = await Promise.all([
-        airtable(SELLER_OFFERS_TABLE)
-          .select({ fields: ["Linked Orders", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
-          .all()
+        scanTable(SELLER_OFFERS_TABLE, {
+          fields: ["Linked Orders", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"]
+        })
           .then((records) =>
             records.filter(
               (r) =>
@@ -20648,12 +20668,10 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
                 orderIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Linked Orders"]))
             )
           ),
-        airtable(COUNTER_OFFERS_TABLE)
-          .select({
-            filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Seller Offer')`,
-            fields: ["Order", "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
-          })
-          .all()
+        scanTable(COUNTER_OFFERS_TABLE, {
+          filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Seller Offer')`,
+          fields: ["Order", "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
+        })
           .then((records) =>
             records.filter((r) => orderIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Order"])))
           )
@@ -22846,6 +22864,26 @@ function scanTableOnce(key, run) {
   return scan;
 }
 
+/*
+ * Any table read whole, shared with whoever is already reading it.
+ *
+ * Same rule as scanTableOnce: identical query, one request. The key is the
+ * table plus the query itself, so two callers only share when they would
+ * have fetched exactly the same rows and fields.
+ *
+ * This is what makes the Offers tab bearable. Opening it fires four requests
+ * at once - the fresh offers, the rounds, the counts, and the counts for the
+ * pills you are not on - and each of those reads the same two tables whole.
+ * They now read them once between them.
+ */
+function scanTable(table, options) {
+  const query = options || {};
+
+  return scanTableOnce(`${table}|${JSON.stringify(query)}`, () =>
+    airtable(table).select(query).all()
+  );
+}
+
 async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSellerId) {
   const linkField = sourceType === "Member WTB" ? "Member WTBs" : "Linked Orders";
   const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
@@ -22873,31 +22911,21 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
     the rows share one scan.
   */
   const [allOffers, allOpenRounds, allRounds] = await Promise.all([
-    scanTableOnce(`offers:${sourceType}`, () =>
-      airtable(SELLER_OFFERS_TABLE)
-        .select({ fields: [linkField, "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"] })
-        .all()
-    ),
-    scanTableOnce(`open-rounds:${sourceType}`, () =>
-      airtable(COUNTER_OFFERS_TABLE)
-        .select({
-          filterByFormula: `AND({Status} = 'Open', {Source Type} = '${escapeFormulaValue(sourceType)}')`,
-          fields: [counterLinkField, "Seller ID", "Counter Payout", "Counter Payout VAT Type", "Seller Original VAT Type", "Seller Counter Price"]
-        })
-        .all()
-    ),
+    scanTable(SELLER_OFFERS_TABLE, {
+      fields: [linkField, "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"]
+    }),
+    scanTable(COUNTER_OFFERS_TABLE, {
+      filterByFormula: `AND({Status} = 'Open', {Source Type} = '${escapeFormulaValue(sourceType)}')`,
+      fields: [counterLinkField, "Seller ID", "Counter Payout", "Counter Payout VAT Type", "Seller Original VAT Type", "Seller Counter Price"]
+    }),
     // Every round regardless of status, because a seller whose round was
     // denied has no Open one left and the chain-trace below still has to find
     // where he actually stood. Without it the trace never starts and falls
     // all the way back to his first listing.
-    scanTableOnce(`all-rounds:${sourceType}`, () =>
-      airtable(COUNTER_OFFERS_TABLE)
-        .select({
-          filterByFormula: `{Source Type} = '${escapeFormulaValue(sourceType)}'`,
-          fields: [counterLinkField, "Seller ID", "Created At", "Seller Counter Price", "Previous Record ID"]
-        })
-        .all()
-    )
+    scanTable(COUNTER_OFFERS_TABLE, {
+      filterByFormula: `{Source Type} = '${escapeFormulaValue(sourceType)}'`,
+      fields: [counterLinkField, "Seller ID", "Created At", "Seller Counter Price", "Previous Record ID"]
+    })
   ]);
 
   const rawOffers = allOffers.filter(
