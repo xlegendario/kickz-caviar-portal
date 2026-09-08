@@ -3125,7 +3125,10 @@ function renderWtbUnifiedOfferRows(items) {
                 <button class="dashboard-deny-btn" type="button" data-wtb-delete-fresh-offer-id="${escapeHtml(item.id || "")}">Delete</button>
               ` : `
                 ${(item.previous_record_id || item.previous_store_price) ? `
-                  <button class="dashboard-confirm-btn" type="button" data-wtb-accept-previous-id="${escapeHtml(item.id || "")}">${item.previous_store_price ? `Accept ${escapeHtml(item.previous_store_price)}` : "Accept Previous"}</button>
+                  <button class="dashboard-confirm-btn action-accept" type="button" data-wtb-accept-previous-id="${escapeHtml(item.id || "")}">
+                    <span class="accept-kop">ACCEPT</span>
+                    <span class="accept-amount">${escapeHtml(amountForButton(item.previous_store_price))}</span>
+                  </button>
                   <button class="dashboard-counter-btn" type="button" data-wtb-retry-counter-id="${escapeHtml(item.id || "")}">Retry</button>
                 ` : ""}
                 <button class="dashboard-deny-btn" type="button" data-wtb-cancel-offer-id="${escapeHtml(item.id || "")}">Delete</button>
@@ -3179,15 +3182,28 @@ function renderWtbUnifiedOfferRows(items) {
     } else if (item._kind === "own_counter") {
       actionsCell = `
         ${item.previous_record_id ? `
+          <button class="dashboard-confirm-btn action-accept" type="button" data-wtb-accept-previous-id="${escapeHtml(item.id || "")}">
+            <span class="accept-kop">ACCEPT</span>
+            <span class="accept-amount">${escapeHtml(amountForButton(item.previous_store_price))}</span>
+          </button>
           <button class="dashboard-counter-btn" type="button" data-wtb-edit-counter-id="${escapeHtml(item.id || "")}">Edit</button>
-          <button class="dashboard-confirm-btn" type="button" data-wtb-accept-previous-id="${escapeHtml(item.id || "")}">${item.previous_store_price ? `Accept ${escapeHtml(item.previous_store_price)}` : "Accept Previous"}</button>
         ` : ""}
         <button class="dashboard-deny-btn" type="button" data-wtb-cancel-counter-id="${escapeHtml(item.id || "")}">Delete</button>
       `;
     } else {
       // "counter" — store/buyer just moved, seller must respond.
+  /*
+    The accept gets its own tall button with the amount under the word, and
+    whatever else the row carries stacks beside it. The style already exists
+    and is already used on the Accepted tab; this renderer simply never
+    reached for it, so three wide buttons sat side by side and the Actions
+    column had to be wide enough for all of them.
+  */
       actionsCell = `
-        <button class="dashboard-confirm-btn" type="button" data-wtb-seller-accept-id="${escapeHtml(item.id || "")}">${item.counter_payout ? `Accept ${escapeHtml(item.counter_payout)}` : "Accept"}</button>
+        <button class="dashboard-confirm-btn action-accept" type="button" data-wtb-seller-accept-id="${escapeHtml(item.id || "")}">
+          <span class="accept-kop">ACCEPT</span>
+          <span class="accept-amount">${escapeHtml(amountForButton(item.counter_payout))}</span>
+        </button>
         <button class="dashboard-counter-btn" type="button" data-wtb-seller-counter-id="${escapeHtml(item.id || "")}" data-wtb-seller-counter-is-member-wtb="${item.is_member_wtb ? "1" : "0"}">Counter</button>
         <button class="dashboard-deny-btn" type="button" data-wtb-seller-deny-id="${escapeHtml(item.id || "")}">Deny</button>
       `;
