@@ -19974,44 +19974,18 @@ async function loadOrderFieldsMap(orderRecordIds) {
   const uniqueIds = [...new Set(orderRecordIds)].filter(Boolean);
   const orderMap = new Map();
 
-  for (let i = 0; i < uniqueIds.length; i += 25) {
-    const batch = uniqueIds.slice(i, i + 25);
+  /*
+    CHANGED - this asked in batches of 25 through a RECORD_ID() formula, one
+    batch after another. A formula makes Airtable walk the table and test
+    every row, so a batch of 25 costs the same as asking about all of them,
+    and the batches did not overlap either. Fetching by id is a direct lookup,
+    and they all go at once.
+  */
+  const records = await findRecordsByIds(ORDERS_TABLE, uniqueIds);
 
-    const formula = `OR(${batch
-      .map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`)
-      .join(",")})`;
-
-    const records = await airtable(ORDERS_TABLE)
-      .select({
-        fields: [
-          "Order ID",
-          "Claimed Channel ID",
-          "Product Name",
-          "SKU",
-          "Size",
-          "Brand",
-          "Current Lowest (Normalized)",
-          "Current Lowest (VAT0)",
-          "Partner or Seller",
-          "Lowest Offer Seller ID",
-          "WTB Created Channel ID",
-          "Client",
-          "Shopify Order Number",
-          "Store Name",
-          "Channel Created?",
-          "Shipping Label URL (Permanent)",
-          "Shipping Label",
-          "Tracking URL",
-          "Fulfillment Status"
-        ],
-        filterByFormula: formula
-      })
-      .all();
-
-    records.forEach((record) => {
-      orderMap.set(record.id, record.fields || {});
-    });
-  }
+  records.forEach((record) => {
+    orderMap.set(record.id, record.fields || {});
+  });
 
   return orderMap;
 }
@@ -20030,28 +20004,12 @@ async function loadMemberWtbFieldsMap(memberWtbRecordIds) {
   const uniqueIds = [...new Set(memberWtbRecordIds)].filter(Boolean);
   const wtbMap = new Map();
 
-  for (let i = 0; i < uniqueIds.length; i += 25) {
-    const batch = uniqueIds.slice(i, i + 25);
+  // Same as loadOrderFieldsMap: by id, all at once.
+  const records = await findRecordsByIds(MEMBER_WTBS_TABLE, uniqueIds);
 
-    const formula = `OR(${batch
-      .map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`)
-      .join(",")})`;
-
-    const records = await airtable(MEMBER_WTBS_TABLE)
-      .select({
-        fields: [
-          "Member WTB ID",
-          "Claimed Channel ID",
-          "Snapshot Status"
-        ],
-        filterByFormula: formula
-      })
-      .all();
-
-    records.forEach((record) => {
-      wtbMap.set(record.id, record.fields || {});
-    });
-  }
+  records.forEach((record) => {
+    wtbMap.set(record.id, record.fields || {});
+  });
 
   return wtbMap;
 }
@@ -20628,10 +20586,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
 
     let memberWtbStatusMap = new Map();
     if (memberWtbIdsForStatusCheck.length) {
-      const mwtbFormula = `OR(${memberWtbIdsForStatusCheck.map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`).join(",")})`;
-      const mwtbRecords = await airtable(MEMBER_WTBS_TABLE)
-        .select({ filterByFormula: mwtbFormula, fields: ["Fulfillment Status"] })
-        .all();
+      const mwtbRecords = await findRecordsByIds(MEMBER_WTBS_TABLE, memberWtbIdsForStatusCheck);
       memberWtbStatusMap = new Map(mwtbRecords.map((r) => [r.id, asText(r.fields?.["Fulfillment Status"])]));
     stageTimings.t3_wtb_status = Date.now() - stageStartedAt;
     }
@@ -20912,10 +20867,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     let previousPriceById = new Map();
     let previousSellerCounterById = new Map();
     if (previousIds.length) {
-      const previousFormula = `OR(${previousIds.map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`).join(",")})`;
-      const previousRecords = await airtable(COUNTER_OFFERS_TABLE)
-        .select({ filterByFormula: previousFormula, fields: ["Store Counter Price", "Counter Payout", "Seller Counter Price"] })
-        .all();
+      const previousRecords = await findRecordsByIds(COUNTER_OFFERS_TABLE, previousIds);
     stageTimings.t7_vorige_rondes = Date.now() - stageStartedAt;
       // FIXED — "Buyer's Last Offer" must show what the SELLER would
       // actually receive, not the raw store-side price. "Store Counter
@@ -23112,6 +23064,34 @@ function clearHeldTableScans() {
  * pills you are not on - and each of those reads the same two tables whole.
  * They now read them once between them.
  */
+/*
+ * A handful of records, fetched by id.
+ *
+ * CHANGED from `OR(RECORD_ID() = '...', ...)` as a filter formula. A formula
+ * makes Airtable walk the table and test every row, so asking for one record
+ * that way costs the same as asking about all of them. Fetching by id is a
+ * direct lookup.
+ *
+ * Measured on the Offers tab, where two steps did this: the want-to-buy
+ * statuses took 1314 to 1538 ms and the previous rounds 1237 to 1255, for a
+ * handful of records each. From a laptop the same single record is 573 ms by
+ * formula against 190 ms by id.
+ *
+ * Missing records are dropped rather than thrown. Every caller here treats a
+ * record it cannot find as one that has nothing to say.
+ */
+async function findRecordsByIds(table, ids) {
+  const wanted = [...new Set((ids || []).filter(Boolean))];
+
+  if (!wanted.length) return [];
+
+  const found = await Promise.all(
+    wanted.map((id) => airtable(table).find(id).catch(() => null))
+  );
+
+  return found.filter(Boolean);
+}
+
 function scanTable(table, options) {
   const query = options || {};
 
@@ -23744,10 +23724,7 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
     let previousSellerCounterById = new Map();
     let previousStoreCounterById = new Map();
     if (previousIds.length) {
-      const previousFormula = `OR(${previousIds.map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`).join(",")})`;
-      const previousRecords = await airtable(COUNTER_OFFERS_TABLE)
-        .select({ filterByFormula: previousFormula, fields: ["Seller Counter Price", "Seller Original Price", "Store Counter Price"] })
-        .all();
+      const previousRecords = await findRecordsByIds(COUNTER_OFFERS_TABLE, previousIds);
 
       previousSellerCounterById = new Map(
         previousRecords.map((r) => {
@@ -27635,13 +27612,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
     // Same "only Delete or no-longer-Outsource makes it disappear"
     // rule — excludes anything whose Member WTB is no longer Outsource.
     const memberWtbStatusMap = new Map(myMemberWtbs.map((r) => [r.id, asText(r.fields?.["Fulfillment Status"])]));
-    const freshMemberWtbStatuses = await airtable(MEMBER_WTBS_TABLE)
-      .select({
-        filterByFormula: `OR(${[...myMemberWtbIds].map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`).join(",")})`,
-        fields: ["Fulfillment Status"]
-      })
-      .all()
-      .catch(() => []);
+    const freshMemberWtbStatuses = await findRecordsByIds(MEMBER_WTBS_TABLE, [...myMemberWtbIds]);
     freshMemberWtbStatuses.forEach((r) => memberWtbStatusMap.set(r.id, asText(r.fields?.["Fulfillment Status"])));
 
     const preFiltered = preFilteredByStatus.filter((record) => {
@@ -27655,10 +27626,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
     let previousSellerCounterById = new Map();
     let previousBuyerCounterById = new Map();
     if (previousIds.length) {
-      const previousFormula = `OR(${previousIds.map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`).join(",")})`;
-      const previousRecords = await airtable(COUNTER_OFFERS_TABLE)
-        .select({ filterByFormula: previousFormula, fields: ["Seller Counter Price", "Seller Original Price", "Seller Original VAT Type", "Store Counter Price"] })
-        .all();
+      const previousRecords = await findRecordsByIds(COUNTER_OFFERS_TABLE, previousIds);
       // FIXED — same underlying issue as the Consignment €0.00 bug:
       // numberValue() always returns a finite number (0 for a blank
       // field), so Number.isFinite(numberValue(x)) is ALWAYS true —
