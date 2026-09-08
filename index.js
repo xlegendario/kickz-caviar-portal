@@ -145,6 +145,19 @@ const SELLERS_TABLE = process.env.AIRTABLE_SELLERS_TABLE || "Sellers Database";
 const DISCORD_MEMBERS_TABLE =
   process.env.AIRTABLE_DISCORD_MEMBERS_TABLE || "Discord Members";
 const DISCORD_SERVER_ID = "922818998163361792";
+
+/*
+ * The Lojiq server, for consignors who are stores.
+ *
+ * A store consigning through the Lojiq portal has its channels in the Lojiq
+ * server, not this one. Anything building a discord.com/channels link has to
+ * name the server the channel is in, and naming this one gives a link that
+ * does not resolve.
+ *
+ * Empty until it is configured, and the code that needs it then leaves the
+ * link out rather than pointing somewhere that is not there.
+ */
+const LOJIQ_DISCORD_SERVER_ID = process.env.LOJIQ_DISCORD_SERVER_ID || "";
 const KICKZ_DEAL_SERVER_ID = "922818998163361792";
 const CONSIGNMENT_DEAL_CATEGORY_ID = "1339532824000335883";
 const KICKZ_ADMIN_ROLE_ID = "942779423449579530";
@@ -30553,6 +30566,9 @@ app.get("/api/dashboard/consignment-accepted", async (req, res) => {
       .find(sellerRecordId)
       .catch(() => null);
 
+    // Which server this consignor's private channels are actually in.
+    const acceptedSellerIsStore = await isStoreConsignor(sellerRecordId);
+
     const ownChannelIds = new Set(
       [
         asText(sellerRecord?.fields?.["Consignment Offer Channel ID"]),
@@ -30604,7 +30620,18 @@ app.get("/api/dashboard/consignment-accepted", async (req, res) => {
       const channelId = asText(f["Consignment Confirm Channel ID"]);
       const messageId = asText(f["Consignment Confirm Message ID"]);
 
-      const scope = ownChannelIds.has(channelId) ? DISCORD_SERVER_ID : "@me";
+      /*
+        CHANGED - this always named the Kickz Caviar server for a private
+        channel. A store consigning through Lojiq has its channels in the
+        Lojiq server, so the link pointed at a channel that server does not
+        have and Discord shows nothing.
+
+        No link beats a link that goes nowhere, so a store consignor gets
+        none until LOJIQ_DISCORD_SERVER_ID is set.
+      */
+      const scope = ownChannelIds.has(channelId)
+        ? (acceptedSellerIsStore ? LOJIQ_DISCORD_SERVER_ID : DISCORD_SERVER_ID)
+        : "@me";
 
       // Same field names and formatting as the Confirmed tab, so both use
       // the shared skeletonColumns layout and nothing has to be special-cased.
@@ -30639,7 +30666,7 @@ app.get("/api/dashboard/consignment-accepted", async (req, res) => {
         // Straight to the exact embed, not the channel — a consignor with
         // private channels would otherwise have to hunt for it.
         discord_url:
-          channelId && messageId
+          channelId && messageId && scope
             ? `https://discord.com/channels/${scope}/${channelId}/${messageId}`
             : null
       };
