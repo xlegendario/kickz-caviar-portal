@@ -29617,6 +29617,33 @@ app.get("/api/dashboard/counts", async (req, res) => {
     // step with Airtable. Same source and same rules as the tab now.
     const consignmentOffersCount = countOffersForScope("consignment");
 
+    /*
+      What the Accepted tab holds, counted the way that tab selects it.
+
+      A seller offer with a confirmation out, not withdrawn, not denied, and
+      no unit on it yet - the moment between "your price was taken" and "yes,
+      I still have it". Asked here rather than derived, because a second rule
+      for the same tab is how a badge and a list start disagreeing.
+    */
+    const consignmentAcceptedCount = (
+      await airtable(SELLER_OFFERS_TABLE)
+        .select({
+          fields: ["Seller ID", "Linked Inventory Unit"],
+          filterByFormula: `AND(
+            {Consignment Inventory ID} != '',
+            {Consignment Confirm Message ID} != '',
+            NOT({Withdrawn?}),
+            NOT({Denied?})
+          )`
+        })
+        .all()
+        .catch(() => [])
+    ).filter(
+      (record) =>
+        linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId) &&
+        !firstLinkedRecordId(record.fields?.["Linked Inventory Unit"])
+    ).length;
+
     const consignmentConfirmedCount = await loadInventoryCount(
       `AND(
         {Type} = 'Consignment',
@@ -29767,6 +29794,10 @@ app.get("/api/dashboard/counts", async (req, res) => {
       consignment: {
         inventory: consignmentInventoryCount,
         offers: consignmentOffersCount,
+        // CHANGED - there was no accepted here at all, so that tab kept an
+        // empty badge while holding rows. Counted the way the tab itself
+        // selects them, not by a rule of its own.
+        accepted: consignmentAcceptedCount,
         confirmed: consignmentConfirmedCount,
         label_requested: consignmentLabelRequestedCount,
         ready_to_ship: consignmentReadyToShipCount,
