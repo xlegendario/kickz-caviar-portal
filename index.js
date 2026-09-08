@@ -20350,6 +20350,67 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     // that doesn't pass this keeps working unchanged.
     const filter = asText(req.query.filter) || "countered";
 
+    /*
+      A stopwatch, for as long as this route is the slow one.
+
+      Two rounds of tuning went to the wrong place because the cost was
+      guessed from reading the code. It reports itself now: add
+      debug_timing=1 and the answer carries how long each half took. Off by
+      default and it never changes what is returned otherwise.
+    */
+    const stageStartedAt = Date.now();
+    const stageTimings = {};
+
+    /*
+      Start every whole-table read at once, before anything asks for one.
+
+      This route reads eight tables and awaited them one after another as each
+      piece of the answer was assembled. Timed against the live base those
+      eight cost 4319 ms in a row and 1542 ms side by side, which is very
+      nearly the whole difference between this endpoint and a quick one.
+
+      Nothing below changes. scanTable hands back the read that is already in
+      flight for the same table and query, so the existing calls now find
+      their answer waiting instead of starting it. The queries here must stay
+      character for character identical to the ones further down: the key is
+      the table plus the query, so a reordered field list would quietly start
+      a second read rather than joining the first.
+
+      Deliberately not awaited. The point is that they run while the rest of
+      this route gets on with its work; whoever needs one awaits it there, and
+      a failure surfaces at that call rather than here.
+    */
+    Promise.all([
+      scanTable(COUNTER_OFFERS_TABLE, {
+        filterByFormula: `OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')`,
+        fields: ["Seller ID", "Previous Record ID", "Created At"]
+      }),
+      scanTable(SELLER_OFFERS_TABLE, {
+        fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"]
+      }),
+      scanTable(COUNTER_OFFERS_TABLE, {
+        filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Member WTB')`,
+        fields: ["Member WTB", "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
+      }),
+      scanTable(COUNTER_OFFERS_TABLE, {
+        filterByFormula: `{Source Type} = 'Member WTB'`,
+        fields: ["Member WTB", "Seller ID", "Created At"]
+      }),
+      scanTable(SELLER_OFFERS_TABLE, {
+        fields: ["Linked Orders", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"]
+      }),
+      scanTable(COUNTER_OFFERS_TABLE, {
+        filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Seller Offer')`,
+        fields: ["Order", "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
+      }),
+      // What findSellersTrueLastCounter traces over, once per row.
+      scanTable(COUNTER_OFFERS_TABLE, {
+        fields: ["Seller Counter Price", "Previous Record ID"]
+      })
+    ]).catch(() => {
+      // Whoever actually needs one of these awaits it and handles it there.
+    });
+
     if (!sellerRecordId) {
       return res.status(400).json({ error: "Missing seller_record_id" });
     }
@@ -20838,6 +20899,9 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     // natively for Store Orders rounds via the Order link. Reads them
     // directly in the mapping below instead.
 
+    // Everything above is fetching and narrowing; everything below is per row.
+    stageTimings.fetching_ms = Date.now() - stageStartedAt;
+
     const items = await Promise.all(preFiltered
       .map(async (record) => {
         const f = record.fields || {};
@@ -21144,9 +21208,14 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     }
 
 
+    stageTimings.total_ms = Date.now() - stageStartedAt;
+    stageTimings.rows_ms = stageTimings.total_ms - stageTimings.fetching_ms;
+    stageTimings.rows = mergedItems.length;
+
     res.json({
       count: mergedItems.length,
-      items: sortDashboardItemsNewestFirst(mergedItems)
+      items: sortDashboardItemsNewestFirst(mergedItems),
+      ...(asText(req.query.debug_timing) === "1" ? { timing: stageTimings } : {})
     });
   } catch (err) {
     console.error("Failed to load WTB counter offers:", err);
