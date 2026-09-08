@@ -284,9 +284,44 @@ if (!AIRTABLE_BASE_ID) {
   throw new Error("Missing AIRTABLE_BASE_ID");
 }
 
-const airtable = new Airtable({
+const airtableBase = new Airtable({
   apiKey: AIRTABLE_TOKEN
 }).base(AIRTABLE_BASE_ID);
+
+/*
+ * Every table goes through here, so that a write can drop the held scans.
+ *
+ * scanTableOnce keeps a finished table read for a few seconds, which is what
+ * lets one page load share it across the four or five requests it makes. The
+ * risk of holding anything is showing somebody a number from before their own
+ * action, and an HTTP middleware alone does not cover that: the Discord
+ * buttons run inside this process and never pass through one.
+ *
+ * Wrapping the four write methods catches all of it in one place instead of
+ * asking every caller to remember. Reads are handed through untouched.
+ */
+const AIRTABLE_WRITE_METHODS = new Set(["create", "update", "replace", "destroy"]);
+
+function airtable(tableName) {
+  const table = airtableBase(tableName);
+
+  return new Proxy(table, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+
+      if (typeof value !== "function") return value;
+
+      if (AIRTABLE_WRITE_METHODS.has(prop)) {
+        return (...args) => {
+          clearHeldTableScans();
+          return value.apply(target, args);
+        };
+      }
+
+      return value.bind(target);
+    }
+  });
+}
 
 if (!SUPABASE_URL) {
   throw new Error("Missing SUPABASE_URL");
@@ -9514,6 +9549,22 @@ function bindConsignmentDiscordButtons(client) {
     }
   });
 }
+
+/*
+ * Every write drops the held table scans. See scanTableOnce for why.
+ *
+ * Registered here rather than on the routes that write, because Express runs
+ * middleware in the order it was added and a route added earlier would never
+ * reach it - and one route that quietly skipped this is exactly how a stale
+ * number gets in front of somebody.
+ */
+app.use((req, res, next) => {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    clearHeldTableScans();
+  }
+
+  next();
+});
 
 app.use(compression());
 app.use(express.json({ limit: "25mb" }));
@@ -22848,20 +22899,61 @@ async function verifyStoreOwnsOrderForRound(orderRecordId, requestedStoreName) {
  */
 const inFlightTableScans = new Map();
 
+/*
+ * CHANGED - a finished scan is now kept for a few seconds instead of being
+ * dropped the moment it settles.
+ *
+ * Sharing only what is in flight was built on the assumption that the screen
+ * fires its requests together. Measured against the live dashboard, it does
+ * not: opening Consignment > Offers asks for the rows, then the counts, then
+ * the two pills you are not on, largely one after another. Nothing overlapped,
+ * so nothing was shared, and the tab took twenty seconds.
+ *
+ * Twelve seconds covers one page load, which is what it has to outlast: the
+ * dashboard's requests run one after another and each takes several seconds,
+ * so a shorter hold expires before the next request arrives and shares
+ * nothing. It is not a cache in any useful sense - come back a moment later
+ * and it reads fresh.
+ *
+ * What makes it safe is the line below: any request that is not a GET clears
+ * the lot before it runs. Accept, counter, deny, delete, edit - every one of
+ * them goes through this server, so the read that follows your own action can
+ * never come from before it. A write from somewhere else, the Discord bot or
+ * a Make scenario, is at most three seconds behind.
+ */
+const SCAN_HOLD_MS = 12000;
+
 function scanTableOnce(key, run) {
-  const running = inFlightTableScans.get(key);
+  const held = inFlightTableScans.get(key);
 
-  if (running) return running;
+  if (held && (held.pending || Date.now() - held.settledAt < SCAN_HOLD_MS)) {
+    return held.scan;
+  }
 
-  // Cleared on failure too. A scan that threw must not be handed to the next
-  // caller as though it were an answer.
-  const scan = run().finally(() => {
-    inFlightTableScans.delete(key);
-  });
+  const entry = { pending: true, settledAt: 0 };
 
-  inFlightTableScans.set(key, scan);
+  entry.scan = run().then(
+    (rows) => {
+      entry.pending = false;
+      entry.settledAt = Date.now();
+      return rows;
+    },
+    (err) => {
+      // A scan that threw must not be handed to the next caller as an answer.
+      inFlightTableScans.delete(key);
+      throw err;
+    }
+  );
 
-  return scan;
+  inFlightTableScans.set(key, entry);
+
+  return entry.scan;
+}
+
+// Anything that changes something invalidates every held scan, so the read
+// after your own action is never the read from before it.
+function clearHeldTableScans() {
+  inFlightTableScans.clear();
 }
 
 /*
