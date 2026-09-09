@@ -10048,29 +10048,32 @@ app.post("/api/member-wtb/send-label-to-discord", async (req, res) => {
 
     const linkedInventoryUnitId = firstLinkedRecordId(f["Linked Inventory Unit"]);
 
-    // Two forms, one place. A shared channel gets the whole order spelled
-    // out; a channel that already is this one deal does not need it
-    // repeated. It used to be written out twice, once per branch.
-    const buildLabelDescription = (detailed) =>
-      detailed
-        ? [
-            `**Order:** ${memberWtbId}`,
-            `**Product:** ${asText(f["Product Name"]) || "—"}`,
-            `**SKU:** ${asText(f["SKU"]) || "—"}`,
-            `**Size:** ${asText(f["Size"]) || "—"}`,
-            "",
-            `**Tracking:**`,
-            trackingNumber,
-            "",
-            `📄 [Download Label](${labelUrl})`
-          ].join("\n")
-        : [
-            `**Order:** ${memberWtbId}`,
-            `**Tracking:**`,
-            trackingNumber,
-            "",
-            `📄 [Download Label](${labelUrl})`
-          ].join("\n");
+    /*
+      CHANGED - there were two forms of this and the consignor got the short
+      one, without the pair on it.
+
+      The idea was that a channel which IS one deal need not repeat what the
+      deal is about. That holds for a channel opened for a single order. It
+      does not hold for a consignor's own consignment channel, which carries
+      every deal he has, and that is where this lands. He was left with an
+      order number, a tracking code and nothing about the shoes.
+
+      A store order has always shown the product, the SKU and the size on this
+      same message. One form now, the same one, and the few lines it costs in
+      a per-deal channel are worth not having to look anything up.
+    */
+    const buildLabelDescription = () =>
+      [
+        `**Product:** ${asText(f["Product Name"]) || "—"}`,
+        `**SKU:** ${asText(f["SKU"]) || "—"}`,
+        `**Size:** ${asText(f["Size"]) || "—"}`,
+        "",
+        `**Order:** ${memberWtbId}`,
+        `**Tracking:**`,
+        trackingNumber,
+        "",
+        `📄 [Download Label](${labelUrl})`
+      ].join("\n");
 
     let sellerRecord = null;
 
@@ -10172,11 +10175,7 @@ app.post("/api/member-wtb/send-label-to-discord", async (req, res) => {
       });
     }
 
-    const isGlobalLabelChannel =
-      targetReason === "seller_label_channel" ||
-      targetReason === "kc_label_channel";
-    
-    const embedDescription = buildLabelDescription(isGlobalLabelChannel);
+    const embedDescription = buildLabelDescription();
     
     const message = await channel.send({
       embeds: [
