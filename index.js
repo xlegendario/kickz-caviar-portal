@@ -30762,6 +30762,20 @@ app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
       return res.status(400).json({ error: "Missing seller_record_id" });
     }
 
+    /*
+      Which server the channel link should name.
+
+      Same fix as the Accepted tab: a store consigning through Lojiq has its
+      channels in the Lojiq server, so naming this one gave a link Discord
+      could not open. No link beats a broken one, so a store gets none until
+      LOJIQ_DISCORD_SERVER_ID is set.
+    */
+    const confirmedSellerIsStore = await isStoreConsignor(sellerRecordId);
+
+    const confirmedServerId = confirmedSellerIsStore
+      ? LOJIQ_DISCORD_SERVER_ID
+      : DISCORD_SERVER_ID;
+
     const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
       .select({
         fields: [
@@ -30806,6 +30820,27 @@ app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
 
     const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
+    /*
+      FIXED - the Request Label button never appeared on a want-to-buy sale.
+
+      The browser hides it unless the buyer has paid, and it reads that from
+      payment_status on the row. This route never returned one, so the test
+      read an empty value, decided the buyer had not paid, and hid the button
+      on every consignment sale that came from a want-to-buy. A consignor was
+      left holding a confirmed deal with nothing to press.
+
+      It needs no new field in Airtable. The want-to-buy each row belongs to
+      is already known here, and its Payment Status is on that record.
+    */
+    const confirmedMemberWtbs = await findRecordsByIds(
+      MEMBER_WTBS_TABLE,
+      filteredInventory.map((record) => firstLinkedRecordId(record.fields?.["Member WTBs"]))
+    );
+
+    const confirmedPaymentStatusById = new Map(
+      confirmedMemberWtbs.map((record) => [record.id, displayValue(record.fields?.["Payment Status"])])
+    );
+
     const items = filteredInventory.map((record) => {
       const f = record.fields || {};
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
@@ -30825,6 +30860,8 @@ app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
           : displayValue(orderFields["Order ID"]),
         order_record_id: linkedOrderId,
         member_wtb_record_id: linkedMemberWtbId,
+        // What the browser checks before it offers the label button.
+        payment_status: confirmedPaymentStatusById.get(linkedMemberWtbId) || "",
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
@@ -30833,8 +30870,8 @@ app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
         vat_type: displayValue(f["VAT Type"]),
         date: formatDateEU(f["Purchase Date"]),
         raw_date: f["Purchase Date"],
-        discord_url: channelId
-          ? `https://discord.com/channels/${DISCORD_SERVER_ID}/${channelId}`
+        discord_url: channelId && confirmedServerId
+          ? `https://discord.com/channels/${confirmedServerId}/${channelId}`
           : ""
       };
     });
