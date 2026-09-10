@@ -1370,40 +1370,63 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
   }
 
   /*
-    NEW - a Confirm button cannot settle an offer that is being negotiated.
+    A Confirm button settles at the agreed amount, not at the asking price.
 
-    This reads "Seller Offer" straight into the Inventory Unit's purchase
-    price, which is right when that field is the whole deal: he asked, it fit
-    the budget, he confirms, we pay what he asked. It is wrong the moment a
-    round exists, because then the agreed number lives on the round and the
-    offer holds his opening price.
+    This reads "Seller Offer" into the Inventory Unit's purchase price, which
+    is right when that field is the whole deal: he asked, it fit the budget,
+    he confirms, we pay what he asked. It is wrong the moment a round exists,
+    because then the agreed number lives on the round.
 
-    That gap is reachable through a stale embed. A Confirm sent before a
-    round existed keeps its buttons, and pressing it afterwards would pay the
-    asking price instead of the agreed one - on MWTB-000468 that is 180
-    against a buyer paying 120.
+    That gap is reachable through a stale embed. A Confirm sent before a round
+    existed keeps its buttons, and pressing it afterwards would pay the asking
+    price instead of the agreed one.
+
+    FIXED - this REFUSED such a confirm, and that was too blunt by half.
+
+    On ORD-024118 the store accepted an auto-offer of 95, the round was opened
+    at 95, and the consignor was told "this match is no longer available" for
+    pressing Confirm on his own price. The two numbers agreed; there was
+    nothing to protect him from.
+
+    So it settles at the round's payout instead of refusing. A stale embed then
+    pays the agreed amount rather than the ask, which is what the guard was
+    for, and a consignor is never blocked from accepting a price he offered.
 
     Only when nobody passed an agreed amount. The accept paths do, and they
-    are the ones that settle a round; refusing them here would break the
-    very flow this protects.
+    are the ones that settle a round.
   */
   if (!agreed) {
     const openRounds = await airtable(COUNTER_OFFERS_TABLE)
       .select({
         filterByFormula: `AND({Status} = 'Open', {Seller Offer Record ID} = '${escapeFormulaValue(sellerOfferRecordId)}')`,
-        fields: ["Counter Offer ID"],
+        fields: ["Counter Offer ID", "Counter Payout", "Counter Payout VAT Type"],
         maxRecords: 1
       })
       .firstPage()
       .catch(() => []);
 
-    if (openRounds.length) {
+    const round = openRounds[0];
+    const roundPayout = numberValue(round?.fields?.["Counter Payout"]);
+
+    if (round && roundPayout > 0) {
       console.log(
-        `Confirm refused on ${sellerOfferRecordId}: round ` +
-          `${asText(openRounds[0].fields?.["Counter Offer ID"]) || openRounds[0].id} is still open.`
+        `Confirm on ${sellerOfferRecordId} settles at the agreed ` +
+          `${moneySmartValue(roundPayout)} from round ` +
+          `${asText(round.fields?.["Counter Offer ID"]) || round.id}, ` +
+          `not the asking price ${moneySmartValue(numberValue(f["Seller Offer"]))}.`
       );
 
-      return { ok: false, reason: "under_negotiation" };
+      /*
+        The same shape the accept paths pass, because that is what the
+        member-WTB branch further down reads: an object with the payout and
+        the VAT scale it is quoted in, not a bare number. A number here would
+        read as undefined there and quietly fall back to the asking price -
+        the very thing this exists to prevent.
+      */
+      agreed = {
+        payout: roundPayout,
+        vatType: asText(round.fields?.["Counter Payout VAT Type"]) || asText(f["Offer VAT Type"])
+      };
     }
   }
 
