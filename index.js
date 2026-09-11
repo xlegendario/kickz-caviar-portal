@@ -11,6 +11,7 @@ import {
 
 import compression from "compression";
 import { spawn } from "child_process";
+import cron from "node-cron";
 import crypto from "crypto";
 import sgMail from "@sendgrid/mail";
 import { createClient } from "@supabase/supabase-js";
@@ -39710,6 +39711,75 @@ const ENRICH_FIRST_RUN_MS = 15 * 60 * 1000;
 
 let enrichRunning = false;
 
+/* ------------------------------------------------------------------ *
+ * The monthly reconciliation
+ *
+ * refreshConsignmentStockLevel runs when stock CHANGES, which keeps the
+ * three layers in step right up until one call fails, and after that the
+ * pair stays wrong for good because nothing ever looks at the whole picture
+ * again. First run found 73 rows claiming stock of a pair we no longer held,
+ * and 9 pairs sitting in Airtable twice with one of the two empty.
+ *
+ * A real clock rather than setInterval. This service deploys often, and a
+ * thirty-day interval resets on every deploy, so a monthly job written that
+ * way would simply never fire.
+ * ------------------------------------------------------------------ */
+
+const RECONCILE_ENABLED = /^(1|true|yes|on)$/i.test(
+  String(process.env.RECONCILE_STOCK_LEVELS || "")
+);
+
+// Four in the morning on the first of the month: it is a few hundred writes
+// against Airtable and nobody is waiting on the portal then.
+const RECONCILE_CRON = process.env.RECONCILE_STOCK_LEVELS_CRON || "0 4 1 * *";
+
+let reconcileRunning = false;
+
+function runReconcileStockLevels() {
+  if (reconcileRunning) {
+    console.log("[reconcile] previous run still busy, skipping this round");
+    return;
+  }
+
+  reconcileRunning = true;
+
+  const startedAt = Date.now();
+  const script = path.join(__dirname, "reconcile-stock-levels.mjs");
+
+  const child = spawn(process.execPath, [script, "--apply"], {
+    cwd: __dirname,
+    env: process.env
+  });
+
+  const relay = (stream, label) => {
+    let rest = "";
+
+    stream.on("data", (chunk) => {
+      const lines = (rest + chunk.toString()).split(/\r?\n/);
+      rest = lines.pop() || "";
+
+      for (const line of lines) {
+        if (line.trim()) console.log(`[reconcile${label}] ${line}`);
+      }
+    });
+  };
+
+  relay(child.stdout, "");
+  relay(child.stderr, ":err");
+
+  child.on("error", (err) => {
+    reconcileRunning = false;
+    console.error("[reconcile] could not start:", err.message);
+  });
+
+  child.on("close", (code) => {
+    reconcileRunning = false;
+
+    const seconds = Math.round((Date.now() - startedAt) / 1000);
+    console.log(`[reconcile] finished in ${seconds}s with code ${code}`);
+  });
+}
+
 function runEnrichPictures() {
   // One at a time. A run that outlives its interval would otherwise be
   // joined by the next one and both would write the same rows.
@@ -39766,6 +39836,16 @@ function runEnrichPictures() {
 
 app.listen(PORT, () => {
   console.log(`Kickz Caviar Portal running on port ${PORT}`);
+
+  if (RECONCILE_ENABLED) {
+    cron.schedule(RECONCILE_CRON, runReconcileStockLevels, {
+      timezone: process.env.TZ || "Europe/Amsterdam"
+    });
+
+    console.log(`[reconcile] on - ${RECONCILE_CRON}`);
+  } else {
+    console.log("[reconcile] off - set RECONCILE_STOCK_LEVELS=true to schedule it");
+  }
 
   if (ENRICH_ENABLED) {
     console.log(
