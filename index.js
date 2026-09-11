@@ -19899,7 +19899,7 @@ async function syncConsignmentStockLevelToAirtable(stockLevel) {
 
   const records = await airtable(STOCK_LEVELS_TABLE)
     .select({
-      fields: ["Stock Counter Key", "SKU", "Size", "Partner Stock Level"],
+      fields: ["Stock Counter Key", "SKU", "Size", "Partner Stock Level", "SKU Master"],
       filterByFormula: `{Stock Counter Key} = '${escapeFormulaValue(stockCounterKey)}'`,
       maxRecords: 1
     })
@@ -19911,8 +19911,46 @@ async function syncConsignmentStockLevelToAirtable(stockLevel) {
     "Partner Stock Level": partnerStockLevel
   };
 
-  if (records.length) {
-    await airtable(STOCK_LEVELS_TABLE).update(records[0].id, fields);
+  const existing = records[0];
+  const alreadyLinked = (existing?.fields?.["SKU Master"] || []).length > 0;
+
+  /*
+    Link the row to its style code.
+
+    A Make scenario has been doing this since the beginning: it watched Stock
+    Levels, looked the SKU up in SKU Master, and filled this link in. Two
+    lookups on the row hang off it, Product Name and Brand, so without it a
+    row reads as a bare style code and a size.
+
+    Brought in here so that scenario can be switched off. The SKU Master
+    record itself is not created here - the consignment intake already does
+    that through the catalogue resolver - so this only has to find one, and
+    only when the row does not have it yet.
+  */
+  if (!alreadyLinked) {
+    const master = await airtable(SKU_MASTER_TABLE)
+      .select({
+        fields: ["SKU"],
+        filterByFormula: `{SKU} = '${escapeFormulaValue(sku)}'`,
+        maxRecords: 1
+      })
+      .all()
+      .catch((err) => {
+        // Never worth failing the stock level over: the number is what
+        // autoAllocateBestUnit reads, and the link is only for reading by eye.
+        console.error("SKU Master lookup for stock level failed:", {
+          sku,
+          error: err.message
+        });
+
+        return [];
+      });
+
+    if (master.length) fields["SKU Master"] = [master[0].id];
+  }
+
+  if (existing) {
+    await airtable(STOCK_LEVELS_TABLE).update(existing.id, fields);
     return;
   }
 
