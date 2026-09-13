@@ -12868,11 +12868,20 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     // Filtered on the plain text field, never on the link:
     // FIND(recordId, ARRAYJOIN({Linked Orders})) does not match in this
     // base, so the order is matched in JS instead.
+    //
+    // FIXED - a withdrawn offer used to slip through this guard, and that
+    // is how a consignor got asked twice for one pair. He is asked, he
+    // refuses, the deny marks his offer withdrawn, and the next run of this
+    // endpoint then sees no live offer on that stock and asks him again:
+    // same pair, same price, same man. Withdrawn never means "ask again" -
+    // every writer of it is a refusal or a seller pulling his own offer -
+    // so a withdrawn offer on THIS order counts as asked and answered.
+    // Denied stays excluded, because that is the store saying no to a
+    // price rather than the consignor saying no to us.
     const sameStockOffers = await airtable(SELLER_OFFERS_TABLE)
       .select({
         filterByFormula: `AND(
           {Consignment Inventory ID} = '${escapeFormulaValue(best.row.id)}',
-          NOT({Withdrawn?}),
           NOT({Denied?})
         )`,
         fields: ["Consignment Inventory ID", source.offerLink]
