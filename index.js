@@ -9472,8 +9472,30 @@ function bindConsignmentDiscordButtons(client) {
         // works afterwards.
         await interaction.deferUpdate().catch(() => {});
 
-        await requestConsignmentShippingLabel(orderRecordId);
-      
+        /*
+          A failure here used to be silent.
+
+          The outer catch logs and returns, so a consignor who pressed the
+          button saw an embed that simply did not change: no error, no
+          confirmation, nothing to act on. He would assume he had misclicked
+          and wait, and the order would sit there until a customer asked
+          where his parcel was. The button is deliberately left as it is, so
+          pressing again is the obvious next thing to try.
+        */
+        try {
+          await requestConsignmentShippingLabel(orderRecordId);
+        } catch (err) {
+          console.error(`Consignment label for ${orderRecordId} failed:`, err);
+
+          await interaction.followUp({
+            content:
+              "❌ Error while generating shipping label, please contact support.",
+            flags: 64
+          }).catch(() => {});
+
+          return;
+        }
+
         await safeEditInteractionMessage(interaction, {
           content: interaction.message.content,
           embeds: interaction.message.embeds,
