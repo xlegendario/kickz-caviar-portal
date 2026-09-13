@@ -6410,6 +6410,43 @@ async function requestWoovinShippingLabel(orderRecordId, orderFields) {
   return { ok: true, ...data };
 }
 
+async function requestBolShippingLabel(orderRecordId, orderFields) {
+  const orderId = displayValue(orderFields["Order ID"]) || orderRecordId;
+
+  const existingLabel = orderFields["Shipping Label"];
+
+  if (Array.isArray(existingLabel) && existingLabel.length) {
+    console.log(`Label already attached for ${orderId}, nothing to make.`);
+
+    return { ok: true, already: true };
+  }
+
+  const response = await fetch(
+    `${LOJIQ_WMS_BASE_URL.replace(/\/$/, "")}/api/request-label`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: "marketplace", record_id: orderRecordId })
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      `bol label for ${orderId} failed: ${response.status} ` +
+        `${data.error || ""} ${data.details || ""}`.trim()
+    );
+  }
+
+  console.log(
+    `📦 bol label made for ${orderId} ` +
+      `(${data.carrier || "?"}, tracking ${data.tracking_number || "none"}).`
+  );
+
+  return { ok: true, ...data };
+}
+
 async function attachSneakerAskShippingLabel(orderRecordId, orderFields) {
   const labelUrl = asText(orderFields["SneakerAsk Label URL"]);
   const trackingNumber = asText(orderFields["SneakerAsk Tracking"]);
@@ -6508,6 +6545,20 @@ async function requestConsignmentShippingLabel(orderRecordId) {
    */
   if (marketplace === "Woovin") {
     return await requestWoovinShippingLabel(orderRecordId, orderFields);
+  }
+
+  /*
+   * bol is the one marketplace that hands us no label at all.
+   *
+   * Their order goes to a private shopper, so the parcel is ours to ship and
+   * the label is ours to draw. The WMS makes it at Sendcloud and delivers it
+   * to the consignor, which is where the keys and the Discord delivery live.
+   *
+   * Before this, a bol order fell through to the store path below and posted
+   * a manual label request into a channel, for a store that does not exist.
+   */
+  if (marketplace === "bol") {
+    return await requestBolShippingLabel(orderRecordId, orderFields);
   }
 
   // FIXED — this only set the status and posted nothing, so pressing
