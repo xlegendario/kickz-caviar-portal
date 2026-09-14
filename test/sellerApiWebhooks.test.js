@@ -83,13 +83,13 @@ test("a delivery is signed, not redirected, and refused when the name resolves i
 
   assert.equal(sent.ok, true);
   assert.equal(seen.init.redirect, "manual");
-  assert.equal(seen.init.headers["X-KC-Event"], "label.ready");
+  assert.equal(seen.init.headers["X-Webhook-Event"], "label.ready");
   assert.equal(
     verifyWebhookSignature({
       secret,
       body: seen.init.body,
-      timestamp: seen.init.headers["X-KC-Timestamp"],
-      signature: seen.init.headers["X-KC-Signature"]
+      timestamp: seen.init.headers["X-Webhook-Timestamp"],
+      signature: seen.init.headers["X-Webhook-Signature"]
     }),
     true
   );
