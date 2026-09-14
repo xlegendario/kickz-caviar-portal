@@ -47,6 +47,12 @@ import {
 } from "./lib/sellerApi.js";
 
 import {
+  createAirtableSalesReader,
+  createSupabaseSalesStore,
+  syncSales
+} from "./lib/sellerApiSales.js";
+
+import {
   buildAuthorizeUrl,
   exchangeCode,
   fetchDiscordUser,
@@ -9789,6 +9795,7 @@ if (!SESSION_SECRET) {
  * an anonymous request and then judged by rules written for somebody else.
  */
 const sellerApiStore = createSupabaseApiStore(supabase);
+const sellerApiSalesStore = createSupabaseSalesStore(supabase);
 
 app.use(
   "/api/v1",
@@ -9829,10 +9836,50 @@ app.use(
 
       return result.member_wtb_record_id;
     },
-    b2bRefusal: b2bBuyingTypeRefusal
+    b2bRefusal: b2bBuyingTypeRefusal,
+    salesStore: sellerApiSalesStore
   })
 );
 app.use("/api/v1", sellerApiErrorHandler);
+
+/*
+ * Keeps the sales feed current. On by default, because without it the feed
+ * simply stops moving and nobody would notice until a partner asks why.
+ * SELLER_API_SALES_SYNC=false turns it off.
+ *
+ * A run is one short read of the units created in the last 60 days, plus the
+ * orders and want-to-buys they point at - a dozen Airtable calls - and it
+ * writes only rows that actually changed. The very first run reads every
+ * unit, to fill an empty table.
+ */
+const SELLER_API_SALES_SYNC = (process.env.SELLER_API_SALES_SYNC || "true").toLowerCase() !== "false";
+const SELLER_API_SALES_CRON = process.env.SELLER_API_SALES_CRON || "*/5 * * * *";
+let sellerApiSalesSyncRunning = false;
+
+async function runSellerApiSalesSync() {
+  if (sellerApiSalesSyncRunning) return;
+
+  sellerApiSalesSyncRunning = true;
+
+  try {
+    const empty = await sellerApiSalesStore.isEmpty();
+
+    await syncSales({
+      reader: createAirtableSalesReader({
+        airtable,
+        unitsTable: INVENTORY_UNITS_TABLE,
+        ordersTable: ORDERS_TABLE,
+        wtbsTable: MEMBER_WTBS_TABLE
+      }),
+      store: sellerApiSalesStore,
+      windowDays: empty ? null : 60
+    });
+  } catch (err) {
+    console.error("[seller-api] sales sync failed:", err.message);
+  } finally {
+    sellerApiSalesSyncRunning = false;
+  }
+}
 
 /*
  * Key management, for the two dashboards.
@@ -40032,6 +40079,19 @@ app.listen(PORT, () => {
     console.log(`[reconcile] on - ${RECONCILE_CRON}`);
   } else {
     console.log("[reconcile] off - set RECONCILE_STOCK_LEVELS=true to schedule it");
+  }
+
+  if (SELLER_API_SALES_SYNC) {
+    cron.schedule(SELLER_API_SALES_CRON, runSellerApiSalesSync, {
+      timezone: process.env.TZ || "Europe/Amsterdam"
+    });
+
+    // Once at start, so a deploy does not leave the feed a full interval behind.
+    setTimeout(runSellerApiSalesSync, 30_000);
+
+    console.log(`[seller-api] sales sync on - ${SELLER_API_SALES_CRON}`);
+  } else {
+    console.log("[seller-api] sales sync off - SELLER_API_SALES_SYNC=false");
   }
 
   if (ENRICH_ENABLED) {
