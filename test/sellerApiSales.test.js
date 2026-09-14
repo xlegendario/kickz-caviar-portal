@@ -10,7 +10,7 @@ import {
   syncSales,
   serializeSale
 } from "../lib/sellerApiSales.js";
-import { createSellerApiRouter, generateApiKey, sellerApiErrorHandler } from "../lib/sellerApi.js";
+import { createSellerApiRouter, generateApiKey, labelUrlOf, sellerApiErrorHandler } from "../lib/sellerApi.js";
 
 /* ---------------- builders ---------------- */
 
@@ -203,7 +203,7 @@ test("the sync reads a window of recent units, or everything when told to", asyn
 
 /* ---------------- the endpoint ---------------- */
 
-async function serve(t, { salesStore, mode = "live", sellerRecordId = "recS" }) {
+async function serve(t, { salesStore, labels, mode = "live", sellerRecordId = "recS" }) {
   const generated = generateApiKey(mode);
   const keyRow = { id: crypto.randomUUID(), seller_record_id: sellerRecordId, seller_id: "SE-00001", mode, key_hash: generated.hash };
 
@@ -214,6 +214,7 @@ async function serve(t, { salesStore, mode = "live", sellerRecordId = "recS" }) 
     createSellerApiRouter({
       store: { findActiveKeyByHash: async (hash) => (hash === keyRow.key_hash ? keyRow : null), touchKey: async () => {} },
       salesStore,
+      labels,
       normalizeSize: (s) => s,
       isUsableSize: () => true,
       sizeError: () => "",
@@ -229,12 +230,16 @@ async function serve(t, { salesStore, mode = "live", sellerRecordId = "recS" }) 
 
   t.after(() => server.close());
 
-  return async (path) => {
+  return async (path, { method = "GET" } = {}) => {
     const res = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
+      method,
       headers: { Authorization: `Bearer ${generated.key}` }
     });
 
-    return { status: res.status, json: await res.json() };
+    const isJson = (res.headers.get("content-type") || "").includes("application/json");
+    const body = isJson ? await res.json() : Buffer.from(await res.arrayBuffer());
+
+    return { status: res.status, json: isJson ? body : null, body, headers: res.headers };
   };
 }
 
@@ -297,4 +302,213 @@ test("a test key gets two sample sales in the live shape and never reads the rea
   assert.equal(res.json.data.items.length, 2);
   assert.deepEqual(res.json.data.items.map((i) => i.role).sort(), ["bought", "sold"]);
   assert.deepEqual(Object.keys(res.json.data.items[0]).sort(), Object.keys(serializeSale({ role: "sold" })).sort());
+});
+
+/* ---------------- labels ---------------- */
+
+const SOLD_ID = "00000000-0000-4000-8000-0000000000e1";
+const BOUGHT_ID = "00000000-0000-4000-8000-0000000000e2";
+const WTB_SOLD_ID = "00000000-0000-4000-8000-0000000000e3";
+
+function labelFixture({ orderFields = {}, wtbFields = {}, requestError = null, fetchOk = true } = {}) {
+  const salesStore = fakeSalesStore();
+
+  const sale = (id, extra) => ({
+    id,
+    unit_record_id: `u-${id}`,
+    party_record_id: "recS",
+    status: "active",
+    reference: "7454",
+    has_label: false,
+    updated_at: "2026-09-14T10:00:00.000Z",
+    ...extra
+  });
+
+  salesStore.rows.push(
+    sale(SOLD_ID, { role: "sold", source_type: "order", source_record_id: "recORDER000000001" }),
+    sale(BOUGHT_ID, { role: "bought", source_type: "member_wtb", source_record_id: "recWTB00000000001" }),
+    sale(WTB_SOLD_ID, { role: "sold", source_type: "member_wtb", source_record_id: "recWTB00000000001", reference: "MWTB-000468" })
+  );
+
+  const records = {
+    recORDER000000001: { id: "recORDER000000001", fields: { "Fulfillment Status": "Allocated", ...orderFields } },
+    recWTB00000000001: { id: "recWTB00000000001", fields: { "Fulfillment Status": "Allocated", "Payment Status": "Paid", ...wtbFields } }
+  };
+
+  const calls = { order: [], wtb: [], fetched: [] };
+
+  const labels = {
+    async findSource({ recordId }) {
+      return records[recordId] ? { ...records[recordId], fields: { ...records[recordId].fields } } : null;
+    },
+    async fetchFile(url) {
+      calls.fetched.push(url);
+
+      return fetchOk ? { ok: true, buffer: Buffer.from("%PDF-1.4 real label") } : { ok: false, status: 500 };
+    },
+    async requestForOrder(id) {
+      calls.order.push(id);
+      if (requestError) throw requestError;
+      // A marketplace label lands during the request itself.
+      records[id].fields["Shipping Label"] = [{ url: "https://dl.airtable.com/label.pdf" }];
+      records[id].fields["Tracking Number"] = "05162999841548";
+    },
+    async requestForWantToBuy(id) {
+      calls.wtb.push(id);
+      records[id].fields["Fulfillment Status"] = "Requested Label";
+    }
+  };
+
+  return { salesStore, labels, calls };
+}
+
+test("a label is found on the attachment first, then on the permanent copy, and only over https", () => {
+  assert.equal(labelUrlOf({ fields: { "Shipping Label": [{ url: "https://a/1.pdf" }], "Shipping Label URL (Permanent)": "https://b/2.pdf" } }, "order"), "https://a/1.pdf");
+  assert.equal(labelUrlOf({ fields: { "Shipping Label URL (Permanent)": "https://b/2.pdf" } }, "order"), "https://b/2.pdf");
+  assert.equal(labelUrlOf({ fields: { "Shipping Label Permanent URL": "https://c/3.pdf" } }, "member_wtb"), "https://c/3.pdf");
+  assert.equal(labelUrlOf({ fields: { "Shipping Label Permanent URL": "https://c/3.pdf" } }, "order"), "", "an order does not read the WTB column");
+  assert.equal(labelUrlOf({ fields: { "Shipping Label URL (Permanent)": "http://plain/4.pdf" } }, "order"), "");
+});
+
+test("the seller downloads the label as a PDF through us, never as a link", async (t) => {
+  const fx = labelFixture({ orderFields: { "Shipping Label": [{ url: "https://dl.airtable.com/label.pdf" }] } });
+  const call = await serve(t, fx);
+
+  const res = await call(`/api/v1/sales/${SOLD_ID}/label`);
+
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "application/pdf");
+  assert.match(res.headers.get("content-disposition"), /7454-label\.pdf/);
+  assert.equal(res.headers.get("cache-control"), "no-store");
+  assert.equal(res.body.toString(), "%PDF-1.4 real label");
+  assert.deepEqual(fx.calls.fetched, ["https://dl.airtable.com/label.pdf"]);
+});
+
+test("no label yet, a buyer, another party and a failed download are each answered plainly", async (t) => {
+  const fx = labelFixture();
+  const call = await serve(t, fx);
+
+  const notReady = await call(`/api/v1/sales/${SOLD_ID}/label`);
+  assert.equal(notReady.status, 404);
+  assert.equal(notReady.json.code, "label_not_ready");
+
+  assert.equal((await call(`/api/v1/sales/${BOUGHT_ID}/label`)).status, 404);
+
+  const other = labelFixture({ orderFields: { "Shipping Label": [{ url: "https://dl.airtable.com/x.pdf" }] } });
+  const otherCall = await serve(t, { ...other, sellerRecordId: "recSOMEONEELSE" });
+  assert.equal((await otherCall(`/api/v1/sales/${SOLD_ID}/label`)).status, 404);
+  assert.deepEqual(other.calls.fetched, [], "nothing is fetched for somebody else's sale");
+
+  const broken = labelFixture({ orderFields: { "Shipping Label": [{ url: "https://dl.airtable.com/x.pdf" }] }, fetchOk: false });
+  const brokenCall = await serve(t, broken);
+  assert.equal((await brokenCall(`/api/v1/sales/${SOLD_ID}/label`)).status, 502);
+});
+
+test("requesting a label on an Allocated order runs the Discord button's route and reports the label it produced", async (t) => {
+  const fx = labelFixture();
+  const call = await serve(t, fx);
+
+  const res = await call(`/api/v1/sales/${SOLD_ID}/request-label`, { method: "POST" });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(fx.calls.order, ["recORDER000000001"]);
+  assert.equal(res.json.data.label_available, true);
+  assert.equal(res.json.data.tracking_number, "05162999841548");
+
+  const again = await call(`/api/v1/sales/${SOLD_ID}/request-label`, { method: "POST" });
+  assert.equal(again.status, 409);
+  assert.equal(again.json.code, "label_available");
+  assert.equal(fx.calls.order.length, 1, "no second request once a label exists");
+});
+
+test("a label cannot be requested outside Allocated, or on a Member WTB the buyer has not paid", async (t) => {
+  const moved = labelFixture({ orderFields: { "Fulfillment Status": "Requested Label" } });
+  const movedCall = await serve(t, moved);
+
+  const res = await movedCall(`/api/v1/sales/${SOLD_ID}/request-label`, { method: "POST" });
+  assert.equal(res.status, 409);
+  assert.equal(res.json.code, "not_requestable");
+  assert.equal(res.json.fulfillment_status, "Requested Label");
+  assert.deepEqual(moved.calls.order, []);
+
+  const unpaid = labelFixture({ wtbFields: { "Payment Status": "Awaiting Payment" } });
+  const unpaidCall = await serve(t, unpaid);
+
+  const waiting = await unpaidCall(`/api/v1/sales/${WTB_SOLD_ID}/request-label`, { method: "POST" });
+  assert.equal(waiting.status, 409);
+  assert.equal(waiting.json.code, "awaiting_payment");
+  assert.deepEqual(unpaid.calls.wtb, []);
+});
+
+test("a paid Member WTB goes through the Member WTB route, and a buyer cannot request at all", async (t) => {
+  const fx = labelFixture();
+  const call = await serve(t, fx);
+
+  const res = await call(`/api/v1/sales/${WTB_SOLD_ID}/request-label`, { method: "POST" });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(fx.calls.wtb, ["recWTB00000000001"]);
+  assert.deepEqual(fx.calls.order, []);
+  assert.equal(res.json.data.label_available, false);
+
+  assert.equal((await call(`/api/v1/sales/${BOUGHT_ID}/request-label`, { method: "POST" })).status, 404);
+});
+
+test("a failing label request keeps a caller's error and hides ours", async (t) => {
+  const theirs = labelFixture({ requestError: Object.assign(new Error("Missing Label Request Channel ID"), { statusCode: 400 }) });
+  const ours = labelFixture({ requestError: new Error("Sendcloud create parcel failed: 500") });
+
+  const theirsCall = await serve(t, theirs);
+  const oursCall = await serve(t, ours);
+
+  assert.equal((await theirsCall(`/api/v1/sales/${SOLD_ID}/request-label`, { method: "POST" })).status, 400);
+
+  const hidden = await oursCall(`/api/v1/sales/${SOLD_ID}/request-label`, { method: "POST" });
+  assert.equal(hidden.status, 502);
+  assert.doesNotMatch(hidden.json.message, /Sendcloud/);
+});
+
+test("a test key downloads a sample PDF and gets a simulated request", async (t) => {
+  const call = await serve(t, {
+    mode: "test",
+    salesStore: { findForParty: async () => { throw new Error("a test key read real sales"); } },
+    labels: {
+      findSource: async () => { throw new Error("a test key reached Airtable"); },
+      requestForOrder: async () => { throw new Error("a test key requested a real label"); }
+    }
+  });
+
+  const pdf = await call("/api/v1/sales/00000000-0000-4000-8000-000000000001/label");
+  assert.equal(pdf.status, 200);
+  assert.match(pdf.body.toString("latin1"), /^%PDF-1\.4/);
+
+  assert.equal((await call("/api/v1/sales/00000000-0000-4000-8000-000000000002/label")).status, 404);
+
+  const requested = await call("/api/v1/sales/00000000-0000-4000-8000-000000000001/request-label", { method: "POST" });
+  assert.equal(requested.status, 200);
+  assert.equal(requested.json.data.simulated, true);
+});
+
+test("a label download that fails once is tried again before anyone is told", async () => {
+  const { fetchLabelFile } = await import("../lib/sellerApiSales.js");
+
+  let attempts = 0;
+  const flaky = async () => {
+    attempts += 1;
+
+    return attempts === 1
+      ? { ok: false, status: 503 }
+      : { ok: true, arrayBuffer: async () => new TextEncoder().encode("%PDF-1.4").buffer };
+  };
+
+  const file = await fetchLabelFile("https://x/label.pdf", { fetchImpl: flaky });
+
+  assert.equal(file.ok, true);
+  assert.equal(attempts, 2);
+
+  let down = 0;
+  const gone = await fetchLabelFile("https://x/label.pdf", { fetchImpl: async () => { down += 1; return { ok: false, status: 404 }; } });
+
+  assert.equal(gone.ok, false);
+  assert.equal(down, 2, "twice, and no more");
 });
