@@ -38,6 +38,13 @@ import {
 import { discordMembershipGuard } from "./lib/discordGate.js";
 
 import {
+  createApiKeyRouter,
+  createSellerApiRouter,
+  createSupabaseApiStore,
+  sellerApiErrorHandler
+} from "./lib/sellerApi.js";
+
+import {
   buildAuthorizeUrl,
   exchangeCode,
   fetchDiscordUser,
@@ -9770,6 +9777,81 @@ function sellerIdentityForRead(req) {
 if (!SESSION_SECRET) {
   throw new Error("Missing SESSION_SECRET");
 }
+
+/*
+ * The seller API, mounted ahead of the session guards on purpose.
+ *
+ * Those guards are about browsers: a cookie, a Discord membership. An API
+ * call has neither and is not supposed to - its key is its identity, checked
+ * inside the router. Mounted after them, every call would first be logged as
+ * an anonymous request and then judged by rules written for somebody else.
+ */
+const sellerApiStore = createSupabaseApiStore(supabase);
+
+app.use(
+  "/api/v1",
+  createSellerApiRouter({
+    store: sellerApiStore,
+    setLiveInventoryRow: setConsignmentInventoryRow,
+    resolveProduct: resolveConsignmentProduct,
+    refreshStockLevel: refreshConsignmentStockLevel,
+    normalizeSize: normalizeConsignmentSize,
+    isUsableSize: isUsableConsignmentSize,
+    sizeError: consignmentSizeError,
+    vatEligibilityError: async (sellerRecordId, vatType) => {
+      if (vatType === "Margin") return null;
+
+      const seller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+
+      if (!seller) return "Seller profile not found";
+
+      return validateSellerVatEligibility(seller.get("VAT ID"), seller.get("Country"), vatType);
+    }
+  })
+);
+app.use("/api/v1", sellerApiErrorHandler);
+
+/*
+ * Key management, for the two dashboards.
+ *
+ * Stricter than sellerIdentityForRead, and deliberately so: that one falls
+ * back to whatever record id the URL claims while AUTH_ENFORCE is "warn",
+ * which here would let anyone mint a working key for any seller. So it is a
+ * signed-in session, or a service secret - the Lojiq portal acting for a
+ * merchant's linked seller - and nothing else, whatever the enforce mode.
+ */
+function identifyForApiKeys(req) {
+  const session = readSession(req, SESSION_SECRET);
+
+  if (session?.rid) return { sellerRecordId: session.rid };
+
+  const presented = Buffer.from(String(req.get("x-kc-secret") || ""));
+  const trusted = KC_SERVICE_SECRETS.filter(Boolean).some((secret) => {
+    const expected = Buffer.from(String(secret));
+
+    return presented.length === expected.length && crypto.timingSafeEqual(presented, expected);
+  });
+
+  const asked = asText(req.query?.seller_record_id || req.body?.seller_record_id);
+
+  if (trusted && asked) return { sellerRecordId: asked };
+
+  return { status: 401, error: "Not signed in" };
+}
+
+app.use(
+  "/api/seller-api",
+  createApiKeyRouter({
+    store: sellerApiStore,
+    identify: identifyForApiKeys,
+    lookupSellerId: async (sellerRecordId) => {
+      const seller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+
+      return asText(seller?.get("Seller ID")) || null;
+    }
+  })
+);
+app.use("/api/seller-api", sellerApiErrorHandler);
 
 app.use(
   sellerIdentityGuard({
