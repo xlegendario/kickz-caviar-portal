@@ -14,6 +14,7 @@ import {
   createApiKeyRouter,
   sellerApiErrorHandler
 } from "../lib/sellerApi.js";
+import { wantToBuyRowFromRecord } from "../lib/sellerApiWantToBuys.js";
 
 /* ---------------- fakes ---------------- */
 
@@ -106,41 +107,88 @@ function memoryStore() {
   };
 }
 
-// Want-to-buys, one list per mode, shaped like what both real stores return.
+// Want-to-buys: Airtable's Member WTBs as records, and one snapshot table per
+// mode, shaped like the real stores.
 function memoryWantToBuys() {
+  const airtable = [];
   const rows = { live: [], test: [] };
 
-  const storeFor = (mode) => ({
-    async list({ sellerRecordId }) {
-      return rows[mode].filter((r) => r.seller_record_id === sellerRecordId).map((r) => ({ ...r }));
-    },
-    async find({ sellerRecordId, id }) {
-      const row = rows[mode].find((r) => r.id === id && r.seller_record_id === sellerRecordId);
+  const snapshotStore = (mode) => ({
+    async upsertFromRecord(row) {
+      const existing = rows[mode].find((r) => r.wtb_record_id === row.wtb_record_id);
+      const stamp = new Date().toISOString();
 
-      return row ? { ...row } : null;
-    },
-    async insert(row) {
-      const created = {
-        id: crypto.randomUUID(),
-        purchase_status: "Offers Sent",
-        fulfillment_status: "Outsource",
-        payment_status: "Pending",
-        created_at: new Date().toISOString(),
-        ...row
-      };
+      if (existing) {
+        Object.assign(existing, row, { updated_at: stamp });
+
+        return { ...existing };
+      }
+
+      const created = { id: crypto.randomUUID(), ...row, fingerprint: "x", created_at: stamp, updated_at: stamp };
       rows[mode].push(created);
 
       return { ...created };
     },
-    async cancel({ id }) {
+    async insertTest(row) {
+      const created = { id: crypto.randomUUID(), ...row };
+      rows[mode].push(created);
+
+      return { ...created };
+    },
+    async cancelTest(id) {
       const row = rows[mode].find((r) => r.id === id);
-      Object.assign(row, { purchase_status: "Cancelled", fulfillment_status: "Cancelled" });
+      Object.assign(row, { purchase_status: "Cancelled", fulfillment_status: "Cancelled", updated_at: new Date().toISOString() });
 
       return { ...row };
+    },
+    async listForParty({ partyRecordId, updatedSince, status, sku, from, to }) {
+      const open = (r) => ["Pending", "Outsource"].includes(r.fulfillment_status);
+      const all = rows[mode]
+        .filter((r) => r.party_record_id === partyRecordId)
+        .filter((r) => !updatedSince || r.updated_at >= updatedSince)
+        .filter((r) => !sku || r.sku === sku)
+        .filter((r) => !status || (status === "open") === open(r));
+
+      return { rows: all.slice(from, to + 1).map((r) => ({ ...r })), total: all.length };
+    },
+    async findForParty({ partyRecordId, id }) {
+      const row = rows[mode].find((r) => r.id === id && r.party_record_id === partyRecordId);
+
+      return row ? { ...row } : null;
     }
   });
 
-  return { rows, stores: { live: storeFor("live"), test: storeFor("test") } };
+  const reader = {
+    async findRecord(recordId) {
+      const record = airtable.find((r) => r.id === recordId);
+
+      return record ? structuredClone(record) : null;
+    },
+    async cancel(recordId) {
+      const record = airtable.find((r) => r.id === recordId);
+      Object.assign(record.fields, { "Purchase Status": "Cancelled", "Fulfillment Status": "Cancelled" });
+
+      return structuredClone(record);
+    }
+  };
+
+  const addRecord = (buyerRecordId, fields) => {
+    const record = {
+      id: `rec${crypto.randomBytes(7).toString("hex")}`,
+      fields: {
+        "Buyer Seller ID": [buyerRecordId],
+        "Purchase Status": "Offers Sent",
+        "Fulfillment Status": "Outsource",
+        "Payment Status": "Pending",
+        ...fields
+      }
+    };
+    airtable.push(record);
+
+    return record;
+  };
+
+  return { airtable, rows, reader, addRecord, stores: { live: snapshotStore("live"), test: snapshotStore("test") } };
 }
 
 function buildApi({ store, catalogue = {}, vat = {}, rateLimit, wtbs = memoryWantToBuys(), createLiveWantToBuy, b2bRefusal } = {}) {
@@ -199,22 +247,17 @@ function buildApi({ store, catalogue = {}, vat = {}, rateLimit, wtbs = memoryWan
       ...sizeRules,
       vatEligibilityError: async (_id, vatType) => vat[vatType] || null,
       wantToBuyStores: wtbs.stores,
-      // Stands in for createOpenMemberWtb: writes the live list, returns the id.
+      wantToBuyReader: wtbs.reader,
+      // Stands in for createOpenMemberWtb: writes an Airtable record, returns its id.
       createLiveWantToBuy:
         createLiveWantToBuy ||
-        (async ({ sellerRecordId, sellerId, sku, size, maxPrice, inventoryType }) => {
-          const created = await wtbs.stores.live.insert({
-            id: `rec${crypto.randomBytes(7).toString("hex")}`,
-            seller_record_id: sellerRecordId,
-            seller_id: sellerId,
-            sku,
-            size,
-            max_price: maxPrice,
-            inventory_type: inventoryType
-          });
-
-          return created.id;
-        }),
+        (async ({ sellerRecordId, sku, size, maxPrice, inventoryType }) =>
+          wtbs.addRecord(sellerRecordId, {
+            SKU: sku,
+            Size: size,
+            "Max Price": maxPrice,
+            "Buying Inventory Filter": { all: "All Inventory", private: "Margin Only", b2b: "B2B Only" }[inventoryType]
+          }).id),
       b2bRefusal,
       rateLimit,
       logger: { error() {} }
@@ -640,7 +683,9 @@ test("a test key places, lists, reads and cancels want-to-buys without touching 
   assert.equal(placed.status, 200);
   assert.equal(placed.json.data.item.sku, "DD1503-101", "the catalogue's spelling");
   assert.equal(placed.json.data.item.is_open, true);
+  assert.equal(placed.json.data.item.invoice_amount, null);
   assert.equal(wtbs.rows.live.length, 0);
+  assert.equal(wtbs.airtable.length, 0);
 
   const id = placed.json.data.item.id;
 
@@ -656,7 +701,26 @@ test("a test key places, lists, reads and cancels want-to-buys without touching 
   assert.equal(again.json.data.already_cancelled, true);
 
   assert.equal((await call("GET", "/api/v1/want-to-buys?status=open", { key })).json.data.pagination.total, 0);
-  assert.equal((await call("GET", "/api/v1/want-to-buys?status=closed", { key })).json.data.pagination.total, 1);
+  // The cancelled one, and the finished sample purchase every test key has.
+  assert.equal((await call("GET", "/api/v1/want-to-buys?status=closed", { key })).json.data.pagination.total, 2);
+});
+
+test("a test key sees one finished purchase to build against, which it cannot cancel", async (t) => {
+  const store = memoryStore();
+  const key = await issueKey(store, { mode: "test" });
+  const call = await withServer(buildApi({ store, catalogue: CATALOGUE }).app, t);
+
+  const list = await call("GET", "/api/v1/want-to-buys", { key });
+  const [sample] = list.json.data.items;
+
+  assert.equal(list.json.data.pagination.total, 1);
+  assert.equal(sample.payment_status, "Paid");
+  assert.equal(sample.invoice_amount, 143);
+  assert.ok(sample.tracking_number);
+  assert.equal(list.json.meta.next_updated_since, sample.updated_at);
+
+  assert.equal((await call("GET", `/api/v1/want-to-buys/${sample.id}`, { key })).status, 200);
+  assert.equal((await call("DELETE", `/api/v1/want-to-buys/${sample.id}`, { key })).status, 409);
 });
 
 test("an unknown SKU is refused for a test key the way it would be for a live one", async (t) => {
@@ -670,7 +734,7 @@ test("an unknown SKU is refused for a test key the way it would be for a live on
   assert.match(res.json.message, /could not be found/);
 });
 
-test("a live key goes through the portal's creator and reads the record back", async (t) => {
+test("a live key goes through the portal's creator and lands in the feed at once", async (t) => {
   const store = memoryStore();
   const key = await issueKey(store);
   const { app, wtbs } = buildApi({ store, catalogue: CATALOGUE });
@@ -679,9 +743,14 @@ test("a live key goes through the portal's creator and reads the record back", a
   const placed = await call("POST", "/api/v1/want-to-buys", { key, body: { sku: "DZ5485-612", size: "43" } });
 
   assert.equal(placed.status, 200);
+  assert.equal(wtbs.airtable.length, 1);
   assert.equal(wtbs.rows.live.length, 1);
-  assert.match(placed.json.data.item.id, /^rec/);
+  assert.match(placed.json.data.item.id, /^[0-9a-f-]{36}$/, "the feed's id, not the Airtable record id");
   assert.equal(placed.json.data.item.max_price, null);
+  assert.equal(placed.json.data.item.is_open, true);
+
+  const listed = await call("GET", "/api/v1/want-to-buys", { key });
+  assert.deepEqual(listed.json.data.items.map((i) => i.id), [placed.json.data.item.id]);
 });
 
 test("the creator's own refusals keep their status instead of becoming a 500", async (t) => {
@@ -720,27 +789,57 @@ test("B2B Only is refused for a buyer without a VAT ID, in both modes", async (t
   }
 });
 
-test("a want-to-buy somebody has agreed to cannot be cancelled, and another buyer's is invisible", async (t) => {
+test("cancelling is decided on Airtable as it is now, not on a feed that is behind", async (t) => {
   const store = memoryStore();
   const mine = await issueKey(store, { sellerRecordId: "recMINE" });
   const theirs = await issueKey(store, { sellerRecordId: "recTHEIRS", sellerId: "SE-00002" });
   const wtbs = memoryWantToBuys();
   const call = await withServer(buildApi({ store, catalogue: CATALOGUE, wtbs }).app, t);
 
-  const allocated = await wtbs.stores.live.insert({
-    id: "recALLOCATED00001",
-    seller_record_id: "recMINE",
-    sku: "DZ5485-612",
-    size: "42",
-    fulfillment_status: "Allocated",
-    payment_status: "Awaiting Payment"
-  });
+  const record = wtbs.addRecord("recMINE", { SKU: "DZ5485-612", Size: "42" });
+  const row = await wtbs.stores.live.upsertFromRecord(wantToBuyRowFromRecord(record));
 
-  const refused = await call("DELETE", `/api/v1/want-to-buys/${allocated.id}`, { key: mine });
+  // A seller accepted a minute ago; the feed still says Outsource.
+  Object.assign(record.fields, { "Fulfillment Status": "Allocated", "Payment Status": "Awaiting Payment", "Invoice Price": 210 });
+
+  const refused = await call("DELETE", `/api/v1/want-to-buys/${row.id}`, { key: mine });
   assert.equal(refused.status, 409);
-  assert.equal(wtbs.rows.live[0].fulfillment_status, "Allocated");
+  assert.equal(record.fields["Fulfillment Status"], "Allocated");
+  assert.equal(wtbs.rows.live[0].fulfillment_status, "Allocated", "and the feed is brought up to date on the way");
 
-  assert.equal((await call("GET", `/api/v1/want-to-buys/${allocated.id}`, { key: theirs })).status, 404);
-  assert.equal((await call("DELETE", `/api/v1/want-to-buys/${allocated.id}`, { key: theirs })).status, 404);
+  assert.equal((await call("GET", `/api/v1/want-to-buys/${row.id}`, { key: theirs })).status, 404);
+  assert.equal((await call("DELETE", `/api/v1/want-to-buys/${row.id}`, { key: theirs })).status, 404);
   assert.equal((await call("GET", "/api/v1/want-to-buys/not-an-id", { key: mine })).status, 404);
+});
+
+test("an open live want-to-buy is cancelled in Airtable and in the feed", async (t) => {
+  const store = memoryStore();
+  const key = await issueKey(store, { sellerRecordId: "recMINE" });
+  const wtbs = memoryWantToBuys();
+  const call = await withServer(buildApi({ store, catalogue: CATALOGUE, wtbs }).app, t);
+
+  const record = wtbs.addRecord("recMINE", { SKU: "DZ5485-612", Size: "42" });
+  const row = await wtbs.stores.live.upsertFromRecord(wantToBuyRowFromRecord(record));
+
+  const res = await call("DELETE", `/api/v1/want-to-buys/${row.id}`, { key });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.json.data.item.fulfillment_status, "Cancelled");
+  assert.equal(record.fields["Fulfillment Status"], "Cancelled");
+  assert.equal(wtbs.rows.live[0].fulfillment_status, "Cancelled");
+});
+
+test("a feed row whose Airtable record no longer names this buyer is not theirs", async (t) => {
+  const store = memoryStore();
+  const key = await issueKey(store, { sellerRecordId: "recMINE" });
+  const wtbs = memoryWantToBuys();
+  const call = await withServer(buildApi({ store, catalogue: CATALOGUE, wtbs }).app, t);
+
+  const record = wtbs.addRecord("recMINE", { SKU: "DZ5485-612", Size: "42" });
+  const row = await wtbs.stores.live.upsertFromRecord(wantToBuyRowFromRecord(record));
+
+  record.fields["Buyer Seller ID"] = ["recSOMEONEELSE"];
+
+  assert.equal((await call("DELETE", `/api/v1/want-to-buys/${row.id}`, { key })).status, 404);
+  assert.equal(record.fields["Fulfillment Status"], "Outsource");
 });
