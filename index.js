@@ -55,6 +55,12 @@ import {
 } from "./lib/sellerApiSales.js";
 
 import {
+  createSupabaseWebhookStore,
+  deliverDue,
+  enqueueEvents
+} from "./lib/sellerApiWebhooks.js";
+
+import {
   buildAuthorizeUrl,
   exchangeCode,
   fetchDiscordUser,
@@ -9798,6 +9804,7 @@ if (!SESSION_SECRET) {
  */
 const sellerApiStore = createSupabaseApiStore(supabase);
 const sellerApiSalesStore = createSupabaseSalesStore(supabase);
+const sellerApiWebhookStore = createSupabaseWebhookStore(supabase);
 
 app.use(
   "/api/v1",
@@ -9840,6 +9847,7 @@ app.use(
     },
     b2bRefusal: b2bBuyingTypeRefusal,
     salesStore: sellerApiSalesStore,
+    webhookStore: sellerApiWebhookStore,
     labels: {
       ...createAirtableLabelSource({ airtable, ordersTable: ORDERS_TABLE, wtbsTable: MEMBER_WTBS_TABLE }),
       fetchFile: (url) => fetchLabelFile(url),
@@ -9882,7 +9890,7 @@ async function runSellerApiSalesSync() {
   try {
     const empty = await sellerApiSalesStore.isEmpty();
 
-    await syncSales({
+    const result = await syncSales({
       reader: createAirtableSalesReader({
         airtable,
         unitsTable: INVENTORY_UNITS_TABLE,
@@ -9890,12 +9898,43 @@ async function runSellerApiSalesSync() {
         wtbsTable: MEMBER_WTBS_TABLE
       }),
       store: sellerApiSalesStore,
-      windowDays: empty ? null : 60
+      windowDays: empty ? null : 60,
+      emitEvents: !empty
     });
+
+    if (result.events?.length) {
+      const queued = await enqueueEvents({ events: result.events, store: sellerApiWebhookStore });
+
+      if (queued) console.log(`[seller-api] ${queued} webhook deliveries queued`);
+    }
   } catch (err) {
     console.error("[seller-api] sales sync failed:", err.message);
   } finally {
     sellerApiSalesSyncRunning = false;
+  }
+}
+
+/*
+ * Drains the webhook outbox every minute. Separate from the sync, so a slow
+ * receiver never holds up the feed, and a retry due in one minute is not
+ * kept waiting for the next five-minute sync.
+ */
+const SELLER_API_WEBHOOKS = (process.env.SELLER_API_WEBHOOKS || "true").toLowerCase() !== "false";
+let sellerApiWebhooksRunning = false;
+
+async function runSellerApiWebhookDeliveries() {
+  if (sellerApiWebhooksRunning) return;
+
+  sellerApiWebhooksRunning = true;
+
+  try {
+    const result = await deliverDue({ store: sellerApiWebhookStore });
+
+    if (result.attempted) console.log(`[seller-api] webhooks: ${JSON.stringify(result)}`);
+  } catch (err) {
+    console.error("[seller-api] webhook delivery failed:", err.message);
+  } finally {
+    sellerApiWebhooksRunning = false;
   }
 }
 
@@ -9931,6 +9970,7 @@ app.use(
   "/api/seller-api",
   createApiKeyRouter({
     store: sellerApiStore,
+    webhookStore: sellerApiWebhookStore,
     identify: identifyForApiKeys,
     lookupSellerId: async (sellerRecordId) => {
       const seller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
@@ -40130,6 +40170,16 @@ app.listen(PORT, () => {
     console.log(`[seller-api] sales sync on - ${SELLER_API_SALES_CRON}`);
   } else {
     console.log("[seller-api] sales sync off - SELLER_API_SALES_SYNC=false");
+  }
+
+  if (SELLER_API_WEBHOOKS) {
+    cron.schedule("* * * * *", runSellerApiWebhookDeliveries, {
+      timezone: process.env.TZ || "Europe/Amsterdam"
+    });
+
+    console.log("[seller-api] webhook deliveries on - every minute");
+  } else {
+    console.log("[seller-api] webhook deliveries off - SELLER_API_WEBHOOKS=false");
   }
 
   if (ENRICH_ENABLED) {
