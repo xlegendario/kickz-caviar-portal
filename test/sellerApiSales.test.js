@@ -136,7 +136,10 @@ function fakeSalesStore() {
       return rows.filter((r) => unitIds.includes(r.unit_record_id));
     },
     async insertMany(list) {
-      for (const row of list) rows.push({ id: crypto.randomUUID(), ...row });
+      const written = list.map((row) => ({ id: crypto.randomUUID(), ...row }));
+      rows.push(...written);
+
+      return written.map((row) => ({ ...row }));
     },
     async updateMany(list) {
       for (const { id, ...row } of list) Object.assign(rows.find((r) => r.id === id), row);
