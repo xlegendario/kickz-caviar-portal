@@ -47,8 +47,10 @@ import {
 } from "./lib/sellerApi.js";
 
 import {
+  createAirtableLabelSource,
   createAirtableSalesReader,
   createSupabaseSalesStore,
+  fetchLabelFile,
   syncSales
 } from "./lib/sellerApiSales.js";
 
@@ -9837,7 +9839,23 @@ app.use(
       return result.member_wtb_record_id;
     },
     b2bRefusal: b2bBuyingTypeRefusal,
-    salesStore: sellerApiSalesStore
+    salesStore: sellerApiSalesStore,
+    labels: {
+      ...createAirtableLabelSource({ airtable, ordersTable: ORDERS_TABLE, wtbsTable: MEMBER_WTBS_TABLE }),
+      fetchFile: (url) => fetchLabelFile(url),
+      // The Discord button's route: marketplaces first, a store request last.
+      requestForOrder: (orderRecordId) => requestConsignmentShippingLabel(orderRecordId),
+      // What the dashboard's Member WTB button does, once the API has checked
+      // the deal is this seller's, Allocated and paid.
+      requestForWantToBuy: async (memberWtbRecordId) => {
+        await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+          "Fulfillment Status": "Requested Label",
+          "Label Requested At": new Date().toISOString()
+        });
+
+        await sendMemberWtbLabelRequestToBuyer(memberWtbRecordId);
+      }
+    }
   })
 );
 app.use("/api/v1", sellerApiErrorHandler);
@@ -25682,7 +25700,27 @@ async function postLabelRequestForOrder(orderRecordId) {
 
 app.post("/api/dashboard/request-label", async (req, res) => {
   try {
-    const result = await postLabelRequestForOrder(asText(req.body?.order_record_id));
+    /*
+      FIXED - this called postLabelRequestForOrder directly, which only knows
+      how to ask a store for a label. The Discord button next to it goes
+      through requestConsignmentShippingLabel, which first handles the three
+      marketplaces - SneakerAsk's own label, Woovin's, and a Sendcloud label
+      for bol - and only then falls back to asking the store.
+
+      So the same deal behaved differently depending on where the consignor
+      pressed: in Discord a bol order got its DPD label, in the dashboard it
+      posted a manual request into a channel for a store that does not exist.
+      Every other order still ends in postLabelRequestForOrder, unchanged.
+    */
+    const orderRecordId = asText(req.body?.order_record_id);
+
+    // Kept as a 400: postLabelRequestForOrder answered a missing id that way,
+    // and requestConsignmentShippingLabel would throw it as a plain 500.
+    if (!orderRecordId) {
+      return res.status(400).json({ error: "Missing order_record_id" });
+    }
+
+    const result = await requestConsignmentShippingLabel(orderRecordId);
 
     res.json(result);
   } catch (err) {
