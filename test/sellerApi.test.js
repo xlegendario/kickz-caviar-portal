@@ -106,7 +106,44 @@ function memoryStore() {
   };
 }
 
-function buildApi({ store, catalogue = {}, vat = {}, rateLimit } = {}) {
+// Want-to-buys, one list per mode, shaped like what both real stores return.
+function memoryWantToBuys() {
+  const rows = { live: [], test: [] };
+
+  const storeFor = (mode) => ({
+    async list({ sellerRecordId }) {
+      return rows[mode].filter((r) => r.seller_record_id === sellerRecordId).map((r) => ({ ...r }));
+    },
+    async find({ sellerRecordId, id }) {
+      const row = rows[mode].find((r) => r.id === id && r.seller_record_id === sellerRecordId);
+
+      return row ? { ...row } : null;
+    },
+    async insert(row) {
+      const created = {
+        id: crypto.randomUUID(),
+        purchase_status: "Offers Sent",
+        fulfillment_status: "Outsource",
+        payment_status: "Pending",
+        created_at: new Date().toISOString(),
+        ...row
+      };
+      rows[mode].push(created);
+
+      return { ...created };
+    },
+    async cancel({ id }) {
+      const row = rows[mode].find((r) => r.id === id);
+      Object.assign(row, { purchase_status: "Cancelled", fulfillment_status: "Cancelled" });
+
+      return { ...row };
+    }
+  });
+
+  return { rows, stores: { live: storeFor("live"), test: storeFor("test") } };
+}
+
+function buildApi({ store, catalogue = {}, vat = {}, rateLimit, wtbs = memoryWantToBuys(), createLiveWantToBuy, b2bRefusal } = {}) {
   const refreshed = [];
 
   // Stands in for the portal's consignment upsert, writing the live table.
@@ -161,13 +198,31 @@ function buildApi({ store, catalogue = {}, vat = {}, rateLimit } = {}) {
       refreshStockLevel: async (sku, size) => refreshed.push(`${sku}|${size}`),
       ...sizeRules,
       vatEligibilityError: async (_id, vatType) => vat[vatType] || null,
+      wantToBuyStores: wtbs.stores,
+      // Stands in for createOpenMemberWtb: writes the live list, returns the id.
+      createLiveWantToBuy:
+        createLiveWantToBuy ||
+        (async ({ sellerRecordId, sellerId, sku, size, maxPrice, inventoryType }) => {
+          const created = await wtbs.stores.live.insert({
+            id: `rec${crypto.randomBytes(7).toString("hex")}`,
+            seller_record_id: sellerRecordId,
+            seller_id: sellerId,
+            sku,
+            size,
+            max_price: maxPrice,
+            inventory_type: inventoryType
+          });
+
+          return created.id;
+        }),
+      b2bRefusal,
       rateLimit,
       logger: { error() {} }
     })
   );
   app.use("/api/v1", sellerApiErrorHandler);
 
-  return { app, refreshed };
+  return { app, refreshed, wtbs };
 }
 
 async function withServer(app, t) {
@@ -539,4 +594,153 @@ test("a seller cannot revoke someone else's key, and the mode must be live or te
   assert.equal((await call("POST", `/api/seller-api/keys/${store.keys[0].id}/revoke`)).status, 404);
   assert.equal(store.keys[0].revoked_at, undefined);
   assert.equal((await call("POST", "/api/seller-api/keys", { body: { mode: "prod" } })).status, 400);
+});
+
+/* ---------------- want-to-buys ---------------- */
+
+test("a want-to-buy is validated before anything is looked up", async () => {
+  const { validateWantToBuyInput } = await import("../lib/sellerApi.js");
+
+  assert.deepEqual(
+    validateWantToBuyInput({ sku: "dz5485-612", size: "EU 42,5" }, sizeRules).item,
+    { sku: "DZ5485-612", size: "42.5", inventoryType: "all", maxPrice: null }
+  );
+
+  assert.equal(validateWantToBuyInput({ sku: "X", size: "42", max_price: "" }, sizeRules).item.maxPrice, null);
+  assert.equal(validateWantToBuyInput({ sku: "X", size: "42", max_price: 150 }, sizeRules).item.maxPrice, 150);
+
+  const reasons = [
+    [{ size: "42" }, /sku is required/],
+    [{ sku: "X", size: "36 x3 37 x5" }, /not a valid EU size/],
+    [{ sku: "X", size: "42", max_price: 0 }, /max_price/],
+    [{ sku: "X", size: "42", max_price: "abc" }, /max_price/],
+    [{ sku: "X", size: "42", inventory_type: "wholesale" }, /inventory_type/]
+  ];
+
+  for (const [body, reason] of reasons) {
+    assert.match(validateWantToBuyInput(body, sizeRules).reason, reason);
+  }
+});
+
+test("a test key places, lists, reads and cancels want-to-buys without touching the live ones", async (t) => {
+  const store = memoryStore();
+  const key = await issueKey(store, { mode: "test" });
+  const { app, wtbs } = buildApi({
+    store,
+    catalogue: CATALOGUE,
+    createLiveWantToBuy: async () => { throw new Error("a test key reached the live creator"); }
+  });
+  const call = await withServer(app, t);
+
+  const placed = await call("POST", "/api/v1/want-to-buys", {
+    key,
+    body: { sku: "DD1503 101", size: "42", max_price: 140, inventory_type: "private" }
+  });
+
+  assert.equal(placed.status, 200);
+  assert.equal(placed.json.data.item.sku, "DD1503-101", "the catalogue's spelling");
+  assert.equal(placed.json.data.item.is_open, true);
+  assert.equal(wtbs.rows.live.length, 0);
+
+  const id = placed.json.data.item.id;
+
+  assert.equal((await call("GET", `/api/v1/want-to-buys/${id}`, { key })).json.data.item.max_price, 140);
+  assert.equal((await call("GET", "/api/v1/want-to-buys?status=open", { key })).json.data.pagination.total, 1);
+
+  const cancelled = await call("DELETE", `/api/v1/want-to-buys/${id}`, { key });
+  assert.equal(cancelled.json.data.item.is_open, false);
+  assert.equal(cancelled.json.data.item.fulfillment_status, "Cancelled");
+
+  const again = await call("DELETE", `/api/v1/want-to-buys/${id}`, { key });
+  assert.equal(again.status, 200);
+  assert.equal(again.json.data.already_cancelled, true);
+
+  assert.equal((await call("GET", "/api/v1/want-to-buys?status=open", { key })).json.data.pagination.total, 0);
+  assert.equal((await call("GET", "/api/v1/want-to-buys?status=closed", { key })).json.data.pagination.total, 1);
+});
+
+test("an unknown SKU is refused for a test key the way it would be for a live one", async (t) => {
+  const store = memoryStore();
+  const key = await issueKey(store, { mode: "test" });
+  const call = await withServer(buildApi({ store, catalogue: CATALOGUE }).app, t);
+
+  const res = await call("POST", "/api/v1/want-to-buys", { key, body: { sku: "NOPE-000", size: "42" } });
+
+  assert.equal(res.status, 404);
+  assert.match(res.json.message, /could not be found/);
+});
+
+test("a live key goes through the portal's creator and reads the record back", async (t) => {
+  const store = memoryStore();
+  const key = await issueKey(store);
+  const { app, wtbs } = buildApi({ store, catalogue: CATALOGUE });
+  const call = await withServer(app, t);
+
+  const placed = await call("POST", "/api/v1/want-to-buys", { key, body: { sku: "DZ5485-612", size: "43" } });
+
+  assert.equal(placed.status, 200);
+  assert.equal(wtbs.rows.live.length, 1);
+  assert.match(placed.json.data.item.id, /^rec/);
+  assert.equal(placed.json.data.item.max_price, null);
+});
+
+test("the creator's own refusals keep their status instead of becoming a 500", async (t) => {
+  const store = memoryStore();
+  const key = await issueKey(store);
+  const call = await withServer(
+    buildApi({
+      store,
+      createLiveWantToBuy: async () => {
+        throw Object.assign(new Error('SKU "ZZ" could not be found or confirmed in our database.'), { statusCode: 404 });
+      }
+    }).app,
+    t
+  );
+
+  const res = await call("POST", "/api/v1/want-to-buys", { key, body: { sku: "ZZ", size: "42" } });
+
+  assert.equal(res.status, 404);
+  assert.match(res.json.message, /could not be found/);
+});
+
+test("B2B Only is refused for a buyer without a VAT ID, in both modes", async (t) => {
+  const store = memoryStore();
+  const live = await issueKey(store);
+  const testKey = await issueKey(store, { mode: "test" });
+  const call = await withServer(
+    buildApi({ store, catalogue: CATALOGUE, b2bRefusal: async (type) => (type === "b2b" ? "B2B Only is for buyers with a VAT ID." : null) }).app,
+    t
+  );
+
+  for (const key of [live, testKey]) {
+    const res = await call("POST", "/api/v1/want-to-buys", { key, body: { sku: "DZ5485-612", size: "42", inventory_type: "b2b" } });
+
+    assert.equal(res.status, 400);
+    assert.match(res.json.message, /VAT ID/);
+  }
+});
+
+test("a want-to-buy somebody has agreed to cannot be cancelled, and another buyer's is invisible", async (t) => {
+  const store = memoryStore();
+  const mine = await issueKey(store, { sellerRecordId: "recMINE" });
+  const theirs = await issueKey(store, { sellerRecordId: "recTHEIRS", sellerId: "SE-00002" });
+  const wtbs = memoryWantToBuys();
+  const call = await withServer(buildApi({ store, catalogue: CATALOGUE, wtbs }).app, t);
+
+  const allocated = await wtbs.stores.live.insert({
+    id: "recALLOCATED00001",
+    seller_record_id: "recMINE",
+    sku: "DZ5485-612",
+    size: "42",
+    fulfillment_status: "Allocated",
+    payment_status: "Awaiting Payment"
+  });
+
+  const refused = await call("DELETE", `/api/v1/want-to-buys/${allocated.id}`, { key: mine });
+  assert.equal(refused.status, 409);
+  assert.equal(wtbs.rows.live[0].fulfillment_status, "Allocated");
+
+  assert.equal((await call("GET", `/api/v1/want-to-buys/${allocated.id}`, { key: theirs })).status, 404);
+  assert.equal((await call("DELETE", `/api/v1/want-to-buys/${allocated.id}`, { key: theirs })).status, 404);
+  assert.equal((await call("GET", "/api/v1/want-to-buys/not-an-id", { key: mine })).status, 404);
 });
