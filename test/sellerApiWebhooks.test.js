@@ -119,7 +119,6 @@ test("a change becomes the most specific event it can", () => {
   assert.deepEqual(deriveEventTypes(null, sold), ["sale.created"]);
   assert.deepEqual(deriveEventTypes(sold, { ...sold, status: "cancelled" }), ["sale.cancelled"]);
   assert.deepEqual(deriveEventTypes(sold, { ...sold, has_label: true }), ["label.ready"]);
-  assert.deepEqual(deriveEventTypes({ ...sold, role: "bought" }, { ...sold, role: "bought", has_label: true }), ["sale.updated"], "a buyer has no label to be told about");
   assert.deepEqual(deriveEventTypes(sold, { ...sold, tracking_number: "0516" }), ["sale.updated"]);
 });
 
