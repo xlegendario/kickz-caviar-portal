@@ -85,6 +85,13 @@ test("a reassigned unit follows its live order, and is cancelled only when every
   const dead = derive(unit("recUNIT4", { "Seller Record ID": ["recS"], "Unfulfilled Orders Log": ["recOLD"] }), [cancelled]);
 
   assert.equal(dead[0].status, "cancelled");
+
+  const storeFulfilled = derive(
+    unit("recUNIT6", { "Seller Record ID": ["recS"], "Unfulfilled Orders Log": ["recSF"] }),
+    [order("recSF", { "Fulfillment Status": "Store Fulfilled" })]
+  );
+
+  assert.equal(storeFulfilled[0].status, "cancelled", "the shop shipped it itself");
 });
 
 test("the fingerprint moves with what the API shows, and only with that", () => {
