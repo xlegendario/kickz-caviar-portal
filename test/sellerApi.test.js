@@ -277,8 +277,8 @@ test("a generated key names its mode and is only stored as a hash", () => {
   const live = generateApiKey("live");
   const testKey = generateApiKey("test");
 
-  assert.match(live.key, /^kc_live_[A-Za-z0-9_-]{40,}$/);
-  assert.match(testKey.key, /^kc_test_/);
+  assert.match(live.key, /^sk_live_[A-Za-z0-9_-]{40,}$/);
+  assert.match(testKey.key, /^sk_test_/);
   assert.equal(live.hash, hashApiKey(live.key));
   assert.notEqual(live.key, generateApiKey("live").key);
   assert.ok(live.key.startsWith(live.prefix));
@@ -291,7 +291,7 @@ test("only a well-formed Bearer key is read", () => {
   assert.equal(readBearerKey(`Bearer ${key}`), key);
   assert.equal(readBearerKey(`bearer ${key}`), key);
   assert.equal(readBearerKey(key), null);
-  assert.equal(readBearerKey("Bearer sk_live_somethingelse1234567890"), null);
+  assert.equal(readBearerKey("Bearer pk_live_somethingelse1234567890"), null);
   assert.equal(readBearerKey(""), null);
   assert.equal(readBearerKey(undefined), null);
 });
@@ -568,7 +568,7 @@ test("a created key is shown once, works, and stops working when revoked", async
   const created = await keysCall("POST", "/api/seller-api/keys", { body: { mode: "test", name: "Staging" } });
 
   assert.equal(created.status, 200);
-  assert.match(created.json.data.key, /^kc_test_/);
+  assert.match(created.json.data.key, /^sk_test_/);
   assert.equal(store.keys[0].seller_id, "SE-00001");
   assert.equal("key_hash" in created.json.data, false);
 
