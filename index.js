@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import express from "express";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import Airtable from "airtable";
@@ -10141,6 +10142,40 @@ app.post("/api/internal/member-wtb-paid", async (req, res) => {
 
 app.get("/guide", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "guide.html"));
+});
+
+/*
+ * API Access: the documentation and the key management, for a signed-in
+ * seller only.
+ *
+ * The page lives outside public/ on purpose. Everything in public/ is served
+ * to anyone who knows the file name, and the documentation is not meant to
+ * be read by someone who is not in our system. Someone without a session is
+ * sent to log in instead.
+ */
+const API_ACCESS_PAGE = fs.readFileSync(path.join(__dirname, "private", "api-access.html"), "utf8");
+const SELLER_API_PUBLIC_ORIGIN = (process.env.SELLER_API_PUBLIC_ORIGIN || "https://kickzcaviar.com").replace(/\/$/, "");
+
+app.get("/api-access", (req, res) => {
+  const session = readSession(req, SESSION_SECRET);
+
+  if (!session?.rid) return res.redirect("/dashboard");
+
+  const config = {
+    brand: "Kickz Caviar",
+    theme: "gold",
+    apiBase: `${SELLER_API_PUBLIC_ORIGIN}/api/v1`,
+    keysBase: "/api/seller-api",
+    backUrl: "/dashboard",
+    loginUrl: "/dashboard"
+  };
+
+  res.set("Cache-Control", "no-store");
+  res.set("X-Robots-Tag", "noindex, nofollow");
+  res.type("html").send(
+    // "<" escaped so nothing in the config can close the script tag it sits in.
+    API_ACCESS_PAGE.replace("__API_ACCESS_CONFIG__", JSON.stringify(config).replace(/</g, "\\u003c"))
+  );
 });
 
 app.get("/api/health", (_req, res) => {
