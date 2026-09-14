@@ -39,13 +39,17 @@ import {
 import { discordMembershipGuard } from "./lib/discordGate.js";
 
 import {
-  createAirtableWantToBuyStore,
   createApiKeyRouter,
   createSellerApiRouter,
   createSupabaseApiStore,
-  createSupabaseTestWantToBuyStore,
   sellerApiErrorHandler
 } from "./lib/sellerApi.js";
+
+import {
+  createAirtableWantToBuyReader,
+  createSupabaseWantToBuyStore,
+  syncWantToBuys
+} from "./lib/sellerApiWantToBuys.js";
 
 import { isBuyerOfMemberWtb, strictSellerIdentity } from "./lib/sellerIdentity.js";
 
@@ -9808,6 +9812,11 @@ if (!SESSION_SECRET) {
 const sellerApiStore = createSupabaseApiStore(supabase);
 const sellerApiSalesStore = createSupabaseSalesStore(supabase);
 const sellerApiWebhookStore = createSupabaseWebhookStore(supabase);
+const sellerApiWantToBuyStores = {
+  live: createSupabaseWantToBuyStore(supabase, "api_want_to_buys"),
+  test: createSupabaseWantToBuyStore(supabase, "api_test_want_to_buys")
+};
+const sellerApiWantToBuyReader = createAirtableWantToBuyReader({ airtable, table: MEMBER_WTBS_TABLE });
 
 app.use(
   "/api/v1",
@@ -9828,10 +9837,8 @@ app.use(
 
       return validateSellerVatEligibility(seller.get("VAT ID"), seller.get("Country"), vatType);
     },
-    wantToBuyStores: {
-      live: createAirtableWantToBuyStore({ airtable, table: MEMBER_WTBS_TABLE }),
-      test: createSupabaseTestWantToBuyStore(supabase)
-    },
+    wantToBuyStores: sellerApiWantToBuyStores,
+    wantToBuyReader: sellerApiWantToBuyReader,
     // The same creator the dashboard, the CSV import and both Discord paths
     // use, so a want-to-buy placed by API posts to the WTB bot and asks our
     // consignment stock exactly like one typed into the portal.
@@ -9872,14 +9879,16 @@ app.use(
 app.use("/api/v1", sellerApiErrorHandler);
 
 /*
- * Keeps the sales feed current. On by default, because without it the feed
- * simply stops moving and nobody would notice until a partner asks why.
- * SELLER_API_SALES_SYNC=false turns it off.
+ * Keeps both feeds current: sales for sellers, want-to-buys for buyers. On
+ * by default, because without it a feed simply stops moving and nobody would
+ * notice until a partner asks why. SELLER_API_SALES_SYNC=false turns it off.
  *
  * A run is one short read of the units created in the last 60 days, plus the
- * orders and want-to-buys they point at - a dozen Airtable calls - and it
- * writes only rows that actually changed. The very first run reads every
- * unit, to fill an empty table.
+ * orders and want-to-buys they point at, and one of the Member WTBs placed in
+ * that window - a dozen Airtable calls - and it writes only rows that
+ * actually changed. The very first run of each reads everything, to fill an
+ * empty table. The two are separate steps, so one failing never stops the
+ * other.
  */
 const SELLER_API_SALES_SYNC = (process.env.SELLER_API_SALES_SYNC || "true").toLowerCase() !== "false";
 const SELLER_API_SALES_CRON = process.env.SELLER_API_SALES_CRON || "*/5 * * * *";
@@ -9912,6 +9921,25 @@ async function runSellerApiSalesSync() {
     }
   } catch (err) {
     console.error("[seller-api] sales sync failed:", err.message);
+  }
+
+  try {
+    const empty = await sellerApiWantToBuyStores.live.isEmpty();
+
+    const result = await syncWantToBuys({
+      reader: sellerApiWantToBuyReader,
+      store: sellerApiWantToBuyStores.live,
+      windowDays: empty ? null : 60,
+      emitEvents: !empty
+    });
+
+    if (result.events?.length) {
+      const queued = await enqueueEvents({ events: result.events, store: sellerApiWebhookStore });
+
+      if (queued) console.log(`[seller-api] ${queued} want-to-buy webhook deliveries queued`);
+    }
+  } catch (err) {
+    console.error("[seller-api] want-to-buy sync failed:", err.message);
   } finally {
     sellerApiSalesSyncRunning = false;
   }
