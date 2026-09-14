@@ -47,6 +47,8 @@ import {
   sellerApiErrorHandler
 } from "./lib/sellerApi.js";
 
+import { isBuyerOfMemberWtb, strictSellerIdentity } from "./lib/sellerIdentity.js";
+
 import {
   createAirtableLabelSource,
   createAirtableSalesReader,
@@ -9940,31 +9942,22 @@ async function runSellerApiWebhookDeliveries() {
 }
 
 /*
- * Key management, for the two dashboards.
+ * Who is acting, for anything that creates, changes or removes.
  *
  * Stricter than sellerIdentityForRead, and deliberately so: that one falls
- * back to whatever record id the URL claims while AUTH_ENFORCE is "warn",
- * which here would let anyone mint a working key for any seller. So it is a
- * signed-in session, or a service secret - the Lojiq portal acting for a
- * merchant's linked seller - and nothing else, whatever the enforce mode.
+ * back to whatever record id the request claims while AUTH_ENFORCE is "warn",
+ * which would let anyone mint a key for any seller, or pass an ownership check
+ * by simply naming the owner. So it is a signed-in session, or a service
+ * secret - the Lojiq portal acting for a merchant's linked seller - and
+ * nothing else, whatever the enforce mode. See lib/sellerIdentity.js.
  */
-function identifyForApiKeys(req) {
-  const session = readSession(req, SESSION_SECRET);
-
-  if (session?.rid) return { sellerRecordId: session.rid };
-
-  const presented = Buffer.from(String(req.get("x-kc-secret") || ""));
-  const trusted = KC_SERVICE_SECRETS.filter(Boolean).some((secret) => {
-    const expected = Buffer.from(String(secret));
-
-    return presented.length === expected.length && crypto.timingSafeEqual(presented, expected);
+function identifySellerForWrite(req) {
+  return strictSellerIdentity({
+    sessionRecordId: readSession(req, SESSION_SECRET)?.rid,
+    presentedSecret: req.get("x-kc-secret"),
+    trustedSecrets: KC_SERVICE_SECRETS,
+    askedRecordId: req.query?.seller_record_id || req.body?.seller_record_id
   });
-
-  const asked = asText(req.query?.seller_record_id || req.body?.seller_record_id);
-
-  if (trusted && asked) return { sellerRecordId: asked };
-
-  return { status: 401, error: "Not signed in" };
 }
 
 app.use(
@@ -9972,7 +9965,7 @@ app.use(
   createApiKeyRouter({
     store: sellerApiStore,
     webhookStore: sellerApiWebhookStore,
-    identify: identifyForApiKeys,
+    identify: identifySellerForWrite,
     lookupSellerId: async (sellerRecordId) => {
       const seller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
 
@@ -12146,30 +12139,69 @@ app.get("/api/consignment/csv-import/latest", async (req, res) => {
   }
 });
 
+/*
+ * FIXED - this and the PATCH below acted on an inventory id alone, never
+ * asking whose stock it was. Any signed-in seller who had another seller's
+ * id could change its price or quantity, or delete it.
+ *
+ * Now the caller is resolved strictly (a session, or the Lojiq portal with
+ * its secret acting for its own merchant) and every read, update and delete
+ * is filtered on that seller as well as the id. A row that is not theirs
+ * gets the same 404 as a row that does not exist, so the answer never
+ * confirms that somebody else's id is real.
+ */
+const INVENTORY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function findOwnInventoryRow(req, res) {
+  const identity = identifySellerForWrite(req);
+
+  if (!identity.sellerRecordId) {
+    res.status(identity.status || 401).json({ error: identity.error || "Not signed in" });
+
+    return null;
+  }
+
+  const inventoryId = asText(req.params.id);
+
+  // Not a UUID is not found: handing it to Postgres answers with a type
+  // error, which used to come back as a 500.
+  if (!INVENTORY_ID.test(inventoryId)) {
+    res.status(404).json({ error: "Inventory item not found" });
+
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("consignment_inventory")
+    .select("id, sku, size")
+    .eq("id", inventoryId)
+    .eq("seller_record_id", identity.sellerRecordId)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  if (!data) {
+    res.status(404).json({ error: "Inventory item not found" });
+
+    return null;
+  }
+
+  return { sellerRecordId: identity.sellerRecordId, item: data };
+}
+
 app.delete("/api/consignment/inventory/:id", async (req, res) => {
   try {
-    const inventoryId = asText(req.params.id);
+    const own = await findOwnInventoryRow(req, res);
 
-    if (!inventoryId) {
-      return res.status(400).json({
-        error: "Missing inventory id"
-      });
-    }
+    if (!own) return;
 
-    const { data: existingItem, error: existingError } = await supabase
-      .from("consignment_inventory")
-      .select("id, sku, size")
-      .eq("id", inventoryId)
-      .single();
-
-    if (existingError) {
-      throw existingError;
-    }
+    const existingItem = own.item;
 
     const { error } = await supabase
       .from("consignment_inventory")
       .delete()
-      .eq("id", inventoryId);
+      .eq("id", existingItem.id)
+      .eq("seller_record_id", own.sellerRecordId);
 
     if (error) {
       throw error;
@@ -12195,13 +12227,8 @@ app.delete("/api/consignment/inventory/:id", async (req, res) => {
 
 app.patch("/api/consignment/inventory/:id", async (req, res) => {
   try {
-    const inventoryId = asText(req.params.id);
     const sellingPriceSuggested = Number(req.body?.selling_price_suggested);
     const quantity = Number(req.body?.quantity);
-
-    if (!inventoryId) {
-      return res.status(400).json({ error: "Missing inventory id" });
-    }
 
     if (!Number.isFinite(sellingPriceSuggested) || sellingPriceSuggested <= 0) {
       return res.status(400).json({
@@ -12215,15 +12242,11 @@ app.patch("/api/consignment/inventory/:id", async (req, res) => {
       });
     }
 
-    const { data: existingItem, error: existingError } = await supabase
-      .from("consignment_inventory")
-      .select("id, sku, size")
-      .eq("id", inventoryId)
-      .single();
+    const own = await findOwnInventoryRow(req, res);
 
-    if (existingError) {
-      throw existingError;
-    }
+    if (!own) return;
+
+    const existingItem = own.item;
 
     const { data, error } = await supabase
       .from("consignment_inventory")
@@ -12232,7 +12255,8 @@ app.patch("/api/consignment/inventory/:id", async (req, res) => {
         quantity,
         updated_at: new Date().toISOString()
       })
-      .eq("id", inventoryId)
+      .eq("id", existingItem.id)
+      .eq("seller_record_id", own.sellerRecordId)
       .select()
       .single();
 
@@ -39480,6 +39504,35 @@ app.post("/api/dashboard/buying/cancel-wtb", async (req, res) => {
       return res.status(400).json({
         error: "Missing member_wtb_record_id"
       });
+    }
+
+    /*
+      FIXED - any signed-in seller could cancel any want-to-buy, given its
+      record id, and those ids are not secret: they sit in offer page links
+      and Discord embeds. Now only its buyer can.
+
+      Looked up with RECORD_ID() on this table, never with find(): find()
+      resolves an id from anywhere in the base, so a seller's own record id
+      would have come back as "a Member WTB" and been cancelled as one.
+    */
+    const identity = identifySellerForWrite(req);
+
+    if (!identity.sellerRecordId) {
+      return res.status(identity.status || 401).json({ error: identity.error || "Not signed in" });
+    }
+
+    const [memberWtb] = /^rec[A-Za-z0-9]{14}$/.test(memberWtbRecordId)
+      ? await airtable(MEMBER_WTBS_TABLE)
+          .select({
+            filterByFormula: `RECORD_ID() = '${escapeFormulaValue(memberWtbRecordId)}'`,
+            fields: ["Buyer Seller ID"],
+            maxRecords: 1
+          })
+          .firstPage()
+      : [];
+
+    if (!isBuyerOfMemberWtb(memberWtb, identity.sellerRecordId)) {
+      return res.status(404).json({ error: "Want To Buy not found" });
     }
 
     await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
