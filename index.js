@@ -38,9 +38,11 @@ import {
 import { discordMembershipGuard } from "./lib/discordGate.js";
 
 import {
+  createAirtableWantToBuyStore,
   createApiKeyRouter,
   createSellerApiRouter,
   createSupabaseApiStore,
+  createSupabaseTestWantToBuyStore,
   sellerApiErrorHandler
 } from "./lib/sellerApi.js";
 
@@ -9806,7 +9808,28 @@ app.use(
       if (!seller) return "Seller profile not found";
 
       return validateSellerVatEligibility(seller.get("VAT ID"), seller.get("Country"), vatType);
-    }
+    },
+    wantToBuyStores: {
+      live: createAirtableWantToBuyStore({ airtable, table: MEMBER_WTBS_TABLE }),
+      test: createSupabaseTestWantToBuyStore(supabase)
+    },
+    // The same creator the dashboard, the CSV import and both Discord paths
+    // use, so a want-to-buy placed by API posts to the WTB bot and asks our
+    // consignment stock exactly like one typed into the portal.
+    createLiveWantToBuy: async ({ sellerRecordId, sellerId, sku, size, maxPrice, inventoryType }) => {
+      const result = await createOpenMemberWtb({
+        sellerRecordId,
+        sellerId,
+        sku,
+        size,
+        maxPrice,
+        inventoryType,
+        createdFrom: "Seller API"
+      });
+
+      return result.member_wtb_record_id;
+    },
+    b2bRefusal: b2bBuyingTypeRefusal
   })
 );
 app.use("/api/v1", sellerApiErrorHandler);
