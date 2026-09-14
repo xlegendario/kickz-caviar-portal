@@ -48,22 +48,18 @@ test("a unit on a store order is one sale, for the seller only", () => {
   assert.equal(rows[0].has_label, true);
 });
 
-test("a unit on a Member WTB is a sale for the seller and a purchase for the buyer", () => {
+test("a unit on a Member WTB is a sale for the seller, and never a row for the buyer", () => {
   const rows = derive(
-    unit("recUNIT2", { "Seller Record ID": ["recSELLER"], "Member WTBs": ["recWTB1"], "Final Purchase Price": 107.9 }),
+    unit("recUNIT2", { "Seller Record ID": ["recSELLER"], "Member WTBs": ["recWTB1"], "Final Purchase Price": 107.9, "Payment Status": "To Pay" }),
     [],
     [wtb("recWTB1", { "Buyer Seller ID": ["recBUYER"], "Invoice Price": 131.4, "Payment Status": "Awaiting Payment", "Fulfillment Status": "Allocated" })]
   );
 
-  const sold = rows.find((r) => r.role === "sold");
-  const bought = rows.find((r) => r.role === "bought");
-
-  assert.equal(sold.party_record_id, "recSELLER");
-  assert.equal(sold.amount, 107.9, "the seller sees his payout");
-  assert.equal(bought.party_record_id, "recBUYER");
-  assert.equal(bought.amount, 131.4, "the buyer sees his invoice");
-  assert.equal(bought.payment_status, "Awaiting Payment");
-  assert.equal(bought.reference, "MWTB-000468");
+  assert.equal(rows.length, 1, "the buyer follows the want-to-buy itself");
+  assert.equal(rows[0].party_record_id, "recSELLER");
+  assert.equal(rows[0].amount, 107.9, "the seller's payout, not the buyer's invoice");
+  assert.equal(rows[0].payment_status, "To Pay", "the seller's payout status");
+  assert.equal(rows[0].reference, "MWTB-000468");
 });
 
 test("a unit with neither an order nor a Member WTB is not a sale", () => {
@@ -144,11 +140,10 @@ function fakeSalesStore() {
     async updateMany(list) {
       for (const { id, ...row } of list) Object.assign(rows.find((r) => r.id === id), row);
     },
-    async listForParty({ partyRecordId, updatedSince, role, status, from, to }) {
+    async listForParty({ partyRecordId, updatedSince, status, from, to }) {
       const all = rows
         .filter((r) => r.party_record_id === partyRecordId)
         .filter((r) => !updatedSince || r.updated_at >= updatedSince)
-        .filter((r) => !role || r.role === role)
         .filter((r) => !status || r.status === status)
         .sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.id.localeCompare(b.id));
 
@@ -263,7 +258,7 @@ test("the feed walks forward with updated_since and hands back where to continue
   store.rows.push(
     row("00000000-0000-4000-8000-00000000000a", "2026-09-10T10:00:00.000Z"),
     row("00000000-0000-4000-8000-00000000000b", "2026-09-11T10:00:00.000Z", { has_label: true }),
-    row("00000000-0000-4000-8000-00000000000c", "2026-09-12T10:00:00.000Z", { role: "bought", has_label: true }),
+    row("00000000-0000-4000-8000-00000000000c", "2026-09-12T10:00:00.000Z", { has_label: true }),
     row("00000000-0000-4000-8000-00000000000d", "2026-09-12T10:00:00.000Z", { party_record_id: "recSOMEONEELSE" })
   );
 
@@ -277,10 +272,9 @@ test("the feed walks forward with updated_since and hands back where to continue
   const next = await call(`/api/v1/sales?updated_since=${all.json.meta.next_updated_since}`);
   assert.equal(next.json.data.items.length, 2, ">= keeps the boundary row, the caller de-duplicates");
 
-  assert.equal((await call("/api/v1/sales?role=bought")).json.data.pagination.total, 1);
-
   const byId = await call("/api/v1/sales/00000000-0000-4000-8000-00000000000c");
-  assert.equal(byId.json.data.item.label_available, false, "a buyer has no label to fetch");
+  assert.equal(byId.json.data.item.label_available, true);
+  assert.equal("role" in byId.json.data.item, false, "a sale is always the seller's");
   assert.equal((await call("/api/v1/sales/00000000-0000-4000-8000-00000000000d")).status, 404);
 });
 
@@ -288,7 +282,6 @@ test("the feed refuses what it cannot read", async (t) => {
   const call = await serve(t, { salesStore: fakeSalesStore() });
 
   assert.equal((await call("/api/v1/sales?updated_since=yesterday")).status, 400);
-  assert.equal((await call("/api/v1/sales?role=refunded")).status, 400);
   assert.equal((await call("/api/v1/sales?status=shipped")).status, 400);
   assert.equal((await call("/api/v1/sales/not-an-id")).status, 404);
 });
@@ -303,14 +296,13 @@ test("a test key gets two sample sales in the live shape and never reads the rea
 
   assert.equal(res.status, 200);
   assert.equal(res.json.data.items.length, 2);
-  assert.deepEqual(res.json.data.items.map((i) => i.role).sort(), ["bought", "sold"]);
-  assert.deepEqual(Object.keys(res.json.data.items[0]).sort(), Object.keys(serializeSale({ role: "sold" })).sort());
+  assert.deepEqual(res.json.data.items.map((i) => i.source).sort(), ["member_wtb", "order"]);
+  assert.deepEqual(Object.keys(res.json.data.items[0]).sort(), Object.keys(serializeSale({})).sort());
 });
 
 /* ---------------- labels ---------------- */
 
 const SOLD_ID = "00000000-0000-4000-8000-0000000000e1";
-const BOUGHT_ID = "00000000-0000-4000-8000-0000000000e2";
 const WTB_SOLD_ID = "00000000-0000-4000-8000-0000000000e3";
 
 function labelFixture({ orderFields = {}, wtbFields = {}, requestError = null, fetchOk = true } = {}) {
@@ -329,7 +321,6 @@ function labelFixture({ orderFields = {}, wtbFields = {}, requestError = null, f
 
   salesStore.rows.push(
     sale(SOLD_ID, { role: "sold", source_type: "order", source_record_id: "recORDER000000001" }),
-    sale(BOUGHT_ID, { role: "bought", source_type: "member_wtb", source_record_id: "recWTB00000000001" }),
     sale(WTB_SOLD_ID, { role: "sold", source_type: "member_wtb", source_record_id: "recWTB00000000001", reference: "MWTB-000468" })
   );
 
@@ -387,15 +378,13 @@ test("the seller downloads the label as a PDF through us, never as a link", asyn
   assert.deepEqual(fx.calls.fetched, ["https://dl.airtable.com/label.pdf"]);
 });
 
-test("no label yet, a buyer, another party and a failed download are each answered plainly", async (t) => {
+test("no label yet, another party and a failed download are each answered plainly", async (t) => {
   const fx = labelFixture();
   const call = await serve(t, fx);
 
   const notReady = await call(`/api/v1/sales/${SOLD_ID}/label`);
   assert.equal(notReady.status, 404);
   assert.equal(notReady.json.code, "label_not_ready");
-
-  assert.equal((await call(`/api/v1/sales/${BOUGHT_ID}/label`)).status, 404);
 
   const other = labelFixture({ orderFields: { "Shipping Label": [{ url: "https://dl.airtable.com/x.pdf" }] } });
   const otherCall = await serve(t, { ...other, sellerRecordId: "recSOMEONEELSE" });
@@ -443,7 +432,7 @@ test("a label cannot be requested outside Allocated, or on a Member WTB the buye
   assert.deepEqual(unpaid.calls.wtb, []);
 });
 
-test("a paid Member WTB goes through the Member WTB route, and a buyer cannot request at all", async (t) => {
+test("a paid Member WTB goes through the Member WTB route", async (t) => {
   const fx = labelFixture();
   const call = await serve(t, fx);
 
@@ -453,8 +442,6 @@ test("a paid Member WTB goes through the Member WTB route, and a buyer cannot re
   assert.deepEqual(fx.calls.wtb, ["recWTB00000000001"]);
   assert.deepEqual(fx.calls.order, []);
   assert.equal(res.json.data.label_available, false);
-
-  assert.equal((await call(`/api/v1/sales/${BOUGHT_ID}/request-label`, { method: "POST" })).status, 404);
 });
 
 test("a failing label request keeps a caller's error and hides ours", async (t) => {
