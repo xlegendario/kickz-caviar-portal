@@ -16,6 +16,7 @@ import {
   verifyWebhookSignature
 } from "../lib/sellerApiWebhooks.js";
 import { deriveEventTypes, syncSales } from "../lib/sellerApiSales.js";
+import { changedFields } from "../lib/sellerApiWebhooks.js";
 import { createApiKeyRouter, createSellerApiRouter, generateApiKey, sellerApiErrorHandler } from "../lib/sellerApi.js";
 
 const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
@@ -114,12 +115,26 @@ test("a delivery is signed, not redirected, and refused when the name resolves i
 /* ---------------- events ---------------- */
 
 test("a change becomes the most specific event it can", () => {
-  const sold = { role: "sold", status: "active", has_label: false };
+  const sold = { status: "active", has_label: false, shipping_status: null, payment_status: "To Pay" };
 
   assert.deepEqual(deriveEventTypes(null, sold), ["sale.created"]);
-  assert.deepEqual(deriveEventTypes(sold, { ...sold, status: "cancelled" }), ["sale.cancelled"]);
+  assert.deepEqual(deriveEventTypes(sold, { ...sold, status: "cancelled", has_label: true }), ["sale.cancelled"], "cancelled says it all");
   assert.deepEqual(deriveEventTypes(sold, { ...sold, has_label: true }), ["label.ready"]);
+  assert.deepEqual(deriveEventTypes(sold, { ...sold, shipping_status: "Pending" }), ["sale.updated"]);
+  assert.deepEqual(deriveEventTypes(sold, { ...sold, shipping_status: "Shipped" }), ["sale.shipped"]);
+  assert.deepEqual(deriveEventTypes({ ...sold, shipping_status: "Shipped" }, { ...sold, shipping_status: "Delivered" }), ["sale.delivered"]);
+  assert.deepEqual(deriveEventTypes(sold, { ...sold, payment_status: "Paid" }), ["sale.paid_out"]);
+  assert.deepEqual(deriveEventTypes(sold, { ...sold, has_label: true, shipping_status: "Shipped" }), ["label.ready", "sale.shipped"]);
   assert.deepEqual(deriveEventTypes(sold, { ...sold, tracking_number: "0516" }), ["sale.updated"]);
+});
+
+test("changes names the API fields that moved, never updated_at", () => {
+  assert.deepEqual(changedFields(null, { a: 1 }), []);
+  assert.deepEqual(
+    changedFields({ id: "x", payment_status: "To Pay", tracking_number: null, updated_at: "1" }, { id: "x", payment_status: "Paid", tracking_number: null, updated_at: "2" }),
+    ["payment_status"]
+  );
+  assert.deepEqual(changedFields({ tracking_number: undefined }, { tracking_number: null }), [], "missing and null are the same");
 });
 
 function salesFixture() {

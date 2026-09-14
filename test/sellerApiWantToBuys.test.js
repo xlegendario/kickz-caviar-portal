@@ -73,13 +73,24 @@ test("the fingerprint moves with what the buyer sees, and only with that", () =>
   assert.notEqual(fingerprintWantToBuy({ ...row, payment_status: "Paid" }), before);
 });
 
-test("a cancellation is its own event, anything else an update, and nothing is news on first sight", () => {
-  const open = { fulfillment_status: "Outsource", purchase_status: "Offers Sent" };
+test("each moment a buyer acts on has its own event, and nothing is news on first sight", () => {
+  const open = { fulfillment_status: "Outsource", purchase_status: "Offers Sent", payment_status: "Pending", shipping_status: null };
+  const filled = { ...open, purchase_status: "Confirmed", fulfillment_status: "Allocated", payment_status: "Awaiting Payment" };
 
   assert.deepEqual(deriveWantToBuyEventTypes(null, open), []);
   assert.deepEqual(deriveWantToBuyEventTypes(open, { ...open, fulfillment_status: "Cancelled" }), ["want_to_buy.cancelled"]);
   assert.deepEqual(deriveWantToBuyEventTypes(open, { ...open, purchase_status: "Cancelled" }), ["want_to_buy.cancelled"]);
-  assert.deepEqual(deriveWantToBuyEventTypes(open, { ...open, fulfillment_status: "Allocated" }), ["want_to_buy.updated"]);
+  assert.deepEqual(deriveWantToBuyEventTypes(open, filled), ["want_to_buy.filled"]);
+  assert.deepEqual(deriveWantToBuyEventTypes(filled, { ...filled, payment_status: "Paid" }), ["want_to_buy.paid"]);
+  assert.deepEqual(deriveWantToBuyEventTypes(filled, { ...filled, shipping_status: "Shipped" }), ["want_to_buy.shipped"]);
+  assert.deepEqual(deriveWantToBuyEventTypes({ ...filled, shipping_status: "Shipped" }, { ...filled, shipping_status: "Delivered" }), ["want_to_buy.delivered"]);
+  assert.deepEqual(deriveWantToBuyEventTypes({ ...filled, shipping_status: "Delivered" }, { ...filled, shipping_status: "Shipped" }), ["want_to_buy.updated"], "a status going back is not shipped again");
+  assert.deepEqual(deriveWantToBuyEventTypes(filled, { ...filled, payment_status: "Expired" }), ["want_to_buy.updated"]);
+  assert.deepEqual(
+    deriveWantToBuyEventTypes({ ...filled, payment_status: "Paid" }, { ...filled, payment_status: "Paid", fulfillment_status: "Cancelled" }),
+    ["want_to_buy.cancelled"],
+    "cancelled says it all"
+  );
 });
 
 /* ---------------- the sync ---------------- */
@@ -133,9 +144,20 @@ test("the sync inserts quietly, then reports changes as events for the buyer", a
   const shipped = await syncWantToBuys({ reader, store, now: () => clock, emitEvents: true, logger: quiet });
 
   assert.equal(shipped.updated, 1);
-  assert.deepEqual(shipped.events.map((e) => [e.type, e.partyRecordId, e.item.tracking_number]), [["want_to_buy.updated", "recBUYER", "0516"]]);
+  assert.deepEqual(
+    shipped.events.map((e) => [e.type, e.partyRecordId, e.item.tracking_number]),
+    [["want_to_buy.filled", "recBUYER", "0516"]],
+    "open to Shipped in one sync is filled; Shipping Status itself did not move"
+  );
+  assert.deepEqual(shipped.events[0].changes, ["is_open", "fulfillment_status", "tracking_number"]);
   assert.equal(shipped.events[0].item.id, store.rows[0].id, "the id the buyer knows from the feed");
   assert.equal(store.rows[0].created_at, "2026-09-14T10:00:00.000Z");
+
+  theRecord.fields["Shipping Status"] = "Shipped";
+
+  const inTransit = await syncWantToBuys({ reader, store, now: () => clock, emitEvents: true, logger: quiet });
+
+  assert.deepEqual(inTransit.events.map((e) => [e.type, e.changes]), [["want_to_buy.shipped", ["shipping_status"]]]);
 
   theRecord.fields["Fulfillment Status"] = "Cancelled";
 
@@ -165,4 +187,22 @@ test("buyers can subscribe to want-to-buy events, and a test event carries a wan
   assert.equal(result.event_type, "want_to_buy.cancelled");
   assert.equal(sent.data.item.wtb_id, sampleWantToBuy().wtb_id);
   assert.equal(sent.data.item.fulfillment_status, "Cancelled");
+  assert.deepEqual(sent.data.changes, ["purchase_status", "fulfillment_status", "is_open"]);
+
+  for (const type of WEBHOOK_EVENTS) {
+    await sendTestEvent({
+      hook: { id: "h1", url: "https://example.com/hook", secret: "s" },
+      sellerRecordId: "recBUYER",
+      type,
+      send: async ({ payload }) => {
+        sent = payload;
+
+        return { ok: true, statusCode: 200 };
+      }
+    });
+
+    assert.equal(sent.type, type);
+    assert.ok(Array.isArray(sent.data.changes), type);
+    assert.equal("wtb_id" in sent.data.item, type.startsWith("want_to_buy."), type);
+  }
 });
