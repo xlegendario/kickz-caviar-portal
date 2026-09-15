@@ -12283,6 +12283,12 @@ app.patch("/api/consignment/inventory/:id", async (req, res) => {
 
     const existingItem = own.item;
 
+    // Someone taken out of consignment may take stock down, never put it
+    // back up: that is how a zeroed row would quietly go live again.
+    if (quantity > Number(existingItem.quantity || 0) && (await refuseNonConsignor(own.sellerRecordId, res))) {
+      return;
+    }
+
     const { data, error } = await supabase
       .from("consignment_inventory")
       .update({

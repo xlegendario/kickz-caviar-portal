@@ -870,5 +870,9 @@ test("a seller who is not a consignor cannot list stock, but can still read and 
   assert.deepEqual(refreshed, []);
 
   assert.equal((await call("GET", "/api/v1/inventory", { key: live })).json.data.pagination.total, 1);
+
+  const restock = await call("PATCH", "/api/v1/inventory/5b7f6c1e-0d2a-4c3b-9e8f-7a6b5c4d3e2f", { key: live, body: { quantity: 2 } });
+  assert.equal(restock.status, 403, "no restocking either");
+  assert.equal((await call("PATCH", "/api/v1/inventory/5b7f6c1e-0d2a-4c3b-9e8f-7a6b5c4d3e2f", { key: live, body: { quantity: 0 } })).status, 200, "emptying stays allowed");
   assert.equal((await call("DELETE", "/api/v1/inventory", { key: live, body: { id: "5b7f6c1e-0d2a-4c3b-9e8f-7a6b5c4d3e2f" } })).json.data.deleted_count, 1);
 });
