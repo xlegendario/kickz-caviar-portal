@@ -12891,7 +12891,23 @@ app.post("/api/consignment/stock-levels/repair", async (req, res) => {
       .filter(([key]) => force || !existingKeys.has(key))
       .map(([key, pair]) => ({ key, ...pair }));
 
-    const target = limit ? missing.slice(0, limit) : missing;
+    /*
+      NEW - just these pairs, when the caller names them.
+
+      Taking a consignor out of consignment sets his rows to zero straight in
+      the table, which none of the usual write paths see. Refreshing only his
+      few hundred pairs is minutes; force over the whole inventory is hours of
+      Airtable writes for pairs that did not change.
+    */
+    const namedPairs = Array.isArray(req.body?.pairs)
+      ? req.body.pairs
+          .map((pair) => ({ sku: asText(pair?.sku).toUpperCase(), size: asText(pair?.size) }))
+          .filter((pair) => pair.sku && pair.size)
+          .map((pair) => ({ key: `${pair.sku}-${pair.size}`, ...pair }))
+      : null;
+
+    const candidates = namedPairs || missing;
+    const target = limit ? candidates.slice(0, limit) : candidates;
 
     if (dryRun) {
       return res.json({
