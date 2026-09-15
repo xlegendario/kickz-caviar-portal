@@ -9856,6 +9856,7 @@ app.use(
       return result.member_wtb_record_id;
     },
     b2bRefusal: b2bBuyingTypeRefusal,
+    consignorRefusal,
     salesStore: sellerApiSalesStore,
     webhookStore: sellerApiWebhookStore,
     labels: {
@@ -11354,6 +11355,8 @@ app.post("/api/consignment/inventory/manual", async (req, res) => {
       });
     }
 
+    if (await refuseNonConsignor(sellerRecordId, res)) return;
+
     if (await refuseIneligibleConsignmentVat(sellerRecordId, [{ vat_type: vatType }], res)) {
       return;
     }
@@ -12013,6 +12016,8 @@ app.post("/api/consignment/inventory/csv-add", async (req, res) => {
       return res.status(400).json({ error: validationError.message });
     }
 
+    if (await refuseNonConsignor(sellerRecordId, res)) return;
+
     if (await refuseIneligibleConsignmentVat(sellerRecordId, normalizedRows, res)) {
       return;
     }
@@ -12076,6 +12081,8 @@ app.post("/api/consignment/inventory/csv-replace", async (req, res) => {
     } catch (validationError) {
       return res.status(400).json({ error: validationError.message });
     }
+
+    if (await refuseNonConsignor(sellerRecordId, res)) return;
 
     if (await refuseIneligibleConsignmentVat(sellerRecordId, normalizedRows, res)) {
       return;
@@ -18733,6 +18740,59 @@ function getStockCounterKey(sku, size) {
 // record lets the upload through: blocking a consignor over a lookup
 // hiccup is worse than the situation this replaces, and the check at
 // offer time still stands behind it.
+/*
+ * Only a seller with Consignor? ticked may put stock in.
+ *
+ * Every consumer of consignment_inventory - the store push, bol, Woovin,
+ * SneakerAsk, the consignor requests on a sale - treats a row as live stock
+ * and never looks at the flag. The dashboard only hid its tab from others,
+ * and the API had no check at all, so this is the one place it is enforced.
+ *
+ * Fails CLOSED, unlike the VAT check: a seller who is not approved must not
+ * end up listed on four marketplaces because Airtable was slow for a second.
+ * A lookup failure asks the caller to try again instead.
+ */
+async function consignorRefusal(sellerRecordId) {
+  const recordId = asText(sellerRecordId);
+
+  if (!/^rec[A-Za-z0-9]{14}$/.test(recordId)) {
+    return { status: 403, message: CONSIGNMENT_NOT_ENABLED_MESSAGE };
+  }
+
+  let records;
+
+  try {
+    records = await airtable(SELLERS_TABLE)
+      .select({
+        fields: ["Consignor?"],
+        filterByFormula: `RECORD_ID() = '${escapeFormulaValue(recordId)}'`,
+        maxRecords: 1
+      })
+      .firstPage();
+  } catch (err) {
+    console.error(`Consignor check for ${recordId} failed:`, err.message);
+
+    return { status: 503, message: "Could not check your account right now. Try again shortly." };
+  }
+
+  return records[0]?.fields?.["Consignor?"] === true
+    ? null
+    : { status: 403, message: CONSIGNMENT_NOT_ENABLED_MESSAGE };
+}
+
+const CONSIGNMENT_NOT_ENABLED_MESSAGE =
+  "Consignment is not enabled for your account. Contact support to become a consignor.";
+
+async function refuseNonConsignor(sellerRecordId, res) {
+  const refusal = await consignorRefusal(sellerRecordId);
+
+  if (!refusal) return false;
+
+  res.status(refusal.status).json({ error: refusal.message, code: "not_consignor" });
+
+  return true;
+}
+
 async function refuseIneligibleConsignmentVat(sellerRecordId, entries, res) {
   const firstRowPerVatType = new Map();
 

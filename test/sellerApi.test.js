@@ -191,7 +191,7 @@ function memoryWantToBuys() {
   return { airtable, rows, reader, addRecord, stores: { live: snapshotStore("live"), test: snapshotStore("test") } };
 }
 
-function buildApi({ store, catalogue = {}, vat = {}, rateLimit, wtbs = memoryWantToBuys(), createLiveWantToBuy, b2bRefusal } = {}) {
+function buildApi({ store, catalogue = {}, vat = {}, rateLimit, wtbs = memoryWantToBuys(), createLiveWantToBuy, b2bRefusal, consignorRefusal } = {}) {
   const refreshed = [];
 
   // Stands in for the portal's consignment upsert, writing the live table.
@@ -259,6 +259,7 @@ function buildApi({ store, catalogue = {}, vat = {}, rateLimit, wtbs = memoryWan
             "Buying Inventory Filter": { all: "All Inventory", private: "Margin Only", b2b: "B2B Only" }[inventoryType]
           }).id),
       b2bRefusal,
+      consignorRefusal,
       rateLimit,
       logger: { error() {} }
     })
@@ -842,4 +843,32 @@ test("a feed row whose Airtable record no longer names this buyer is not theirs"
 
   assert.equal((await call("DELETE", `/api/v1/want-to-buys/${row.id}`, { key })).status, 404);
   assert.equal(record.fields["Fulfillment Status"], "Outsource");
+});
+
+test("a seller who is not a consignor cannot list stock, but can still read and remove it", async (t) => {
+  const store = memoryStore();
+  const live = await issueKey(store, { sellerRecordId: "recNOTCONSIGNOR" });
+  const testKey = await issueKey(store, { sellerRecordId: "recNOTCONSIGNOR", mode: "test" });
+  const { app, refreshed } = buildApi({
+    store,
+    catalogue: CATALOGUE,
+    consignorRefusal: async () => ({ status: 403, message: "Consignment is not enabled for your account." })
+  });
+  const call = await withServer(app, t);
+
+  store.tables.live.push({ id: "5b7f6c1e-0d2a-4c3b-9e8f-7a6b5c4d3e2f", seller_record_id: "recNOTCONSIGNOR", sku: "DZ5485-612", size: "42", vat_type: "Margin", selling_price_suggested: 180, quantity: 1 });
+
+  for (const key of [live, testKey]) {
+    const res = await call("POST", "/api/v1/inventory", { key, body: { items: [{ sku: "DZ5485-612", size: "43", vat_type: "Margin", price: 180 }] } });
+
+    assert.equal(res.status, 403);
+    assert.equal(res.json.code, "not_consignor");
+  }
+
+  assert.equal(store.tables.live.length, 1, "nothing was written");
+  assert.equal(store.tables.test.length, 0);
+  assert.deepEqual(refreshed, []);
+
+  assert.equal((await call("GET", "/api/v1/inventory", { key: live })).json.data.pagination.total, 1);
+  assert.equal((await call("DELETE", "/api/v1/inventory", { key: live, body: { id: "5b7f6c1e-0d2a-4c3b-9e8f-7a6b5c4d3e2f" } })).json.data.deleted_count, 1);
 });
