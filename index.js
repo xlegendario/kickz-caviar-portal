@@ -968,6 +968,17 @@ function closeSnapshotForRecord({ recordId, source, status = "Claimed" }) {
   );
 }
 
+/*
+ * FIXED - both of these were one function from 8 September.
+ *
+ * The rewrite of the Member WTB version (own asking price, a round beside
+ * it, Hold From Store) was pasted over the store-order version, and the
+ * Member WTB name disappeared with it. The Member WTB accept then called a
+ * function that did not exist - the consignor was asked, the buyer was told
+ * "Failed to accept offer", and nobody else was asked - while every store
+ * order ran Member WTB code against variables it does not have and stopped
+ * at the first spare. Store orders are back on their own version below.
+ */
 async function askOtherConsignorsForOrder({
   orderRecordId,
   orderFields,
@@ -997,6 +1008,117 @@ async function askOtherConsignorsForOrder({
   if (!others.length) return { ok: true, asked: [] };
 
   const orderId = asText(orderFields["Order ID"]) || orderRecordId;
+  const asked = [];
+
+  for (const row of others) {
+    try {
+      const ownAsk = Number(row.selling_price_suggested);
+      const theirAmount = Number(
+        consignmentAmountForVatType(budgetNormalized, row.vat_type).toFixed(2)
+      );
+
+      if (!(theirAmount > 0)) continue;
+
+      const sellerRecord = await airtable(SELLERS_TABLE)
+        .find(row.seller_record_id)
+        .catch(() => null);
+
+      if (!sellerRecord) continue;
+
+      const sf = sellerRecord.fields || {};
+
+      const createdOffer = await airtable(SELLER_OFFERS_TABLE).create({
+        "Seller ID": [row.seller_record_id],
+        "Linked Orders": [orderRecordId],
+        "Seller Offer": theirAmount,
+        "Offer VAT Type": asText(row.vat_type),
+        "Offer Cost (Normalized)": Number(budgetNormalized.toFixed(2)),
+        "Offer Date": new Date().toISOString(),
+        "Consignment Inventory ID": row.id
+      });
+
+      const discordResult = await sendConsignmentOfferDiscordMessage({
+        allowCounter: false,
+        seller: {
+          seller_record_id: row.seller_record_id,
+          seller_id: asText(sf["Seller ID"]),
+          discord_id: asText(sf["Discord ID"]),
+          consignment_offer_channel_id: asText(sf["Consignment Offer Channel ID"]),
+          consignment_confirmation_channel_id: asText(sf["Consignment Confirmation Channel ID"])
+        },
+        offer: {
+          id: createdOffer.id,
+          order_record_id: orderRecordId,
+          order_id: orderId,
+          source_type: "order",
+          seller_record_id: row.seller_record_id,
+          seller_id: asText(sf["Seller ID"]),
+          product_name: asText(row.product_name) || asText(orderFields["Product Name"]),
+          sku,
+          size,
+          brand: asText(row.brand) || asText(orderFields["Brand"]),
+          vat_type: asText(row.vat_type),
+          seller_price: Number.isFinite(ownAsk) && ownAsk > 0 ? ownAsk : theirAmount,
+          offer_price: theirAmount
+        },
+        calculatedOfferPrice: theirAmount,
+        sellerOfferRecordId: createdOffer.id
+      });
+
+      await rememberConsignmentConfirmMessage(createdOffer.id, discordResult);
+
+      asked.push({
+        seller_offer_record_id: createdOffer.id,
+        seller_id: asText(sf["Seller ID"]),
+        inventory_id: row.id,
+        amount: theirAmount
+      });
+
+      console.log(
+        `📩 Order ${orderId}: also asked ${asText(sf["Seller ID"])} ` +
+          `${moneySmartValue(theirAmount.toFixed(2))} ${asText(row.vat_type)} ` +
+          `(inventory ${row.id}) -> Seller Offer ${createdOffer.id}`
+      );
+    } catch (err) {
+      console.error(
+        `Could not ask consignor ${row.seller_id} for order ${orderId}:`,
+        err.message
+      );
+    }
+  }
+
+  return { ok: true, asked };
+}
+
+async function askOtherConsignorsForMemberWtb({
+  memberWtbRecordId,
+  memberFields,
+  askedInventoryId,
+  budgetNormalized
+}) {
+  const sku = asText(memberFields["SKU"]);
+  const size = asText(memberFields["Size"]);
+
+  if (!sku || !size || !(budgetNormalized > 0)) {
+    return { ok: false, reason: "missing_sku_size_or_budget" };
+  }
+
+  const { data: holders, error } = await supabase
+    .from("consignment_inventory")
+    .select("id, sku, size, vat_type, selling_price_suggested, quantity, seller_id, seller_record_id, product_name, brand")
+    .eq("sku", sku)
+    .eq("size", size)
+    .gt("quantity", 0);
+
+  if (error) throw error;
+
+  const others = (holders || []).filter(
+    (row) => asText(row.id) !== asText(askedInventoryId) && row.seller_record_id
+  );
+
+  if (!others.length) return { ok: true, asked: [] };
+
+  const memberWtbId = asText(memberFields["Member WTB ID"]) || memberWtbRecordId;
   const asked = [];
 
   /*
