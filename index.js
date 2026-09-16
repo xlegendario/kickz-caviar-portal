@@ -5750,7 +5750,17 @@ async function sendConsignmentDealUpdateDiscordMessage({
     only the app that posted a message can act on its buttons. A store asks
     for its label in the portal.
   */
-  const storeConsignor = await isStoreConsignor(seller?.id).catch(() => false);
+  /*
+    FIXED - read only seller.id, and the confirmation path never sets it: it
+    passes seller_id and the channels, with the record id on the offer. So a
+    store consignor was taken for a member, the Kickz Caviar bot tried the
+    Lojiq channel, failed, and the store never got its deal update
+    (ORD-024891, 16-09-2026).
+  */
+  const sellerRecordIdForRouting =
+    asText(seller?.id) || asText(seller?.seller_record_id) || asText(offer?.seller_record_id);
+
+  const storeConsignor = await isStoreConsignor(sellerRecordIdForRouting).catch(() => false);
 
   const channel = storeConsignor
     ? null
