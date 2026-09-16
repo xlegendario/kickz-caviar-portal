@@ -3030,7 +3030,7 @@ async function isStoreConsignor(sellerRecordId) {
  * is why nothing with a button goes down this road. A store answers in its
  * portal; what arrives here is a notice that something needs answering.
  */
-async function postLojiqConsignorEmbed({ channelId, content, embeds }) {
+async function postLojiqConsignorEmbed({ channelId, content, embeds, components = [] }) {
   if (!AIRTABLE_DISCORD_UPDATES_URL) {
     return { ok: false, reason: "no_updates_service_url" };
   }
@@ -3045,7 +3045,7 @@ async function postLojiqConsignorEmbed({ channelId, content, embeds }) {
         "Content-Type": "application/json",
         ...(secret ? { "x-kc-secret": secret } : {})
       },
-      body: JSON.stringify({ channel_id: channelId, content, embeds, components: [] })
+      body: JSON.stringify({ channel_id: channelId, content, embeds, components: toLojiqComponents(components) })
     }
   );
 
@@ -3056,6 +3056,33 @@ async function postLojiqConsignorEmbed({ channelId, content, embeds }) {
   }
 
   return { ok: true, channelId: data.channel_id, messageId: data.message_id };
+}
+
+/*
+ * Buttons as the Lojiq bot posts them.
+ *
+ * Every custom_id gets a "kc:" in front. That bot has buttons of its own for
+ * stores as buyers, some with the same names as ours, so the prefix is how it
+ * tells a click it must forward from one it answers itself. Link buttons have
+ * no custom_id and pass through.
+ */
+const LOJIQ_FORWARD_PREFIX = "kc:";
+
+function toLojiqComponents(value) {
+  if (Array.isArray(value)) return value.map(toLojiqComponents);
+  if (!value || typeof value !== "object") return value;
+
+  // A discord.js builder carries its data behind toJSON.
+  const copy = typeof value.toJSON === "function" ? { ...value.toJSON() } : { ...value };
+
+  // Text inputs (type 4) keep their names: they are read back by name, not clicked.
+  if (copy.type !== 4 && typeof copy.custom_id === "string" && !copy.custom_id.startsWith(LOJIQ_FORWARD_PREFIX)) {
+    copy.custom_id = `${LOJIQ_FORWARD_PREFIX}${copy.custom_id}`;
+  }
+
+  if (copy.components) copy.components = toLojiqComponents(copy.components);
+
+  return copy;
 }
 
 function getSellerOfferChannelId(sellerRow, isConfirmation) {
@@ -3269,6 +3296,36 @@ async function sendConsignmentOfferDiscordMessage({
     to answer. Carrying an accept path here as well would be two ways to say
     yes to one offer, which is how a pair gets promised twice.
   */
+  const offerComponents = [
+    {
+      type: 1,
+      components: [
+        {
+          type: 2,
+          style: 3,
+          label: isConfirmation ? "Confirm" : "Accept",
+          custom_id: confirmCustomId
+        },
+        ...(allowCounter && !isConfirmation && asText(offer.source_type) !== "member_wtb"
+          ? [
+              {
+                type: 2,
+                style: 1,
+                label: "Counter",
+                custom_id: `counter_consignment_offer:${offer.id}`
+              }
+            ]
+          : []),
+        {
+          type: 2,
+          style: 4,
+          label: "Deny",
+          custom_id: denyCustomId
+        }
+      ]
+    }
+  ];
+
   if (storeConsignor && deliveryType === "private_channel") {
     const posted = await postLojiqConsignorEmbed({
       channelId: privateChannelId,
@@ -3277,7 +3334,10 @@ async function sendConsignmentOfferDiscordMessage({
         : `Offer sent for ${offer.sku} / ${offer.size}`,
       // Lojiq blue. The yellow belongs to a brand this store is not supposed
       // to be looking at in the first place.
-      embeds: [{ ...embed, color: 0x2F80ED }]
+      embeds: [{ ...embed, color: 0x2F80ED }],
+      // CHANGED - the same buttons a member gets. They reach this service
+      // through the Lojiq bot; see consignmentInteractionHandler.
+      components: offerComponents
     });
 
     return {
@@ -3296,35 +3356,7 @@ async function sendConsignmentOfferDiscordMessage({
 
     embeds: [embed],
 
-    components: [
-      {
-        type: 1,
-        components: [
-          {
-            type: 2,
-            style: 3,
-            label: isConfirmation ? "Confirm" : "Accept",
-            custom_id: confirmCustomId
-          },
-          ...(allowCounter && !isConfirmation && asText(offer.source_type) !== "member_wtb"
-            ? [
-                {
-                  type: 2,
-                  style: 1,
-                  label: "Counter",
-                  custom_id: `counter_consignment_offer:${offer.id}`
-                }
-              ]
-            : []),
-          {
-            type: 2,
-            style: 4,
-            label: "Deny",
-            custom_id: denyCustomId
-          }
-        ]
-      }
-    ]
+    components: offerComponents
   });
 
   return {
@@ -3432,11 +3464,28 @@ async function sendConsignmentCounterOfferDiscordMessage({
     color: 0xf1c40f
   };
 
+  const counterComponents = [
+    {
+      type: 1,
+      components: noRoomToCounter
+        ? [
+            { type: 2, style: 3, label: `Accept ${moneySmartValue(Number(consignorEquivalent))}`, custom_id: `consignment_counter_accept:${offer.id}` },
+            { type: 2, style: 4, label: "Deny", custom_id: `consignment_counter_deny:${offer.id}` }
+          ]
+        : [
+            { type: 2, style: 3, label: `Accept ${moneySmartValue(Number(consignorEquivalent))}`, custom_id: `consignment_counter_accept:${offer.id}` },
+            { type: 2, style: 1, label: "Counter", custom_id: `consignment_counter_counter:${offer.id}` },
+            { type: 2, style: 4, label: "Deny", custom_id: `consignment_counter_deny:${offer.id}` }
+          ]
+    }
+  ];
+
   if (storeConsignor && deliveryType === "private_channel") {
     const posted = await postLojiqConsignorEmbed({
       channelId: privateChannelId,
       content: `We countered on ${offer.sku} / ${offer.size}`,
-      embeds: [{ ...embed, color: 0x2F80ED }]
+      embeds: [{ ...embed, color: 0x2F80ED }],
+      components: counterComponents
     });
 
     return {
@@ -3449,21 +3498,7 @@ async function sendConsignmentCounterOfferDiscordMessage({
   const message = await target.send({
     content: deliveryType === "dm" ? null : undefined,
     embeds: [embed],
-    components: [
-      {
-        type: 1,
-        components: noRoomToCounter
-          ? [
-              { type: 2, style: 3, label: `Accept ${moneySmartValue(Number(consignorEquivalent))}`, custom_id: `consignment_counter_accept:${offer.id}` },
-              { type: 2, style: 4, label: "Deny", custom_id: `consignment_counter_deny:${offer.id}` }
-            ]
-          : [
-              { type: 2, style: 3, label: `Accept ${moneySmartValue(Number(consignorEquivalent))}`, custom_id: `consignment_counter_accept:${offer.id}` },
-              { type: 2, style: 1, label: "Counter", custom_id: `consignment_counter_counter:${offer.id}` },
-              { type: 2, style: 4, label: "Deny", custom_id: `consignment_counter_deny:${offer.id}` }
-            ]
-      }
-    ]
+    components: counterComponents
   });
 
   return {
@@ -5753,7 +5788,20 @@ async function sendConsignmentDealUpdateDiscordMessage({
     const posted = await postLojiqConsignorEmbed({
       channelId,
       content: `Your deal for ${offer.sku} - ${offer.size} has been confirmed`,
-      embeds: [shippingEmbed]
+      embeds: [shippingEmbed],
+      components: [
+        {
+          type: 1,
+          components: [
+            {
+              type: 2,
+              style: 3,
+              label: "Request Label",
+              custom_id: `request_consignment_label:${offer.order_record_id}:${inventoryUnitRecordId || ""}`
+            }
+          ]
+        }
+      ]
     });
 
     return {
@@ -7224,7 +7272,20 @@ function bindMemberWtbDiscordCsvUploads(
 }
 
 function bindConsignmentDiscordButtons(client) {
-  client.on(Events.InteractionCreate, async (interaction) => {
+  client.on(Events.InteractionCreate, consignmentInteractionHandler(client));
+}
+
+/*
+ * Every consignment and Member WTB button, as one function.
+ *
+ * Split out of bindConsignmentDiscordButtons so the Lojiq bot can use it too:
+ * a store consignor's messages are posted by that bot, and Discord only lets
+ * the bot that posted a message answer its buttons. It forwards the click to
+ * /api/lojiq-bot/interaction, which runs this same function - so a store and
+ * a member get exactly the same behaviour, not a second copy of it.
+ */
+function consignmentInteractionHandler(client) {
+  return async (interaction) => {
     if (!interaction.isButton() && !interaction.isModalSubmit()) return;
 
     const customId = String(interaction.customId || "");
@@ -9745,7 +9806,7 @@ function bindConsignmentDiscordButtons(client) {
     } catch (err) {
       console.error("Consignment Discord button error:", err);
     }
-  });
+  };
 }
 
 /*
@@ -10843,6 +10904,106 @@ app.post("/api/consignment/application", async (req, res) => {
     });
   }
 });
+
+/*
+ * A click on a consignment button that the Lojiq bot posted.
+ *
+ * Discord only lets the bot that posted a message answer its buttons, and a
+ * store consignor's messages come from the Lojiq bot. So that bot forwards the
+ * click here and this runs consignmentInteractionHandler - the very function
+ * the Kickz Caviar bot runs - against a stand-in interaction that records what
+ * it would have done: edit the message, open a modal, reply. The Lojiq bot
+ * then does those things on the real interaction.
+ *
+ * Nothing about a click is decided here that the member path does not decide
+ * the same way. The prefix comes off on the way in and goes back on for
+ * anything handed back with a custom_id, so the next click routes here again.
+ */
+app.post("/api/lojiq-bot/interaction", async (req, res) => {
+  const secret = asText(req.headers["x-kc-secret"]);
+
+  if (!COUNTER_OFFERS_SECRET || secret !== COUNTER_OFFERS_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const rawCustomId = asText(req.body?.custom_id);
+  const customId = rawCustomId.startsWith(LOJIQ_FORWARD_PREFIX)
+    ? rawCustomId.slice(LOJIQ_FORWARD_PREFIX.length)
+    : rawCustomId;
+
+  if (!customId) return res.status(400).json({ error: "Missing custom_id" });
+
+  const isModal = req.body?.type === "modal_submit";
+  const fields = req.body?.fields && typeof req.body.fields === "object" ? req.body.fields : {};
+  const sourceMessage = req.body?.message || {};
+  const ops = [];
+
+  const record = (op, payload) => {
+    ops.push({ op, payload: payload === undefined ? null : toLojiqComponentsInPayload(payload) });
+  };
+
+  const message = {
+    id: asText(sourceMessage.id),
+    channelId: asText(req.body?.channel_id),
+    content: sourceMessage.content || "",
+    embeds: Array.isArray(sourceMessage.embeds) ? sourceMessage.embeds : [],
+    components: Array.isArray(sourceMessage.components) ? sourceMessage.components : [],
+    edit: async (payload) => {
+      record("edit_message", payload);
+      return message;
+    }
+  };
+
+  const interaction = {
+    customId,
+    channelId: asText(req.body?.channel_id),
+    message,
+    user: { id: asText(req.body?.user_id) },
+    deferred: false,
+    replied: false,
+    isButton: () => !isModal,
+    isModalSubmit: () => isModal,
+    fields: { getTextInputValue: (name) => asText(fields[name]) },
+    deferUpdate: async () => { interaction.deferred = true; record("defer_update"); },
+    deferReply: async (payload) => { interaction.deferred = true; record("defer_reply", payload || {}); },
+    reply: async (payload) => { interaction.replied = true; record("reply", payload); },
+    editReply: async (payload) => { record("edit_reply", payload); },
+    followUp: async (payload) => { record("follow_up", payload); },
+    update: async (payload) => { record("edit_message", payload); },
+    showModal: async (payload) => { record("show_modal", payload); }
+  };
+
+  // A client that is never ready: every "edit the source message" helper
+  // falls through to interaction.message.edit, which is recorded above.
+  const offlineClient = { isReady: () => false };
+
+  try {
+    await consignmentInteractionHandler(offlineClient)(interaction);
+
+    return res.json({ ok: true, handled: ops.length > 0, ops });
+  } catch (err) {
+    console.error(`Lojiq bot interaction ${customId} failed:`, err);
+
+    return res.status(500).json({ error: "Interaction failed", details: err.message, ops });
+  }
+});
+
+// Buttons and modals in a recorded payload, prefixed for the Lojiq bot.
+function toLojiqComponentsInPayload(payload) {
+  if (!payload || typeof payload !== "object") return payload;
+
+  const copy = typeof payload.toJSON === "function" ? { ...payload.toJSON() } : { ...payload };
+
+  if (Array.isArray(copy.components)) copy.components = toLojiqComponents(copy.components);
+
+  // A modal is itself addressed by custom_id; its text inputs are not
+  // clicks and keep their names, which is what getTextInputValue reads.
+  if (typeof copy.custom_id === "string" && copy.title && !copy.custom_id.startsWith(LOJIQ_FORWARD_PREFIX)) {
+    copy.custom_id = `${LOJIQ_FORWARD_PREFIX}${copy.custom_id}`;
+  }
+
+  return copy;
+}
 
 app.post("/api/make/consignor-activated", async (req, res) => {
   try {
