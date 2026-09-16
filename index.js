@@ -5813,6 +5813,64 @@ async function sendConsignmentDealUpdateDiscordMessage({
   };
 }
 
+/*
+ * The activation notice for a Lojiq store, in its own server.
+ *
+ * Posted in the store's Offer Requests channel from Merchants, the channel it
+ * already reads for everything we send it. No buttons, no Kickz Caviar name.
+ */
+async function sendStoreConsignorActivationMessage(sellerRecord) {
+  const merchantId = firstLinkedRecordId(sellerRecord?.fields?.["Merchants"]);
+
+  const merchants = merchantId
+    ? await airtable(MERCHANTS_TABLE)
+        .select({
+          filterByFormula: `RECORD_ID() = '${escapeFormulaValue(merchantId)}'`,
+          fields: ["Store Name", "Offer Requests Channel ID"],
+          maxRecords: 1
+        })
+        .firstPage()
+        .catch(() => [])
+    : [];
+
+  const channelId = asText(merchants[0]?.fields?.["Offer Requests Channel ID"]);
+
+  if (!channelId) {
+    return { skipped: "store_has_no_offer_requests_channel" };
+  }
+
+  const posted = await postLojiqConsignorEmbed({
+    channelId,
+    content: "Consignment is now active for your store",
+    embeds: [
+      {
+        title: "✅ Consignment Activated",
+        description: [
+          "Consignment is now active for your store.",
+          "",
+          "**Please log out and log back in** to the Lojiq portal to unlock the Consignment section.",
+          "",
+          "**How it works:**",
+          "• Add and manage your consignment stock in the portal, by hand, by CSV or through the API",
+          "• Your pairs are offered across our sales channels",
+          "• When one of them sells you get a notice here, and you confirm it in the portal",
+          "• After confirming, request the shipping label and ship the pair",
+          "",
+          "Questions? Just reply in this server."
+        ].join("\n"),
+        color: 0x2F80ED
+      }
+    ]
+  });
+
+  return {
+    channelId: posted.channelId || channelId,
+    messageId: posted.messageId || null,
+    deliveryType: "lojiq_channel",
+    client: "lojiq_bot"
+  };
+}
+
 async function sendConsignorActivationDiscordDM(seller) {
   await initKickzDealDiscord();
 
@@ -10830,8 +10888,24 @@ app.post("/api/make/consignor-activated", async (req, res) => {
       });
     }
 
-    const discordResult =
-      await sendConsignorActivationDiscordDM(seller);
+    /*
+      NEW - a store hears this from Lojiq, never from Kickz Caviar.
+
+      A consignor linked to a Merchant is a Lojiq store (see
+      isStoreConsignor). It used to get the same Kickz Caviar DM as a member,
+      which names a brand the store is not supposed to see and points it at a
+      dashboard it does not use. It now gets a Lojiq notice in its own store
+      channel, through the Lojiq bot, and no DM at all.
+    */
+    const discordResult = (await isStoreConsignor(sellerRecordId))
+      ? await sendStoreConsignorActivationMessage(sellerRecord)
+      : await sendConsignorActivationDiscordDM(seller);
+
+    if (discordResult?.skipped) {
+      // Nothing was sent, so nothing is stamped: once the store has a
+      // channel, the next call sends it.
+      return res.json({ ok: true, skipped: true, reason: discordResult.skipped });
+    }
 
     await airtable(SELLERS_TABLE).update(
       sellerRecordId,
