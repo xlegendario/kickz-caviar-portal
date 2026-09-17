@@ -15670,6 +15670,127 @@ app.post("/api/counter-offers/create", async (req, res) => {
   }
 });
 
+/*
+ * NEW — send an open counter round to the seller again, unchanged.
+ *
+ * A round is only ever delivered once, when it is made. If the seller had no
+ * Consignment Offer Channel on Sellers Database at that moment, the message
+ * went to a DM or nowhere at all, and there is no way back to it: editing the
+ * broadcast demands a higher price, and countering again changes the deal.
+ * ORD-025095 (17-09-2026) sat like that - SE-00781's channels were filled in
+ * afterwards and the store's 120 was never seen.
+ *
+ * So this re-delivers what is already on the round: same payout, same price,
+ * same buttons, to wherever the seller is reachable now. The old message, if
+ * there is one, has its buttons taken off first so only one live copy exists.
+ */
+app.post("/api/internal/counter-offers/resend", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const roundId = asText(req.body?.counter_offer_record_id);
+    const orderRecordId = asText(req.body?.order_record_id);
+    const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
+
+    let rounds = [];
+
+    if (roundId) {
+      const record = await airtable(COUNTER_OFFERS_TABLE).find(roundId).catch(() => null);
+      if (record) rounds = [record];
+    } else if (orderRecordId || memberWtbRecordId) {
+      const linkField = memberWtbRecordId ? "Member WTB" : "Order";
+      const recordId = memberWtbRecordId || orderRecordId;
+
+      const open = await airtable(COUNTER_OFFERS_TABLE)
+        .select({ filterByFormula: `{Status} = 'Open'` })
+        .all();
+
+      rounds = open.filter((record) => linkedRecordIncludes(record.fields?.[linkField], recordId));
+    }
+
+    if (!rounds.length) {
+      return res.status(404).json({ error: "No open round found to send again." });
+    }
+
+    const sent = [];
+    const errors = [];
+
+    for (const round of rounds) {
+      const f = round.fields || {};
+
+      if (asText(f["Status"]) !== "Open") {
+        errors.push(`${asText(f["Counter Offer ID"]) || round.id} is ${asText(f["Status"])}, not Open.`);
+        continue;
+      }
+
+      const payout = numberValue(f["Counter Payout"]);
+      const sellerDiscordId = asText(f["Seller Discord ID"]);
+
+      if (!(payout > 0)) {
+        errors.push(`${asText(f["Counter Offer ID"]) || round.id} has no payout on it.`);
+        continue;
+      }
+
+      const oldChannelId = asText(f["Discord Channel ID"]);
+      const oldMessageId = asText(f["Discord Message ID"]);
+
+      if (oldChannelId && oldMessageId) {
+        await disableCounterOfferDiscordButtons(
+          oldChannelId,
+          oldMessageId,
+          "🔁 This counter was sent again below."
+        ).catch(() => {});
+      }
+
+      const isMemberWtb = asText(f["Source Type"]) === "Member WTB" || Boolean(firstLinkedRecordId(f["Member WTB"]));
+      const send = isMemberWtb ? sendMemberWtbCounterOfferDiscordDM : sendCounterOfferDiscordDM;
+
+      const discordResult = await send({
+        counterOfferRecordId: round.id,
+        sellerDiscordId,
+        productName: asText(f["Product Name"]),
+        sku: asText(f["SKU"]),
+        size: asText(f["Size"]),
+        orderId: asText(f["Order ID"]) || asText(f["Member WTB ID"]),
+        payout,
+        vatType: asText(f["Counter Payout VAT Type"]) || asText(f["Seller Original VAT Type"]),
+        sellerOriginalPrice: numberValue(f["Seller Original Price"]),
+        sellerOriginalVatType: asText(f["Seller Original VAT Type"])
+      }).catch((err) => {
+        errors.push(`${asText(f["Counter Offer ID"]) || round.id}: ${err.message}`);
+        return null;
+      });
+
+      if (!discordResult) continue;
+
+      await airtable(COUNTER_OFFERS_TABLE).update(round.id, {
+        "Discord Channel ID": discordResult.channelId,
+        "Discord Message ID": discordResult.messageId,
+        "Discord Delivery Type": discordResult.deliveryType
+      });
+
+      console.log(
+        `🔁 Counter round ${asText(f["Counter Offer ID"]) || round.id} sent again to ` +
+          `${discordResult.channelId} (${discordResult.deliveryType}).`
+      );
+
+      sent.push({
+        counter_offer_id: asText(f["Counter Offer ID"]) || round.id,
+        payout,
+        channel_id: discordResult.channelId,
+        delivery: discordResult.deliveryType
+      });
+    }
+
+    return res.json({ ok: sent.length > 0, sent, errors });
+  } catch (err) {
+    console.error("counter-offers resend failed:", err);
+    return res.status(500).json({ error: "Could not send the round again", details: err.message });
+  }
+});
+
 // ---------------------------------------------------------------------
 // NEW — additive only: lets the store edit its round-1 counter (the
 // very first broadcast created by /api/counter-offers/create above)
