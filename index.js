@@ -20,6 +20,14 @@ import {
   pickOwnSku,
   isUnknownBarcodeError
 } from "./lib/barcodeLookup.js";
+import {
+  MODES,
+  isListedMode,
+  normalizeIntake,
+  orderPairsForSale,
+  orderPairsForForwarding,
+  priceDifferences
+} from "./lib/partnerStock.js";
 
 import compression from "compression";
 import { spawn } from "child_process";
@@ -670,13 +678,27 @@ async function writeOffConsignmentUnit(consignmentInventoryId, context = "") {
 
   const { data: row, error: readError } = await supabase
     .from("consignment_inventory")
-    .select("id, sku, size, quantity")
+    .select("id, sku, size, quantity, payout_price, seller_record_id")
     .eq("id", id)
     .maybeSingle();
 
   if (readError) throw readError;
 
   if (!row) return { ok: false, reason: "row_not_found" };
+
+  // A partner row is kept by partner_stock: the pair is marked sold there and
+  // the trigger sets the quantity. Decrementing here as well would take two
+  // pairs off for one sale. Falls through only when no pair backs the row.
+  if (Number(row.payout_price) > 0) {
+    const sold = await sellPartnerPair(row, context);
+
+    if (sold) return sold;
+
+    console.error(
+      `❌ Partner row ${row.id} (${row.sku} / ${row.size}) has a payout price but no pair in stock - ` +
+        "writing off the row itself"
+    );
+  }
 
   // Already at zero: someone got there first, or this ran twice. Not an
   // error, and definitely not a reason to go negative.
@@ -6523,27 +6545,9 @@ async function confirmConsignmentOffer(offerId) {
       selling_method: "Kickz Caviar"
     });
   
-    const { data: inventoryRow, error: inventoryFetchError } = await supabase
-      .from("consignment_inventory")
-      .select("id, quantity, sku, size")
-      .eq("id", lockedOffer.inventory_id)
-      .single();
-  
-    if (inventoryFetchError) throw inventoryFetchError;
-  
-    const newQuantity = Math.max(0, Number(inventoryRow.quantity || 0) - 1);
-  
-    const { error: inventoryUpdateError } = await supabase
-      .from("consignment_inventory")
-      .update({
-        quantity: newQuantity,
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", inventoryRow.id);
-  
-    if (inventoryUpdateError) throw inventoryUpdateError;
-  
-    await refreshConsignmentStockLevel(inventoryRow.sku, inventoryRow.size);
+    // CHANGED - was an inline decrement; the shared helper also handles a
+    // partner pair, which must not be decremented directly.
+    await writeOffConsignmentUnit(lockedOffer.inventory_id, `legacy member wtb ${memberWtbRecordId}`);
   
     await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
       "Purchase Status": "Confirmed",
@@ -6612,30 +6616,9 @@ async function confirmConsignmentOffer(offerId) {
 
   const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer(lockedOffer);
 
-  const { data: inventoryRow, error: inventoryFetchError } = await supabase
-    .from("consignment_inventory")
-    .select("id, quantity, sku, size")
-    .eq("id", lockedOffer.inventory_id)
-    .single();
-
-  if (inventoryFetchError) throw inventoryFetchError;
-
-  const newQuantity = Math.max(
-    0,
-    Number(inventoryRow.quantity || 0) - 1
-  );
-
-  const { error: inventoryUpdateError } = await supabase
-    .from("consignment_inventory")
-    .update({
-      quantity: newQuantity,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", inventoryRow.id);
-
-  if (inventoryUpdateError) throw inventoryUpdateError;
-
-  await refreshConsignmentStockLevel(inventoryRow.sku, inventoryRow.size);
+  // CHANGED - was an inline decrement; the shared helper also handles a
+  // partner pair, which must not be decremented directly.
+  await writeOffConsignmentUnit(lockedOffer.inventory_id, `legacy order ${lockedOffer.order_id || lockedOffer.id}`);
 
   await supabase
     .from("consignment_offers")
@@ -13513,6 +13496,659 @@ app.post("/api/internal/learn-barcodes", async (req, res) => {
     return res.status(502).json({ ok: false, sku, reason: "lookup_failed" });
   }
 });
+
+// NEW — partner stock.
+//
+// A partner keeps pairs in our warehouse. Each pair is a row in Supabase
+// partner_stock, and a trigger there keeps one consignment_inventory row per
+// partner, SKU and size in step: quantity is every listed pair still here,
+// and the price comes from the cheapest of them (partner price plus markup,
+// with payout_price the partner price). So every listing, offer and sale
+// reads the partner exactly like a consignor.
+//
+// These endpoints are what the WMS uses: take a parcel in, list what is
+// here, change prices, and claim pairs for forwarding. Airtable only hears
+// about a pair when it sells or is sent on.
+//
+// A partner is a seller with a Default VAT Type on Sellers Database. That
+// field only exists for this, so an ordinary consignor can never end up
+// here by accident.
+
+async function loadPartnerSeller(sellerRecordId) {
+  const id = asText(sellerRecordId);
+
+  if (!/^rec[a-zA-Z0-9]{14}$/.test(id)) return null;
+
+  const record = await airtable(SELLERS_TABLE).find(id).catch(() => null);
+
+  if (!record) return null;
+
+  const f = record.fields || {};
+  const vatType = asText(f["Default VAT Type"]);
+
+  return {
+    id: record.id,
+    sellerId: asText(f["Seller ID"]),
+    name: asText(f["Full Name"]),
+    vatType,
+    forwardingFee: numberValue(f["Forwarding Fee"]),
+    isPartner: PARTNER_VAT_TYPES.includes(vatType) && Boolean(asText(f["Seller ID"]))
+  };
+}
+
+const PARTNER_VAT_TYPES = ["Margin", "VAT0", "VAT21"];
+
+const PARTNER_PAIR_FIELDS =
+  "id, seller_record_id, seller_id, barcode, sku, size, product_name, brand, image_url, " +
+  "mode, vat_type, partner_price, markup, status, tracking_number, received_at, " +
+  "sold_at, sold_ref, forwarded_at, forwarded_ref, inventory_unit_id, notes, updated_at";
+
+/*
+ * The store-facing stock level for every SKU and size a change touched.
+ *
+ * The trigger already put consignment_inventory right; this is the part it
+ * cannot do, because the Airtable Stock Levels sync lives here.
+ */
+async function refreshPartnerStockLevels(pairs, context) {
+  const keys = new Map();
+
+  for (const pair of pairs || []) {
+    if (pair?.sku && pair?.size) keys.set(`${pair.sku}|${pair.size}`, pair);
+  }
+
+  for (const pair of keys.values()) {
+    await refreshConsignmentStockLevel(pair.sku, pair.size).catch((err) =>
+      console.error(`Partner stock (${context}): stock level ${pair.sku} / ${pair.size} not refreshed:`, err.message)
+    );
+  }
+}
+
+/*
+ * A sale of a partner pair: the pair leaves partner_stock, and the trigger
+ * takes it off the listing.
+ *
+ * Called from writeOffConsignmentUnit in place of the plain decrement. The
+ * pair is the cheapest listed one - the same pair whose partner price the
+ * unit was just made with. Claimed with a status condition, so two sales at
+ * once cannot take the same pair.
+ */
+async function sellPartnerPair(row, context) {
+  const { data, error } = await supabase
+    .from("partner_stock")
+    .select(PARTNER_PAIR_FIELDS)
+    .eq("seller_record_id", row.seller_record_id)
+    .eq("sku", row.sku)
+    .eq("size", row.size)
+    .eq("status", "in_stock");
+
+  if (error) throw error;
+
+  for (const candidate of orderPairsForSale(data || [])) {
+    const { data: claimed, error: claimError } = await supabase
+      .from("partner_stock")
+      .update({
+        status: "sold",
+        sold_at: new Date().toISOString(),
+        sold_ref: asText(context) || null
+      })
+      .eq("id", candidate.id)
+      .eq("status", "in_stock")
+      .select("id");
+
+    if (claimError) throw claimError;
+
+    if (claimed?.length) {
+      await refreshConsignmentStockLevel(row.sku, row.size);
+
+      console.log(
+        `✅ Partner pair sold${context ? ` (${context})` : ""}: ${row.sku} / ${row.size} ` +
+          `pair ${candidate.id} at ${candidate.partner_price} + ${candidate.markup}`
+      );
+
+      return { ok: true, partner_pair_id: candidate.id, sku: row.sku, size: row.size };
+    }
+  }
+
+  return null;
+}
+
+function refusePartnerStock(res, status, errors) {
+  return res.status(status).json({ ok: false, errors: [].concat(errors) });
+}
+
+app.post("/api/internal/partner-stock/intake", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const partner = await loadPartnerSeller(req.body?.seller_record_id);
+
+    if (!partner?.isPartner) {
+      return refusePartnerStock(res, 400, "This seller is not set up as a partner (Default VAT Type is empty)");
+    }
+
+    const mode = asText(req.body?.mode).toLowerCase();
+    const trackingNumber = asText(req.body?.tracking_number) || null;
+    const { lines, errors } = normalizeIntake({ mode, items: req.body?.items });
+
+    if (errors.length) return refusePartnerStock(res, 400, errors);
+
+    /*
+      Submitting the same parcel twice would put every pair on the shelf
+      twice. A tracking number that already brought pairs in is refused,
+      unless the caller says it is adding to that parcel on purpose.
+    */
+    if (trackingNumber && !req.body?.append) {
+      const { data: earlier, error: earlierError } = await supabase
+        .from("partner_stock")
+        .select("id")
+        .eq("seller_record_id", partner.id)
+        .eq("tracking_number", trackingNumber)
+        .limit(1);
+
+      if (earlierError) throw earlierError;
+
+      if (earlier?.length) {
+        return refusePartnerStock(
+          res,
+          409,
+          `Parcel ${trackingNumber} was already taken in for ${partner.sellerId}. Nothing was added.`
+        );
+      }
+    }
+
+    // The catalogue decides what a SKU is, exactly as for a consignor's own
+    // listing: an unknown code is refused, and a code StockX writes
+    // differently is stored the way StockX writes it.
+    const products = new Map();
+    const skuErrors = [];
+
+    for (const sku of [...new Set(lines.map((line) => line.sku))]) {
+      const outcome = await resolveSkuThroughCatalog(sku).catch((err) => ({
+        ok: false,
+        reason: "lookup_failed",
+        error: err.message
+      }));
+
+      if (!outcome.ok) {
+        skuErrors.push(
+          outcome.reason === "lookup_failed"
+            ? `${sku}: could not be looked up right now, try again`
+            : `${sku}: not a known SKU`
+        );
+        continue;
+      }
+
+      products.set(sku, {
+        sku: asText(outcome.matched_sku || sku).toUpperCase(),
+        product_name: asText(outcome.product_name) || null,
+        brand: asText(outcome.brand) || null,
+        image_url: asText(outcome.image) || null
+      });
+    }
+
+    if (skuErrors.length) return refusePartnerStock(res, 400, skuErrors);
+
+    const resolvedLines = lines.map((line) => ({ ...line, product: products.get(line.sku) }));
+
+    const { data: shelf, error: shelfError } = await supabase
+      .from("partner_stock")
+      .select(PARTNER_PAIR_FIELDS)
+      .eq("seller_record_id", partner.id)
+      .eq("status", "in_stock")
+      .in("sku", [...new Set(resolvedLines.map((line) => line.product.sku))]);
+
+    if (shelfError) throw shelfError;
+
+    const notes = priceDifferences(
+      shelf || [],
+      resolvedLines.map((line) => ({ ...line, sku: line.product.sku }))
+    );
+
+    const receivedAt = new Date().toISOString();
+
+    const rows = resolvedLines.flatMap((line) =>
+      Array.from({ length: line.quantity }, () => ({
+        seller_record_id: partner.id,
+        seller_id: partner.sellerId,
+        barcode: line.barcode,
+        sku: line.product.sku,
+        size: line.size,
+        product_name: line.product.product_name,
+        brand: line.product.brand,
+        image_url: line.product.image_url,
+        mode,
+        vat_type: partner.vatType,
+        partner_price: line.partner_price,
+        markup: line.markup,
+        tracking_number: trackingNumber,
+        received_at: receivedAt
+      }))
+    );
+
+    const created = [];
+
+    for (let i = 0; i < rows.length; i += 200) {
+      const { data, error } = await supabase
+        .from("partner_stock")
+        .insert(rows.slice(i, i + 200))
+        .select("id, sku, size");
+
+      if (error) throw error;
+
+      created.push(...(data || []));
+    }
+
+    if (isListedMode(mode)) await refreshPartnerStockLevels(created, "intake");
+
+    console.log(
+      `📦 Partner intake ${partner.sellerId}: ${created.length} pair(s), mode ${mode}` +
+        (trackingNumber ? `, parcel ${trackingNumber}` : "")
+    );
+
+    return res.json({
+      ok: true,
+      seller_id: partner.sellerId,
+      mode,
+      pairs_created: created.length,
+      lines: resolvedLines.map((line) => ({
+        sku: line.product.sku,
+        size: line.size,
+        quantity: line.quantity,
+        partner_price: line.partner_price,
+        markup: line.markup,
+        product_name: line.product.product_name
+      })),
+      notes
+    });
+  } catch (err) {
+    console.error("partner-stock intake failed:", err);
+    return res.status(500).json({ ok: false, errors: ["Intake failed"], details: err.message });
+  }
+});
+
+app.post("/api/internal/partner-stock/list", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const partner = await loadPartnerSeller(req.body?.seller_record_id);
+
+    if (!partner?.isPartner) {
+      return refusePartnerStock(res, 400, "This seller is not set up as a partner");
+    }
+
+    const statuses = (Array.isArray(req.body?.statuses) ? req.body.statuses : ["in_stock"])
+      .map((status) => asText(status))
+      .filter(Boolean);
+
+    const rows = [];
+
+    for (let from = 0; ; from += 1000) {
+      let query = supabase
+        .from("partner_stock")
+        .select(PARTNER_PAIR_FIELDS)
+        .eq("seller_record_id", partner.id)
+        .in("status", statuses)
+        .order("sku")
+        .order("size")
+        .order("received_at")
+        .range(from, from + 999);
+
+      const sku = asText(req.body?.sku).toUpperCase();
+      if (sku) query = query.eq("sku", sku);
+
+      const { data, error } = await query;
+
+      if (error) throw error;
+
+      rows.push(...(data || []));
+
+      if (!data || data.length < 1000) break;
+    }
+
+    return res.json({
+      ok: true,
+      partner: { id: partner.id, seller_id: partner.sellerId, name: partner.name, vat_type: partner.vatType },
+      pairs: rows
+    });
+  } catch (err) {
+    console.error("partner-stock list failed:", err);
+    return res.status(500).json({ ok: false, errors: ["Could not load partner stock"], details: err.message });
+  }
+});
+
+/*
+ * Change pairs that are still here: price, markup, mode, or take them out.
+ *
+ * Only pairs in stock. A sold or forwarded pair has a unit in Airtable and a
+ * price on it; changing the row here would only make the two disagree.
+ */
+app.post("/api/internal/partner-stock/update", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const partner = await loadPartnerSeller(req.body?.seller_record_id);
+
+    if (!partner?.isPartner) {
+      return refusePartnerStock(res, 400, "This seller is not set up as a partner");
+    }
+
+    const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(asText).filter(Boolean))];
+    const changes = req.body?.changes || {};
+
+    if (!ids.length) return refusePartnerStock(res, 400, "No pairs selected");
+
+    const update = {};
+    const errors = [];
+
+    if (changes.partner_price !== undefined && changes.partner_price !== "") {
+      const price = Number(String(changes.partner_price).replace(",", "."));
+      if (!(price > 0)) errors.push("Partner price must be above zero");
+      else update.partner_price = Math.round(price * 100) / 100;
+    }
+
+    if (changes.markup !== undefined && changes.markup !== "") {
+      const markup = Number(String(changes.markup).replace(",", "."));
+      if (!(markup >= 0)) errors.push("Markup cannot be negative");
+      else update.markup = Math.round(markup * 100) / 100;
+    }
+
+    if (changes.mode !== undefined && changes.mode !== "") {
+      const mode = asText(changes.mode).toLowerCase();
+      if (!MODES.includes(mode)) errors.push(`Unknown mode "${mode}"`);
+      else update.mode = mode;
+    }
+
+    if (changes.remove) {
+      update.status = "removed";
+      update.notes = asText(changes.note) || "Removed in WMS";
+    }
+
+    if (errors.length) return refusePartnerStock(res, 400, errors);
+    if (!Object.keys(update).length) return refusePartnerStock(res, 400, "Nothing to change");
+
+    const { data: current, error: currentError } = await supabase
+      .from("partner_stock")
+      .select(PARTNER_PAIR_FIELDS)
+      .eq("seller_record_id", partner.id)
+      .eq("status", "in_stock")
+      .in("id", ids);
+
+    if (currentError) throw currentError;
+
+    // A pair switched to a listed mode has to have a price to list at.
+    if (isListedMode(update.mode) && update.partner_price === undefined) {
+      const unpriced = (current || []).filter((pair) => !(Number(pair.partner_price) > 0));
+
+      if (unpriced.length) {
+        return refusePartnerStock(
+          res,
+          400,
+          `${unpriced.length} selected pair(s) have no partner price yet; give one to list them`
+        );
+      }
+    }
+
+    const found = (current || []).map((pair) => pair.id);
+
+    if (!found.length) return refusePartnerStock(res, 409, "None of the selected pairs are in stock any more");
+
+    const { data: updated, error: updateError } = await supabase
+      .from("partner_stock")
+      .update(update)
+      .in("id", found)
+      .eq("status", "in_stock")
+      .select("id, sku, size");
+
+    if (updateError) throw updateError;
+
+    await refreshPartnerStockLevels([...(current || []), ...(updated || [])], "update");
+
+    return res.json({
+      ok: true,
+      updated: updated?.length || 0,
+      skipped: ids.length - (updated?.length || 0)
+    });
+  } catch (err) {
+    console.error("partner-stock update failed:", err);
+    return res.status(500).json({ ok: false, errors: ["Update failed"], details: err.message });
+  }
+});
+
+/*
+ * Pairs that can be sent on, for Create Outbound.
+ *
+ * Found by SKU and size, or by a scanned barcode. A barcode is matched on the
+ * pairs themselves first and then through the barcode table, because a pair
+ * typed in by hand has no barcode of its own.
+ */
+app.post("/api/internal/partner-stock/forwardable", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const partner = await loadPartnerSeller(req.body?.seller_record_id);
+
+    if (!partner?.isPartner) {
+      return res.json({ ok: true, is_partner: false, pairs: [] });
+    }
+
+    let sku = asText(req.body?.sku).toUpperCase();
+    let size = asText(req.body?.size);
+    const barcode = cleanBarcode(req.body?.barcode);
+
+    if (!sku && barcode) {
+      const { data: byBarcode, error } = await supabase
+        .from("partner_stock")
+        .select("sku, size")
+        .eq("seller_record_id", partner.id)
+        .in("barcode", barcodeForms(barcode))
+        .limit(1);
+
+      if (error) throw error;
+
+      const known = byBarcode?.[0] || (await findBarcodeInCatalog(barcode).catch(() => null));
+
+      if (known) {
+        sku = asText(known.sku).toUpperCase();
+        size = asText(known.size);
+      }
+    }
+
+    if (!sku || !size) {
+      return res.json({ ok: true, is_partner: true, pairs: [], forwarding_fee: partner.forwardingFee });
+    }
+
+    const { data, error } = await supabase
+      .from("partner_stock")
+      .select(PARTNER_PAIR_FIELDS)
+      .eq("seller_record_id", partner.id)
+      .eq("sku", sku)
+      .eq("size", size)
+      .eq("status", "in_stock");
+
+    if (error) throw error;
+
+    return res.json({
+      ok: true,
+      is_partner: true,
+      sku,
+      size,
+      forwarding_fee: partner.forwardingFee,
+      pairs: orderPairsForForwarding(data || [])
+    });
+  } catch (err) {
+    console.error("partner-stock forwardable failed:", err);
+    return res.status(500).json({ ok: false, errors: ["Could not look up partner stock"], details: err.message });
+  }
+});
+
+/*
+ * Claim pairs for a forward, all or nothing.
+ *
+ * Claimed before the WMS makes the Airtable units, so a sale that comes in
+ * at the same moment either finds the pair gone or has already taken it -
+ * never both. If fewer pairs could be claimed than asked, the ones that were
+ * are put back and nothing is forwarded.
+ */
+app.post("/api/internal/partner-stock/forward", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const partner = await loadPartnerSeller(req.body?.seller_record_id);
+
+    if (!partner?.isPartner) {
+      return refusePartnerStock(res, 400, "This seller is not set up as a partner");
+    }
+
+    const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(asText).filter(Boolean))];
+
+    if (!ids.length) return refusePartnerStock(res, 400, "No pairs to forward");
+
+    const { data: claimed, error } = await supabase
+      .from("partner_stock")
+      .update({
+        status: "forwarded",
+        forwarded_at: new Date().toISOString(),
+        forwarded_ref: asText(req.body?.ref) || null
+      })
+      .eq("seller_record_id", partner.id)
+      .eq("status", "in_stock")
+      .in("mode", ["forwarding", "both"])
+      .in("id", ids)
+      .select(PARTNER_PAIR_FIELDS);
+
+    if (error) throw error;
+
+    if ((claimed?.length || 0) < ids.length) {
+      if (claimed?.length) {
+        await supabase
+          .from("partner_stock")
+          .update({ status: "in_stock", forwarded_at: null, forwarded_ref: null })
+          .in("id", claimed.map((pair) => pair.id));
+      }
+
+      return refusePartnerStock(
+        res,
+        409,
+        `Only ${claimed?.length || 0} of ${ids.length} pair(s) can still be forwarded - one was sold or sent on meanwhile. Nothing was forwarded; look the item up again.`
+      );
+    }
+
+    await refreshPartnerStockLevels(claimed, "forward");
+
+    return res.json({ ok: true, pairs: claimed, forwarding_fee: partner.forwardingFee });
+  } catch (err) {
+    console.error("partner-stock forward failed:", err);
+    return res.status(500).json({ ok: false, errors: ["Forward failed"], details: err.message });
+  }
+});
+
+// The WMS could not finish a forward in Airtable: put the pairs back.
+app.post("/api/internal/partner-stock/undo-forward", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(asText).filter(Boolean))];
+
+    if (!ids.length) return refusePartnerStock(res, 400, "No pairs");
+
+    const { data, error } = await supabase
+      .from("partner_stock")
+      .update({ status: "in_stock", forwarded_at: null, forwarded_ref: null, inventory_unit_id: null })
+      .eq("status", "forwarded")
+      .in("id", ids)
+      .select("id, sku, size");
+
+    if (error) throw error;
+
+    await refreshPartnerStockLevels(data, "undo-forward");
+
+    return res.json({ ok: true, restored: data?.length || 0 });
+  } catch (err) {
+    console.error("partner-stock undo-forward failed:", err);
+    return res.status(500).json({ ok: false, errors: ["Undo failed"], details: err.message });
+  }
+});
+
+// Which Airtable unit and log a forwarded pair became.
+app.post("/api/internal/partner-stock/link-units", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const links = Array.isArray(req.body?.links) ? req.body.links : [];
+
+    for (const link of links) {
+      const id = asText(link?.id);
+      if (!id) continue;
+
+      const { error } = await supabase
+        .from("partner_stock")
+        .update({
+          inventory_unit_id: asText(link.inventory_unit_id) || null,
+          forwarded_ref: asText(link.forwarded_ref) || null
+        })
+        .eq("id", id);
+
+      if (error) throw error;
+    }
+
+    return res.json({ ok: true, linked: links.length });
+  } catch (err) {
+    console.error("partner-stock link-units failed:", err);
+    return res.status(500).json({ ok: false, errors: ["Linking failed"], details: err.message });
+  }
+});
+
+/*
+ * Prices changed straight in the Supabase table.
+ *
+ * The trigger keeps consignment_inventory right on any edit, but the Airtable
+ * Stock Levels sync only runs here. Every few minutes, anything touched since
+ * the last look gets its stock level refreshed. A missing table (before the
+ * migration) is logged once and otherwise ignored.
+ */
+let partnerStockSyncedUntil = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+let partnerStockSyncMissingLogged = false;
+
+async function runPartnerStockLevelSync() {
+  const since = partnerStockSyncedUntil;
+  const startedAt = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from("partner_stock")
+    .select("sku, size, updated_at")
+    .gt("updated_at", since)
+    .limit(2000);
+
+  if (error) {
+    if (!partnerStockSyncMissingLogged) {
+      console.error("[partner-stock] level sync skipped:", error.message);
+      partnerStockSyncMissingLogged = true;
+    }
+    return;
+  }
+
+  partnerStockSyncMissingLogged = false;
+  partnerStockSyncedUntil = startedAt;
+
+  if (data?.length) {
+    await refreshPartnerStockLevels(data, "sync");
+    console.log(`[partner-stock] stock levels refreshed for ${new Set(data.map((r) => `${r.sku}|${r.size}`)).size} size(s)`);
+  }
+}
 
 app.post("/api/consignment/stock-levels/repair", async (req, res) => {
   try {
@@ -41105,6 +41741,15 @@ app.listen(PORT, () => {
   } else {
     console.log("[seller-api] sales sync off - SELLER_API_SALES_SYNC=false");
   }
+
+  // Partner stock edited straight in Supabase still reaches Stock Levels.
+  cron.schedule("*/5 * * * *", () => {
+    runPartnerStockLevelSync().catch((err) =>
+      console.error("[partner-stock] level sync failed:", err.message)
+    );
+  }, {
+    timezone: process.env.TZ || "Europe/Amsterdam"
+  });
 
   if (SELLER_API_WEBHOOKS) {
     cron.schedule("* * * * *", runSellerApiWebhookDeliveries, {
