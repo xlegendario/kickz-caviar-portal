@@ -376,12 +376,38 @@ const slaap = (ms) => new Promise((r) => setTimeout(r, ms));
  * itself.
  */
 export async function searchStockx(sku, { token, pogingen = 4 } = {}) {
-  if (!env.stockxKey()) throw new Error("Missing STOCKX_API_KEY");
-
   const cleanSku = normalizeSku(sku);
 
   const url = new URL("https://api.stockx.com/v2/catalog/search");
   url.searchParams.set("query", cleanSku);
+
+  return stockxResults(
+    await stockxGet(url, { token, pogingen, label: "catalog search" })
+  );
+}
+
+/**
+ * Every size of one StockX product, with the barcodes printed on its box.
+ *
+ * The search above finds the product; only this call knows which size a
+ * barcode belongs to. Same retries and token handling, because a warehouse
+ * scan that fails on a passing 429 looks exactly like an unknown shoe.
+ */
+export async function fetchStockxVariants(productId, { token, pogingen = 4 } = {}) {
+  const id = asText(productId).trim();
+  if (!id) return [];
+
+  const url = new URL(
+    `https://api.stockx.com/v2/catalog/products/${encodeURIComponent(id)}/variants`
+  );
+
+  const data = await stockxGet(url, { token, pogingen, label: "variants" });
+
+  return Array.isArray(data) ? data : data?.variants || [];
+}
+
+async function stockxGet(url, { token, pogingen = 4, label = "request" } = {}) {
+  if (!env.stockxKey()) throw new Error("Missing STOCKX_API_KEY");
 
   let laatsteFout = null;
 
@@ -426,9 +452,9 @@ export async function searchStockx(sku, { token, pogingen = 4 } = {}) {
 
     const data = await response.json().catch(() => ({}));
 
-    if (response.ok) return stockxResults(data);
+    if (response.ok) return data;
 
-    const err = new Error(`StockX catalog search failed: ${response.status}`);
+    const err = new Error(`StockX ${label} failed: ${response.status}`);
     err.status = response.status;
     err.body = data;
     laatsteFout = err;

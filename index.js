@@ -7,8 +7,19 @@ import Airtable from "airtable";
 
 import {
   resolve as resolveSkuThroughCatalog,
-  normalizeSku as normalizeSkuStrict
+  normalizeSku as normalizeSkuStrict,
+  identifyOnStockx,
+  searchStockx,
+  fetchStockxVariants
 } from "./sku-resolver.mjs";
+import {
+  cleanBarcode,
+  barcodeForms,
+  findVariantForBarcode,
+  barcodeRowsForVariants,
+  pickOwnSku,
+  isUnknownBarcodeError
+} from "./lib/barcodeLookup.js";
 
 import compression from "compression";
 import { spawn } from "child_process";
@@ -13201,6 +13212,228 @@ app.post("/api/internal/resolve-sku", async (req, res) => {
       error: "Failed to resolve SKUs",
       details: err.message
     });
+  }
+});
+
+// NEW — barcodes for the warehouse.
+//
+// The WMS only knew a barcode it had seen before in Incoming Stock or as a
+// Product GTIN on Stock Levels, so most scans came back empty and every pair
+// was typed in by hand. Meanwhile bol_barcodes held thirteen thousand sizes,
+// and StockX answers a search by barcode directly.
+//
+// The order is cheapest first: our own table, then StockX. A StockX hit
+// stores every size of that product at once, so the next size out of the
+// same box is a table hit and costs nothing.
+//
+// Rows are only ever added, never overwritten. The marketplace service owns
+// bol_barcodes and picked those EANs for bol; a warehouse scan has no
+// business changing which one bol is offered.
+
+function hasInternalSecret(req) {
+  const secret = asText(req.headers["x-kc-secret"]);
+
+  return Boolean(
+    process.env.COUNTER_OFFERS_SECRET &&
+      secret === process.env.COUNTER_OFFERS_SECRET
+  );
+}
+
+async function findBarcodeInCatalog(barcode) {
+  const forms = barcodeForms(barcode);
+  if (!forms.length) return null;
+
+  const list = forms.join(",");
+
+  const { data, error } = await supabase
+    .from("bol_barcodes")
+    .select("sku,size")
+    .or(`ean.in.(${list}),gtin.in.(${list})`)
+    .limit(10);
+
+  if (error) throw new Error(`bol_barcodes lookup failed: ${error.message}`);
+
+  // A size of "-" is the marker for a SKU StockX did not know. Not a box.
+  const rows = (data || []).filter((row) => row.sku && row.size && row.size !== "-");
+
+  if (!rows.length) return null;
+
+  // One box under two codes happens when StockX bundles a re-release and
+  // both codes were stored. The first is used; the rest are shown, so the
+  // person holding the box can see it and correct the row.
+  const seen = new Set();
+  const matches = [];
+
+  for (const row of rows) {
+    const key = `${row.sku}|${row.size}`;
+
+    if (!seen.has(key)) {
+      seen.add(key);
+      matches.push({ sku: row.sku, size: row.size });
+    }
+  }
+
+  return { ...matches[0], alternatives: matches.slice(1) };
+}
+
+async function storeBarcodeRows(rows) {
+  if (!rows.length) return 0;
+
+  const { error } = await supabase
+    .from("bol_barcodes")
+    .upsert(rows, { onConflict: "sku,size", ignoreDuplicates: true });
+
+  // Learning is a bonus. The scan already has its answer, so a failed write
+  // is logged and the next scan simply asks StockX again.
+  if (error) {
+    console.error("Storing learned barcodes failed:", error.message);
+    return 0;
+  }
+
+  return rows.length;
+}
+
+async function skusWeAlreadyHold(skus) {
+  if (skus.length < 2) return [];
+
+  const [barcodes, inventory] = await Promise.all([
+    supabase.from("bol_barcodes").select("sku").in("sku", skus).limit(100),
+    supabase.from("consignment_inventory").select("sku").in("sku", skus).limit(100)
+  ]);
+
+  return [...(barcodes.data || []), ...(inventory.data || [])].map((row) => row.sku);
+}
+
+async function findBarcodeOnStockx(barcode) {
+  let products;
+
+  try {
+    // Two attempts, not four: someone is standing at the table with a box.
+    products = await searchStockx(barcode, { pogingen: 2 });
+  } catch (err) {
+    if (isUnknownBarcodeError(err)) return null;
+    throw err;
+  }
+
+  for (const product of (products || []).slice(0, 3)) {
+    const productId = asText(product?.productId || product?.id);
+    if (!productId) continue;
+
+    const variants = await fetchStockxVariants(productId, { pogingen: 2 });
+    const hit = findVariantForBarcode(variants, barcode);
+
+    // The search can return a product the barcode does not belong to. The
+    // variant list is the proof; without it this is not the shoe.
+    if (!hit) continue;
+
+    const styleId = asText(product?.styleId || product?.style_id);
+    const parts = styleId.toUpperCase().split("/").map((p) => p.trim()).filter(Boolean);
+    const sku = pickOwnSku(styleId, await skusWeAlreadyHold(parts));
+
+    if (!sku) continue;
+
+    const learned = await storeBarcodeRows(barcodeRowsForVariants(sku, variants));
+
+    return { sku, size: hit.size, alternatives: [], learned };
+  }
+
+  return null;
+}
+
+app.post("/api/internal/lookup-barcode", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const barcode = cleanBarcode(req.body?.barcode);
+
+  if (!barcode) {
+    return res.status(400).json({ error: "Missing or invalid barcode" });
+  }
+
+  // Off when the caller wants the quick answer only, because it has its own
+  // tables to check before a StockX call is worth making.
+  const askStockx = req.body?.stockx !== false;
+
+  try {
+    const known = await findBarcodeInCatalog(barcode);
+
+    if (known) {
+      return res.json({ found: true, barcode, source: "bol_barcodes", ...known });
+    }
+
+    if (!askStockx) {
+      return res.json({ found: false, barcode, reason: "not_in_catalog" });
+    }
+
+    const fromStockx = await findBarcodeOnStockx(barcode);
+
+    if (fromStockx) {
+      console.log(
+        `lookup-barcode: ${barcode} is ${fromStockx.sku} size ${fromStockx.size} ` +
+          `(StockX, ${fromStockx.learned} sizes stored)`
+      );
+
+      return res.json({ found: true, barcode, source: "stockx", ...fromStockx });
+    }
+
+    return res.json({ found: false, barcode, reason: "not_found" });
+  } catch (err) {
+    // An outage is not "unknown barcode". The WMS says so, and the person
+    // scanning knows to try again rather than type it in.
+    console.error("lookup-barcode failed:", { barcode, error: err.message });
+
+    return res.status(502).json({
+      found: false,
+      barcode,
+      reason: "lookup_failed",
+      details: err.message
+    });
+  }
+});
+
+// Every size of a SKU typed in by hand, so the next box of that SKU scans.
+app.post("/api/internal/learn-barcodes", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const sku = normalizeSkuStrict(req.body?.sku);
+
+  if (!sku) {
+    return res.status(400).json({ error: "Missing sku" });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("bol_barcodes")
+      .select("size")
+      .eq("sku", sku)
+      .limit(1);
+
+    if (error) throw new Error(error.message);
+
+    // Already there, including the "-" marker for a SKU StockX does not
+    // know. Asking again would give the same answer.
+    if (data?.length) {
+      return res.json({ ok: true, sku, learned: 0, already_known: true });
+    }
+
+    const identity = await identifyOnStockx(sku, { pogingen: 2 });
+    const productId = asText(identity?.raw?.productId || identity?.raw?.id);
+
+    if (!productId) {
+      return res.json({ ok: false, sku, reason: "not_found" });
+    }
+
+    const variants = await fetchStockxVariants(productId, { pogingen: 2 });
+    const learned = await storeBarcodeRows(barcodeRowsForVariants(sku, variants));
+
+    return res.json({ ok: true, sku, learned });
+  } catch (err) {
+    console.error("learn-barcodes failed:", { sku, error: err.message });
+
+    return res.status(502).json({ ok: false, sku, reason: "lookup_failed" });
   }
 });
 
