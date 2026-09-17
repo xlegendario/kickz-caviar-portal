@@ -631,6 +631,38 @@ async function closeConsignmentRoundsForSellerOffer(sellerOfferRecordId, status)
  * because "this seller was not a consignor" is a normal outcome here, not
  * an error.
  */
+/*
+ * What a partner is paid for a pair, or null for everyone else.
+ *
+ * A partner's selling_price_suggested is the partner price plus the markup
+ * Dario set, so every listing, offer and negotiation works on that number
+ * exactly as it does for an ordinary consignor. Only the unit is different:
+ * the purchase price is the partner's own price in payout_price, whatever
+ * the pair sold for.
+ *
+ * Read from the row at the moment the unit is made, before the write-off, so
+ * it is the price of the pair that is actually leaving. An error is thrown
+ * rather than guessed around: a unit with the wrong purchase price is a
+ * payout nobody catches.
+ */
+async function partnerPayoutForInventory(consignmentInventoryId) {
+  const id = asText(consignmentInventoryId);
+
+  if (!id) return null;
+
+  const { data, error } = await supabase
+    .from("consignment_inventory")
+    .select("payout_price")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  const payout = Number(data?.payout_price);
+
+  return Number.isFinite(payout) && payout > 0 ? payout : null;
+}
+
 async function writeOffConsignmentUnit(consignmentInventoryId, context = "") {
   const id = asText(consignmentInventoryId);
 
@@ -1049,6 +1081,7 @@ async function askOtherConsignorsForOrder({
       });
 
       const discordResult = await sendConsignmentOfferDiscordMessage({
+        inventoryId: row.id,
         allowCounter: false,
         seller: {
           seller_record_id: row.seller_record_id,
@@ -1236,6 +1269,7 @@ async function askOtherConsignorsForMemberWtb({
 
       if (isConfirmation) {
         const discordResult = await sendConsignmentOfferDiscordMessage({
+          inventoryId: row.id,
           seller: {
             seller_record_id: row.seller_record_id,
             seller_id: asText(sf["Seller ID"]),
@@ -1429,6 +1463,7 @@ async function askConsignorToConfirmMemberWtbOffer({
   const calculatedOfferPrice = negotiated ? acceptedPayout : sellerPrice;
 
   const discordResult = await sendConsignmentOfferDiscordMessage({
+    inventoryId,
     // The seller already agreed to this number, so it is a confirmation
     // even when it sits below his original listing.
     forceConfirmation: negotiated,
@@ -3017,7 +3052,15 @@ async function denyConsignmentSellerOffer(sellerOfferRecordId) {
 }
 
 async function createConsignmentInventoryUnitFromOffer(offer) {
-  const purchasePrice = Number(offer.offer_price);
+  const partnerPayout = await partnerPayoutForInventory(offer.inventory_id);
+  const purchasePrice = partnerPayout ?? Number(offer.offer_price);
+
+  if (partnerPayout != null) {
+    console.log(
+      `Partner pair ${offer.sku} / ${offer.size}: purchase price ${partnerPayout} ` +
+        `(sold as ${offer.offer_price})`
+    );
+  }
 
   const inventoryFields = {
     "Product Name": offer.product_name,
@@ -3284,9 +3327,15 @@ async function sendConsignmentOfferDiscordMessage({
   // Set when the price was settled in a negotiation. Without it the
   // shape is decided by comparing against the listing, which reads a
   // seller who came down as if he were being countered again.
-  forceConfirmation = false
+  forceConfirmation = false,
+  // The consignment_inventory row, when the offer object does not carry it.
+  inventoryId = null
 }) {
   await initDiscord();
+
+  // Never lets a message fail over a label.
+  const partnerPayout = await partnerPayoutForInventory(offer?.inventory_id || inventoryId)
+    .catch(() => null);
 
   // NEW — additive only: when this offer lives as a Seller Offer record
   // rather than a consignment_offers row, the buttons must route to the
@@ -3405,7 +3454,18 @@ async function sendConsignmentOfferDiscordMessage({
             value: `${moneySmartValue(Number(offer.offer_price).toFixed(2))}` +
               (offer.vat_type ? ` · ${offer.vat_type}` : ""),
             inline: true
-          }
+          },
+          // Only on a partner pair, whose channel is read by us and not by
+          // the partner: what the partner is paid, so the room left in a
+          // negotiation is on screen.
+          ...(partnerPayout != null
+            ? [{
+                name: "Partner Price",
+                value: `${moneySmartValue(partnerPayout.toFixed(2))}` +
+                  (offer.vat_type ? ` · ${offer.vat_type}` : ""),
+                inline: true
+              }]
+            : [])
         ],
   
         footer: {
@@ -5905,6 +5965,9 @@ async function sendConsignmentDealUpdateDiscordMessage({
 
   const price = Number(offer.offer_price || 0);
 
+  const partnerPayoutForDeal = await partnerPayoutForInventory(offer.inventory_id)
+    .catch(() => null);
+
   const shippingEmbed = {
     title: "📦 Time To Ship Your Item!",
     description: [
@@ -5919,6 +5982,9 @@ async function sendConsignmentDealUpdateDiscordMessage({
       "",
       "**Price**",
       `${moneySmartValue(Number(offer.offer_price || 0).toFixed(2))} (${offer.vat_type || "—"})`,
+      ...(partnerPayoutForDeal != null
+        ? ["", "**Partner Price**", `${moneySmartValue(partnerPayoutForDeal.toFixed(2))} (${offer.vat_type || "—"})`]
+        : []),
       "",
       "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
     ].join("\n"),
@@ -10915,6 +10981,7 @@ app.post("/api/sneakerask/ask-consignors", async (req, res) => {
         });
 
         const discordResult = await sendConsignmentOfferDiscordMessage({
+          inventoryId: asText(request?.inventory_id),
           forceConfirmation: true,
           seller: {
             seller_record_id: sellerRecordId,
@@ -14253,6 +14320,7 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       const consignorFields = consignorRecord?.fields || {};
 
       const confirmDiscordResult = await sendConsignmentOfferDiscordMessage({
+        inventoryId: best.row.id,
         seller: {
           seller_id: best.row.seller_id,
           discord_id: asText(consignorFields["Discord ID"]),
@@ -16200,6 +16268,7 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
             const sellerPriceForGuard = numberValue(sellerOfferForGuard.fields?.["Seller Offer"]);
 
             const guardDiscordResult = await sendConsignmentOfferDiscordMessage({
+              inventoryId: inventoryRowForGuard.id,
               seller: {
                 seller_id: inventoryRowForGuard.seller_id,
                 discord_id: asText(consignorGuardFields["Discord ID"]),
@@ -37273,6 +37342,14 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       asText(memberFields['WTB ID']) ||
       memberWtbRecordId;
 
+    // A partner pair is paid the partner's own price. The buyer's price and
+    // the margin check above stay on the negotiated number, the one the
+    // buyer actually agreed to.
+    const partnerPayout = await partnerPayoutForInventory(
+      offerFields['Consignment Inventory ID']
+    );
+    const unitPurchasePrice = partnerPayout ?? purchasePrice;
+
     const inventoryFields = {
       'Product Name': asText(memberFields['Product Name']),
       'SKU': asText(memberFields['SKU']),
@@ -37280,7 +37357,7 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       'Brand': asText(memberFields['Brand']),
 
       'VAT Type': vatType,
-      'Purchase Price': purchasePrice,
+      'Purchase Price': unitPurchasePrice,
       'Shipping Deduction': 0,
       'Purchase Date': new Date().toLocaleDateString('en-CA'),
 
@@ -37290,7 +37367,7 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       'Type': 'Custom',
       'Source': 'Outsourced',
       'Verification Status': 'Verified',
-      'Payment Note': `${moneySmartValue(purchasePrice.toFixed(2))}`,
+      'Payment Note': `${moneySmartValue(unitPurchasePrice.toFixed(2))}`,
       'Payment Status': 'To Pay',
       'Availability Status': 'Sold',
       'Selling Price': finalBuyingPrice,
