@@ -3062,6 +3062,16 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     );
   }
 
+  /*
+    A partner pair is its own Type, so it can be filtered on in Airtable and
+    gets the PCS- Item ID. That is more than a label: the WMS treats PCS- as
+    stock in our own warehouse, so the order shows up in Pack & Ship - which
+    is right, because a partner's pairs sit with us and nobody else ships
+    them. The consignor dashboard filters on "Consignment" and leaves these
+    out, which is also right: the partner has no dashboard access.
+  */
+  const unitType = partnerPayout != null ? "Partner Consignment" : "Consignment";
+
   const inventoryFields = {
     "Product Name": offer.product_name,
     "SKU": offer.sku,
@@ -3076,7 +3086,7 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     "Seller ID": [offer.seller_record_id],
     "Ticket Number": offer.order_id,
   
-    "Type": "Consignment",
+    "Type": unitType,
     "Source": "Regular",
     "Verification Status": "Consigned",
     "Payment Note": `${moneySmartValue(purchasePrice.toFixed(2))}`,
@@ -3134,7 +3144,7 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
         source_type: asText(offer.source_type) || "order",
         member_wtb_record_id: asText(offer.member_wtb_record_id),
   
-        type: "Consignment",
+        type: unitType,
         source: "Regular",
         verification_status: "Consigned",
         payment_note: `${moneySmartValue(purchasePrice.toFixed(2))}`,
