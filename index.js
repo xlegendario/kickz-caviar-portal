@@ -15917,7 +15917,43 @@ app.post("/api/counter-offers/create-fresh-round", async (req, res) => {
     // build already goes through — not a second, separately-derived
     // check.
     const best = await getCurrentGlobalLowestNormalized("Seller Offer", orderRecordId, null);
-    if (best.winningSource === "counter_offer_round" || best.winningRecordId !== sellerOfferRecordId) {
+
+    /*
+      FIXED - a second Accept on the same offer was refused as "no longer the
+      current best position".
+
+      The first Accept creates an Open round below, shaped like a seller's
+      own counter. From then on that round IS the lowest position on the
+      order, so the check above named it the winner instead of the Seller
+      Offer - and every later click was turned away before the reuse guard
+      further down could hand back that very round. On a consignment offer
+      the store's buttons stay live while the consignor is asked, so a second
+      click is normal, not a mistake. ORD-024703 (17-09-2026): CTO-000911
+      created on the first click, both later clicks refused.
+
+      The winner counts as this offer when it is an Open round made for this
+      Seller Offer on this order.
+    */
+    let winnerIsThisOffersRound = false;
+
+    if (best.winningSource === "counter_offer_round" && best.winningRecordId) {
+      const winningRound = await airtable(COUNTER_OFFERS_TABLE)
+        .find(best.winningRecordId)
+        .catch(() => null);
+
+      const rf = winningRound?.fields || {};
+
+      winnerIsThisOffersRound =
+        asText(rf["Status"]) === "Open" &&
+        asText(rf["Seller Offer Record ID"]) === sellerOfferRecordId &&
+        linkedRecordIncludes(rf["Order"], orderRecordId);
+    }
+
+    const isCurrentBest = best.winningSource === "counter_offer_round"
+      ? winnerIsThisOffersRound
+      : best.winningRecordId === sellerOfferRecordId;
+
+    if (!isCurrentBest) {
       return res.status(409).json({ error: "This offer is no longer the current best position — please refresh." });
     }
 
