@@ -37360,6 +37360,19 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
     );
     const unitPurchasePrice = partnerPayout ?? purchasePrice;
 
+    /*
+      Partner stock is Partner Consignment wherever it sells, so everything a
+      partner ever sold is one filter in Airtable. Source Regular, not
+      Outsourced, because the Item ID formula checks Source before Type: this
+      way the unit is PCS- like a partner sale through a store order, instead
+      of OUT-.
+
+      The seller-side Want To Buys tabs look for OUT- and Custom and leave it
+      out. The partner has no dashboard, so that is intended. The buyer's side
+      does not read the unit's Type.
+    */
+    const isPartnerUnit = partnerPayout != null;
+
     const inventoryFields = {
       'Product Name': asText(memberFields['Product Name']),
       'SKU': asText(memberFields['SKU']),
@@ -37374,8 +37387,8 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       'Seller ID': [sellerRecordId],
       'Ticket Number': memberWtbId,
 
-      'Type': 'Custom',
-      'Source': 'Outsourced',
+      'Type': isPartnerUnit ? 'Partner Consignment' : 'Custom',
+      'Source': isPartnerUnit ? 'Regular' : 'Outsourced',
       'Verification Status': 'Verified',
       'Payment Note': `${moneySmartValue(unitPurchasePrice.toFixed(2))}`,
       'Payment Status': 'To Pay',
