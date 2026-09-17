@@ -13541,7 +13541,7 @@ const PARTNER_VAT_TYPES = ["Margin", "VAT0", "VAT21"];
 const PARTNER_PAIR_FIELDS =
   "id, seller_record_id, seller_id, barcode, sku, size, product_name, brand, image_url, " +
   "mode, vat_type, partner_price, markup, status, tracking_number, received_at, " +
-  "sold_at, sold_ref, forwarded_at, forwarded_ref, inventory_unit_id, notes, updated_at";
+  "sold_at, sold_ref, forwarded_at, forwarded_ref, forwarding_log_id, inventory_unit_id, notes, updated_at";
 
 /*
  * The store-facing stock level for every SKU and size a change touched.
@@ -13990,14 +13990,91 @@ app.post("/api/internal/partner-stock/forwardable", async (req, res) => {
 });
 
 /*
- * Claim pairs for a forward, all or nothing.
+ * NEW — forwarding in Supabase.
  *
- * Claimed before the WMS makes the Airtable units, so a sale that comes in
- * at the same moment either finds the pair gone or has already taken it -
- * never both. If fewer pairs could be claimed than asked, the ones that were
- * are put back and nothing is forwarded.
+ * A forward is one row in forwarding_log: who sends, to whom, how many pairs,
+ * the fee, shipping costs, labels and tracking, and whether it is shipped and
+ * paid. The pairs are the partner_stock rows that point at it. Nothing goes
+ * to Inventory Units - a forwarded pair was never ours - and nothing to the
+ * Airtable Forwarding Service Log, which stays behind as the archive.
+ *
+ * The WMS creates forwards and ships them through these endpoints; the Lojiq
+ * Admin portal manages them (labels, costs, paid) straight in Supabase.
  */
-app.post("/api/internal/partner-stock/forward", async (req, res) => {
+
+function forwardingTrackingList(value) {
+  const raw = Array.isArray(value) ? value.join(",") : asText(value);
+
+  return [
+    ...new Set(
+      raw
+        .split(/[\s,;]+/)
+        .map((part) => part.trim())
+        .filter(Boolean)
+    )
+  ];
+}
+
+function forwardingLabelList(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((label) => ({
+      url: asText(label?.url),
+      filename: asText(label?.filename) || "label.pdf",
+      tracking: asText(label?.tracking) || null,
+      uploaded_at: asText(label?.uploaded_at) || new Date().toISOString()
+    }))
+    .filter((label) => /^https?:\/\//i.test(label.url));
+}
+
+// Ready to ship as soon as there is something to ship with.
+function forwardingShippingStatus(trackingNumbers, labels) {
+  return trackingNumbers.length || labels.length ? "ready_to_ship" : "awaiting_label";
+}
+
+function forwardingDisplayId(row) {
+  return `FWD-${String(row?.forwarding_number ?? "").padStart(6, "0")}`;
+}
+
+/*
+ * Take pairs off the shelf for a forward, all or nothing.
+ *
+ * With a status condition, so a sale that comes in at the same moment either
+ * finds the pair gone or has already taken it - never both. If fewer pairs
+ * could be taken than asked, the ones that were go back.
+ */
+async function claimPairsForForward(partner, ids) {
+  const { data: claimed, error } = await supabase
+    .from("partner_stock")
+    .update({ status: "forwarded", forwarded_at: new Date().toISOString() })
+    .eq("seller_record_id", partner.id)
+    .eq("status", "in_stock")
+    .in("mode", ["forwarding", "both"])
+    .in("id", ids)
+    .select(PARTNER_PAIR_FIELDS);
+
+  if (error) throw error;
+
+  if ((claimed?.length || 0) < ids.length) {
+    await releaseForwardedPairs((claimed || []).map((pair) => pair.id));
+    return { ok: false, claimed: claimed?.length || 0 };
+  }
+
+  return { ok: true, pairs: claimed };
+}
+
+async function releaseForwardedPairs(ids) {
+  if (!ids.length) return;
+
+  const { error } = await supabase
+    .from("partner_stock")
+    .update({ status: "in_stock", forwarded_at: null, forwarded_ref: null, forwarding_log_id: null })
+    .in("id", ids)
+    .eq("status", "forwarded");
+
+  if (error) console.error("partner-stock: pairs NOT put back:", ids, error.message);
+}
+
+app.post("/api/internal/forwarding/create", async (req, res) => {
   if (!hasInternalSecret(req)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -14009,106 +14086,178 @@ app.post("/api/internal/partner-stock/forward", async (req, res) => {
       return refusePartnerStock(res, 400, "This seller is not set up as a partner");
     }
 
-    const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(asText).filter(Boolean))];
+    const ids = [...new Set((Array.isArray(req.body?.pair_ids) ? req.body.pair_ids : []).map(asText).filter(Boolean))];
+    const shippingCosts = Number(req.body?.shipping_costs ?? 0);
+    const labelsNeeded = Number(req.body?.labels_needed ?? 0);
+    const trackingNumbers = forwardingTrackingList(req.body?.tracking_numbers);
+    const labels = forwardingLabelList(req.body?.labels);
+    const buyer = req.body?.buyer || {};
 
-    if (!ids.length) return refusePartnerStock(res, 400, "No pairs to forward");
+    const errors = [];
+    if (!ids.length) errors.push("No pairs to forward");
+    if (!Number.isFinite(shippingCosts) || shippingCosts < 0) errors.push("Shipping costs cannot be negative");
+    if (!Number.isInteger(labelsNeeded) || labelsNeeded < 0) errors.push("Labels needed must be a whole number");
+    if (errors.length) return refusePartnerStock(res, 400, errors);
 
-    const { data: claimed, error } = await supabase
-      .from("partner_stock")
-      .update({
-        status: "forwarded",
-        forwarded_at: new Date().toISOString(),
-        forwarded_ref: asText(req.body?.ref) || null
-      })
-      .eq("seller_record_id", partner.id)
-      .eq("status", "in_stock")
-      .in("mode", ["forwarding", "both"])
-      .in("id", ids)
-      .select(PARTNER_PAIR_FIELDS);
+    const claim = await claimPairsForForward(partner, ids);
 
-    if (error) throw error;
-
-    if ((claimed?.length || 0) < ids.length) {
-      if (claimed?.length) {
-        await supabase
-          .from("partner_stock")
-          .update({ status: "in_stock", forwarded_at: null, forwarded_ref: null })
-          .in("id", claimed.map((pair) => pair.id));
-      }
-
+    if (!claim.ok) {
       return refusePartnerStock(
         res,
         409,
-        `Only ${claimed?.length || 0} of ${ids.length} pair(s) can still be forwarded - one was sold or sent on meanwhile. Nothing was forwarded; look the item up again.`
+        `Only ${claim.claimed} of ${ids.length} pair(s) can still be forwarded - one was sold or sent on meanwhile. Nothing was forwarded; look the item up again.`
       );
     }
 
-    await refreshPartnerStockLevels(claimed, "forward");
+    let forward;
 
-    return res.json({ ok: true, pairs: claimed, forwarding_fee: partner.forwardingFee });
+    try {
+      const { data, error } = await supabase
+        .from("forwarding_log")
+        .insert({
+          seller_record_id: partner.id,
+          seller_id: partner.sellerId,
+          seller_name: partner.name || null,
+          buyer_record_id: asText(buyer.record_id) || null,
+          buyer_id: asText(buyer.buyer_id) || null,
+          buyer_name: asText(buyer.name) || null,
+          buyer_country: asText(buyer.country) || null,
+          pair_count: claim.pairs.length,
+          unit_forwarding_fee: partner.forwardingFee || 0,
+          shipping_costs: Math.round(shippingCosts * 100) / 100,
+          labels_needed: labelsNeeded,
+          tracking_numbers: trackingNumbers,
+          labels,
+          shipping_status: forwardingShippingStatus(trackingNumbers, labels),
+          notes: asText(req.body?.notes) || null
+        })
+        .select("*")
+        .single();
+
+      if (error) throw error;
+
+      forward = data;
+    } catch (insertError) {
+      await releaseForwardedPairs(ids);
+      throw insertError;
+    }
+
+    const { error: linkError } = await supabase
+      .from("partner_stock")
+      .update({ forwarding_log_id: forward.id, forwarded_ref: forwardingDisplayId(forward) })
+      .in("id", ids);
+
+    if (linkError) {
+      console.error(`forwarding ${forwardingDisplayId(forward)}: pairs not linked:`, linkError.message);
+    }
+
+    await refreshPartnerStockLevels(claim.pairs, "forward");
+
+    console.log(
+      `📤 Forward ${forwardingDisplayId(forward)} for ${partner.sellerId}: ${claim.pairs.length} pair(s), ` +
+        `${forward.shipping_status}`
+    );
+
+    return res.json({ ok: true, forward: { ...forward, display_id: forwardingDisplayId(forward) }, pairs: claim.pairs });
   } catch (err) {
-    console.error("partner-stock forward failed:", err);
+    console.error("forwarding create failed:", err);
     return res.status(500).json({ ok: false, errors: ["Forward failed"], details: err.message });
   }
 });
 
-// The WMS could not finish a forward in Airtable: put the pairs back.
-app.post("/api/internal/partner-stock/undo-forward", async (req, res) => {
+// Forwards by shipping status, newest first, for Pack & Ship.
+app.post("/api/internal/forwarding/list", async (req, res) => {
   if (!hasInternalSecret(req)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
   try {
-    const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(asText).filter(Boolean))];
-
-    if (!ids.length) return refusePartnerStock(res, 400, "No pairs");
+    const statuses = (Array.isArray(req.body?.statuses) ? req.body.statuses : ["ready_to_ship"])
+      .map(asText)
+      .filter(Boolean);
 
     const { data, error } = await supabase
-      .from("partner_stock")
-      .update({ status: "in_stock", forwarded_at: null, forwarded_ref: null, inventory_unit_id: null })
-      .eq("status", "forwarded")
-      .in("id", ids)
-      .select("id, sku, size");
+      .from("forwarding_log")
+      .select("*")
+      .in("shipping_status", statuses)
+      .order("created_at", { ascending: false })
+      .limit(500);
 
     if (error) throw error;
 
-    await refreshPartnerStockLevels(data, "undo-forward");
-
-    return res.json({ ok: true, restored: data?.length || 0 });
+    return res.json({
+      ok: true,
+      forwards: (data || []).map((row) => ({ ...row, display_id: forwardingDisplayId(row) }))
+    });
   } catch (err) {
-    console.error("partner-stock undo-forward failed:", err);
-    return res.status(500).json({ ok: false, errors: ["Undo failed"], details: err.message });
+    console.error("forwarding list failed:", err);
+    return res.status(500).json({ ok: false, errors: ["Could not load forwards"], details: err.message });
   }
 });
 
-// Which Airtable unit and log a forwarded pair became.
-app.post("/api/internal/partner-stock/link-units", async (req, res) => {
+app.post("/api/internal/forwarding/get", async (req, res) => {
   if (!hasInternalSecret(req)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
   try {
-    const links = Array.isArray(req.body?.links) ? req.body.links : [];
+    const id = asText(req.body?.id);
 
-    for (const link of links) {
-      const id = asText(link?.id);
-      if (!id) continue;
+    const { data: forward, error } = await supabase
+      .from("forwarding_log")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
 
-      const { error } = await supabase
-        .from("partner_stock")
-        .update({
-          inventory_unit_id: asText(link.inventory_unit_id) || null,
-          forwarded_ref: asText(link.forwarded_ref) || null
-        })
-        .eq("id", id);
+    if (error) throw error;
+    if (!forward) return refusePartnerStock(res, 404, "Forward not found");
 
-      if (error) throw error;
+    const { data: pairs, error: pairsError } = await supabase
+      .from("partner_stock")
+      .select(PARTNER_PAIR_FIELDS)
+      .eq("forwarding_log_id", id)
+      .order("sku")
+      .order("size");
+
+    if (pairsError) throw pairsError;
+
+    return res.json({ ok: true, forward: { ...forward, display_id: forwardingDisplayId(forward) }, pairs: pairs || [] });
+  } catch (err) {
+    console.error("forwarding get failed:", err);
+    return res.status(500).json({ ok: false, errors: ["Could not load the forward"], details: err.message });
+  }
+});
+
+// Packed and gone: the forward is shipped.
+app.post("/api/internal/forwarding/ship", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const id = asText(req.body?.id);
+
+    const { data, error } = await supabase
+      .from("forwarding_log")
+      .update({
+        shipping_status: "shipped",
+        shipped_at: new Date().toISOString(),
+        items_per_parcel: asText(req.body?.items_per_parcel) || null
+      })
+      .eq("id", id)
+      .eq("shipping_status", "ready_to_ship")
+      .select("*");
+
+    if (error) throw error;
+
+    if (!data?.length) {
+      return refusePartnerStock(res, 409, "This forward is not Ready to Ship any more");
     }
 
-    return res.json({ ok: true, linked: links.length });
+    return res.json({ ok: true, forward: { ...data[0], display_id: forwardingDisplayId(data[0]) } });
   } catch (err) {
-    console.error("partner-stock link-units failed:", err);
-    return res.status(500).json({ ok: false, errors: ["Linking failed"], details: err.message });
+    console.error("forwarding ship failed:", err);
+    return res.status(500).json({ ok: false, errors: ["Could not mark the forward shipped"], details: err.message });
   }
 });
 
