@@ -25507,9 +25507,14 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
     // denied has no Open one left and the chain-trace below still has to find
     // where he actually stood. Without it the trace never starts and falls
     // all the way back to his first listing.
+    //
+    // FIXED - Status was missing here, so the Accepted check below always
+    // read undefined and a seller's finished deal kept counting as a live
+    // price. On ORD-024817 an accepted 170 from 16-09 outranked his new 290
+    // offer, and the order vanished from the store's Open offers.
     scanTable(COUNTER_OFFERS_TABLE, {
       filterByFormula: `{Source Type} = '${escapeFormulaValue(sourceType)}'`,
-      fields: [counterLinkField, "Seller ID", "Created At", "Seller Counter Price", "Previous Record ID"]
+      fields: [counterLinkField, "Seller ID", "Created At", "Seller Counter Price", "Previous Record ID", "Status"]
     })
   ]);
 
