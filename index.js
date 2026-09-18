@@ -671,6 +671,50 @@ async function partnerPayoutForInventory(consignmentInventoryId) {
   return Number.isFinite(payout) && payout > 0 ? payout : null;
 }
 
+/*
+ * Partner pairs confirm themselves.
+ *
+ * Everyone else is asked "do you still have it?" because the pair is in
+ * their house and only they know. A partner pair is on our shelf - partner
+ * stock only lists pairs that came in through the WMS - so there is nobody
+ * to ask, and waiting on a click only gives a consignor holding the same
+ * pair the chance to confirm first and take the sale.
+ *
+ * Run a few seconds after the caller answers, so whatever the caller still
+ * writes to the order or want-to-buy lands first, exactly as it would before
+ * a human pressed Confirm. When it fails, fallback() runs the ordinary
+ * request, so a partner pair is never left with nobody asked.
+ */
+const PARTNER_AUTO_CONFIRM_DELAY_MS = 5000;
+
+function autoConfirmPartnerOffer({ sellerOfferRecordId, agreed = null, context = "", fallback = null }) {
+  setTimeout(async () => {
+    let result;
+
+    try {
+      result = await confirmConsignmentSellerOffer(sellerOfferRecordId, agreed);
+    } catch (err) {
+      result = { ok: false, reason: err.message };
+    }
+
+    if (result?.ok) {
+      console.log(`✅ Partner pair confirmed automatically${context ? ` (${context})` : ""}: Seller Offer ${sellerOfferRecordId}`);
+      return;
+    }
+
+    console.error(
+      `❌ Partner auto-confirm failed${context ? ` (${context})` : ""} on Seller Offer ${sellerOfferRecordId}: ` +
+        `${result?.reason || "unknown"} - asking the usual way instead`
+    );
+
+    if (fallback) {
+      await Promise.resolve()
+        .then(fallback)
+        .catch((err) => console.error(`Partner auto-confirm fallback failed on ${sellerOfferRecordId}:`, err.message));
+    }
+  }, PARTNER_AUTO_CONFIRM_DELAY_MS);
+}
+
 async function writeOffConsignmentUnit(consignmentInventoryId, context = "") {
   const id = asText(consignmentInventoryId);
 
@@ -1431,7 +1475,8 @@ async function askOtherConsignorsForMemberWtb({
 async function askConsignorToConfirmMemberWtbOffer({
   memberWtbRecordId,
   sellerOfferRecordId,
-  acceptedPayout = null
+  acceptedPayout = null,
+  skipPartnerAutoConfirm = false
 }) {
   const offerRecord = await airtable(SELLER_OFFERS_TABLE)
     .find(sellerOfferRecordId)
@@ -1443,6 +1488,28 @@ async function askConsignorToConfirmMemberWtbOffer({
   const inventoryId = asText(f["Consignment Inventory ID"]);
 
   if (!inventoryId) return { ok: false, reason: "not_consignment" };
+
+  // A partner pair is on our shelf: nobody to ask, and nobody else either.
+  if (!skipPartnerAutoConfirm && (await partnerPayoutForInventory(inventoryId))) {
+    const agreedPayout = Number(acceptedPayout);
+
+    autoConfirmPartnerOffer({
+      sellerOfferRecordId,
+      agreed: Number.isFinite(agreedPayout) && agreedPayout > 0
+        ? { payout: agreedPayout, vatType: asText(f["Offer VAT Type"]) }
+        : null,
+      context: `Member WTB ${memberWtbRecordId}`,
+      fallback: () =>
+        askConsignorToConfirmMemberWtbOffer({
+          memberWtbRecordId,
+          sellerOfferRecordId,
+          acceptedPayout,
+          skipPartnerAutoConfirm: true
+        })
+    });
+
+    return { ok: true, partner_auto_confirm: true };
+  }
 
   const sellerRecordId = firstLinkedRecordId(f["Seller ID"]);
 
@@ -10939,7 +11006,26 @@ app.post("/api/sneakerask/ask-consignors", async (req, res) => {
     const sent = [];
     const failed = [];
 
+    /*
+      A partner pair that the sale covers is bought from our own shelf.
+
+      Its partner price is what we pay, whatever it sells for, so it is the
+      cheapest source we have even when its ask (partner price plus markup)
+      is not. It confirms itself and nobody else is asked; if that fails,
+      everyone is asked the usual way. See autoConfirmPartnerOffer.
+    */
+    let partnerRequest = null;
+
     for (const request of requests) {
+      const payout = await partnerPayoutForInventory(request?.inventory_id).catch(() => null);
+
+      if (payout && numberValue(request?.ask_amount) >= payout) {
+        partnerRequest = request;
+        break;
+      }
+    }
+
+    const askOne = async (request, { skipMessage = false, existingOfferId = null } = {}) => {
       const sellerRecordId = asText(request?.seller_record_id);
       const inventoryId = asText(request?.inventory_id);
       const askAmount = numberValue(request?.ask_amount);
@@ -10948,7 +11034,7 @@ app.post("/api/sneakerask/ask-consignors", async (req, res) => {
 
       if (!sellerRecordId || !inventoryId || !(askAmount > 0) || !vatType) {
         failed.push({ inventory_id: inventoryId, reason: "incomplete request" });
-        continue;
+        return;
       }
 
       try {
@@ -10963,15 +11049,30 @@ app.post("/api/sneakerask/ask-consignors", async (req, res) => {
           shows him. That is why askAmount feeds both and nothing recomputes
           it in between.
         */
-        const createdOffer = await airtable(SELLER_OFFERS_TABLE).create({
-          "Seller ID": [sellerRecordId],
-          "Linked Orders": [orderRecordId],
-          "Seller Offer": askAmount,
-          "Offer VAT Type": vatType,
-          "Offer Cost (Normalized)": numberValue(request?.normalized) || askAmount,
-          "Offer Date": new Date().toISOString(),
-          "Consignment Inventory ID": inventoryId
-        });
+        const createdOffer = existingOfferId
+          ? { id: existingOfferId }
+          : await airtable(SELLER_OFFERS_TABLE).create({
+              "Seller ID": [sellerRecordId],
+              "Linked Orders": [orderRecordId],
+              "Seller Offer": askAmount,
+              "Offer VAT Type": vatType,
+              "Offer Cost (Normalized)": numberValue(request?.normalized) || askAmount,
+              "Offer Date": new Date().toISOString(),
+              "Consignment Inventory ID": inventoryId
+            });
+
+        if (skipMessage) {
+          sent.push({
+            seller_offer_record_id: createdOffer.id,
+            seller_id: asText(sf["Seller ID"]),
+            inventory_id: inventoryId,
+            ask_amount: askAmount,
+            channel_id: null,
+            delivery: "partner-auto-confirm"
+          });
+
+          return createdOffer.id;
+        }
 
         const discordResult = await sendConsignmentOfferDiscordMessage({
           inventoryId: asText(request?.inventory_id),
@@ -11022,6 +11123,8 @@ app.post("/api/sneakerask/ask-consignors", async (req, res) => {
             `${moneySmartValue(askAmount)} ${vatType} to ${asText(sf["Seller ID"])} ` +
             `(inventory ${inventoryId}) → Seller Offer ${createdOffer.id}`
         );
+
+        return createdOffer.id;
       } catch (err) {
         console.error(
           `Failed to ask consignor ${sellerRecordId} for ${orderId}:`,
@@ -11029,6 +11132,28 @@ app.post("/api/sneakerask/ask-consignors", async (req, res) => {
         );
 
         failed.push({ inventory_id: inventoryId, reason: err.message });
+      }
+    };
+
+    const partnerOfferId = partnerRequest
+      ? await askOne(partnerRequest, { skipMessage: true })
+      : null;
+
+    if (partnerOfferId) {
+      autoConfirmPartnerOffer({
+        sellerOfferRecordId: partnerOfferId,
+        context: `marketplace ${orderId}`,
+        fallback: async () => {
+          await askOne(partnerRequest, { existingOfferId: partnerOfferId });
+
+          for (const request of requests) {
+            if (request !== partnerRequest) await askOne(request);
+          }
+        }
+      });
+    } else {
+      for (const request of requests) {
+        await askOne(request);
       }
     }
 
@@ -14516,7 +14641,8 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         selling_price_suggested,
         quantity,
         seller_id,
-        seller_record_id
+        seller_record_id,
+        payout_price
       `)
       .eq("sku", sku)
       .eq("size", size)
@@ -14605,7 +14731,7 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         ? firstLinkedRecordId(sourceRecord?.fields?.["Buyer Seller ID"])
         : null;
 
-    const best = (inventoryRows || [])
+    const candidates = (inventoryRows || [])
       .filter((row) => !refusedInventoryIds.has(row.id))
       .filter(
         (row) =>
@@ -14614,14 +14740,21 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       )
       .map((row) => {
         const sellerPrice = Number(row.selling_price_suggested);
+        const payout = Number(row.payout_price);
+        const isPartner = Number.isFinite(payout) && payout > 0;
+        const sellerComparePrice = getConsignmentComparePrice(
+          sellerPrice,
+          row.vat_type
+        );
 
         return {
           row,
           sellerPrice,
-          sellerComparePrice: getConsignmentComparePrice(
-            sellerPrice,
-            row.vat_type
-          )
+          sellerComparePrice,
+          isPartner,
+          costCompare: isPartner
+            ? getConsignmentComparePrice(payout, row.vat_type)
+            : sellerComparePrice
         };
       })
       .filter(
@@ -14632,8 +14765,47 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
           // Null means "no restriction", which is every store order and a
           // Member WTB set to All Inventory.
           (!allowedVatTypes || allowedVatTypes.includes(asText(item.row.vat_type)))
-      )
-      .sort((a, b) => a.sellerComparePrice - b.sellerComparePrice)[0];
+      );
+
+    /*
+      The source that costs US the least, not the lowest asking price.
+
+      A partner pair asks its partner price plus our markup, and that markup
+      is already our money. Ranked on the ask, a consignor at 110 beat a
+      partner pair asking 125 on a partner price of 100 - so we bought at 110
+      what we had on the shelf at 100. Ranked on cost the partner goes first;
+      for everyone else cost and ask are the same number, so nothing changes.
+      A tie goes to the partner as well.
+
+      The partner pair then sells at what the market asks, never above it:
+      the cheapest ask among the sources, so the buyer sees exactly the price
+      the consignor would have given. The purchase price stays the partner
+      price (partnerPayoutForInventory), so the gap down to it is ours.
+    */
+    const best = candidates.sort(
+      (a, b) =>
+        a.costCompare - b.costCompare ||
+        Number(b.isPartner) - Number(a.isPartner) ||
+        a.sellerComparePrice - b.sellerComparePrice
+    )[0];
+
+    if (best?.isPartner) {
+      const marketCompare = Math.min(...candidates.map((item) => item.sellerComparePrice));
+
+      if (marketCompare < best.sellerComparePrice) {
+        const ownAsk = best.sellerPrice;
+
+        best.sellerPrice = Number(
+          consignmentAmountForVatType(marketCompare, best.row.vat_type).toFixed(2)
+        );
+        best.sellerComparePrice = getConsignmentComparePrice(best.sellerPrice, best.row.vat_type);
+
+        console.log(
+          `Partner pair ${best.row.sku} / ${best.row.size} goes first at the market price ` +
+            `${moneySmartValue(best.sellerPrice)} (asks ${moneySmartValue(ownAsk)}).`
+        );
+      }
+    }
 
     if (!best) {
       return res.status(404).json({
@@ -15108,10 +15280,10 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       .find(best.row.seller_record_id)
       .catch(() => null);
 
-    if (isConfirmation && engageConsignorNow) {
-      // His price already fits under the ceiling, so there is nothing to
-      // negotiate — just the one question this whole route exists for:
-      // do you still have it?
+    // A partner pair that fits needs nobody's yes. See autoConfirmPartnerOffer.
+    const partnerAutoConfirm = isConfirmation && engageConsignorNow && best.isPartner;
+
+    const sendConfirmRequest = async () => {
       const consignorFields = consignorRecord?.fields || {};
 
       const confirmDiscordResult = await sendConsignmentOfferDiscordMessage({
@@ -15155,6 +15327,19 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       });
 
       await rememberConsignmentConfirmMessage(createdOffer.id, confirmDiscordResult);
+    };
+
+    if (partnerAutoConfirm) {
+      autoConfirmPartnerOffer({
+        sellerOfferRecordId: createdOffer.id,
+        context: `${source.kind} ${source.recordId}`,
+        fallback: sendConfirmRequest
+      });
+    } else if (isConfirmation && engageConsignorNow) {
+      // His price already fits under the ceiling, so there is nothing to
+      // negotiate — just the one question this whole route exists for:
+      // do you still have it?
+      await sendConfirmRequest();
     }
 
     if (!isConfirmation && engageConsignorNow) {
@@ -15299,7 +15484,7 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       The snapshot stays. It is one open price to any seller, not an offer
       written in somebody's name, so it never enters that comparison.
     */
-    if (engageConsignorNow && source.kind === "member_wtb" && calculatedOfferPrice > 0) {
+    if (engageConsignorNow && !partnerAutoConfirm && source.kind === "member_wtb" && calculatedOfferPrice > 0) {
       offerSnapshotFor({
         recordId: source.recordId,
         source: "member_wtb",
@@ -15309,6 +15494,8 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
 
     res.json({
       ...baseResponse,
+      // Tells createMemberWtbAutoOffer to stop: the pair is ours already.
+      partner_auto_confirm: partnerAutoConfirm,
       is_confirmation: isConfirmation,
       maximum_buying_price: Number.isFinite(maximumBuyingPrice) ? maximumBuyingPrice : null,
       calculated_offer_price: calculatedOfferPrice,
@@ -17150,7 +17337,18 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
           (record) => record.id !== counterOfferRecordId
         );
 
-        if (!consignorEngaged) {
+        // A partner pair is on our shelf, so there is no one to ask: it
+        // settles right here like a negotiated deal, and the consignors
+        // holding the same pair are never pinged for it.
+        const isPartnerPair = Boolean(await partnerPayoutForInventory(consignmentInventoryId));
+
+        if (isPartnerPair) {
+          console.log(
+            `Store accept on ${linkedOrderId}: partner pair (inventory ${consignmentInventoryId}) - confirmed without asking.`
+          );
+        }
+
+        if (!consignorEngaged && !isPartnerPair) {
           const { data: inventoryRowForGuard } = await supabase
             .from("consignment_inventory")
             .select("*")
@@ -37837,6 +38035,10 @@ async function createMemberWtbAutoOffer(memberWtbRecordId) {
     }
 
     made.push(data);
+
+    // A partner pair is confirming itself; asking the next source down would
+    // only hand someone a request for a sale that is already ours.
+    if (data.partner_auto_confirm) break;
   }
 
   console.log(
