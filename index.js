@@ -14423,10 +14423,10 @@ app.post("/api/internal/buyers/create", async (req, res) => {
     const { data: created, error } = await supabase.from("buyers").insert(row).select("*").single();
     if (error) throw error;
 
-    const buyer = await ensureAirtableBuyer(created).catch((err) => {
-      console.error(`buyer ${buyerNumberText(created)}: Airtable row not made yet:`, err.message);
-      return created;
-    });
+    // No Airtable row any more: External Sales live in Supabase since the
+    // switch. A forward of old Airtable units still asks for one through
+    // /buyers/get with_airtable, which makes it then.
+    const buyer = created;
 
     console.log(`👤 New buyer ${buyerNumberText(buyer)} ${buyerOption(buyer).label}`);
     return res.json({ ok: true, option: buyerOption(buyer) });
