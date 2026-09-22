@@ -3356,6 +3356,10 @@ const LOJIQ_FORWARD_PREFIX = "kc:";
  * The buttons keep their own custom ids behind the "kc:" prefix, and the
  * Lojiq bot forwards a click to /api/lojiq-bot/interaction, which runs the
  * same handler - so Accept, Counter and Deny work there as they do anywhere.
+ *
+ * A store never gets a Kickz Caviar DM, not even as a fallback: that names a
+ * brand the store is not supposed to see. When the Lojiq channel cannot be
+ * reached the send fails loudly; the round is still in the store's dashboard.
  */
 async function counterRoundIsForStoreConsignor(counterOfferRecordId) {
   if (!counterOfferRecordId) return false;
@@ -20790,7 +20794,12 @@ async function sendCounterOfferDiscordDM({
 
   // A Lojiq store's channel is posted to by the Lojiq bot. See
   // counterRoundIsForStoreConsignor.
-  const viaLojiq = Boolean(channelId) && (await counterRoundIsForStoreConsignor(counterOfferRecordId));
+  const storeConsignor = await counterRoundIsForStoreConsignor(counterOfferRecordId);
+  const viaLojiq = Boolean(channelId) && storeConsignor;
+
+  if (storeConsignor && !channelId) {
+    throw new Error(`Counter round ${counterOfferRecordId}: store consignor has no Lojiq channel - not sent.`);
+  }
 
   if (channelId && !viaLojiq) {
     await initDiscord();
@@ -20916,8 +20925,7 @@ async function sendCounterOfferDiscordDM({
       message = await postCounterViaLojiq(channelId, counterPayload);
       deliveryType = "lojiq_channel";
     } catch (err) {
-      console.error(`Counter round ${counterOfferRecordId}: Lojiq channel ${channelId} refused it (${err.message}) - sending it as a DM instead.`);
-      target = await openDm();
+      throw new Error(`Counter round ${counterOfferRecordId}: Lojiq channel ${channelId} refused it (${err.message}) - not sent.`);
     }
   }
 
@@ -21021,7 +21029,12 @@ async function sendMemberWtbCounterOfferDiscordDM({
 
   // A Lojiq store's channel is posted to by the Lojiq bot. See
   // counterRoundIsForStoreConsignor.
-  const viaLojiq = Boolean(channelId) && (await counterRoundIsForStoreConsignor(counterOfferRecordId));
+  const storeConsignor = await counterRoundIsForStoreConsignor(counterOfferRecordId);
+  const viaLojiq = Boolean(channelId) && storeConsignor;
+
+  if (storeConsignor && !channelId) {
+    throw new Error(`Member WTB counter round ${counterOfferRecordId}: store consignor has no Lojiq channel - not sent.`);
+  }
 
   if (channelId && !viaLojiq) {
     await initDiscord();
@@ -21130,8 +21143,7 @@ async function sendMemberWtbCounterOfferDiscordDM({
       message = await postCounterViaLojiq(channelId, counterPayload);
       deliveryType = "lojiq_channel";
     } catch (err) {
-      console.error(`Member WTB counter round ${counterOfferRecordId}: Lojiq channel ${channelId} refused it (${err.message}) - sending it as a DM instead.`);
-      dm = await openDm();
+      throw new Error(`Member WTB counter round ${counterOfferRecordId}: Lojiq channel ${channelId} refused it (${err.message}) - not sent.`);
     }
   }
 
@@ -21393,7 +21405,21 @@ async function sendOfferDeniedDiscordDM({
   // channel and keeps his DM, including the missing-ID throw below.
   let target = null;
 
-  if (sellerRecordId && sellerOfferRecordId) {
+  // A Lojiq store hears this in its own channel through the Lojiq bot, never
+  // as a Kickz Caviar DM (see counterRoundIsForStoreConsignor).
+  const storeConsignor = await isStoreConsignor(sellerRecordId).catch(() => false);
+  let lojiqChannelId = "";
+
+  if (storeConsignor) {
+    const storeSeller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+    lojiqChannelId = asText(storeSeller?.fields?.["Consignment Offer Channel ID"]);
+
+    if (!lojiqChannelId) {
+      throw new Error(`Offer denied for store consignor ${sellerRecordId}: no Lojiq channel - not sent.`);
+    }
+  }
+
+  if (!storeConsignor && sellerRecordId && sellerOfferRecordId) {
     const deniedSeller = await airtable(SELLERS_TABLE)
       .find(sellerRecordId)
       .catch(() => null);
@@ -21418,7 +21444,7 @@ async function sendOfferDeniedDiscordDM({
     }
   }
 
-  if (!target) {
+  if (!target && !storeConsignor) {
     await initKickzDealDiscord();
 
     if (!sellerDiscordId) {
@@ -21430,7 +21456,10 @@ async function sendOfferDeniedDiscordDM({
     target = await user.createDM();
   }
 
-  const dm = target;
+  // Lojiq posts through its own bot; everything else sends directly.
+  const dm = storeConsignor
+    ? { send: (payload) => postCounterViaLojiq(lojiqChannelId, payload) }
+    : target;
 
   const amountText =
     deniedAmount !== undefined && deniedAmount !== null && deniedAmount !== ""
@@ -21549,8 +21578,21 @@ async function disableSellerOfferDeniedEmbed(sellerOfferRecordId) {
       if (edited) return;
     }
 
+    // A store's denial was posted by the Lojiq bot.
+    const delegated = await fetch(`${AIRTABLE_DISCORD_UPDATES_URL}/counter-offer/disable`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        channel_id: channelId,
+        message_id: messageId,
+        note: "This embed disabled — please check your dashboard for the current status of this offer."
+      })
+    }).then((res) => res.ok).catch(() => false);
+
+    if (delegated) return;
+
     console.error(
-      "Could not disable denied embed - neither bot could edit it:",
+      "Could not disable denied embed - no bot could edit it:",
       messageId
     );
   } catch (err) {
