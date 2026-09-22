@@ -94,6 +94,7 @@ import {
 } from "./lib/discordOauth.js";
 
 import { COUNTRY_NAMES } from "./lib/countries.js";
+import { airtableBuyerFields, buyerFromInput, buyerId as buyerNumberText, buyerOption, findDuplicate } from "./lib/buyers.js";
 import { validateRegistration } from "./lib/registration.js";
 import {
   isOpenForOffers,
@@ -14325,6 +14326,113 @@ app.post("/api/internal/forwarding/create", async (req, res) => {
   } catch (err) {
     console.error("forwarding create failed:", err);
     return res.status(500).json({ ok: false, errors: ["Forward failed"], details: err.message });
+  }
+});
+
+/*
+ * Buyers for the WMS: Create Outbound lists them, picks one, or makes a new
+ * one here. Supabase public.buyers is the one list (see lib/buyers.js).
+ */
+
+// Until the WMS writes External Sales to Supabase, a deal in the External
+// Sales Log links to the buyer's row in the main base's "Buyers Database".
+// A buyer made here gets that row on first use, so nothing waits on it.
+async function ensureAirtableBuyer(buyer) {
+  if (buyer.airtable_record_id) return buyer;
+
+  const created = await airtable("Buyers Database").create(airtableBuyerFields(buyer));
+
+  const { data, error } = await supabase
+    .from("buyers")
+    .update({ airtable_record_id: created.id })
+    .eq("id", buyer.id)
+    .select("*")
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+async function loadBuyer(id) {
+  const { data, error } = await supabase.from("buyers").select("*").eq("id", asText(id)).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+app.post("/api/internal/buyers/list", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const { data, error } = await supabase.from("buyers").select("*").limit(5000);
+    if (error) throw error;
+
+    const options = (data || [])
+      .map(buyerOption)
+      .filter((option) => option.label)
+      .sort((a, b) => a.label.localeCompare(b.label, "en", { sensitivity: "base" }));
+
+    return res.json({ ok: true, options, countries: COUNTRY_NAMES });
+  } catch (err) {
+    console.error("buyers list failed:", err);
+    return res.status(500).json({ ok: false, errors: ["Could not load buyers"], details: err.message });
+  }
+});
+
+// One buyer, with the Airtable row a deal links to (made if missing).
+app.post("/api/internal/buyers/get", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const found = await loadBuyer(req.body?.id);
+    if (!found) return res.status(404).json({ ok: false, errors: ["That buyer does not exist"] });
+
+    const buyer = req.body?.with_airtable ? await ensureAirtableBuyer(found) : found;
+    return res.json({ ok: true, buyer: { ...buyer, buyer_id: buyerNumberText(buyer) }, option: buyerOption(buyer) });
+  } catch (err) {
+    console.error("buyer get failed:", err);
+    return res.status(500).json({ ok: false, errors: ["Could not load the buyer"], details: err.message });
+  }
+});
+
+app.post("/api/internal/buyers/create", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const { errors, row } = buyerFromInput(req.body || {});
+    if (errors.length) return res.status(400).json({ ok: false, errors });
+
+    const { data: all, error: listError } = await supabase.from("buyers").select("*").limit(5000);
+    if (listError) throw listError;
+
+    // The same business twice is how the duplicates of 22-09-2026 came about.
+    const duplicate = findDuplicate(all || [], row);
+    if (duplicate) {
+      return res.status(409).json({
+        ok: false,
+        errors: [`${buyerOption(duplicate).label} (${buyerNumberText(duplicate)}) already has this ${row.vat_id && duplicate.vat_id === row.vat_id ? "VAT ID" : "email address"}. Choose that buyer instead.`],
+        existing: buyerOption(duplicate)
+      });
+    }
+
+    const { data: created, error } = await supabase.from("buyers").insert(row).select("*").single();
+    if (error) throw error;
+
+    const buyer = await ensureAirtableBuyer(created).catch((err) => {
+      console.error(`buyer ${buyerNumberText(created)}: Airtable row not made yet:`, err.message);
+      return created;
+    });
+
+    console.log(`👤 New buyer ${buyerNumberText(buyer)} ${buyerOption(buyer).label}`);
+    return res.json({ ok: true, option: buyerOption(buyer) });
+  } catch (err) {
+    console.error("buyer create failed:", err);
+    return res.status(500).json({ ok: false, errors: ["Could not save the buyer"], details: err.message });
   }
 });
 
