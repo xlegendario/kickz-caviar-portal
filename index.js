@@ -3343,6 +3343,40 @@ async function postLojiqConsignorEmbed({ channelId, content, embeds, components 
  */
 const LOJIQ_FORWARD_PREFIX = "kc:";
 
+/*
+ * Counter rounds for a consignor who is a Lojiq store.
+ *
+ * Such a consignor's channels live in the Lojiq server, where this service's
+ * bots cannot post. The offer and confirmation messages knew that and went
+ * through the Lojiq bot; the counter rounds did not. They tried the channel
+ * with the Kickz Caviar bot, could not see it, and quietly fell back to a DM -
+ * ORD-025598 (22-09-2026): KicksbyMattie got round 1 and countered in his DMs
+ * while his offer channel stayed empty.
+ *
+ * The buttons keep their own custom ids behind the "kc:" prefix, and the
+ * Lojiq bot forwards a click to /api/lojiq-bot/interaction, which runs the
+ * same handler - so Accept, Counter and Deny work there as they do anywhere.
+ */
+async function counterRoundIsForStoreConsignor(counterOfferRecordId) {
+  if (!counterOfferRecordId) return false;
+
+  const round = await airtable(COUNTER_OFFERS_TABLE).find(counterOfferRecordId).catch(() => null);
+
+  return isStoreConsignor(firstLinkedRecordId(round?.fields?.["Seller ID"])).catch(() => false);
+}
+
+async function postCounterViaLojiq(channelId, payload) {
+  const posted = await postLojiqConsignorEmbed({
+    channelId,
+    content: null,
+    // Lojiq blue, as on the other messages in that channel.
+    embeds: (payload.embeds || []).map((embed) => ({ ...embed, color: 0x2F80ED })),
+    components: payload.components || []
+  });
+
+  return { id: posted.messageId, channelId: posted.channelId || channelId };
+}
+
 function toLojiqComponents(value) {
   if (Array.isArray(value)) return value.map(toLojiqComponents);
   if (!value || typeof value !== "object") return value;
@@ -20754,14 +20788,22 @@ async function sendCounterOfferDiscordDM({
 
   let target = null;
 
-  if (channelId) {
+  // A Lojiq store's channel is posted to by the Lojiq bot. See
+  // counterRoundIsForStoreConsignor.
+  const viaLojiq = Boolean(channelId) && (await counterRoundIsForStoreConsignor(counterOfferRecordId));
+
+  if (channelId && !viaLojiq) {
     await initDiscord();
     target = await discordClient.channels.fetch(channelId).catch(() => null);
+
+    if (!target) {
+      console.error(`Counter round ${counterOfferRecordId}: channel ${channelId} not reachable - sending it as a DM instead.`);
+    }
   }
 
   let deliveryType = channelId ? "private_channel" : "dm";
 
-  if (!target) {
+  const openDm = async () => {
     await initKickzDealDiscord();
 
     if (!sellerDiscordId) {
@@ -20769,8 +20811,12 @@ async function sendCounterOfferDiscordDM({
     }
 
     const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
-    target = await user.createDM();
     deliveryType = "dm";
+    return user.createDM();
+  };
+
+  if (!target && !viaLojiq) {
+    target = await openDm();
   }
 
   // FIXED — his call: primary reference should be the seller's LAST
@@ -20818,7 +20864,7 @@ async function sendCounterOfferDiscordDM({
       ? ["❌ Your offer was denied.", ""]
       : [];
 
-  const message = await target.send({
+  const counterPayload = {
     embeds: [
       {
         // FIXED — when this notification is specifically a re-send
@@ -20861,7 +20907,21 @@ async function sendCounterOfferDiscordDM({
       const row = isDenial ? [acceptBtn, counterBtn] : [acceptBtn, counterBtn, denyBtn];
       return [{ type: 1, components: row }];
     })()
-  });
+  };
+
+  let message = null;
+
+  if (viaLojiq) {
+    try {
+      message = await postCounterViaLojiq(channelId, counterPayload);
+      deliveryType = "lojiq_channel";
+    } catch (err) {
+      console.error(`Counter round ${counterOfferRecordId}: Lojiq channel ${channelId} refused it (${err.message}) - sending it as a DM instead.`);
+      target = await openDm();
+    }
+  }
+
+  if (!message) message = await target.send(counterPayload);
 
   // UNIVERSAL SUPERSEDING — this new embed replaces any older embed this
   // seller has on this order/WTB. Disable all their OTHER round embeds.
@@ -20959,12 +21019,20 @@ async function sendMemberWtbCounterOfferDiscordDM({
   let dm = null;
   let deliveryType = channelId ? "private_channel" : "dm";
 
-  if (channelId) {
+  // A Lojiq store's channel is posted to by the Lojiq bot. See
+  // counterRoundIsForStoreConsignor.
+  const viaLojiq = Boolean(channelId) && (await counterRoundIsForStoreConsignor(counterOfferRecordId));
+
+  if (channelId && !viaLojiq) {
     await initDiscord();
     dm = await discordClient.channels.fetch(channelId).catch(() => null);
+
+    if (!dm) {
+      console.error(`Member WTB counter round ${counterOfferRecordId}: channel ${channelId} not reachable - sending it as a DM instead.`);
+    }
   }
 
-  if (!dm) {
+  const openDm = async () => {
     await initKickzDealDiscord();
 
     if (!sellerDiscordId) {
@@ -20972,8 +21040,12 @@ async function sendMemberWtbCounterOfferDiscordDM({
     }
 
     const user = await kickzDealDiscordClient.users.fetch(sellerDiscordId);
-    dm = await user.createDM();
     deliveryType = "dm";
+    return user.createDM();
+  };
+
+  if (!dm && !viaLojiq) {
+    dm = await openDm();
   }
 
   // FIXED — same change as sendCounterOfferDiscordDM (WTB): show the
@@ -21010,7 +21082,7 @@ async function sendMemberWtbCounterOfferDiscordDM({
       ? ["❌ Your offer was denied.", ""]
       : [];
 
-  const message = await dm.send({
+  const counterPayload = {
     embeds: [
       {
         // FIXED — same fix as sendCounterOfferDiscordDM (WTB) — this
@@ -21049,7 +21121,21 @@ async function sendMemberWtbCounterOfferDiscordDM({
       const row = isDenial ? [acceptBtn, counterBtn] : [acceptBtn, counterBtn, denyBtn];
       return [{ type: 1, components: row }];
     })()
-  });
+  };
+
+  let message = null;
+
+  if (viaLojiq) {
+    try {
+      message = await postCounterViaLojiq(channelId, counterPayload);
+      deliveryType = "lojiq_channel";
+    } catch (err) {
+      console.error(`Member WTB counter round ${counterOfferRecordId}: Lojiq channel ${channelId} refused it (${err.message}) - sending it as a DM instead.`);
+      dm = await openDm();
+    }
+  }
+
+  if (!message) message = await dm.send(counterPayload);
 
   // UNIVERSAL SUPERSEDING — Member WTB seller side.
   try {
