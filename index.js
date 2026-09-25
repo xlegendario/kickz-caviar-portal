@@ -170,6 +170,9 @@ const {
   // The consignment service running in Woovin mode. Only it holds their
   // token, so label downloads are asked of it rather than done here.
   WOOVIN_SERVICE_BASE_URL = "https://woovin-consignment.onrender.com",
+  // The same service in Hypeneedz mode, which holds their partner API key
+  // and makes the label through their SendCloud account.
+  HYPENEEDZ_SERVICE_BASE_URL = "https://hypeneedz-consignment.onrender.com",
   SELLER_SIGNUP_URL = "https://discord.com/channels/922818998163361792/1444130166703128676",
   DISCORD_BOT_BASE_URL,
   KICKZ_WTB_BOT_BASE_URL,
@@ -6854,6 +6857,54 @@ async function requestWoovinShippingLabel(orderRecordId, orderFields) {
   return { ok: true, ...data };
 }
 
+/*
+ * Hypeneedz makes the label on request, through their own SendCloud account,
+ * and only the consignment service holds their key. Same errand as Woovin's.
+ *
+ * One difference that matters: making their label also marks the pair shipped
+ * on their side. The service refuses to make a second one for the same unit,
+ * so pressing the button twice is safe.
+ */
+async function requestHypeneedzShippingLabel(orderRecordId, orderFields) {
+  const saleId = asText(orderFields["Marketplace Sale ID"]);
+  const orderId = displayValue(orderFields["Order ID"]) || orderRecordId;
+
+  if (!saleId) {
+    throw new Error(`No Marketplace Sale ID on ${orderId}`);
+  }
+
+  const existingLabel = orderFields["Shipping Label"];
+
+  if (Array.isArray(existingLabel) && existingLabel.length) {
+    console.log(`Label already attached for ${orderId}, nothing to make.`);
+    return { ok: true, already: true };
+  }
+
+  const response = await fetch(
+    `${HYPENEEDZ_SERVICE_BASE_URL.replace(/\/$/, "")}/hypeneedz/label`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-kc-secret": process.env.COUNTER_OFFERS_SECRET || ""
+      },
+      body: JSON.stringify({ order_record_id: orderRecordId, sale_id: saleId })
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      `Hypeneedz label for ${orderId} failed: ${response.status} ${data.error || ""}`
+    );
+  }
+
+  console.log(`Hypeneedz label attached for ${orderId}.`);
+
+  return { ok: true, ...data };
+}
+
 async function requestBolShippingLabel(orderRecordId, orderFields) {
   const orderId = displayValue(orderFields["Order ID"]) || orderRecordId;
 
@@ -7003,6 +7054,10 @@ async function requestConsignmentShippingLabel(orderRecordId) {
    */
   if (marketplace === "bol") {
     return await requestBolShippingLabel(orderRecordId, orderFields);
+  }
+
+  if (marketplace === "Hypeneedz") {
+    return await requestHypeneedzShippingLabel(orderRecordId, orderFields);
   }
 
   // FIXED — this only set the status and posted nothing, so pressing
