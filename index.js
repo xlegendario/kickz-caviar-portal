@@ -10053,6 +10053,27 @@ function consignmentInteractionHandler(client) {
         } catch (err) {
           console.error(`Consignment label for ${orderRecordId} failed:`, err);
 
+          /*
+            Why it failed, written where it can be found again.
+
+            The consignor is told to contact support and the reason went to
+            the console of whichever service happened to be running - so by
+            the time anyone looked, there was nothing to look at. ORD-026578
+            failed on 28-09-2026 and every step of it worked when tried again
+            by hand; with no record left, what went wrong is still a guess.
+
+            On the order, because that is where the person handling it looks.
+            Cleared again by the next attempt that gets through, which is
+            what the WMS already does when it saves a label.
+          */
+          await airtable(ORDERS_TABLE)
+            .update(orderRecordId, {
+              "Label Error Message": `${new Date().toISOString().slice(0, 16).replace("T", " ")} ${err.message}`.slice(0, 900)
+            })
+            .catch((writeError) =>
+              console.error(`could not record the label error on ${orderRecordId}:`, writeError.message)
+            );
+
           await interaction.followUp({
             content:
               "❌ Error while generating shipping label, please contact support.",
