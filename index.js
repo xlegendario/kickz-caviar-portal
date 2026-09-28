@@ -6942,6 +6942,44 @@ async function requestBolShippingLabel(orderRecordId, orderFields) {
   return { ok: true, ...data };
 }
 
+/*
+ * The label a consignor uses to send a pair to us.
+ *
+ * Ours to ours, so it carries no buyer and nothing of the marketplace's: the
+ * WMS draws it at Sendcloud with our own address on both ends and UPS as the
+ * carrier, because UPS is what takes a Dutch label from anywhere. It lands
+ * in the order's own inbound fields and leaves Fulfillment Status alone -
+ * the pair has not been sent to the buyer, it has been sent to us.
+ */
+async function requestWarehouseInboundLabel(orderRecordId, orderFields) {
+  const orderId = displayValue(orderFields["Order ID"]) || orderRecordId;
+
+  const response = await fetch(
+    `${LOJIQ_WMS_BASE_URL.replace(/\/$/, "")}/api/request-label`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: "marketplace", record_id: orderRecordId, to_warehouse: true })
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      `Inbound label for ${orderId} failed: ${response.status} ` +
+        `${data.error || ""} ${data.details || ""}`.trim()
+    );
+  }
+
+  console.log(
+    `📦 inbound label made for ${orderId} ` +
+      `(${data.carrier || "UPS"}, tracking ${data.tracking_number || "none"}) - to our warehouse.`
+  );
+
+  return { ok: true, ...data };
+}
+
 async function attachSneakerAskShippingLabel(orderRecordId, orderFields) {
   const labelUrl = asText(orderFields["SneakerAsk Label URL"]);
   const trackingNumber = asText(orderFields["SneakerAsk Tracking"]);
@@ -7038,7 +7076,23 @@ async function requestConsignmentShippingLabel(orderRecordId) {
    * unlike a store order there is nobody to wait for: press the button and
    * it is there.
    */
+  /*
+   * Woovin ships on DPD alone, and a consignor DPD cannot reach still has
+   * stock we want on there - it is the biggest channel we sell through.
+   *
+   * Such a pair comes to the warehouse first: this label is ours to ours,
+   * made at Sendcloud by the WMS, and Woovin's own label is fetched later,
+   * when the pair is scanned in. Which of the two it is depends on the
+   * order's Inbound Status: the poller sets it when nobody reachable holds
+   * the pair, and it is empty on every other Woovin order.
+   */
   if (marketplace === "Woovin") {
+    const comingToUs = asText(orderFields["Inbound Status"]);
+
+    if (comingToUs && !asText(orderFields["Inbound Tracking Number"])) {
+      return await requestWarehouseInboundLabel(orderRecordId, orderFields);
+    }
+
     return await requestWoovinShippingLabel(orderRecordId, orderFields);
   }
 
@@ -14555,6 +14609,44 @@ app.post("/api/internal/forwarding/get", async (req, res) => {
 });
 
 // Packed and gone: the forward is shipped.
+/*
+ * A pair that came to us has arrived: fetch the label it leaves on.
+ *
+ * Called by the WMS the moment Receive Parcels scans the inbound tracking
+ * number. Only the marketplace's own label is fetched here - everything
+ * after that is the machinery every label goes through, so the order lands
+ * in Pack & Ship the same way any other does.
+ */
+app.post("/api/internal/marketplace/label-after-arrival", async (req, res) => {
+  if (!hasInternalSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const orderRecordId = asText(req.body?.order_record_id);
+
+    if (!orderRecordId) {
+      return res.status(400).json({ error: "Missing order_record_id" });
+    }
+
+    const record = await airtable(ORDERS_TABLE).find(orderRecordId);
+    const fields = record.fields || {};
+    const marketplace = asText(fields["Marketplace"]);
+
+    if (marketplace !== "Woovin") {
+      return res.status(400).json({ error: `${marketplace || "This order"} has no label to fetch on arrival` });
+    }
+
+    const result = await requestWoovinShippingLabel(orderRecordId, fields);
+
+    return res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("label-after-arrival failed:", err);
+
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.post("/api/internal/forwarding/ship", async (req, res) => {
   if (!hasInternalSecret(req)) {
     return res.status(401).json({ error: "Unauthorized" });
