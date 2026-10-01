@@ -6504,6 +6504,24 @@ async function resolveMemberWtbAgreedBuyerPrice({
   );
 
   /*
+   * A partner-run deal is a price the partner agreed himself, and it is
+   * never recomputed.
+   *
+   * Everywhere else the buyer is a member who was quoted a price by the
+   * shop, so when a consignor comes back dearer the quote has to move with
+   * him to keep the margin whole. A partner has no such quote: he is
+   * standing between a buyer he negotiates with and a consignor he
+   * negotiates with, and the two numbers are both his.
+   *
+   * Without this, a consignor countering 165 up to 175 would have pushed
+   * the sale from the 190 the partner agreed to 200 - a price his buyer
+   * never said yes to, on an invoice he cannot send.
+   */
+  if (memberFields?.["Partner Run?"] === true) {
+    return { price: fromMaxPrice, via: "partner_run" };
+  }
+
+  /*
     CHANGED - "Member WTB" was not the only kind of round that settles one.
 
     A round the SELLER opened carries Source Type "Seller Offer" and puts
