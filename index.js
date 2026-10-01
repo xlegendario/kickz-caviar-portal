@@ -2914,6 +2914,17 @@ async function notifyBuyerConsignmentWithdrawn(memberWtbRecordId) {
   if (!memberWtb) return { ok: false, reason: "member_wtb_not_found" };
 
   const f = memberWtb.fields || {};
+
+  /*
+   * On a partner-run deal the buyer hears everything from the partner.
+   *
+   * He may well be linked here - the partner fills that in once the deal is
+   * closed, and a buyer who registered through the link is a real Discord
+   * member - but a DM saying the consignor pulled out would reach him before
+   * the partner has had the chance to find another one.
+   */
+  if (f["Partner Run?"] === true) return { ok: false, reason: "partner_run" };
+
   const buyerRecordId = firstLinkedRecordId(f["Buyer Seller ID"]);
 
   if (!buyerRecordId) return { ok: false, reason: "no_buyer" };
@@ -4344,6 +4355,18 @@ async function sendMemberWtbLabelRequestToBuyer(memberWtbRecordId) {
   const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
   const f = memberWtb.fields || {};
 
+  /*
+   * A partner-run want-to-buy has no buyer in Discord to ask for a label.
+   *
+   * The partner handles the buyer's side himself - he decides when a label
+   * goes out and whether he wants the money first. Guarded here rather than
+   * at each of the five callers, because they all mean the same thing by it
+   * and one of them forgetting is how this comes back.
+   */
+  if (f["Partner Run?"] === true) {
+    return { skipped: true, reason: "partner_run" };
+  }
+
   const buyerRecordId = firstLinkedRecordId(f["Buyer Seller ID"]);
 
   if (!buyerRecordId) {
@@ -5699,23 +5722,37 @@ async function handleMemberWtbPaymentGate(
     };
   }
 
+  /*
+   * A partner-run want-to-buy has no buyer in Discord.
+   *
+   * The partner found the buyer himself, agreed a price himself and collects
+   * the money himself, so there is nobody here to ask for payment and nobody
+   * to DM. There is often no Buyer Seller ID yet either: he fills that in
+   * once the deal is actually closed, which can be after the consignor has
+   * already confirmed.
+   *
+   * Everything the consignor sees stays exactly the same. What this skips is
+   * only the buyer's side - the same handling a Lojiq store gets below.
+   */
+  const partnerRun = fields["Partner Run?"] === true;
+
   const buyerRecordId =
     firstLinkedRecordId(
       fields["Buyer Seller ID"]
     );
 
-  if (!buyerRecordId) {
+  if (!buyerRecordId && !partnerRun) {
     throw new Error(
       "Member WTB missing Buyer Seller ID"
     );
   }
 
-  const buyerRecord = await airtable(
-    SELLERS_TABLE
-  ).find(buyerRecordId);
+  const buyerRecord = buyerRecordId
+    ? await airtable(SELLERS_TABLE).find(buyerRecordId)
+    : null;
 
-  const buyerFields = buyerRecord.fields || {};
-  const buyer = normalizeSeller(buyerRecord);
+  const buyerFields = buyerRecord?.fields || {};
+  const buyer = buyerRecord ? normalizeSeller(buyerRecord) : null;
 
   const trustedBuyer =
     buyerFields["Trusted Buyer?"] === true;
@@ -5739,7 +5776,9 @@ async function handleMemberWtbPaymentGate(
     Array.isArray(buyerFields["Merchants"]) &&
     buyerFields["Merchants"].length > 0;
 
-  if (lojiqStoreBuyer) {
+  // Both of these settle outside Mollie: a store through its own portal, a
+  // partner-run deal through the partner. Same handling either way.
+  if (lojiqStoreBuyer || partnerRun) {
     /*
       FIXED - this guard read the status, and the status is "Pending" before
       anything has happened at all.
@@ -5807,7 +5846,7 @@ async function handleMemberWtbPaymentGate(
     }
 
     return {
-      status: "lojiq_portal_payment"
+      status: partnerRun ? "partner_run_payment" : "lojiq_portal_payment"
     };
   }
 
