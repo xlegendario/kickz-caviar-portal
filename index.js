@@ -6629,6 +6629,89 @@ function assertMemberWtbLeavesMargin({
   );
 }
 
+/*
+ * Everything that turns an agreed consignment offer into a booked deal.
+ *
+ * Pulled out of confirmConsignmentOffer so a partner-run want-to-buy can
+ * run it LATER. There the consignor saying yes settles only the buying
+ * side; until the partner has closed with his buyer there is no sale, and
+ * a unit, a written-off pair and a Ready To Ship step for a deal that
+ * falls through is worse than none at all - buyers drop out often enough
+ * that it would happen weekly.
+ */
+async function bookMemberWtbConsignmentDeal({ offer: lockedOffer, memberWtbRecordId, memberFields }) {
+  const vatType = asText(lockedOffer.vat_type);
+
+  const agreed = await resolveMemberWtbAgreedBuyerPrice({
+    memberWtbRecordId,
+    memberFields,
+    vatType
+  });
+
+  const finalBuyingPrice = agreed.price;
+
+  assertMemberWtbLeavesMargin({
+    memberWtbRecordId,
+    buyerPrice: finalBuyingPrice,
+    payout: Number(lockedOffer.offer_price)
+  });
+
+  console.log(
+    `Member WTB ${memberWtbRecordId}: buyer price ${finalBuyingPrice} via ${agreed.via}, ` +
+      `payout ${lockedOffer.offer_price}`
+  );
+
+  const memberWtbId =
+    asText(memberFields["Member WTB ID"]) ||
+    asText(memberFields["WTB ID"]) ||
+    memberWtbRecordId;
+
+  const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer({
+    ...lockedOffer,
+    order_record_id: null,
+    order_id: memberWtbId,
+    source_type: "member_wtb",
+    member_wtb_record_id: memberWtbRecordId,
+    selling_price: finalBuyingPrice,
+    selling_method: "Kickz Caviar"
+  });
+  
+  // CHANGED - was an inline decrement; the shared helper also handles a
+  // partner pair, which must not be decremented directly.
+  await writeOffConsignmentUnit(lockedOffer.inventory_id, `legacy member wtb ${memberWtbRecordId}`);
+  
+  await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+    "Purchase Status": "Confirmed",
+    "Fulfillment Status": "Allocated",
+    "Linked Inventory Unit": [inventoryUnitRecord.id],
+    "Final Buying Price": finalBuyingPrice
+  });
+  
+  await supabase
+    .from("consignment_offers")
+    .update({
+      status: "accepted",
+      accepted_at: new Date().toISOString(),
+      closed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", lockedOffer.id);
+  
+  await closeCompetingMemberWtbOffers(memberWtbRecordId, lockedOffer.id);
+
+  await disableMemberWtbKcOfferButtons(
+    memberWtbRecordId,
+    "❌ This Member WTB was already allocated to a consignor."
+  );
+
+  await handleMemberWtbPaymentGate(memberWtbRecordId);
+  
+  return {
+    ok: true,
+    offer: lockedOffer
+  };
+}
+
 async function confirmConsignmentOffer(offerId) {
   const { data: lockedOffer, error: lockError } = await supabase
     .from("consignment_offers")
@@ -6675,76 +6758,49 @@ async function confirmConsignmentOffer(offerId) {
     }
   
 
-    const vatType = asText(lockedOffer.vat_type);
+    /*
+     * A partner-run deal is not booked by the consignor saying yes.
+     *
+     * He is one of two people the partner is negotiating with. His yes
+     * settles what we pay; it says nothing about whether the sale happens,
+     * and buyers drop out often enough that booking here would leave a
+     * unit, a written-off pair and an invoice line for a deal that never
+     * was.
+     *
+     * So his answer is parked and the partner finishes it from his own
+     * screen once his buyer has said yes too. Everything that was here
+     * runs then, unchanged, out of bookMemberWtbConsignmentDeal.
+     */
+    if (memberFields["Partner Run?"] === true) {
+      await supabase
+        .from("consignment_offers")
+        .update({
+          status: "partner_agreed",
+          accepted_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", lockedOffer.id);
 
-    const agreed = await resolveMemberWtbAgreedBuyerPrice({
+      // He has his consignor, so the other offers on this pair are done.
+      await closeCompetingMemberWtbOffers(memberWtbRecordId, lockedOffer.id);
+
+      await disableMemberWtbKcOfferButtons(
+        memberWtbRecordId,
+        "✅ A consignor agreed; the partner is closing with his buyer."
+      );
+
+      return {
+        ok: true,
+        awaiting_partner: true,
+        offer: lockedOffer
+      };
+    }
+
+    return bookMemberWtbConsignmentDeal({
+      offer: lockedOffer,
       memberWtbRecordId,
-      memberFields,
-      vatType
+      memberFields
     });
-
-    const finalBuyingPrice = agreed.price;
-
-    assertMemberWtbLeavesMargin({
-      memberWtbRecordId,
-      buyerPrice: finalBuyingPrice,
-      payout: Number(lockedOffer.offer_price)
-    });
-
-    console.log(
-      `Member WTB ${memberWtbRecordId}: buyer price ${finalBuyingPrice} via ${agreed.via}, ` +
-        `payout ${lockedOffer.offer_price}`
-    );
-
-    const memberWtbId =
-      asText(memberFields["Member WTB ID"]) ||
-      asText(memberFields["WTB ID"]) ||
-      memberWtbRecordId;
-
-    const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer({
-      ...lockedOffer,
-      order_record_id: null,
-      order_id: memberWtbId,
-      source_type: "member_wtb",
-      member_wtb_record_id: memberWtbRecordId,
-      selling_price: finalBuyingPrice,
-      selling_method: "Kickz Caviar"
-    });
-  
-    // CHANGED - was an inline decrement; the shared helper also handles a
-    // partner pair, which must not be decremented directly.
-    await writeOffConsignmentUnit(lockedOffer.inventory_id, `legacy member wtb ${memberWtbRecordId}`);
-  
-    await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
-      "Purchase Status": "Confirmed",
-      "Fulfillment Status": "Allocated",
-      "Linked Inventory Unit": [inventoryUnitRecord.id],
-      "Final Buying Price": finalBuyingPrice
-    });
-  
-    await supabase
-      .from("consignment_offers")
-      .update({
-        status: "accepted",
-        accepted_at: new Date().toISOString(),
-        closed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", lockedOffer.id);
-  
-    await closeCompetingMemberWtbOffers(memberWtbRecordId, lockedOffer.id);
-
-    await disableMemberWtbKcOfferButtons(
-      memberWtbRecordId,
-      "❌ This Member WTB was already allocated to a consignor."
-    );
-
-    await handleMemberWtbPaymentGate(memberWtbRecordId);
-  
-    return {
-      ok: true,
-      offer: lockedOffer
-    };
   }
 
   if (lockedOffer.is_counter_offer || Number(lockedOffer.consignor_counter_price) > 0) {
@@ -13485,6 +13541,88 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
  * gate is safe to ask for twice - it reuses a live payment rather than making
  * a second one - so the caller does not have to know whether it already ran.
  */
+/*
+ * The partner closing a deal he agreed on both sides.
+ *
+ * His consignor already said yes, which parked the offer on
+ * "partner_agreed" instead of booking it. This is the other half: the unit,
+ * the written-off pair, the Ready To Ship step. It runs the same code the
+ * consignor's yes used to run, so a partner deal and an ordinary one end up
+ * identical - only later.
+ *
+ * The want-to-buy is read HERE and not carried over from then, because the
+ * whole point of the wait is that the partner may still have moved the
+ * buyer price in the meantime.
+ */
+app.post("/api/internal/partner-deal/finalize", async (req, res) => {
+  try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
+    const offerId = asText(req.body?.offer_id);
+
+    if (!offerId) {
+      return res.status(400).json({ error: "offer_id is required" });
+    }
+
+    /*
+     * Locked the way confirmConsignmentOffer locks: the status is the lock,
+     * so two clicks cannot both get through and book it twice.
+     */
+    const { data: lockedOffer, error: lockError } = await supabase
+      .from("consignment_offers")
+      .update({
+        status: "processing",
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", offerId)
+      .eq("status", "partner_agreed")
+      .select()
+      .single();
+
+    if (lockError || !lockedOffer) {
+      return res.status(409).json({ error: "That offer is not waiting to be closed." });
+    }
+
+    const memberWtbRecordId = asText(lockedOffer.member_wtb_record_id);
+
+    if (!memberWtbRecordId) {
+      return res.status(409).json({ error: "This offer has no want-to-buy on it." });
+    }
+
+    const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+    const memberFields = memberWtb.fields || {};
+
+    try {
+      const out = await bookMemberWtbConsignmentDeal({
+        offer: lockedOffer,
+        memberWtbRecordId,
+        memberFields
+      });
+
+      return res.json({ ok: true, member_wtb_record_id: memberWtbRecordId, ...out });
+    } catch (bookErr) {
+      /*
+       * Put it back where it was. A refusal here is nearly always the
+       * margin guard - a buyer price that no longer covers the payout - and
+       * the partner has to be able to fix that number and try again.
+       */
+      await supabase
+        .from("consignment_offers")
+        .update({ status: "partner_agreed", updated_at: new Date().toISOString() })
+        .eq("id", lockedOffer.id);
+
+      throw bookErr;
+    }
+  } catch (err) {
+    console.error("❌ Partner deal finalize failed:", err);
+    return res.status(400).json({ error: err.message });
+  }
+});
+
 app.post("/api/internal/member-wtb-payment-gate", async (req, res) => {
   try {
     const memberWtbRecordId = String(req.body?.member_wtb_record_id || "").trim();
