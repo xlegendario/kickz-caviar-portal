@@ -42287,12 +42287,25 @@ app.post(
           metadata.trusted_buyer === true ||
           asText(metadata.trusted_buyer)
             .toLowerCase() === "true";
-        
-        if (!trustedBuyer) {
+
+        /*
+         * A partner-run deal has already had both of these.
+         *
+         * Its payment gate does not wait for money - the partner collects
+         * that himself - so the consignor got his Ready To Ship step and
+         * Make got the purchase at the moment the deal was allocated. Doing
+         * it again when Mollie confirms would send the consignor the same
+         * embed twice and book the same purchase twice.
+         *
+         * Same reason the trusted branch is excluded, and the same shape.
+         */
+        const partnerRun = memberFields["Partner Run?"] === true;
+
+        if (!trustedBuyer && !partnerRun) {
           await sendMemberWtbPurchaseWebhook(
             memberWtbRecordId
           );
-        
+
           await sendMemberWtbDealUpdateAfterPayment(
             memberWtbRecordId
           );
