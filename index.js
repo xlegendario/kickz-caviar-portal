@@ -3218,7 +3218,12 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     inventoryFields
   );
 
-  if (asText(offer.source_type) !== "member_wtb") {
+  /*
+   * The scenario behind this hook builds a STORE order's paperwork. A
+   * member want-to-buy never needed it, and neither does a broker deal -
+   * that one's invoice comes from its External Sale.
+   */
+  if (!["member_wtb", "external_sale"].includes(asText(offer.source_type))) {
     await fetch("https://hook.eu2.make.com/cmq6wlbq5sa9spmwogy4pdordvjzuz4i", {
       method: "POST",
       headers: {
@@ -3505,7 +3510,14 @@ async function sendConsignmentOfferDiscordMessage({
     ? `deny_consignment_seller_offer:${sellerOfferRecordId}`
     : `deny_offer:${offer.id}`;
 
-  const isMemberWtbOffer = asText(offer.source_type) === "member_wtb";
+  /*
+    Both of these quote the consignor in his own terms: what he asks is what
+    he is compared against. A store order is the odd one out - there the
+    offer is on the store's scale and has to be converted first.
+  */
+  const isMemberWtbOffer =
+    asText(offer.source_type) === "member_wtb" ||
+    asText(offer.source_type) === "external_sale";
 
   const sellerComparePrice = isMemberWtbOffer
     ? Number(offer.seller_price || 0)
@@ -3767,15 +3779,27 @@ async function sendConsignmentCounterOfferDiscordMessage({
   // silent-margin-lookup-failure bug found and fixed multiple times
   // earlier in this build (Store Orders, Member WTB). Fetch the real
   // order fields so the margin/percentage lookup actually works.
-  const orderRecordForNotify = await airtable(ORDERS_TABLE).find(offer.order_record_id);
-  const orderFieldsForNotify = orderRecordForNotify.fields || {};
+  /*
+   * A broker's round is quoted in the consignor's own terms from the
+   * start, so the number in front of him IS the number, and there is no
+   * order to read a margin or a country from. Reading one anyway would
+   * hand Airtable a null id, which resolves base-wide.
+   */
+  const brokerRound = asText(offer.source_type) === "external_sale";
+
+  const orderRecordForNotify = brokerRound
+    ? null
+    : await airtable(ORDERS_TABLE).find(offer.order_record_id);
+  const orderFieldsForNotify = orderRecordForNotify?.fields || {};
   const clientCountryForNotify = asText(orderFieldsForNotify["Client Country"]);
 
-  const consignorEquivalent = convertStoreBasePriceToConsignorPrice(
-    calculateConsignmentBaseFromStoreOffer(storeOfferPrice, orderFieldsForNotify),
-    offer.vat_type,
-    clientCountryForNotify
-  );
+  const consignorEquivalent = brokerRound
+    ? Number(storeOfferPrice)
+    : convertStoreBasePriceToConsignorPrice(
+        calculateConsignmentBaseFromStoreOffer(storeOfferPrice, orderFieldsForNotify),
+        offer.vat_type,
+        clientCountryForNotify
+      );
 
   const closingLine = noRoomToCounter
     ? "You're now very close to each other's price — there's no room for another counter. Please accept or deny."
@@ -6386,6 +6410,21 @@ async function denyConsignmentOffer(offerId) {
     })
     .eq("id", offer.id);
 
+  /*
+   * A broker's line goes back to draft rather than dying with the round.
+   *
+   * One consignor said no; the pair may well be sitting with three others.
+   * The line keeps its prices and is simply waiting to be offered again,
+   * and the picker skips everyone who has already been asked - so the next
+   * click walks one step further down the list instead of back to him.
+   */
+  if (asText(offer.source_type) === "external_sale") {
+    await supabase
+      .from("deal_lines")
+      .update({ status: "draft", offer_id: null, updated_at: new Date().toISOString() })
+      .eq("offer_id", offer.id);
+  }
+
   return {
     ok: true,
     offer
@@ -6728,6 +6767,41 @@ async function confirmConsignmentOffer(offerId) {
     return {
       ok: false,
       reason: "not_open"
+    };
+  }
+
+  /*
+   * A broker's deal is not booked by the consignor saying yes.
+   *
+   * He is one of two people being negotiated with. His yes settles what we
+   * pay; it says nothing about whether the sale happens, and a buyer who
+   * drops out would otherwise leave a unit, a written-off pair and an
+   * invoice line for a deal that never was.
+   *
+   * So it is parked here and finished from the deal page once the buyer is
+   * in - which is also the only moment the pair is cheap to let go of.
+   */
+  if (asText(lockedOffer.source_type) === "external_sale") {
+    const nowIso = new Date().toISOString();
+
+    await supabase
+      .from("consignment_offers")
+      .update({
+        status: "partner_agreed",
+        accepted_at: nowIso,
+        updated_at: nowIso
+      })
+      .eq("id", lockedOffer.id);
+
+    await supabase
+      .from("deal_lines")
+      .update({ status: "agreed", updated_at: nowIso })
+      .eq("offer_id", lockedOffer.id);
+
+    return {
+      ok: true,
+      awaiting_broker: true,
+      offer: lockedOffer
     };
   }
 
@@ -10344,8 +10418,19 @@ function consignmentInteractionHandler(client) {
           return;
         }
       
+        /*
+         * FIXED - this always said a deal update had been sent, and on a
+         * parked deal none has been: the buying side is settled and the
+         * selling side is not, so there is no unit, no shipping step and
+         * nothing for the consignor to do yet. Telling him otherwise sends
+         * him looking for a label that will not be there for hours.
+         */
+        const parked = result.awaiting_partner === true || result.awaiting_broker === true;
+
         await safeEditInteractionMessage(interaction, {
-          content: `✅ Confirmed by ${result.offer.seller_id}. Deal update has been sent.`,
+          content: parked
+            ? `✅ Confirmed by ${result.offer.seller_id}. You will get the shipping step once the deal is closed.`
+            : `✅ Confirmed by ${result.offer.seller_id}. Deal update has been sent.`,
           embeds: interaction.message.embeds,
           components: []
         }, client).catch((err) => {
@@ -13541,6 +13626,936 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
  * gate is safe to ask for twice - it reuses a live payment rather than making
  * a second one - so the caller does not have to know whether it already ran.
  */
+/* ------------------------------------------------------------------ *
+ * Broker deals: a consignor round that belongs to an External Sale.
+ *
+ * The third source next to a store order and a member want-to-buy. A
+ * broker stands between a buyer he is negotiating with and a consignor he
+ * is negotiating with, and neither price is worked out from the other.
+ *
+ * Deliberately NOT a Seller Offer or a Counter Offers round: those two
+ * Airtable tables are mirrors of consignment_offers for screens that have
+ * not moved to Supabase yet, and a new flow should not deepen a mirror
+ * that is on its way out. Everything about a broker round lives in
+ * consignment_offers, which already carries the pair's own sku, size,
+ * product name and brand - so there is nothing to look up and nothing to
+ * come back empty.
+ *
+ * What the consignor sees is the same embed with the same buttons, posting
+ * the same confirm_offer:/deny_offer: ids he has always had.
+ * ------------------------------------------------------------------ */
+
+const BROKER_VAT_FILTERS = {
+  all: ["Margin", "VAT0", "VAT21"],
+  margin: ["Margin"],
+  b2b: ["VAT0", "VAT21"]
+};
+
+async function loadDealLine(lineId) {
+  const { data, error } = await supabase
+    .from("deal_lines")
+    .select("*")
+    .eq("id", asText(lineId))
+    .maybeSingle();
+
+  if (error) throw error;
+
+  return data;
+}
+
+/*
+ * Who gets asked next.
+ *
+ * The cheapest holder inside the deal's VAT filter who has not been asked
+ * on this line yet. Asked rather than refused, so walking down the list
+ * ends: a consignor who is already holding a question must not get a
+ * second one for the same pair.
+ *
+ * Partner stock is left out. A pair on our own shelf that a partner is
+ * paid for is already ours to sell - there is nobody to ask, and the
+ * auto-confirm that handles it hangs off a Seller Offer this flow does
+ * not make.
+ */
+async function pickBrokerConsignor(line) {
+  const allowed = BROKER_VAT_FILTERS[asText(line.vat_filter)] || BROKER_VAT_FILTERS.all;
+
+  const { data: stock, error } = await supabase
+    .from("consignment_inventory")
+    .select("id, product_name, sku, size, brand, vat_type, selling_price_suggested, quantity, seller_id, seller_record_id, payout_price")
+    .eq("sku", asText(line.sku).toUpperCase())
+    .eq("size", asText(line.size))
+    .gt("quantity", 0);
+
+  if (error) throw error;
+
+  const { data: asked } = await supabase
+    .from("consignment_offers")
+    .select("inventory_id")
+    .eq("external_sale_id", line.sale_id)
+    .eq("sku", asText(line.sku).toUpperCase())
+    .eq("size", asText(line.size))
+    .not("status", "in", "(denied,store_denied,closed,expired,cancelled)");
+
+  /*
+   * Counted rather than flagged, because a consignor holding two of the
+   * same pair may be asked twice - once per line - and a deal for two is
+   * exactly when that comes up. He drops out when every one he has is
+   * already spoken for in this deal.
+   */
+  const timesAsked = new Map();
+
+  for (const row of asked || []) {
+    const id = asText(row.inventory_id);
+    if (id) timesAsked.set(id, (timesAsked.get(id) || 0) + 1);
+  }
+
+  return (stock || [])
+    .filter((row) => (timesAsked.get(asText(row.id)) || 0) < Number(row.quantity || 0))
+    .filter((row) => allowed.includes(asText(row.vat_type)))
+    // Partner stock: ours already, nobody to ask.
+    .filter((row) => !(Number(row.payout_price) > 0))
+    .map((row) => ({
+      row,
+      ask: Number(row.selling_price_suggested),
+      compare: getConsignmentComparePrice(row.selling_price_suggested, row.vat_type)
+    }))
+    .filter((item) => Number.isFinite(item.ask) && item.ask > 0)
+    .sort((a, b) => a.compare - b.compare)[0] || null;
+}
+
+/*
+ * Bring out an offer on one line of a deal.
+ *
+ * Called again after a no: it picks the next cheapest holder, which is why
+ * nothing here remembers a decision beyond "this one has been asked".
+ */
+app.post("/api/internal/broker/offer", async (req, res) => {
+  try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
+    const line = await loadDealLine(req.body?.deal_line_id);
+
+    if (!line) {
+      return res.status(404).json({ error: "That line is not part of a deal." });
+    }
+
+    if (line.inventory_unit_record_id) {
+      return res.status(409).json({ error: "That pair is already bought." });
+    }
+
+    const payout = Number(line.payout);
+
+    if (!(payout > 0)) {
+      return res.status(400).json({ error: "This line has no payout to offer." });
+    }
+
+    const pick = await pickBrokerConsignor(line);
+
+    if (!pick) {
+      return res.status(409).json({
+        error: "Nobody is left holding this pair who has not been asked already."
+      });
+    }
+
+    /*
+     * Never above his own asking price.
+     *
+     * Paying a consignor more than he asked for buys nothing: he says yes
+     * either way, and the difference comes straight off the margin. The
+     * Admin side refuses it before it gets here; this is the second lock.
+     */
+    const cents = (value) => Math.round((Number(value) || 0) * 100) / 100;
+    const offerPrice = Math.min(cents(payout), cents(pick.ask));
+
+    const { data: offer, error: offerError } = await supabase
+      .from("consignment_offers")
+      .insert({
+        source_type: "external_sale",
+        external_sale_id: line.sale_id,
+        order_id: await brokerDealNumber(line.sale_id),
+
+        inventory_id: pick.row.id,
+        seller_record_id: pick.row.seller_record_id,
+        seller_id: pick.row.seller_id,
+
+        product_name: asText(pick.row.product_name) || asText(line.product_name),
+        sku: asText(pick.row.sku).toUpperCase(),
+        size: asText(pick.row.size),
+        brand: asText(pick.row.brand) || asText(line.brand),
+
+        vat_type: pick.row.vat_type,
+        seller_price: pick.ask,
+        offer_price: offerPrice,
+        quantity_at_offer: pick.row.quantity,
+
+        status: "open",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+
+    if (offerError) throw offerError;
+
+    const sellerRecord = await airtable(SELLERS_TABLE)
+      .find(asText(pick.row.seller_record_id))
+      .catch(() => null);
+
+    if (!sellerRecord) {
+      await supabase
+        .from("consignment_offers")
+        .update({ status: "closed", closed_at: new Date().toISOString() })
+        .eq("id", offer.id);
+
+      return res.status(409).json({ error: `Consignor ${pick.row.seller_id} no longer exists.` });
+    }
+
+    const sf = sellerRecord.fields || {};
+
+    /*
+     * No sellerOfferRecordId, on purpose: that argument is what points the
+     * buttons at the Airtable handlers. Leaving it out gives the consignor
+     * confirm_offer:/deny_offer: with this row's id, which is the Supabase
+     * road - and the Counter button works for the same reason.
+     */
+    const discordResult = await sendConsignmentOfferDiscordMessage({
+      seller: {
+        id: asText(pick.row.seller_record_id),
+        seller_record_id: asText(pick.row.seller_record_id),
+        seller_id: asText(sf["Seller ID"]),
+        discord_id: asText(sf["Discord ID"]),
+        consignment_offer_channel_id: asText(sf["Consignment Offer Channel ID"]),
+        consignment_confirmation_channel_id: asText(sf["Consignment Confirmation Channel ID"])
+      },
+      offer,
+      calculatedOfferPrice: offerPrice,
+      inventoryId: pick.row.id
+    });
+
+    await supabase
+      .from("consignment_offers")
+      .update({
+        discord_channel_id: discordResult.channelId,
+        discord_message_id: discordResult.messageId,
+        discord_delivery_type: discordResult.deliveryType,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", offer.id);
+
+    await supabase
+      .from("deal_lines")
+      .update({
+        status: "offered",
+        offer_id: offer.id,
+        consignment_inventory_id: pick.row.id,
+        product_name: asText(line.product_name) || asText(pick.row.product_name),
+        brand: asText(line.brand) || asText(pick.row.brand),
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", line.id);
+
+    console.log(
+      `📨 Broker offer on ${offer.sku} ${offer.size}: ${moneySmartValue(offerPrice.toFixed(2))} ` +
+        `to ${offer.seller_id} (asks ${moneySmartValue(Number(pick.ask).toFixed(2))}).`
+    );
+
+    return res.json({
+      ok: true,
+      offer_id: offer.id,
+      seller_id: offer.seller_id,
+      asks: pick.ask,
+      offered: offerPrice,
+      delivery: discordResult.deliveryType
+    });
+  } catch (err) {
+    console.error("❌ Broker offer failed:", err);
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+/*
+ * His label is ready, and everything on it travels together.
+ *
+ * One message for the whole parcel, naming every pair, because the one
+ * mistake this costs real money is a consignor putting three boxes in the
+ * post with the same label on them. His dashboard collapses the rows for
+ * the same reason; this says it out loud.
+ *
+ * Posted into the channel his offer went out in - that is the conversation
+ * he already has about these pairs.
+ */
+app.post("/api/internal/broker/label-ready", async (req, res) => {
+  try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
+    const saleId = asText(req.body?.sale_id);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const pairs = Array.isArray(req.body?.pairs) ? req.body.pairs : [];
+
+    if (!saleId || !sellerRecordId || !pairs.length) {
+      return res.status(400).json({ error: "sale_id, seller_record_id and pairs are required" });
+    }
+
+    // Any round of his on this deal: they all went to the same place.
+    const { data: rounds } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("external_sale_id", saleId)
+      .eq("seller_record_id", sellerRecordId)
+      .not("discord_channel_id", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    const offer = (rounds || [])[0];
+
+    if (!offer) {
+      return res.status(404).json({ error: "No conversation with that consignor on this deal." });
+    }
+
+    const many = pairs.length > 1;
+
+    const told = await tellConsignmentOfferChannel(offer, [
+      `📦 **Your shipping label for ${asText(req.body?.deal_id)} is ready.**`,
+      "",
+      many
+        ? `**${pairs.length} pairs, one parcel.** Put them in ONE box - the label below covers all of them:`
+        : "**One pair:**",
+      ...pairs.map((pair) =>
+        `• ${asText(pair.product_name) || asText(pair.sku)} - ${asText(pair.sku)} - size ${asText(pair.size)}`
+      ),
+      "",
+      `**Label:** ${asText(req.body?.label_url)}`,
+      `**Tracking:** ${asText(req.body?.tracking)}`,
+      "",
+      many
+        ? "Please do not send them separately - there is one label and one tracking number for the whole parcel."
+        : "It is also in your dashboard, under Ready to Ship."
+    ].join("\n"));
+
+    return res.json({ ok: true, told, pairs: pairs.length });
+  } catch (err) {
+    console.error("❌ Broker label notice failed:", err);
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+/*
+ * Closing one line of a broker's deal.
+ *
+ * His consignor said yes a while ago, which parked the round instead of
+ * booking it. This is the other half, and it only runs once the buyer is in
+ * too: the Inventory Unit, the pair off the consignor's shelf, his shipping
+ * step. Until this moment nothing exists that would have to be undone if
+ * the buyer walked away, which is the whole reason for the wait.
+ *
+ * The buyer price is read HERE and not carried over from then, because the
+ * waiting is exactly when a broker is still moving it.
+ *
+ * What it does NOT do is add the pair to the sale: that is the Admin
+ * portal's job, which owns external_sale_pairs and knows which VAT route
+ * this buyer is on. This side hands it a finished Inventory Unit.
+ */
+app.post("/api/internal/broker/finalize", async (req, res) => {
+  try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
+    const line = await loadDealLine(req.body?.deal_line_id);
+
+    if (!line) {
+      return res.status(404).json({ error: "That line is not part of a deal." });
+    }
+
+    if (line.inventory_unit_record_id) {
+      return res.status(409).json({ error: "That pair is already bought." });
+    }
+
+    const buyerPrice = Number(req.body?.buyer_price ?? line.buyer_price);
+
+    if (!(buyerPrice > 0)) {
+      return res.status(400).json({ error: "What does the buyer pay?" });
+    }
+
+    /*
+     * The status is the lock, the same way confirmConsignmentOffer locks:
+     * two clicks cannot both get through and buy the pair twice.
+     */
+    const { data: lockedOffer, error: lockError } = await supabase
+      .from("consignment_offers")
+      .update({ status: "processing", updated_at: new Date().toISOString() })
+      .eq("id", asText(line.offer_id))
+      .eq("status", "partner_agreed")
+      .select()
+      .single();
+
+    if (lockError || !lockedOffer) {
+      return res.status(409).json({ error: "That offer is not waiting to be closed." });
+    }
+
+    try {
+      const payout = Number(lockedOffer.offer_price);
+
+      if (!(buyerPrice > payout)) {
+        throw new Error(
+          `${moneySmartValue(buyerPrice.toFixed(2))} does not cover the ` +
+            `${moneySmartValue(payout.toFixed(2))} going to ${lockedOffer.seller_id}.`
+        );
+      }
+
+      const dealId = await brokerDealNumber(line.sale_id);
+
+      const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer({
+        ...lockedOffer,
+        order_record_id: null,
+        order_id: dealId,
+        source_type: "external_sale",
+        selling_price: buyerPrice,
+        selling_method: "Kickz Caviar"
+      });
+
+      await writeOffConsignmentUnit(lockedOffer.inventory_id, `broker deal ${dealId}`);
+
+      const nowIso = new Date().toISOString();
+
+      await supabase
+        .from("consignment_offers")
+        .update({
+          status: "accepted",
+          accepted_at: nowIso,
+          closed_at: nowIso,
+          updated_at: nowIso
+        })
+        .eq("id", lockedOffer.id);
+
+      await supabase
+        .from("deal_lines")
+        .update({
+          status: "confirmed",
+          buyer_price: buyerPrice,
+          payout,
+          inventory_unit_record_id: inventoryUnitRecord.id,
+          updated_at: nowIso
+        })
+        .eq("id", line.id);
+
+      console.log(
+        `🤝 Broker deal ${dealId}: bought ${lockedOffer.sku} ${lockedOffer.size} from ` +
+          `${lockedOffer.seller_id} for ${moneySmartValue(payout.toFixed(2))}, selling at ` +
+          `${moneySmartValue(buyerPrice.toFixed(2))}.`
+      );
+
+      return res.json({
+        ok: true,
+        deal_line_id: line.id,
+        inventory_unit_record_id: inventoryUnitRecord.id,
+        item_id: asText(inventoryUnitRecord.fields?.["Item ID"]),
+        seller_id: lockedOffer.seller_id,
+        payout,
+        buyer_price: buyerPrice
+      });
+    } catch (bookErr) {
+      /*
+       * Put it back where it was. A refusal here is nearly always the
+       * margin guard - a buyer price that no longer covers the payout -
+       * and the broker has to be able to fix that number and try again.
+       */
+      await supabase
+        .from("consignment_offers")
+        .update({ status: "partner_agreed", updated_at: new Date().toISOString() })
+        .eq("id", lockedOffer.id);
+
+      throw bookErr;
+    }
+  } catch (err) {
+    console.error("❌ Broker finalize failed:", err);
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+// The deal's own number, so the consignor's embed names something he can
+// be asked about later. Falls back to the record id rather than failing an
+// offer over a label.
+async function brokerDealNumber(saleId) {
+  const { data } = await supabase
+    .from("external_sales")
+    .select("deal_number")
+    .eq("id", asText(saleId))
+    .maybeSingle();
+
+  return data?.deal_number ? `EXTD-${String(data.deal_number).padStart(6, "0")}` : asText(saleId);
+}
+
+/*
+ * The clock on a partner-run deal.
+ *
+ * A partner stands between two people who do not work here, and neither of
+ * them is waiting on a system: a consignor who said yes a day ago should
+ * know whether he still has to keep the pair aside, and an offer nobody
+ * answered is not a deal that is pending, it is one that is over.
+ *
+ * Twenty-four hours from the last sign of life, whichever side gave it.
+ * Every move already stamps its own time, so the deadline is read off the
+ * row instead of stored on it - a stored one would be the thing that goes
+ * stale when the round moves on.
+ *
+ * "extended_until" is the one thing written, for the case the row cannot
+ * see: the buyer asking for another day.
+ *
+ * The Admin portal shows this same countdown (admin/adminPartnerDeals.js,
+ * CLOCK_HOURS / CLOCK_WATCHES). It has to be in both - that one is where
+ * the partner watches the time run out, this one is where it runs out - so
+ * a change here is a change there.
+ */
+const PARTNER_DEAL_CLOCK_HOURS = Number(
+  process.env.PARTNER_DEAL_CLOCK_HOURS || 24
+);
+
+const PARTNER_DEAL_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+
+// Whose move it is waiting on, and the stamp that move left behind. A
+// status that is not here is finished, and a finished offer has no clock.
+const PARTNER_DEAL_CLOCK_WATCHES = {
+  open: "created_at",
+  store_pending: "consignor_counter_at",
+  partner_agreed: "accepted_at"
+};
+
+function partnerRunDealDeadline(offer) {
+  const watched = PARTNER_DEAL_CLOCK_WATCHES[asText(offer?.status)];
+
+  if (!watched) return null;
+
+  // The round's own start stands in for a missing stamp: a row written
+  // before a given column existed still has a created_at.
+  const since = Date.parse(asText(offer[watched]) || asText(offer.created_at));
+
+  if (!Number.isFinite(since)) return null;
+
+  const due = since + PARTNER_DEAL_CLOCK_HOURS * 3600 * 1000;
+  const extended = Date.parse(asText(offer.extended_until));
+
+  return Number.isFinite(extended) && extended > due ? extended : due;
+}
+
+/*
+ * A line into the channel the offer itself went out in.
+ *
+ * Not an edit of that message: a consignor who agreed to something is owed
+ * a notice he will actually see, and an edited embed two hundred messages
+ * up is not that.
+ *
+ * Same routing as the offer took. A store consignor's channels live in the
+ * Lojiq server where neither of this service's bots can post, and a DM-only
+ * consignor only ever had the deal bot.
+ */
+async function tellConsignmentOfferChannel(offer, content) {
+  const channelId = asText(offer?.discord_channel_id);
+
+  if (!channelId) return false;
+
+  const storeConsignor = await isStoreConsignor(asText(offer.seller_record_id))
+    .catch(() => false);
+
+  if (storeConsignor) {
+    await postLojiqConsignorEmbed({ channelId, content });
+    return true;
+  }
+
+  const wasDm = offer.discord_delivery_type === "dm";
+
+  if (wasDm) {
+    await initKickzDealDiscord();
+  } else {
+    await initDiscord();
+  }
+
+  const clients = wasDm
+    ? [kickzDealDiscordClient, discordClient]
+    : [discordClient, kickzDealDiscordClient];
+
+  for (const client of clients) {
+    if (!client?.isReady?.()) continue;
+
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+
+    if (!channel) continue;
+
+    await channel.send({ content });
+    return true;
+  }
+
+  console.error("Could not reach a consignor's offer channel:", {
+    offerId: offer.id,
+    channelId
+  });
+
+  return false;
+}
+
+/*
+ * The Seller Offer behind a partner-run consignment offer, taken off the
+ * board.
+ *
+ * Found through the want-to-buy rather than carried on the offer row: the
+ * offers table has never held the Seller Offer's id, and the want-to-buy
+ * links every request made on it.
+ *
+ * Withdrawn? is the flag the rest of this service reads as "nobody is
+ * waiting on this one any more" - the same one a seller's own delete uses.
+ * The confirm message ids are cleared with it so a later accept on this
+ * stock asks again instead of assuming somebody is still thinking it over.
+ */
+async function withdrawPartnerRunSellerOffer({ memberWtbRecordId, sellerRecordId }) {
+  const memberWtb = await airtable(MEMBER_WTBS_TABLE)
+    .find(memberWtbRecordId)
+    .catch(() => null);
+
+  const offerIds = Array.isArray(memberWtb?.fields?.["Seller Offers"])
+    ? memberWtb.fields["Seller Offers"]
+    : [];
+
+  let withdrawn = 0;
+
+  for (const offerId of offerIds) {
+    const record = await airtable(SELLER_OFFERS_TABLE).find(offerId).catch(() => null);
+
+    if (!record) continue;
+
+    const f = record.fields || {};
+
+    if (!asText(f["Consignment Inventory ID"])) continue;
+    if (f["Withdrawn?"]) continue;
+    // Booked. Nothing to withdraw, and nothing that should be touched.
+    if (firstLinkedRecordId(f["Linked Inventory Unit"])) continue;
+    if (sellerRecordId && firstLinkedRecordId(f["Seller ID"]) !== sellerRecordId) continue;
+
+    await airtable(SELLER_OFFERS_TABLE).update(offerId, {
+      "Withdrawn?": true,
+      "Consignment Confirm Message ID": "",
+      "Consignment Confirm Channel ID": ""
+    });
+
+    // And the counter rounds hanging off it, which are what the consignor
+    // sees in his own portal.
+    await closeConsignmentRoundsForSellerOffer(offerId, "Closed");
+
+    withdrawn += 1;
+  }
+
+  return withdrawn;
+}
+
+/*
+ * Ending a partner-run offer that will not become a deal.
+ *
+ * One road for both ways that happens - the clock running out and the
+ * partner dropping it by hand - because they end in exactly the same place
+ * and a rule written on one of them would silently not apply to the other.
+ *
+ * Who hears about it depends on what the consignor did, not on why it
+ * ended. He agreed: he set a pair aside on our word and has to be told it
+ * is free again. He only countered, or never answered at all: he hears
+ * nothing, because nothing was ever settled with him and a notice would be
+ * us announcing our own silence.
+ *
+ * Nothing was booked - that is the whole point of parking on
+ * "partner_agreed" - so there is no unit, no written-off pair and no
+ * invoice line to undo here.
+ */
+async function endPartnerRunOffer(offer, { why = "expired" } = {}) {
+  const was = asText(offer.status);
+  const agreed = was === "partner_agreed";
+  const nowIso = new Date().toISOString();
+
+  /*
+   * The status is the lock, as everywhere else in this flow: the sweep and
+   * the partner's own click can land in the same second, and the consignor
+   * can be answering at that moment too.
+   */
+  const { data: ended, error } = await supabase
+    .from("consignment_offers")
+    .update({
+      status: why === "expired" ? "expired" : "cancelled",
+      closed_at: nowIso,
+      updated_at: nowIso
+    })
+    .eq("id", offer.id)
+    .eq("status", was)
+    .select()
+    .single();
+
+  if (error || !ended) return { ok: false, reason: "moved_on" };
+
+  // The offer embed, if it still has live buttons on it.
+  if (ended.discord_channel_id && ended.discord_message_id) {
+    await disableConsignmentDiscordButtons(
+      ended.discord_channel_id,
+      ended.discord_message_id,
+      why === "expired"
+        ? "⌛ This request expired."
+        : "❌ This request was withdrawn."
+    ).catch((err) =>
+      console.error("Could not close a partner-run offer embed (non-blocking):", err.message)
+    );
+  }
+
+  let told = false;
+
+  if (agreed) {
+    told = await tellConsignmentOfferChannel(
+      ended,
+      [
+        `⚠️ **The deal for ${asText(ended.sku) || "this pair"} - ${asText(ended.size) || "?"} is not going ahead.**`,
+        "",
+        "You confirmed it, so you are hearing it from us: the buyer did not" +
+          " come through and we are not buying the pair. It is yours again" +
+          " and stays listed - nothing else is needed from you.",
+        "",
+        "Sorry for the back and forth."
+      ].join("\n")
+    ).catch((err) => {
+      console.error(
+        `Failed to tell ${asText(ended.seller_id)} his partner deal is off:`,
+        err.message
+      );
+
+      return false;
+    });
+  }
+
+  /*
+   * And the want-to-buy itself, once nothing live is left on it.
+   *
+   * It was made for this one deal; with the offer gone it is a request
+   * nobody is working on, and leaving it open would show it to KC as one
+   * that still needs filling. The partner starts a new one from
+   * Consignment Stock in two clicks, which is also where its numbers come
+   * from - so there is nothing here worth keeping alive.
+   */
+  /*
+   * A broker's line goes back on the shelf rather than taking the deal
+   * with it: the buyer may still want the pair, and the next holder has
+   * not been asked yet. Same place a refusal leaves it.
+   */
+  if (asText(ended.source_type) === "external_sale") {
+    await supabase
+      .from("deal_lines")
+      .update({ status: "draft", offer_id: null, updated_at: nowIso })
+      .eq("offer_id", ended.id);
+
+    console.log(
+      `🧹 Broker round ${ended.id} (${asText(ended.seller_id)}, ${asText(ended.sku)} ${asText(ended.size)}) ` +
+        `${why} from ${was}${agreed ? `; consignor told: ${told}` : ""}.`
+    );
+
+    return { ok: true, offer: ended, told_consignor: told, was };
+  }
+
+  const memberWtbRecordId = asText(ended.member_wtb_record_id);
+
+  if (memberWtbRecordId) {
+    /*
+     * The Airtable side of the same request first.
+     *
+     * A consignment offer is two records: this row, and the Seller Offer
+     * the want-to-buy actually points at. Every "is anyone still working
+     * on this pair" question in this service is answered from that one, so
+     * leaving it standing would make the request live and dead at the same
+     * time - and the sweep below would never find the want-to-buy empty.
+     *
+     * Not denyConsignmentSellerOffer, deliberately: that one answers for a
+     * consignor who said no, and goes on to offer the pair to the next
+     * cheapest source. Nobody said no here, and nobody is waiting for a
+     * replacement - the deal is off.
+     */
+    await withdrawPartnerRunSellerOffer({
+      memberWtbRecordId,
+      sellerRecordId: asText(ended.seller_record_id)
+    }).catch((err) =>
+      console.error("Could not withdraw a partner-run Seller Offer (non-blocking):", err.message)
+    );
+
+    const stillLive = await countLiveConsignmentRequestsForMemberWtb(memberWtbRecordId)
+      .catch(() => 1);
+
+    if (!stillLive) {
+      await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
+        "Purchase Status": "Cancelled",
+        "Fulfillment Status": "Cancelled"
+      }).catch((err) =>
+        console.error(`Failed to cancel Member WTB ${memberWtbRecordId} (non-blocking):`, err.message)
+      );
+
+      await disableMemberWtbKcOfferButtons(
+        memberWtbRecordId,
+        why === "expired"
+          ? "⌛ This partner request expired."
+          : "❌ This partner request was withdrawn."
+      ).catch(() => {});
+    }
+  }
+
+  console.log(
+    `🧹 Partner-run offer ${ended.id} (${asText(ended.seller_id)}, ${asText(ended.sku)} ${asText(ended.size)}) ` +
+      `${why} from ${was}${agreed ? `; consignor told: ${told}` : ""}.`
+  );
+
+  return { ok: true, offer: ended, told_consignor: told, was };
+}
+
+/*
+ * Every live partner-run offer whose time is up.
+ *
+ * Read from the offers side and narrowed with one Airtable call, because
+ * only the want-to-buy knows a run is a partner's: the offers table has no
+ * flag of its own, and asking Airtable per offer would be dozens of reads
+ * every ten minutes for the handful that are a partner's.
+ */
+async function sweepPartnerRunDeals() {
+  try {
+    /*
+     * Both kinds of brokered round: the partner-run want-to-buy this
+     * started as, and the broker deal that replaces it. They run on the
+     * same clock and end the same way, so one sweep covers both.
+     */
+    const { data: live, error } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .in("source_type", ["member_wtb", "external_sale"])
+      .in("status", Object.keys(PARTNER_DEAL_CLOCK_WATCHES))
+      .order("created_at", { ascending: true })
+      .limit(500);
+
+    if (error) throw error;
+
+    const now = Date.now();
+
+    const due = (live || []).filter((offer) => {
+      const deadline = partnerRunDealDeadline(offer);
+
+      return Number.isFinite(deadline) && deadline <= now;
+    });
+
+    if (!due.length) return { checked: (live || []).length, ended: 0 };
+
+    /*
+     * A broker round needs no checking: its external_sale_id IS the proof
+     * that it belongs to a deal. Only the want-to-buys have to be asked
+     * about, because that table is full of ordinary ones too.
+     */
+    const wtbIds = [...new Set(
+      due
+        .filter((offer) => asText(offer.source_type) === "member_wtb")
+        .map((offer) => asText(offer.member_wtb_record_id))
+    )].filter((id) => /^rec[A-Za-z0-9]{14}$/.test(id));
+
+    const partnerRun = new Set();
+
+    for (let i = 0; i < wtbIds.length; i += 50) {
+      const chunk = wtbIds.slice(i, i + 50);
+
+      const records = await airtable(MEMBER_WTBS_TABLE)
+        .select({
+          filterByFormula: `AND({Partner Run?} = TRUE(), OR(${chunk
+            .map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`)
+            .join(",")}))`,
+          fields: ["Partner Run?"]
+        })
+        .all()
+        .catch(() => []);
+
+      for (const record of records) partnerRun.add(record.id);
+    }
+
+    let ended = 0;
+
+    for (const offer of due) {
+      const brokered = asText(offer.source_type) === "external_sale"
+        ? Boolean(asText(offer.external_sale_id))
+        : partnerRun.has(asText(offer.member_wtb_record_id));
+
+      if (!brokered) continue;
+
+      const out = await endPartnerRunOffer(offer, { why: "expired" })
+        .catch((err) => {
+          console.error(`Failed to expire partner-run offer ${offer.id}:`, err.message);
+
+          return { ok: false };
+        });
+
+      if (out.ok) ended += 1;
+    }
+
+    return { checked: (live || []).length, ended };
+  } catch (err) {
+    console.error("Partner-run deal sweep failed:", err.message);
+
+    return { checked: 0, ended: 0 };
+  }
+}
+
+/*
+ * The partner dropping a deal before the clock gets there.
+ *
+ * His buyer walked away, and a consignor holding a pair for a deal that is
+ * off should not have to wait out the day to find that out.
+ */
+app.post("/api/internal/partner-deal/discard", async (req, res) => {
+  try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
+    const offerId = asText(req.body?.offer_id);
+
+    if (!offerId) {
+      return res.status(400).json({ error: "offer_id is required" });
+    }
+
+    const { data: offer, error } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("id", offerId)
+      .single();
+
+    if (error || !offer) {
+      return res.status(404).json({ error: "That offer does not exist." });
+    }
+
+    if (!PARTNER_DEAL_CLOCK_WATCHES[asText(offer.status)]) {
+      return res.status(409).json({ error: `That offer is already ${asText(offer.status)}.` });
+    }
+
+    const out = await endPartnerRunOffer(offer, { why: "cancelled" });
+
+    if (!out.ok) {
+      return res.status(409).json({ error: "That offer was answered a moment ago." });
+    }
+
+    return res.json({
+      ok: true,
+      told_consignor: out.told_consignor,
+      was: out.was
+    });
+  } catch (err) {
+    console.error("❌ Partner deal discard failed:", err);
+    return res.status(400).json({ error: err.message });
+  }
+});
+
 /*
  * The partner closing a deal he agreed on both sides.
  *
@@ -19353,6 +20368,51 @@ app.post("/api/consignment/offers/:id/counter", async (req, res) => {
       });
     }
     
+    /*
+     * A broker's round is quoted in the consignor's own terms, so there is
+     * nothing to convert and no store to post to.
+     *
+     * Everything below this point exists to put a consignor's counter onto
+     * a STORE's scale and into a store's channel: the client country, the
+     * margin, the Lowest Offer sync, the store embed. A broker has no
+     * store - he reads the counter on his own deal page and answers it
+     * there, and what his buyer pays is a separate negotiation.
+     */
+    if (asText(offer.source_type) === "external_sale") {
+      const { data: countered, error: counterError } = await supabase
+        .from("consignment_offers")
+        .update({
+          status: "store_pending",
+          consignor_counter_price: counterPrice,
+          consignor_counter_at: new Date().toISOString(),
+          store_response_status: "pending",
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", offer.id)
+        .eq("status", "open")
+        .select()
+        .single();
+
+      if (counterError || !countered) {
+        return res.status(409).json({ error: "Offer is no longer available" });
+      }
+
+      await supabase
+        .from("deal_lines")
+        .update({ status: "countered", updated_at: new Date().toISOString() })
+        .eq("offer_id", offer.id);
+
+      if (offer.discord_channel_id && offer.discord_message_id) {
+        await disableConsignmentDiscordButtons(
+          offer.discord_channel_id,
+          offer.discord_message_id,
+          `🔁 Counter offer sent: ${moneySmartValue(counterPrice.toFixed(2))} (${offer.vat_type}).`
+        ).catch(() => {});
+      }
+
+      return res.json({ ok: true, offer: countered });
+    }
+
     const orderRecord = await airtable(ORDERS_TABLE).find(offer.order_record_id);
     const orderFields = orderRecord.fields || {};
     const clientCountry = asText(orderFields["Client Country"]);
@@ -19506,6 +20566,104 @@ app.post("/api/consignment/offers/:id/store-counter", async (req, res) => {
 
     if (!(Number(previousOffer.consignor_counter_price) > 0)) {
       return res.status(409).json({ error: "This offer has no consignor counter to respond to yet." });
+    }
+
+    /*
+     * A broker countering back.
+     *
+     * Placed before the order is read, because a broker's round has no
+     * order - and read it anyway and Airtable resolves a null id
+     * base-wide, which is how three silent mistakes happened in one day.
+     *
+     * The band is the plain one: above what he was offered, below what he
+     * asked for. No store scale, no margin, no ceiling - the broker's own
+     * buyer price is his business and is deliberately not consulted here.
+     */
+    if (asText(previousOffer.source_type) === "external_sale") {
+      const was = Number(previousOffer.offer_price);
+      const his = Number(previousOffer.consignor_counter_price);
+
+      if (!(proposedPrice > was && proposedPrice < his)) {
+        return res.status(400).json({
+          error:
+            `A counter sits between your ${moneySmartValue(was.toFixed(2))} and his ` +
+            `${moneySmartValue(his.toFixed(2))}.`,
+          band: [Math.floor(was) + 1, Math.ceil(his) - 1]
+        });
+      }
+
+      const brokerNowIso = new Date().toISOString();
+
+      await supabase
+        .from("consignment_offers")
+        .update({ status: "closed", closed_at: brokerNowIso })
+        .eq("id", previousOfferId);
+
+      const { data: brokerRound, error: brokerError } = await supabase
+        .from("consignment_offers")
+        .insert({
+          source_type: "external_sale",
+          external_sale_id: previousOffer.external_sale_id,
+          order_id: previousOffer.order_id,
+          inventory_id: previousOffer.inventory_id,
+
+          seller_record_id: previousOffer.seller_record_id,
+          seller_id: previousOffer.seller_id,
+
+          product_name: previousOffer.product_name,
+          sku: previousOffer.sku,
+          size: previousOffer.size,
+          brand: previousOffer.brand,
+
+          vat_type: previousOffer.vat_type,
+          seller_price: previousOffer.seller_price,
+          // His own terms throughout, so the counter IS the new offer.
+          offer_price: proposedPrice,
+
+          is_counter_offer: true,
+          store_counter_price: proposedPrice,
+          previous_offer_id: previousOfferId,
+
+          status: "open",
+          created_at: brokerNowIso,
+          updated_at: brokerNowIso
+        })
+        .select()
+        .single();
+
+      if (brokerError) throw brokerError;
+
+      await supabase
+        .from("deal_lines")
+        .update({ status: "offered", offer_id: brokerRound.id, updated_at: brokerNowIso })
+        .eq("offer_id", previousOfferId);
+
+      let brokerDiscord = null;
+
+      try {
+        brokerDiscord = await sendConsignmentCounterOfferDiscordMessage({
+          offer: brokerRound,
+          storeOfferPrice: proposedPrice,
+          storeOfferVatType: previousOffer.vat_type,
+          yourPreviousCounter: his,
+          noRoomToCounter: !hasRoomForNextStep(his, proposedPrice),
+          isFirstStoreResponse: !(Number(previousOffer.store_counter_price) > 0)
+        });
+
+        await supabase
+          .from("consignment_offers")
+          .update({
+            discord_channel_id: brokerDiscord.channelId,
+            discord_message_id: brokerDiscord.messageId,
+            discord_delivery_type: brokerDiscord.deliveryType,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", brokerRound.id);
+      } catch (err) {
+        console.error("Failed to notify consignor of a broker counter (non-blocking):", err);
+      }
+
+      return res.json({ ok: true, new_offer_id: brokerRound.id, dm_sent: !!brokerDiscord });
     }
 
     const orderRecord = await airtable(ORDERS_TABLE).find(previousOffer.order_record_id);
@@ -20682,6 +21840,22 @@ app.post("/api/consignment/offers/:id/store-deny", async (req, res) => {
       }
     } catch (reopenErr) {
       console.error("Failed to reopen prior round after consignment store-deny (non-blocking):", reopenErr);
+    }
+
+    /*
+     * And the broker's line follows what just happened to the round: back
+     * to the earlier offer if one was reopened for the consignor to take,
+     * otherwise back to draft so the next holder can be asked.
+     */
+    if (asText(offer.source_type) === "external_sale") {
+      await supabase
+        .from("deal_lines")
+        .update(
+          offer.previous_offer_id
+            ? { status: "offered", offer_id: offer.previous_offer_id, updated_at: new Date().toISOString() }
+            : { status: "draft", offer_id: null, updated_at: new Date().toISOString() }
+        )
+        .eq("offer_id", offer.id);
     }
 
     res.json({
@@ -33286,6 +34460,148 @@ app.get("/api/dashboard/open-claims", async (req, res) => {
   }
 });
 
+/* ------------------------------------------------------------------ *
+ * A broker deal in the consignor's own dashboard.
+ *
+ * His tabs read Inventory Units and ask a lookup what step the pair is on.
+ * A broker pair has no want-to-buy and no order to look through, so those
+ * come back empty and the pair would simply not appear - he would get the
+ * offer in Discord and then see nothing at all in the portal he is used
+ * to.
+ *
+ * So the same two questions are asked of Supabase as well, and the answers
+ * are merged. Nothing about the existing rows changes: a pair that has a
+ * want-to-buy or an order behind it still reads exactly as it did.
+ * ------------------------------------------------------------------ */
+
+const BROKER_PAIR_UNIT_FIELDS = [
+  "Seller ID",
+  "Item ID",
+  "Type",
+  "Fulfillment Status (UOL)",
+  "Fulfillment Status (MWTB)",
+  "Shipping Status",
+  "Shipping Status (MWTB)",
+  "Payment Status",
+  "Purchase Price",
+  "Unfulfilled Orders Log",
+  "Member WTBs",
+  "Member WTB ID",
+  "WTB Created Channel ID (MWTB)",
+  "Shipping Label URL (Permanent) (MWTB)",
+  "Tracking URL (MWTB)",
+  "Product Name",
+  "SKU",
+  "Size",
+  "Brand",
+  "VAT Type",
+  "Purchase Date"
+];
+
+/*
+ * The pairs of a broker deal that are at this step, with the deal they
+ * belong to - the consignor knows his pair by that number.
+ */
+async function brokerPairsAt(column, value) {
+  const { data, error } = await supabase
+    .from("external_sale_pairs")
+    .select("*, external_sales(deal_number,payment_status)")
+    .eq(column, value)
+    .is("cancelled_at", null)
+    .not("inventory_unit_record_id", "is", null)
+    .limit(500);
+
+  if (error) {
+    // Non-fatal: without it his broker pairs do not show, which is where
+    // this screen was before. His other pairs must not go down with it.
+    console.error(`Could not read broker pairs at ${column}=${value}:`, error.message);
+    return [];
+  }
+
+  return data || [];
+}
+
+async function brokerUnitsFor(pairs) {
+  const ids = [...new Set(
+    (pairs || [])
+      .map((pair) => asText(pair.inventory_unit_record_id))
+      .filter((id) => /^rec[A-Za-z0-9]{14}$/.test(id))
+  )];
+
+  if (!ids.length) return [];
+
+  const out = [];
+
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+
+    const records = await airtable(AIRTABLE_INVENTORY_UNITS_TABLE)
+      .select({
+        fields: BROKER_PAIR_UNIT_FIELDS,
+        filterByFormula: `OR(${chunk
+          .map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`)
+          .join(",")})`
+      })
+      .all()
+      .catch((err) => {
+        console.error("Could not read the units behind broker pairs:", err.message);
+        return [];
+      });
+
+    out.push(...records);
+  }
+
+  return out;
+}
+
+// The units of a broker deal sitting at this step, ready to be merged in
+// beside the ones Airtable found.
+async function brokerUnitsAt(column, value) {
+  return brokerUnitsFor(await brokerPairsAt(column, value));
+}
+
+/*
+ * The pair rows behind a set of units, by unit id.
+ *
+ * Read per screenful rather than per row: a consignor's tab holds tens of
+ * pairs, and one query answers for all of them.
+ */
+async function brokerPairsByUnit(records) {
+  const ids = (records || [])
+    .map((record) => asText(record.id))
+    .filter((id) => /^rec[A-Za-z0-9]{14}$/.test(id));
+
+  if (!ids.length) return new Map();
+
+  /*
+   * Only the pairs that carry a step of their own.
+   *
+   * Every External Sale has pairs, and an ordinary one - a pair off our
+   * own shelf - must not be mistaken for a brokered one: it would start
+   * showing the deal number in place of its own and look for a label that
+   * does not exist. "consignor_fulfillment_status" is set by the broker
+   * flow and by nothing else, so it is what tells the two apart.
+   */
+  const { data, error } = await supabase
+    .from("external_sale_pairs")
+    .select("*, external_sales(deal_number,payment_status)")
+    .in("inventory_unit_record_id", ids)
+    .not("consignor_fulfillment_status", "is", null)
+    .is("cancelled_at", null);
+
+  if (error) {
+    console.error("Could not read broker pairs for these units:", error.message);
+    return new Map();
+  }
+
+  return new Map((data || []).map((pair) => [asText(pair.inventory_unit_record_id), pair]));
+}
+
+const brokerDealNumberOf = (pair) =>
+  pair?.external_sales?.deal_number
+    ? `EXTD-${String(pair.external_sales.deal_number).padStart(6, "0")}`
+    : "";
+
 async function loadConsignmentDashboardItemsByStatus(status) {
   const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
     .select({
@@ -33324,7 +34640,26 @@ async function loadConsignmentDashboardItemsByStatus(status) {
     })
     .all();
 
-  return inventoryRecords;
+  /*
+   * And the same step, asked of the broker deals.
+   *
+   * Their units carry no lookup that could answer the formula above, so
+   * they are found from their pair instead. A unit cannot be in both
+   * lists - a pair belongs to one deal - but it is de-duplicated anyway,
+   * because a silent double row is the kind of thing that is only ever
+   * noticed by the consignor.
+   */
+  const brokerByStep = await brokerUnitsAt("consignor_fulfillment_status", status);
+  const brokerByShipping = await brokerUnitsAt("consignor_shipping_status", status);
+
+  const seen = new Set(inventoryRecords.map((record) => record.id));
+  const extra = [...brokerByStep, ...brokerByShipping].filter((record) => {
+    if (seen.has(record.id)) return false;
+    seen.add(record.id);
+    return true;
+  });
+
+  return [...inventoryRecords, ...extra];
 }
 
 async function normalizeConsignmentDashboardItems(records, sellerRecordId) {
@@ -33344,12 +34679,17 @@ async function normalizeConsignmentDashboardItems(records, sellerRecordId) {
 
   const orderMap = await loadOrderFieldsMap(linkedOrderIds);
 
+  // The third source. Empty for everyone who has never been in a broker
+  // deal, which is almost everyone.
+  const pairByUnit = await brokerPairsByUnit(filteredInventory);
+
   const items = filteredInventory.map((record) => {
     const f = record.fields || {};
 
     const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
     const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
     const isMemberWtb = !!linkedMemberWtbId;
+    const brokerPair = !isMemberWtb && !linkedOrderId ? pairByUnit.get(record.id) : null;
 
     const orderFields = orderMap.get(linkedOrderId) || {};
 
@@ -33357,22 +34697,34 @@ async function normalizeConsignmentDashboardItems(records, sellerRecordId) {
       ? displayValue(f["WTB Created Channel ID (MWTB)"])
       : displayValue(orderFields["WTB Created Channel ID"]);
 
-    const labelUrl = isMemberWtb
-      ? displayValue(f["Shipping Label URL (Permanent) (MWTB)"])
-      : (
-          displayValue(orderFields["Shipping Label URL (Permanent)"]) ||
-          displayValue(orderFields["Shipping Label"])
-        );
+    const labelUrl = brokerPair
+      ? asText(brokerPair.consignor_label_url)
+      : isMemberWtb
+        ? displayValue(f["Shipping Label URL (Permanent) (MWTB)"])
+        : (
+            displayValue(orderFields["Shipping Label URL (Permanent)"]) ||
+            displayValue(orderFields["Shipping Label"])
+          );
 
-    const trackingUrl = isMemberWtb
-      ? displayValue(f["Tracking URL (MWTB)"])
-      : displayValue(orderFields["Tracking URL"]);
+    const trackingUrl = brokerPair
+      ? asText(brokerPair.consignor_tracking_url)
+      : isMemberWtb
+        ? displayValue(f["Tracking URL (MWTB)"])
+        : displayValue(orderFields["Tracking URL"]);
 
     return {
       id: record.id,
-      order_id: isMemberWtb
-        ? displayValue(f["Member WTB ID"])
-        : displayValue(orderFields["Order ID"]),
+      order_id: brokerPair
+        ? brokerDealNumberOf(brokerPair)
+        : isMemberWtb
+          ? displayValue(f["Member WTB ID"])
+          : displayValue(orderFields["Order ID"]),
+      /*
+       * Pairs from one consignor travelling in one parcel share a group,
+       * and he must see that before he packs - two boxes with the same
+       * label on them is the one mistake this costs real money.
+       */
+      shipment_group: brokerPair ? asText(brokerPair.shipment_group) : "",
       order_record_id: linkedOrderId,
       member_wtb_record_id: linkedMemberWtbId,
       product: displayValue(f["Product Name"]),
@@ -33637,6 +34989,62 @@ app.get("/api/dashboard/consignment-accepted", async (req, res) => {
       };
     });
 
+    /*
+     * And the rounds of a broker deal, which have no Seller Offer to be
+     * found through.
+     *
+     * Same tab, same columns, same question: do you want this. What
+     * differs is the id the buttons carry - a consignment_offers row
+     * rather than an Airtable record - and the portal already has
+     * handlers for that shape.
+     */
+    const { data: brokerRounds, error: brokerError } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("source_type", "external_sale")
+      .eq("seller_record_id", sellerRecordId)
+      .eq("status", "open")
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (brokerError) {
+      // Non-fatal, like the stock read above: his other offers must not
+      // disappear because one query failed.
+      console.error("Could not read broker rounds for the Accepted tab:", brokerError.message);
+    }
+
+    for (const round of brokerRounds || []) {
+      const channelId = asText(round.discord_channel_id);
+      const messageId = asText(round.discord_message_id);
+      const scope = ownChannelIds.has(channelId)
+        ? (acceptedSellerIsStore ? LOJIQ_DISCORD_SERVER_ID : DISCORD_SERVER_ID)
+        : "@me";
+
+      items.push({
+        seller_offer_record_id: null,
+        // What the portal's own handlers act on.
+        offer_id: asText(round.id),
+        is_counter_offer: round.is_counter_offer === true,
+        previous_offer_id: asText(round.previous_offer_id) || null,
+
+        order_id: asText(round.order_id),
+        product: asText(round.product_name),
+        sku: asText(round.sku),
+        size: asText(round.size),
+        brand: asText(round.brand),
+
+        your_price: moneyWholeValue(round.seller_price),
+        payout: moneyWholeValue(round.offer_price),
+        vat_type: asText(round.vat_type),
+        date: formatDateEU(round.created_at),
+
+        discord_url:
+          channelId && messageId && scope
+            ? `https://discord.com/channels/${scope}/${channelId}/${messageId}`
+            : null
+      });
+    }
+
     res.json({ count: items.length, items });
   } catch (err) {
     console.error("Failed to load consignment accepted:", err);
@@ -33771,9 +35179,21 @@ app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
       })
       .all();
 
+    // A broker pair stands at the same step and says so on its own row,
+    // because its unit has no lookup that could.
+    const confirmedSeen = new Set(inventoryRecords.map((record) => record.id));
+
+    for (const record of await brokerUnitsAt("consignor_fulfillment_status", "Allocated")) {
+      if (confirmedSeen.has(record.id)) continue;
+      confirmedSeen.add(record.id);
+      inventoryRecords.push(record);
+    }
+
     const filteredInventory = inventoryRecords.filter((record) =>
       linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
     );
+
+    const confirmedPairByUnit = await brokerPairsByUnit(filteredInventory);
 
     const linkedOrderIds = [
       ...new Set(
@@ -33811,6 +35231,7 @@ app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
       const linkedOrderId = firstLinkedRecordId(f["Unfulfilled Orders Log"]);
       const linkedMemberWtbId = firstLinkedRecordId(f["Member WTBs"]);
       const isMemberWtb = !!linkedMemberWtbId;
+      const brokerPair = !isMemberWtb && !linkedOrderId ? confirmedPairByUnit.get(record.id) : null;
 
       const orderFields = orderMap.get(linkedOrderId) || {};
 
@@ -33820,13 +35241,23 @@ app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
 
       return {
         id: record.id,
-        order_id: isMemberWtb
-          ? displayValue(f["Member WTB ID"])
-          : displayValue(orderFields["Order ID"]),
+        order_id: brokerPair
+          ? brokerDealNumberOf(brokerPair)
+          : isMemberWtb
+            ? displayValue(f["Member WTB ID"])
+            : displayValue(orderFields["Order ID"]),
         order_record_id: linkedOrderId,
         member_wtb_record_id: linkedMemberWtbId,
-        // What the browser checks before it offers the label button.
-        payment_status: confirmedPaymentStatusById.get(linkedMemberWtbId) || "",
+        /*
+         * What the browser checks before it offers the label button. On a
+         * broker deal the buyer pays the deal, not a want-to-buy, so that
+         * is where the answer lives - and the consignor should no more be
+         * asked to ship for an unpaid broker deal than for an unpaid
+         * want-to-buy.
+         */
+        payment_status: brokerPair
+          ? (asText(brokerPair.external_sales?.payment_status) === "paid" ? "Paid" : "")
+          : confirmedPaymentStatusById.get(linkedMemberWtbId) || "",
         product: displayValue(f["Product Name"]),
         sku: displayValue(f["SKU"]),
         size: displayValue(f["Size"]),
@@ -33913,7 +35344,12 @@ app.get("/api/dashboard/consignment-shipped", async (req, res) => {
       })
       .all();
 
-    const items = await normalizeConsignmentDashboardItems(records, sellerRecordId);
+    // The broker pairs at this step come from their own row rather than
+    // from a lookup their unit does not have.
+    const items = await normalizeConsignmentDashboardItems(
+      [...records, ...await brokerUnitsAt("consignor_shipping_status", "Shipped")],
+      sellerRecordId
+    );
 
     res.json({ count: items.length, items });
   } catch (err) {
@@ -33951,7 +35387,12 @@ app.get("/api/dashboard/consignment-delivered", async (req, res) => {
       })
       .all();
 
-    const items = await normalizeConsignmentDashboardItems(records, sellerRecordId);
+    // The broker pairs at this step come from their own row rather than
+    // from a lookup their unit does not have.
+    const items = await normalizeConsignmentDashboardItems(
+      [...records, ...await brokerUnitsAt("consignor_shipping_status", "Delivered")],
+      sellerRecordId
+    );
 
     res.json({ count: items.length, items });
   } catch (err) {
@@ -42893,6 +44334,27 @@ app.listen(PORT, () => {
         () => escalateMarketplaceDealsToSnapshot(),
         SNAPSHOT_ESCALATION_INTERVAL_MS
       );
+
+      /*
+       * And the partner's own deals, on the same ten minutes.
+       *
+       * Here rather than in the Admin portal because this is the service
+       * that owns the offers and the only one that can reach a consignor's
+       * Discord - which is the half of expiring that matters.
+       *
+       * Started after the bots are up for the same reason the sweep above
+       * is: the consignor who agreed has to be told, and a message that
+       * cannot be sent is the one part of this that is not recoverable.
+       */
+      sweepPartnerRunDeals().then((out) => {
+        if (out.ended) console.log("[partner deals sweep]", JSON.stringify(out));
+      });
+
+      setInterval(() => {
+        sweepPartnerRunDeals().then((out) => {
+          if (out.ended) console.log("[partner deals sweep]", JSON.stringify(out));
+        });
+      }, PARTNER_DEAL_SWEEP_INTERVAL_MS);
     })
     .catch((err) => {
       console.error("Failed to init Kickz Deal Discord bot on startup:", err);

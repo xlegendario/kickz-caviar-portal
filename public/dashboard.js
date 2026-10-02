@@ -2185,6 +2185,30 @@ function renderConsignmentAcceptedRows(items) {
       <td>${escapeHtml(item.date || "-")}</td>
       <td>
         <div class="dashboard-action-row">
+        ${/*
+           A request from a broker deal has no Seller Offer behind it - it
+           is a consignment_offers row - so its buttons carry that id
+           instead. The handlers for both already exist; only the
+           attribute differs, and a Counter is possible here because a
+           broker negotiates rather than takes it or leaves it.
+        */ item.offer_id ? `
+        <button
+          class="dashboard-confirm-btn action-accept"
+          type="button"
+          data-consignment-confirm-offer-id="${escapeHtml(item.offer_id)}"
+        ><span class="accept-kop">CONFIRM</span><span class="accept-amount">${escapeHtml(amountForButton(item.payout))}</span></button>
+        <button
+          class="dashboard-counter-btn"
+          type="button"
+          data-consignment-counter-offer-id="${escapeHtml(item.offer_id)}"
+          data-is-counter-offer="${item.is_counter_offer ? "true" : "false"}"
+        >Counter</button>
+        <button
+          class="dashboard-deny-btn"
+          type="button"
+          data-consignment-deny-offer-id="${escapeHtml(item.offer_id)}"
+        >Deny</button>
+        ` : `
         <button
           class="dashboard-confirm-btn action-accept"
           type="button"
@@ -2195,6 +2219,7 @@ function renderConsignmentAcceptedRows(items) {
           type="button"
           data-consignment-deny="${escapeHtml(item.seller_offer_record_id)}"
         >Deny</button>
+        `}
         ${
           item.discord_url
             ? `
@@ -3230,6 +3255,58 @@ function renderWtbUnifiedOfferRows(items) {
       </tr>
     `;
   }).join("");
+}
+
+/*
+ * Pairs travelling in one parcel, as one row.
+ *
+ * A broker deal can buy three pairs from the same consignor, and those go
+ * in ONE box on ONE label. Shown as three rows he would see the same label
+ * three times and put three boxes in the post - which costs him two
+ * shipments and us a pair that arrives late.
+ *
+ * Only rows that carry a shipment group are touched; everything else is
+ * passed through exactly as it came in.
+ */
+function oneRowPerParcel(items) {
+  const groups = new Map();
+  const out = [];
+
+  for (const item of items || []) {
+    const group = item && item.shipment_group;
+
+    if (!group) {
+      out.push(item);
+      continue;
+    }
+
+    if (!groups.has(group)) {
+      // The first pair carries the row: its label, its tracking, its
+      // Discord link. The others only add themselves to it.
+      const first = { ...item, parcel_pairs: [], payout: 0 };
+      groups.set(group, first);
+      out.push(first);
+    }
+
+    const row = groups.get(group);
+
+    row.parcel_pairs.push({ product: item.product, sku: item.sku, size: item.size });
+    row.payout = Number(row.payout) + Number(item.payout || 0);
+  }
+
+  for (const row of groups.values()) {
+    // One pair in a group is just a pair.
+    if (row.parcel_pairs.length < 2) {
+      delete row.parcel_pairs;
+      continue;
+    }
+
+    row.product = `${row.parcel_pairs.length} pairs - one parcel`;
+    row.sku = row.parcel_pairs.map((pair) => `${pair.sku} ${pair.size}`).join(" · ");
+    row.size = "—";
+  }
+
+  return out;
 }
 
 function renderReadyToShipRows(items) {
@@ -4576,17 +4653,20 @@ async function loadDashboardData() {
       );
     }
   
+    // One parcel is one row, whichever tab it is standing on.
+    const shown = oneRowPerParcel(data.items || []);
+
     if (activeTab === "accepted") {
       renderConsignmentAcceptedRows(data.items || []);
     } else if (activeTab === "ready_to_ship") {
-      renderReadyToShipRows(data.items || []);
+      renderReadyToShipRows(shown);
     } else if (
       activeTab === "shipped" ||
       activeTab === "delivered"
     ) {
-      renderTrackingRows(data.items || []);
+      renderTrackingRows(shown);
     } else {
-      renderOpenClaimsRows(data.items || []);
+      renderOpenClaimsRows(shown);
     }
   
     setConsignmentCount(activeTab, data.count || 0);
