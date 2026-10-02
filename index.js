@@ -17541,7 +17541,29 @@ app.post("/api/counter-offers/create-fresh-round", async (req, res) => {
     const sellerOfferRecord = await airtable(SELLER_OFFERS_TABLE).find(sellerOfferRecordId);
     const sof = sellerOfferRecord.fields || {};
 
-    if (sof["Delete Offer"] || sof["Denied?"] || sof["Withdrawn?"]) {
+    /*
+      FIXED - a store could never take back its own no.
+
+      The Denied pill offers ACCEPT on purpose: a store that said no and
+      then thinks better of it should be able to close the deal after all.
+      It never could. "Denied?" is written by the denial itself, so the
+      click that denied the offer was the same click that made accepting it
+      impossible, and the store got "This offer is no longer available."
+      ORD-025787 (Genky Sneakers, €177,50) on 02-10-2026; the button has
+      been dead for every denied fresh offer before that.
+
+      "Denied?" is only ever set by a buyer saying no - here, by the deny
+      broadcast, and on the Member WTB side. A seller pulling his pair
+      writes "Withdrawn?" or "Delete Offer" instead, and those still refuse:
+      that is the seller's own word that it is gone, and no store may
+      overrule it.
+
+      Nothing is finalised by this call. It only prepares a round, and
+      store-accept below still asks a consignor "do you still have it?"
+      before anything is written - which is the question that matters for a
+      seller who was told no and may since have sold the pair elsewhere.
+    */
+    if (sof["Delete Offer"] || sof["Withdrawn?"]) {
       return res.status(409).json({ error: "This offer is no longer available." });
     }
 
@@ -18011,6 +18033,34 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
       "Accepted At": new Date().toISOString(),
       "Closed At": new Date().toISOString()
     });
+
+    /*
+      A denial the store has just taken back is no longer a denial.
+
+      Now that a denied offer can be accepted after all, the flags would
+      otherwise stay on a deal that is closed: the seller keeps a Denied row
+      with a Retry button for an order he has actually won, and the record
+      says denied and accepted at once. Cleared here rather than at the
+      start, so an accept that never completes leaves the denial standing.
+
+      Non-blocking: the deal is already done at this point, and losing the
+      tidy-up must not fail it.
+    */
+    const sellerOfferToRevive = asText(f["Seller Offer Record ID"]);
+
+    if (sellerOfferToRevive) {
+      await airtable(SELLER_OFFERS_TABLE)
+        .update(sellerOfferToRevive, {
+          "Denied?": false,
+          "Denied At": null,
+          "Denied Amount": null,
+          // A single select is cleared with null; an empty string is refused.
+          "Denied VAT Type": null
+        })
+        .catch((err) =>
+          console.error("Failed to clear the denial after a store accept (non-blocking):", err)
+        );
+    }
 
     // FIXED — CRITICAL: this record can be either a store-placed round
     // (has "Store Counter Price") or a seller-placed round (has "Seller
