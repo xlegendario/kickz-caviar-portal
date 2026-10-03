@@ -6779,7 +6779,7 @@ async function brokerLineIdOf(offer) {
  * to whoever answered first. Their Discord message is taken down with it,
  * so nobody is left looking at a live-looking offer for something gone.
  */
-async function closeLosingBrokerRounds(lineId, winnerId) {
+async function closeLosingBrokerRounds(lineId, winnerId, note = "⌛ Another consignor was first with this pair.") {
   if (!lineId) return;
 
   const nowIso = new Date().toISOString();
@@ -6798,7 +6798,7 @@ async function closeLosingBrokerRounds(lineId, winnerId) {
     await disableConsignmentDiscordButtons(
       loser.discord_channel_id,
       loser.discord_message_id,
-      "⌛ Another consignor was first with this pair."
+      note
     ).catch(() => {});
   }
 
@@ -13967,6 +13967,118 @@ app.post("/api/internal/broker/offer", async (req, res) => {
 });
 
 /*
+ * Taking the price he last asked for, after countering under it.
+ *
+ * The broker counters at 185, the consignor goes quiet, and the ten euros
+ * between them are worth less than the pair. Without this he can only wait
+ * or walk: his own counter replaced the consignor's and there is no way
+ * back to it.
+ *
+ * So the earlier round is reopened at the consignor's own number and
+ * confirmed as if he had never countered. His pending round closes on its
+ * own, through the same sibling sweep that settles a race - it is a round
+ * on this line that did not win.
+ *
+ * The consignor is not asked again, which is the point: he named this
+ * price himself, and a yes to his own number needs no second yes.
+ */
+app.post("/api/internal/broker/accept-previous", async (req, res) => {
+  try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
+    const line = await loadDealLine(req.body?.deal_line_id);
+
+    if (!line) {
+      return res.status(404).json({ error: "That line is not part of a deal." });
+    }
+
+    const { data: current } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("id", asText(line.offer_id))
+      .maybeSingle();
+
+    if (!current || asText(current.status) !== "open") {
+      return res.status(409).json({ error: "There is no counter of yours still running on this pair." });
+    }
+
+    const previousId = asText(current.previous_offer_id);
+
+    if (!previousId) {
+      return res.status(409).json({ error: "You have not countered on this pair, so there is nothing to fall back on." });
+    }
+
+    const { data: previous } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("id", previousId)
+      .maybeSingle();
+
+    const wanted = Number(previous?.consignor_counter_price);
+
+    if (!previous || !(wanted > 0)) {
+      return res.status(409).json({ error: "His earlier price cannot be read back." });
+    }
+
+    const nowIso = new Date().toISOString();
+
+    /*
+     * Reopened at his number, which is what confirmConsignmentOffer locks
+     * on - and the lock is what keeps this safe if he answers the counter
+     * in the same second: whoever gets there first takes the line, and the
+     * other comes back empty-handed rather than buying a second pair.
+     */
+    await supabase
+      .from("consignment_offers")
+      .update({
+        status: "open",
+        offer_price: wanted,
+        store_response_status: "accepted",
+        store_response_at: nowIso,
+        closed_at: null,
+        updated_at: nowIso
+      })
+      .eq("id", previous.id);
+
+    const result = await confirmConsignmentOffer(previous.id);
+
+    if (!result.ok) {
+      // Put it back the way it was: the pair went elsewhere while this was
+      // in flight, and a reopened round would sit there looking live.
+      await supabase
+        .from("consignment_offers")
+        .update({ status: "closed", closed_at: nowIso, updated_at: nowIso })
+        .eq("id", previous.id)
+        .eq("status", "open");
+
+      return res.status(409).json({ error: "That pair is no longer available." });
+    }
+
+    await closeLosingBrokerRounds(
+      await brokerLineIdOf(previous),
+      previous.id,
+      `✅ Your ${moneySmartValue(wanted.toFixed(2))} was accepted instead.`
+    );
+
+    console.log(`↩️ Broker fell back on ${previous.seller_id}'s ${moneySmartValue(wanted.toFixed(2))} for ${previous.sku} ${previous.size}.`);
+
+    return res.json({
+      ok: true,
+      offer_id: previous.id,
+      seller_id: previous.seller_id,
+      payout: wanted
+    });
+  } catch (err) {
+    console.error("❌ Broker fallback failed:", err);
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+/*
  * His label is ready, and everything on it travels together.
  *
  * One message for the whole parcel, naming every pair, because the one
@@ -20762,6 +20874,9 @@ app.post("/api/consignment/offers/:id/store-counter", async (req, res) => {
           is_counter_offer: true,
           store_counter_price: proposedPrice,
           previous_offer_id: previousOfferId,
+          // Same pair of the same deal: a round that loses still has to be
+          // findable from the line it was about.
+          deal_line_id: previousOffer.deal_line_id,
 
           status: "open",
           created_at: brokerNowIso,
