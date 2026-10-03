@@ -6779,7 +6779,9 @@ async function brokerLineIdOf(offer) {
  * to whoever answered first. Their Discord message is taken down with it,
  * so nobody is left looking at a live-looking offer for something gone.
  */
-async function closeLosingBrokerRounds(lineId, winnerId, note = "⌛ Another consignor was first with this pair.") {
+async function closeLosingBrokerRounds(lineId, winnerId, note) {
+  const said = note || "⌛ Another consignor was first with this pair.";
+
   if (!lineId) return;
 
   const nowIso = new Date().toISOString();
@@ -6798,7 +6800,7 @@ async function closeLosingBrokerRounds(lineId, winnerId, note = "⌛ Another con
     await disableConsignmentDiscordButtons(
       loser.discord_channel_id,
       loser.discord_message_id,
-      note
+      said
     ).catch(() => {});
   }
 
@@ -6807,7 +6809,12 @@ async function closeLosingBrokerRounds(lineId, winnerId, note = "⌛ Another con
   }
 }
 
-async function confirmConsignmentOffer(offerId) {
+/*
+ * The note the losing rounds are closed with travels in, because only the
+ * caller knows why they lost. Beaten to it by another consignor is the
+ * usual reason; settling for this man's own earlier price is not.
+ */
+async function confirmConsignmentOffer(offerId, { closingNote } = {}) {
   const { data: lockedOffer, error: lockError } = await supabase
     .from("consignment_offers")
     .update({
@@ -6882,7 +6889,7 @@ async function confirmConsignmentOffer(offerId) {
       })
       .eq("id", lockedOffer.id);
 
-    await closeLosingBrokerRounds(lineId, lockedOffer.id);
+    await closeLosingBrokerRounds(lineId, lockedOffer.id, closingNote);
 
     return {
       ok: true,
@@ -14044,7 +14051,9 @@ app.post("/api/internal/broker/accept-previous", async (req, res) => {
       })
       .eq("id", previous.id);
 
-    const result = await confirmConsignmentOffer(previous.id);
+    const result = await confirmConsignmentOffer(previous.id, {
+      closingNote: `✅ Your ${moneySmartValue(wanted.toFixed(2))} was accepted after all.`
+    });
 
     if (!result.ok) {
       // Put it back the way it was: the pair went elsewhere while this was
@@ -14057,12 +14066,6 @@ app.post("/api/internal/broker/accept-previous", async (req, res) => {
 
       return res.status(409).json({ error: "That pair is no longer available." });
     }
-
-    await closeLosingBrokerRounds(
-      await brokerLineIdOf(previous),
-      previous.id,
-      `✅ Your ${moneySmartValue(wanted.toFixed(2))} was accepted instead.`
-    );
 
     console.log(`↩️ Broker fell back on ${previous.seller_id}'s ${moneySmartValue(wanted.toFixed(2))} for ${previous.sku} ${previous.size}.`);
 
