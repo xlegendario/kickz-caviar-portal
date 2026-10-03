@@ -14211,19 +14211,50 @@ app.post("/api/internal/broker/deal-confirmed", async (req, res) => {
       const owed = sold.reduce((sum, item) => sum + (Number(item.line.payout) || 0), 0);
       const many = sold.length > 1;
 
-      const sent = await tellConsignmentOfferChannel(channel, [
-        `🤝 **${dealId || "The deal"} is closed${many ? `, with ${sold.length} of your pairs` : ""}.**`,
-        "",
-        many ? "**Sold:**" : "**Your pair is sold:**",
-        ...sold.map(({ line, round }) =>
-          `• ${asText(round.product_name) || asText(line.product_name) || asText(line.sku)} - ` +
-          `${asText(line.sku)} - size ${asText(line.size)} - ${moneySmartValue(Number(line.payout || 0).toFixed(2))}`
-        ),
-        "",
-        `**${many ? "Together" : "You get"}: ${moneySmartValue(owed.toFixed(2))}**`,
-        "",
-        `Keep ${many ? "them" : "it"} ready - a shipping label follows here, and ${many ? "they are" : "it is"} in your dashboard under Allocated.`
-      ].join("\n"));
+      /*
+       * The same shape as the deal update for a store order, and
+       * deliberately without its Request Label button.
+       *
+       * That button asks a store for a label, and a broker deal has no
+       * store behind it - it was made by hand from the admin side, and the
+       * label is arranged there per consignor. A button that cannot do
+       * anything is worse than no button: he presses it and waits.
+       */
+      const sent = await tellConsignmentOfferChannel(
+        channel,
+        `${dealId || "Your deal"} is confirmed.`,
+        [{
+          title: "📦 Consignment Deal Confirmed",
+          description: [
+            many ? `**${sold.length} of your pairs are sold:**` : "**Item Details:**",
+            ...sold.flatMap(({ line, round }) => many
+              ? [`• ${asText(round.product_name) || asText(line.product_name) || asText(line.sku)} - ` +
+                 `${asText(line.sku)} - size ${asText(line.size)} - ` +
+                 `${moneySmartValue(Number(line.payout || 0).toFixed(2))}`]
+              : [
+                  asText(round.product_name) || asText(line.product_name) || "—",
+                  "",
+                  "**SKU**",
+                  asText(line.sku) || "—",
+                  "",
+                  "**Size**",
+                  asText(line.size) || "—"
+                ]),
+            "",
+            "**Deal**",
+            dealId || "—",
+            "",
+            `**${many ? "Together" : "Price"}**`,
+            `${moneySmartValue(owed.toFixed(2))} (${asText(channel.vat_type) || "—"})`,
+            "",
+            `Your shipping label will follow soon - we arrange it for you, so there is nothing to request. ` +
+            `${many ? "They are" : "It is"} in your dashboard under Allocated.`
+          ].join("\n"),
+          color: 0x2ecc71,
+          footer: { text: `SellerID: ${asText(channel.seller_id)}` },
+          timestamp: new Date().toISOString()
+        }]
+      );
 
       if (sent) told += 1;
     }
@@ -14703,7 +14734,7 @@ function partnerRunDealDeadline(offer) {
  * Lojiq server where neither of this service's bots can post, and a DM-only
  * consignor only ever had the deal bot.
  */
-async function tellConsignmentOfferChannel(offer, content) {
+async function tellConsignmentOfferChannel(offer, content, embeds = null) {
   const channelId = asText(offer?.discord_channel_id);
 
   if (!channelId) return false;
@@ -14712,7 +14743,7 @@ async function tellConsignmentOfferChannel(offer, content) {
     .catch(() => false);
 
   if (storeConsignor) {
-    await postLojiqConsignorEmbed({ channelId, content });
+    await postLojiqConsignorEmbed({ channelId, content, ...(embeds ? { embeds } : {}) });
     return true;
   }
 
@@ -14735,7 +14766,7 @@ async function tellConsignmentOfferChannel(offer, content) {
 
     if (!channel) continue;
 
-    await channel.send({ content });
+    await channel.send({ content, ...(embeds ? { embeds } : {}) });
     return true;
   }
 
