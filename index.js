@@ -5970,7 +5970,9 @@ function sanitizeDiscordChannelName(value) {
 async function createConsignmentDealChannelForDmSeller({
   seller,
   offer,
-  inventoryUnitRecordId
+  inventoryUnitRecordId,
+  labelRequest = true,
+  closingLine = ""
 }) {
   await initKickzDealDiscord();
 
@@ -6089,26 +6091,29 @@ async function createConsignmentDealChannelForDmSeller({
           "**Price**",
           `${moneySmartValue(price.toFixed(2))} (${offer.vat_type || "—"})`,
           "",
-          "Please request your shipping label below. You can also use this channel for questions about this specific deal."
+          closingLine ||
+            "Please request your shipping label below. You can also use this channel for questions about this specific deal."
         ].join("\n"),
         color: 0x2ecc71,
         footer: { text: `SellerID: ${offer.seller_id}` },
         timestamp: new Date().toISOString()
       }
     ],
-    components: [
-      {
-        type: 1,
-        components: [
+    components: labelRequest
+      ? [
           {
-            type: 2,
-            style: 3,
-            label: "Request Label",
-            custom_id: `request_consignment_label:${offer.order_record_id}:${inventoryUnitRecordId || ""}`
+            type: 1,
+            components: [
+              {
+                type: 2,
+                style: 3,
+                label: "Request Label",
+                custom_id: `request_consignment_label:${offer.order_record_id}:${inventoryUnitRecordId || ""}`
+              }
+            ]
           }
         ]
-      }
-    ]
+      : []
   });
 
   return {
@@ -6141,10 +6146,20 @@ async function notifySellerDealChannelCreatedDM({ seller, channelId }) {
   };
 }
 
+/*
+ * labelRequest: false drops the Request Label button, and closingLine
+ * replaces the sentence that tells him to press it.
+ *
+ * For a broker deal there is no store to ask for a label - we make it from
+ * the admin side - and a button that cannot do anything is worse than none:
+ * he presses it and waits.
+ */
 async function sendConsignmentDealUpdateDiscordMessage({
   seller,
   offer,
-  inventoryUnitRecordId
+  inventoryUnitRecordId,
+  labelRequest = true,
+  closingLine = ""
 }) {
   const wasOfferDeliveredByDm = offer.discord_delivery_type === "dm";
 
@@ -6158,7 +6173,9 @@ async function sendConsignmentDealUpdateDiscordMessage({
     const dealChannelResult = await createConsignmentDealChannelForDmSeller({
       seller,
       offer,
-      inventoryUnitRecordId
+      inventoryUnitRecordId,
+      labelRequest,
+      closingLine
     });
 
     await notifySellerDealChannelCreatedDM({
@@ -6241,7 +6258,8 @@ async function sendConsignmentDealUpdateDiscordMessage({
         ? ["", "**Partner Price**", `${moneySmartValue(partnerPayoutForDeal.toFixed(2))} (${offer.vat_type || "—"})`]
         : []),
       "",
-      "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
+      closingLine ||
+        "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
     ].join("\n"),
     color: 0x2F80ED,
     footer: { text: `SellerID: ${offer.seller_id}` },
@@ -6253,19 +6271,21 @@ async function sendConsignmentDealUpdateDiscordMessage({
       channelId,
       content: `Your deal for ${offer.sku} - ${offer.size} has been confirmed`,
       embeds: [shippingEmbed],
-      components: [
-        {
-          type: 1,
-          components: [
+      components: labelRequest
+        ? [
             {
-              type: 2,
-              style: 3,
-              label: "Request Label",
-              custom_id: `request_consignment_label:${offer.order_record_id}:${inventoryUnitRecordId || ""}`
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 3,
+                  label: "Request Label",
+                  custom_id: `request_consignment_label:${offer.order_record_id}:${inventoryUnitRecordId || ""}`
+                }
+              ]
             }
           ]
-        }
-      ]
+        : []
     });
 
     return {
@@ -6296,26 +6316,29 @@ async function sendConsignmentDealUpdateDiscordMessage({
           "**Price**",
           `${moneySmartValue(price.toFixed(2))} (${offer.vat_type || "—"})`,
           "",
-          "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
+          closingLine ||
+            "The sale is now visible in your dashboard. Please request or download the shipping label as soon as possible."
         ].join("\n"),
         color: 0x2ecc71,
         footer: { text: `SellerID: ${offer.seller_id}` },
         timestamp: new Date().toISOString()
       }
     ],
-    components: [
-      {
-        type: 1,
-        components: [
+    components: labelRequest
+      ? [
           {
-            type: 2,
-            style: 3,
-            label: "Request Label",
-            custom_id: `request_consignment_label:${offer.order_record_id}:${inventoryUnitRecordId || ""}`
+            type: 1,
+            components: [
+              {
+                type: 2,
+                style: 3,
+                label: "Request Label",
+                custom_id: `request_consignment_label:${offer.order_record_id}:${inventoryUnitRecordId || ""}`
+              }
+            ]
           }
         ]
-      }
-    ]
+      : []
   });
 
   return {
@@ -14174,8 +14197,18 @@ app.post("/api/internal/broker/deal-confirmed", async (req, res) => {
       .in("id", offerIds);
 
     const byOffer = new Map((rounds || []).map((round) => [asText(round.id), round]));
-    const bySeller = new Map();
+    const sellers = new Map();
+    let told = 0;
 
+    /*
+     * One message per pair, through the machinery every other confirmed
+     * consignment deal goes through: his Deal Updates channel, the embed
+     * that belongs there, and the dashboard behind it.
+     *
+     * Without the Request Label button, and saying so. That button asks a
+     * store to produce a label; a broker deal has no store, and the label
+     * is made from the admin side.
+     */
     for (const line of lines || []) {
       const round = byOffer.get(asText(line.offer_id));
 
@@ -14183,85 +14216,46 @@ app.post("/api/internal/broker/deal-confirmed", async (req, res) => {
 
       const who = asText(round.seller_record_id);
 
-      if (!bySeller.has(who)) bySeller.set(who, []);
-      bySeller.get(who).push({ line, round });
-    }
+      if (!sellers.has(who)) {
+        const record = await airtable(SELLERS_TABLE).find(who).catch(() => null);
+        const sf = record?.fields || {};
 
-    let told = 0;
+        sellers.set(who, {
+          id: who,
+          seller_record_id: who,
+          seller_id: asText(round.seller_id) || asText(sf["Seller ID"]),
+          discord_id: asText(sf["Discord ID"]),
+          deal_updates_channel_id: asText(sf["Deal Updates Channel ID"]),
+          labels_channel_id: asText(sf["Labels Channel ID"]),
+          consignment_offer_channel_id: asText(sf["Consignment Offer Channel ID"]),
+          consignment_confirmation_channel_id: asText(sf["Consignment Confirmation Channel ID"])
+        });
+      }
 
-    for (const [who, sold] of bySeller) {
-      /*
-       * Posted into the conversation he already has about these pairs. Any
-       * round of his on this deal leads to the same place, so the newest
-       * one that has a channel is as good as the first.
-       */
-      const { data: talking } = await supabase
-        .from("consignment_offers")
-        .select("*")
-        .eq("external_sale_id", saleId)
-        .eq("seller_record_id", who)
-        .not("discord_channel_id", "is", null)
-        .order("created_at", { ascending: false })
-        .limit(1);
-
-      const channel = (talking || [])[0];
-
-      if (!channel) continue;
-
-      const owed = sold.reduce((sum, item) => sum + (Number(item.line.payout) || 0), 0);
-      const many = sold.length > 1;
-
-      /*
-       * The same shape as the deal update for a store order, and
-       * deliberately without its Request Label button.
-       *
-       * That button asks a store for a label, and a broker deal has no
-       * store behind it - it was made by hand from the admin side, and the
-       * label is arranged there per consignor. A button that cannot do
-       * anything is worse than no button: he presses it and waits.
-       */
-      const sent = await tellConsignmentOfferChannel(
-        channel,
-        `${dealId || "Your deal"} is confirmed.`,
-        [{
-          title: "📦 Consignment Deal Confirmed",
-          description: [
-            many ? `**${sold.length} of your pairs are sold:**` : "**Item Details:**",
-            ...sold.flatMap(({ line, round }) => many
-              ? [`• ${asText(round.product_name) || asText(line.product_name) || asText(line.sku)} - ` +
-                 `${asText(line.sku)} - size ${asText(line.size)} - ` +
-                 `${moneySmartValue(Number(line.payout || 0).toFixed(2))}`]
-              : [
-                  asText(round.product_name) || asText(line.product_name) || "—",
-                  "",
-                  "**SKU**",
-                  asText(line.sku) || "—",
-                  "",
-                  "**Size**",
-                  asText(line.size) || "—"
-                ]),
-            "",
-            "**Deal**",
-            dealId || "—",
-            "",
-            `**${many ? "Together" : "Price"}**`,
-            `${moneySmartValue(owed.toFixed(2))} (${asText(channel.vat_type) || "—"})`,
-            "",
-            "Your shipping label will be arranged automatically and will appear under Allocated " +
-            "in your dashboard shortly. No request needed."
-          ].join("\n"),
-          color: 0x2ecc71,
-          footer: { text: `SellerID: ${asText(channel.seller_id)}` },
-          timestamp: new Date().toISOString()
-        }]
-      );
+      const sent = await sendConsignmentDealUpdateDiscordMessage({
+        seller: sellers.get(who),
+        offer: {
+          ...round,
+          order_id: dealId || asText(round.order_id),
+          // His own number, which is what the payout will be.
+          offer_price: Number(line.payout) || Number(round.offer_price) || 0
+        },
+        inventoryUnitRecordId: asText(line.inventory_unit_record_id),
+        labelRequest: false,
+        closingLine:
+          "Your shipping label will be arranged automatically and will appear under Allocated " +
+          "in your dashboard shortly. No request needed."
+      }).catch((err) => {
+        console.error(`❌ ${round.seller_id} was not told that ${dealId} closed:`, err.message);
+        return null;
+      });
 
       if (sent) told += 1;
     }
 
-    console.log(`🤝 ${dealId || saleId}: ${told} of ${bySeller.size} consignor(s) told the deal is closed.`);
+    console.log(`🤝 ${dealId || saleId}: ${told} pair(s) announced to ${sellers.size} consignor(s).`);
 
-    return res.json({ ok: true, told, consignors: bySeller.size });
+    return res.json({ ok: true, told, consignors: sellers.size });
   } catch (err) {
     console.error("❌ Broker deal notice failed:", err);
     return res.status(400).json({ error: err.message });
@@ -14312,24 +14306,81 @@ app.post("/api/internal/broker/label-ready", async (req, res) => {
     }
 
     const many = pairs.length > 1;
+    const dealId = asText(req.body?.deal_id);
+    const labelUrl = asText(req.body?.label_url);
+    const tracking = asText(req.body?.tracking);
 
-    const told = await tellConsignmentOfferChannel(offer, [
-      `📦 **Your shipping label for ${asText(req.body?.deal_id)} is ready.**`,
-      "",
-      many
-        ? `**${pairs.length} pairs, one parcel.** Put them in ONE box - the label below covers all of them:`
-        : "**One pair:**",
-      ...pairs.map((pair) =>
-        `• ${asText(pair.product_name) || asText(pair.sku)} - ${asText(pair.sku)} - size ${asText(pair.size)}`
-      ),
-      "",
-      `**Label:** ${asText(req.body?.label_url)}`,
-      `**Tracking:** ${asText(req.body?.tracking)}`,
-      "",
-      many
-        ? "Please do not send them separately - there is one label and one tracking number for the whole parcel."
-        : "It is also in your dashboard, under Ready to Ship."
-    ].join("\n"));
+    /*
+     * The same Shipping Label Ready embed every other consignor gets, and
+     * the same shape: what the shoe is, which deal, the tracking, and the
+     * label behind a link.
+     *
+     * One box can hold several pairs here, which no other label message
+     * has to say - so they are listed, with the warning that makes the
+     * difference between one parcel and three.
+     */
+    const embed = {
+      title: "📦 Shipping Label Ready",
+      description: [
+        ...(many
+          ? [
+              `**${pairs.length} pairs, one parcel.** Put them in ONE box - this label covers all of them:`,
+              ...pairs.map((pair) =>
+                `• ${asText(pair.product_name) || asText(pair.sku)} - ${asText(pair.sku)} - size ${asText(pair.size)}`
+              )
+            ]
+          : [
+              `**Product:** ${asText(pairs[0]?.product_name) || "—"}`,
+              `**SKU:** ${asText(pairs[0]?.sku) || "—"}`,
+              `**Size:** ${asText(pairs[0]?.size) || "—"}`
+            ]),
+        "",
+        `**Order:** ${dealId || "—"}`,
+        "**Tracking:**",
+        tracking,
+        "",
+        `📄 [Download Label](${labelUrl})`,
+        ...(many
+          ? ["", "Please do not send them separately - there is one label and one tracking number for the whole parcel."]
+          : [])
+      ].join("\n"),
+      color: 0x2ecc71,
+      footer: { text: "Kickz Caviar" },
+      timestamp: new Date().toISOString()
+    };
+
+    /*
+     * His labels channel first, because that is where a label belongs and
+     * where he goes looking for one. Then the channel he reads about deals
+     * in, and only then the conversation this offer happened in - losing
+     * the label is worse than posting it a room further out.
+     */
+    const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+    const sf = sellerRecord?.fields || {};
+
+    let told = false;
+
+    if (await isStoreConsignor(sellerRecordId).catch(() => false)) {
+      // A store reads everything we send it in its own server, through the
+      // conversation the portal owns.
+      told = await tellConsignmentOfferChannel(offer, `Your shipping label for ${dealId} is ready`, [embed]);
+    } else {
+      await initDiscord();
+
+      for (const channelId of [asText(sf["Labels Channel ID"]), asText(sf["Deal Updates Channel ID"])]) {
+        if (!channelId) continue;
+
+        const channel = await discordClient.channels.fetch(channelId).catch(() => null);
+
+        if (!channel) continue;
+
+        await channel.send({ embeds: [embed] });
+        told = true;
+        break;
+      }
+
+      if (!told) told = await tellConsignmentOfferChannel(offer, "", [embed]);
+    }
 
     return res.json({ ok: true, told, pairs: pairs.length });
   } catch (err) {
