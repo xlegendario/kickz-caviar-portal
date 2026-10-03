@@ -14133,6 +14133,111 @@ app.post("/api/internal/broker/accept-previous", async (req, res) => {
 });
 
 /*
+ * The deal is closed, and everyone who sold into it hears so.
+ *
+ * His own message said he would get the deal update once it was finalized,
+ * and until now the next thing he actually got was a shipping label - which
+ * can be hours later. One message per consignor rather than per pair, for
+ * the same reason the label notice is: a man who sold three pairs into one
+ * deal is having one conversation about it.
+ */
+app.post("/api/internal/broker/deal-confirmed", async (req, res) => {
+  try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
+    const saleId = asText(req.body?.sale_id);
+    const dealId = asText(req.body?.deal_id);
+
+    if (!saleId) {
+      return res.status(400).json({ error: "sale_id is required" });
+    }
+
+    const { data: lines } = await supabase
+      .from("deal_lines")
+      .select("*")
+      .eq("sale_id", saleId)
+      .eq("status", "confirmed");
+
+    const offerIds = [...new Set((lines || []).map((line) => asText(line.offer_id)).filter(Boolean))];
+
+    if (!offerIds.length) {
+      return res.json({ ok: true, told: 0, consignors: 0 });
+    }
+
+    const { data: rounds } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .in("id", offerIds);
+
+    const byOffer = new Map((rounds || []).map((round) => [asText(round.id), round]));
+    const bySeller = new Map();
+
+    for (const line of lines || []) {
+      const round = byOffer.get(asText(line.offer_id));
+
+      if (!round) continue;
+
+      const who = asText(round.seller_record_id);
+
+      if (!bySeller.has(who)) bySeller.set(who, []);
+      bySeller.get(who).push({ line, round });
+    }
+
+    let told = 0;
+
+    for (const [who, sold] of bySeller) {
+      /*
+       * Posted into the conversation he already has about these pairs. Any
+       * round of his on this deal leads to the same place, so the newest
+       * one that has a channel is as good as the first.
+       */
+      const { data: talking } = await supabase
+        .from("consignment_offers")
+        .select("*")
+        .eq("external_sale_id", saleId)
+        .eq("seller_record_id", who)
+        .not("discord_channel_id", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      const channel = (talking || [])[0];
+
+      if (!channel) continue;
+
+      const owed = sold.reduce((sum, item) => sum + (Number(item.line.payout) || 0), 0);
+      const many = sold.length > 1;
+
+      const sent = await tellConsignmentOfferChannel(channel, [
+        `🤝 **${dealId || "The deal"} is closed${many ? `, with ${sold.length} of your pairs` : ""}.**`,
+        "",
+        many ? "**Sold:**" : "**Your pair is sold:**",
+        ...sold.map(({ line, round }) =>
+          `• ${asText(round.product_name) || asText(line.product_name) || asText(line.sku)} - ` +
+          `${asText(line.sku)} - size ${asText(line.size)} - ${moneySmartValue(Number(line.payout || 0).toFixed(2))}`
+        ),
+        "",
+        `**${many ? "Together" : "You get"}: ${moneySmartValue(owed.toFixed(2))}**`,
+        "",
+        `Keep ${many ? "them" : "it"} ready - a shipping label follows here, and ${many ? "they are" : "it is"} in your dashboard under Allocated.`
+      ].join("\n"));
+
+      if (sent) told += 1;
+    }
+
+    console.log(`🤝 ${dealId || saleId}: ${told} of ${bySeller.size} consignor(s) told the deal is closed.`);
+
+    return res.json({ ok: true, told, consignors: bySeller.size });
+  } catch (err) {
+    console.error("❌ Broker deal notice failed:", err);
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+/*
  * His label is ready, and everything on it travels together.
  *
  * One message for the whole parcel, naming every pair, because the one
