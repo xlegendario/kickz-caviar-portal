@@ -719,6 +719,57 @@ function autoConfirmPartnerOffer({ sellerOfferRecordId, agreed = null, context =
   }, PARTNER_AUTO_CONFIRM_DELAY_MS);
 }
 
+/*
+ * Putting a pair back where it came from.
+ *
+ * The mirror of writeOffConsignmentUnit, for a pair that was taken out of
+ * the market for a deal that then did not happen. The stock level is
+ * refreshed for the same reason it is on the way out: without it the shop
+ * keeps the old number and the pair stays unbuyable.
+ *
+ * A partner row is refused rather than guessed at. Those are kept by
+ * partner_stock through a trigger, and adding one here would invent a pair
+ * nobody owns - a broker round never picks partner stock anyway.
+ */
+async function restoreConsignmentUnit(consignmentInventoryId, context = "") {
+  const id = asText(consignmentInventoryId);
+
+  if (!id) return { ok: false, reason: "not_consignment" };
+
+  const { data: row, error: readError } = await supabase
+    .from("consignment_inventory")
+    .select("id, sku, size, quantity, payout_price")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (readError) throw readError;
+
+  if (!row) return { ok: false, reason: "row_not_found" };
+
+  if (Number(row.payout_price) > 0) {
+    console.error(`❌ Partner row ${row.id} (${row.sku} / ${row.size}) cannot be put back from here.`);
+    return { ok: false, reason: "partner_row" };
+  }
+
+  const newQuantity = Number(row.quantity || 0) + 1;
+
+  const { error: writeError } = await supabase
+    .from("consignment_inventory")
+    .update({ quantity: newQuantity, updated_at: new Date().toISOString() })
+    .eq("id", row.id);
+
+  if (writeError) throw writeError;
+
+  await refreshConsignmentStockLevel(row.sku, row.size);
+
+  console.log(
+    `↩️ Consignment stock put back${context ? ` (${context})` : ""}: ` +
+    `${row.sku} / ${row.size} ${row.quantity} → ${newQuantity}`
+  );
+
+  return { ok: true, sku: row.sku, size: row.size, from: row.quantity, to: newQuantity };
+}
+
 async function writeOffConsignmentUnit(consignmentInventoryId, context = "") {
   const id = asText(consignmentInventoryId);
 
@@ -14167,6 +14218,176 @@ app.post("/api/internal/broker/label-ready", async (req, res) => {
  * portal's job, which owns external_sale_pairs and knows which VAT route
  * this buyer is on. This side hands it a finished Inventory Unit.
  */
+/*
+ * Taking a pair out of the market, without buying it.
+ *
+ * The consignor agreed a while ago; this is the broker saying "this one is
+ * mine". The pair comes off the consignment stock, so no marketplace and
+ * no other deal can sell it from under him - but nothing is bought, no
+ * Inventory Unit exists and nothing has to be unwound if the buyer walks
+ * away from the whole deal.
+ *
+ * Buying happens once, at the end, when the broker confirms the deal: see
+ * /api/internal/broker/finalize.
+ */
+app.post("/api/internal/broker/lock", async (req, res) => {
+  try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
+    const line = await loadDealLine(req.body?.deal_line_id);
+
+    if (!line) {
+      return res.status(404).json({ error: "That line is not part of a deal." });
+    }
+
+    if (line.inventory_unit_record_id) {
+      return res.status(409).json({ error: "That pair is already bought." });
+    }
+
+    const buyerPrice = Number(req.body?.buyer_price ?? line.buyer_price);
+
+    if (!(buyerPrice > 0)) {
+      return res.status(400).json({ error: "What does the buyer pay?" });
+    }
+
+    const { data: offer } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("id", asText(line.offer_id))
+      .maybeSingle();
+
+    if (!offer || asText(offer.status) !== "partner_agreed") {
+      return res.status(409).json({ error: "Nobody has agreed this pair yet." });
+    }
+
+    const payout = Number(offer.offer_price);
+
+    if (!(buyerPrice > payout)) {
+      return res.status(400).json({
+        error:
+          `${moneySmartValue(buyerPrice.toFixed(2))} does not cover the ` +
+          `${moneySmartValue(payout.toFixed(2))} going to ${offer.seller_id}.`
+      });
+    }
+
+    /*
+     * The line's own status is the lock, the same way the race for a pair
+     * is settled: two clicks cannot both take it off the stock.
+     */
+    const { data: claimed } = await supabase
+      .from("deal_lines")
+      .update({ status: "locked", buyer_price: buyerPrice, payout, updated_at: new Date().toISOString() })
+      .eq("id", line.id)
+      .eq("status", "agreed")
+      .select()
+      .maybeSingle();
+
+    if (!claimed) {
+      return res.status(409).json({ error: "That pair is not waiting to be locked." });
+    }
+
+    const dealId = await brokerDealNumber(line.sale_id);
+
+    let off;
+
+    try {
+      off = await writeOffConsignmentUnit(offer.inventory_id, `broker deal ${dealId} (locked)`);
+    } catch (stockErr) {
+      off = { ok: false, reason: stockErr.message };
+    }
+
+    if (!off?.ok) {
+      // Nothing was taken out, so the line goes back to where it was -
+      // locked without the stock behind it is the one state that lies.
+      await supabase
+        .from("deal_lines")
+        .update({ status: "agreed", updated_at: new Date().toISOString() })
+        .eq("id", line.id)
+        .eq("status", "locked");
+
+      return res.status(409).json({
+        error: off?.reason === "already_zero"
+          ? `${offer.seller_id} no longer has that pair.`
+          : `That pair could not be taken out of the stock (${off?.reason || "unknown"}).`
+      });
+    }
+
+    console.log(
+      `🔒 Broker deal ${dealId}: locked ${offer.sku} ${offer.size} from ${offer.seller_id} ` +
+        `at ${moneySmartValue(payout.toFixed(2))}, selling at ${moneySmartValue(buyerPrice.toFixed(2))}.`
+    );
+
+    return res.json({ ok: true, deal_line_id: line.id, seller_id: offer.seller_id, payout, buyer_price: buyerPrice });
+  } catch (err) {
+    console.error("❌ Broker lock failed:", err);
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+/*
+ * Letting a locked pair go again.
+ *
+ * The deal fell through, or the broker changed his mind about this one. It
+ * goes back on the consignor's stock and back to agreed, so it can be
+ * dropped the ordinary way - or locked again.
+ */
+app.post("/api/internal/broker/unlock", async (req, res) => {
+  try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
+    const line = await loadDealLine(req.body?.deal_line_id);
+
+    if (!line) {
+      return res.status(404).json({ error: "That line is not part of a deal." });
+    }
+
+    if (line.inventory_unit_record_id) {
+      return res.status(409).json({ error: "That pair is already bought." });
+    }
+
+    const { data: freed } = await supabase
+      .from("deal_lines")
+      .update({ status: "agreed", updated_at: new Date().toISOString() })
+      .eq("id", line.id)
+      .eq("status", "locked")
+      .select()
+      .maybeSingle();
+
+    if (!freed) {
+      return res.status(409).json({ error: "That pair is not locked." });
+    }
+
+    const { data: offer } = await supabase
+      .from("consignment_offers")
+      .select("inventory_id, seller_id, sku, size")
+      .eq("id", asText(line.offer_id))
+      .maybeSingle();
+
+    const back = await restoreConsignmentUnit(offer?.inventory_id, `broker line ${line.id} released`);
+
+    return res.json({ ok: true, deal_line_id: line.id, stock_back: back?.ok === true });
+  } catch (err) {
+    console.error("❌ Broker unlock failed:", err);
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+/*
+ * Buying a locked pair. The last step, and the only irreversible one.
+ *
+ * Reached from the deal's confirmation, once per locked line, because that
+ * is the moment the broker says this is the deal. The pair already came
+ * off the consignment stock when it was locked, so all that is left here
+ * is the purchase itself.
+ */
 app.post("/api/internal/broker/finalize", async (req, res) => {
   try {
     const refusal = serviceCallRefusal(req);
@@ -14183,6 +14404,10 @@ app.post("/api/internal/broker/finalize", async (req, res) => {
 
     if (line.inventory_unit_record_id) {
       return res.status(409).json({ error: "That pair is already bought." });
+    }
+
+    if (asText(line.status) !== "locked") {
+      return res.status(409).json({ error: "That pair is not locked, so there is nothing to buy yet." });
     }
 
     const buyerPrice = Number(req.body?.buyer_price ?? line.buyer_price);
@@ -14228,7 +14453,7 @@ app.post("/api/internal/broker/finalize", async (req, res) => {
         selling_method: "Kickz Caviar"
       });
 
-      await writeOffConsignmentUnit(lockedOffer.inventory_id, `broker deal ${dealId}`);
+      // Not written off here: that happened when the pair was locked.
 
       const nowIso = new Date().toISOString();
 
