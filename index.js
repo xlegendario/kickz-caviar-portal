@@ -14247,6 +14247,122 @@ app.post("/api/internal/broker/label-void", async (req, res) => {
 });
 
 /*
+ * A pair goes back to the consignor.
+ *
+ * The buyer cancelled before it left his hands, or he sent the wrong shoe.
+ * Either way we are not buying it after all, so what we took off his stock
+ * goes back - but only while the pair is still with him.
+ *
+ * Once he has posted it, it is in a box somewhere between him and us, and
+ * putting it back on his stock would offer it for sale while he cannot
+ * ship it. He puts it back himself when it is in his hands again, and this
+ * says so.
+ */
+app.post("/api/internal/broker/pair-returned", async (req, res) => {
+  try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
+    const line = await loadDealLine(req.body?.deal_line_id);
+
+    if (!line) {
+      return res.status(404).json({ error: "That line is not part of a deal." });
+    }
+
+    const shipped = req.body?.shipped === true;
+    const dealId = asText(req.body?.deal_id) || await brokerDealNumber(line.sale_id);
+
+    const { data: offer } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("id", asText(line.offer_id))
+      .maybeSingle();
+
+    const inventoryId = asText(line.consignment_inventory_id) || asText(offer?.inventory_id);
+
+    let back = null;
+
+    if (!shipped) {
+      back = await restoreConsignmentUnit(inventoryId, `${dealId} cancelled`);
+    }
+
+    await supabase
+      .from("deal_lines")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("id", line.id);
+
+    /*
+     * And he is told, because this is his pair and his money. The wording
+     * splits on where the shoe is: on his shelf nothing is asked of him,
+     * in the post he has to put it back when it lands.
+     */
+    const embed = {
+      title: "↩️ A sold pair is coming back to you",
+      description: [
+        "**Product**",
+        asText(offer?.product_name) || asText(line.product_name) || asText(line.sku) || "—",
+        "",
+        "**SKU**",
+        asText(line.sku) || "—",
+        "",
+        "**Size**",
+        asText(line.size) || "—",
+        "",
+        `**Order:** ${dealId}`,
+        "",
+        shipped
+          ? "It is on its way back to you. Please put it back in your inventory once it arrives - we have not done that for you, so it is not offered for sale while it is still in the post."
+          : "Please do not ship it. It is back in your inventory and for sale again.",
+        "",
+        "This pair will not be paid out."
+      ].join("\n"),
+      color: 0xe67e22,
+      footer: { text: `SellerID: ${asText(offer?.seller_id)}` },
+      timestamp: new Date().toISOString()
+    };
+
+    const sellerRecordId = asText(offer?.seller_record_id);
+    const sellerRecord = sellerRecordId
+      ? await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null)
+      : null;
+
+    const sf = sellerRecord?.fields || {};
+
+    let told = false;
+
+    if (sellerRecordId && await isStoreConsignor(sellerRecordId).catch(() => false)) {
+      told = offer ? await tellConsignmentOfferChannel(offer, "A sold pair is coming back to you", [embed]) : false;
+    } else {
+      await initDiscord();
+
+      for (const channelId of [asText(sf["Deal Updates Channel ID"]), asText(sf["Labels Channel ID"])]) {
+        if (!channelId) continue;
+
+        const channel = await discordClient.channels.fetch(channelId).catch(() => null);
+
+        if (!channel) continue;
+
+        await channel.send({ embeds: [embed] });
+        told = true;
+        break;
+      }
+
+      if (!told && offer) told = await tellConsignmentOfferChannel(offer, "", [embed]);
+    }
+
+    console.log(`↩️ ${dealId}: ${line.sku} ${line.size} back to ${asText(offer?.seller_id)}${shipped ? " (in the post)" : " (stock restored)"}.`);
+
+    return res.json({ ok: true, restocked: back?.ok === true, told });
+  } catch (err) {
+    console.error("❌ Broker return failed:", err);
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+/*
  * The deal is closed, and everyone who sold into it hears so.
  *
  * His own message said he would get the deal update once it was finalized,
