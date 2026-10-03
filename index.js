@@ -14247,8 +14247,8 @@ app.post("/api/internal/broker/deal-confirmed", async (req, res) => {
             `**${many ? "Together" : "Price"}**`,
             `${moneySmartValue(owed.toFixed(2))} (${asText(channel.vat_type) || "—"})`,
             "",
-            `Your shipping label will follow soon - we arrange it for you, so there is nothing to request. ` +
-            `${many ? "They are" : "It is"} in your dashboard under Allocated.`
+            "Your shipping label will be arranged automatically and will appear under Allocated " +
+            "in your dashboard shortly. No request needed."
           ].join("\n"),
           color: 0x2ecc71,
           footer: { text: `SellerID: ${asText(channel.seller_id)}` },
