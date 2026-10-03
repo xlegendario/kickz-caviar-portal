@@ -12209,6 +12209,8 @@ function isUsableConsignmentSize(size) {
 
   if (/^\d{1,2}(\.5)?$/.test(clean)) return true;      // 42, 42.5, 9
   if (/^\d{1,2} [12]\/3$/.test(clean)) return true;     // 37 1/3, 38 2/3
+  // Crocs and most slides are sold in a pair of sizes, not one: 41-42.
+  if (/^\d{1,2}-\d{1,2}$/.test(clean)) return true;      // 41-42, 42-43
   if (/^(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL)$/.test(clean)) return true;
   if (/^(S\/M|M\/L|L\/XL)$/.test(clean)) return true;
 

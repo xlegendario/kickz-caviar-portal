@@ -1434,9 +1434,11 @@ function cleanSkuInput(value) {
 }
 
 function cleanSizeInput(value) {
+  // The hyphen is a size, not a typo: Crocs are sold as 41-42. It was the
+  // only character the SKU field allowed and this one did not.
   return String(value || "")
     .toUpperCase()
-    .replace(/[^A-Z0-9.\/ ]/g, "")
+    .replace(/[^A-Z0-9.\/\- ]/g, "")
     .replace(/^\s+|\s+$/g, "");
 }
 
