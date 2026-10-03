@@ -14453,6 +14453,16 @@ app.post("/api/internal/broker/finalize", async (req, res) => {
         selling_method: "Kickz Caviar"
       });
 
+      /*
+       * The deal it was bought for, in the field External Sales looks it
+       * up by. The consignment unit maker puts the deal in Ticket Number,
+       * which is right for a member WTB and leaves a broker's unit out of
+       * every view that filters on this one.
+       */
+      await airtable(INVENTORY_UNITS_TABLE)
+        .update(inventoryUnitRecord.id, { "External Deal ID": dealId })
+        .catch((err) => console.error("[broker] External Deal ID not set:", err.message));
+
       // Not written off here: that happened when the pair was locked.
 
       const nowIso = new Date().toISOString();
