@@ -10515,7 +10515,7 @@ function consignmentInteractionHandler(client) {
 
         await safeEditInteractionMessage(interaction, {
           content: parked
-            ? `✅ Confirmed by ${result.offer.seller_id}. You will get the shipping step once the deal is closed.`
+            ? `✅ Confirmed by ${result.offer.seller_id}. You'll receive the deal update once the deal is finalized.`
             : `✅ Confirmed by ${result.offer.seller_id}. Deal update has been sent.`,
           embeds: interaction.message.embeds,
           components: []
