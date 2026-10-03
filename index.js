@@ -3823,10 +3823,10 @@ async function sendConsignmentCounterOfferDiscordMessage({
       `The store sent a counter offer.`,
       "",
       `**${isFirstStoreResponse ? "Your Price" : "Your Previous Counter"}**`,
-      `${moneySmartValue(Number(yourPreviousCounter).toFixed(2))}`,
+      `${moneySmartValue(Number(yourPreviousCounter).toFixed(2))}${offer.vat_type ? ` · ${offer.vat_type}` : ""}`,
       "",
       `**New Counter**`,
-      `${moneySmartValue(Number(consignorEquivalent).toFixed(2))}`,
+      `${moneySmartValue(Number(consignorEquivalent).toFixed(2))}${offer.vat_type ? ` · ${offer.vat_type}` : ""}`,
       "",
       closingLine
     ].join("\n"),
