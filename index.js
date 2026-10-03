@@ -6751,6 +6751,62 @@ async function bookMemberWtbConsignmentDeal({ offer: lockedOffer, memberWtbRecor
   };
 }
 
+/*
+ * The deal line a broker round belongs to.
+ *
+ * Two ways on purpose: deal_line_id is the back-link every round carries
+ * from now on, and offer_id is how the line pointed at its only round
+ * before there could be more than one. The older rounds keep working.
+ */
+async function brokerLineIdOf(offer) {
+  const carried = asText(offer?.deal_line_id);
+
+  if (carried) return carried;
+
+  const { data } = await supabase
+    .from("deal_lines")
+    .select("id")
+    .eq("offer_id", asText(offer?.id))
+    .maybeSingle();
+
+  return asText(data?.id);
+}
+
+/*
+ * The men who were asked the same question and lost.
+ *
+ * Closed rather than denied: they did nothing wrong, the pair simply went
+ * to whoever answered first. Their Discord message is taken down with it,
+ * so nobody is left looking at a live-looking offer for something gone.
+ */
+async function closeLosingBrokerRounds(lineId, winnerId) {
+  if (!lineId) return;
+
+  const nowIso = new Date().toISOString();
+
+  const { data: losers } = await supabase
+    .from("consignment_offers")
+    .update({ status: "closed", closed_at: nowIso, updated_at: nowIso })
+    .eq("deal_line_id", lineId)
+    .neq("id", asText(winnerId))
+    .in("status", ["open", "store_pending"])
+    .select();
+
+  for (const loser of losers || []) {
+    if (!loser.discord_channel_id || !loser.discord_message_id) continue;
+
+    await disableConsignmentDiscordButtons(
+      loser.discord_channel_id,
+      loser.discord_message_id,
+      "⌛ Another consignor was first with this pair."
+    ).catch(() => {});
+  }
+
+  if (losers?.length) {
+    console.log(`⌛ Broker line ${lineId}: ${losers.length} other round(s) closed.`);
+  }
+}
+
 async function confirmConsignmentOffer(offerId) {
   const { data: lockedOffer, error: lockError } = await supabase
     .from("consignment_offers")
@@ -6783,6 +6839,39 @@ async function confirmConsignmentOffer(offerId) {
    */
   if (asText(lockedOffer.source_type) === "external_sale") {
     const nowIso = new Date().toISOString();
+    const lineId = await brokerLineIdOf(lockedOffer);
+
+    /*
+     * The first yes takes the pair.
+     *
+     * A round may be out with several consignors at once - they are all
+     * holding the same question about the same pair - so saying yes is a
+     * race, and it is settled on the line itself. Claimed by conditional
+     * update rather than by reading the line and then writing it: two men
+     * pressing Accept in the same second would both pass a read, where the
+     * second update simply matches no row and comes back empty.
+     *
+     * Countered as well as offered, because a consignor whose own counter
+     * is still pending may fall back on accepting what we put to him.
+     */
+    const { data: claimed } = await supabase
+      .from("deal_lines")
+      .update({ status: "agreed", offer_id: lockedOffer.id, updated_at: nowIso })
+      .eq("id", lineId)
+      .in("status", ["offered", "countered"])
+      .select()
+      .maybeSingle();
+
+    if (!claimed) {
+      // Somebody was faster, or the broker pulled the pair while this was
+      // in flight. His round is closed rather than left on processing.
+      await supabase
+        .from("consignment_offers")
+        .update({ status: "closed", closed_at: nowIso, updated_at: nowIso })
+        .eq("id", lockedOffer.id);
+
+      return { ok: false, reason: "gone" };
+    }
 
     await supabase
       .from("consignment_offers")
@@ -6793,10 +6882,7 @@ async function confirmConsignmentOffer(offerId) {
       })
       .eq("id", lockedOffer.id);
 
-    await supabase
-      .from("deal_lines")
-      .update({ status: "agreed", updated_at: nowIso })
-      .eq("offer_id", lockedOffer.id);
+    await closeLosingBrokerRounds(lineId, lockedOffer.id);
 
     return {
       ok: true,
@@ -13776,6 +13862,9 @@ app.post("/api/internal/broker/offer", async (req, res) => {
       .insert({
         source_type: "external_sale",
         external_sale_id: line.sale_id,
+        // Which pair of the deal this round is about. The line points back
+        // at the round that WON; this points at the line regardless.
+        deal_line_id: line.id,
         order_id: await brokerDealNumber(line.sale_id),
 
         inventory_id: pick.row.id,
