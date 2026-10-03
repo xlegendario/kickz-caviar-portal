@@ -14156,6 +14156,94 @@ app.post("/api/internal/broker/accept-previous", async (req, res) => {
 });
 
 /*
+ * That label does not count any more.
+ *
+ * He has a label in his hand and must not put it in the post - either the
+ * pairs are going in one box after all, or the buyer moved an address. Sent
+ * where the label was sent, so it sits next to the thing it cancels.
+ */
+app.post("/api/internal/broker/label-void", async (req, res) => {
+  try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
+    const saleId = asText(req.body?.sale_id);
+    const sellerRecordId = asText(req.body?.seller_record_id);
+    const pairs = Array.isArray(req.body?.pairs) ? req.body.pairs : [];
+
+    if (!saleId || !sellerRecordId) {
+      return res.status(400).json({ error: "sale_id and seller_record_id are required" });
+    }
+
+    const { data: rounds } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("external_sale_id", saleId)
+      .eq("seller_record_id", sellerRecordId)
+      .not("discord_channel_id", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    const offer = (rounds || [])[0];
+    const tracking = asText(req.body?.tracking);
+
+    const embed = {
+      title: "🚫 Shipping Label Cancelled",
+      description: [
+        "**Please do not post this parcel.**",
+        "",
+        ...(pairs.length
+          ? pairs.map((pair) =>
+              `• ${asText(pair.product_name) || asText(pair.sku)} - ${asText(pair.sku)} - size ${asText(pair.size)}`
+            )
+          : []),
+        "",
+        `**Order:** ${asText(req.body?.deal_id) || "—"}`,
+        ...(tracking ? [`**Cancelled tracking:** ${tracking}`] : []),
+        "",
+        "A new label follows here. The pairs are back under Allocated in your dashboard."
+      ].join("\n"),
+      color: 0xe74c3c,
+      footer: { text: "Kickz Caviar" },
+      timestamp: new Date().toISOString()
+    };
+
+    const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+    const sf = sellerRecord?.fields || {};
+
+    let told = false;
+
+    if (await isStoreConsignor(sellerRecordId).catch(() => false)) {
+      told = offer ? await tellConsignmentOfferChannel(offer, "A label was cancelled", [embed]) : false;
+    } else {
+      await initDiscord();
+
+      for (const channelId of [asText(sf["Labels Channel ID"]), asText(sf["Deal Updates Channel ID"])]) {
+        if (!channelId) continue;
+
+        const channel = await discordClient.channels.fetch(channelId).catch(() => null);
+
+        if (!channel) continue;
+
+        await channel.send({ embeds: [embed] });
+        told = true;
+        break;
+      }
+
+      if (!told && offer) told = await tellConsignmentOfferChannel(offer, "", [embed]);
+    }
+
+    return res.json({ ok: true, told });
+  } catch (err) {
+    console.error("❌ Broker label void notice failed:", err);
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+/*
  * The deal is closed, and everyone who sold into it hears so.
  *
  * His own message said he would get the deal update once it was finalized,
