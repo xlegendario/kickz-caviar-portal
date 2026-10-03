@@ -14196,9 +14196,12 @@ app.post("/api/internal/broker/label-void", async (req, res) => {
         "**Please do not post this parcel.**",
         "",
         ...(pairs.length
-          ? pairs.map((pair) =>
-              `• ${asText(pair.product_name) || asText(pair.sku)} - ${asText(pair.sku)} - size ${asText(pair.size)}`
-            )
+          ? [pairs.length > 1 ? "**Products:**" : "**Product:**", ...pairs.flatMap((pair, i) => [
+              ...(i ? [""] : []),
+              asText(pair.product_name) || asText(pair.sku) || "—",
+              asText(pair.sku) || "—",
+              asText(pair.size) || "—"
+            ])]
           : []),
         "",
         `**Order:** ${asText(req.body?.deal_id) || "—"}`,
@@ -14411,12 +14414,12 @@ app.post("/api/internal/broker/label-ready", async (req, res) => {
       title: "📦 Shipping Label Ready",
       description: [
         ...(many
-          ? [
-              `**${pairs.length} pairs, one parcel.** Put them in ONE box - this label covers all of them:`,
-              ...pairs.map((pair) =>
-                `• ${asText(pair.product_name) || asText(pair.sku)} - ${asText(pair.sku)} - size ${asText(pair.size)}`
-              )
-            ]
+          ? ["**Products:**", ...pairs.flatMap((pair, i) => [
+              ...(i ? [""] : []),
+              asText(pair.product_name) || asText(pair.sku) || "—",
+              asText(pair.sku) || "—",
+              asText(pair.size) || "—"
+            ])]
           : [
               `**Product:** ${asText(pairs[0]?.product_name) || "—"}`,
               `**SKU:** ${asText(pairs[0]?.sku) || "—"}`,
@@ -14429,7 +14432,11 @@ app.post("/api/internal/broker/label-ready", async (req, res) => {
         "",
         `📄 [Download Label](${labelUrl})`,
         ...(many
-          ? ["", "Please do not send them separately - there is one label and one tracking number for the whole parcel."]
+          ? [
+              "",
+              `**${pairs.length} pairs, one parcel.** Put them in ONE box - this label covers all of them. ` +
+              "Please do not send them separately."
+            ]
           : [])
       ].join("\n"),
       color: 0x2ecc71,
