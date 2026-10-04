@@ -587,20 +587,52 @@ async function closeConsignmentRoundsForSellerOffer(sellerOfferRecordId, status)
         {Seller Offer Record ID} = '${escapeFormulaValue(sellerOfferRecordId)}',
         {Status} = 'Open'
       )`,
-      fields: ["Status"]
+      fields: ["Status", "Created At", "Counter Offer ID"]
     })
     .all()
     .catch(() => []);
 
   const nowIso = new Date().toISOString();
 
+  /*
+    FIXED - every open round was being marked Accepted, not just the one
+    that was agreed.
+
+    A deal is one agreement. Several rounds can be open at once - rounds
+    are created in a few places and nothing closes the older ones - and
+    this stamped Accepted on all of them. Everything downstream that looks
+    up "the accepted round" then has several to choose from, all carrying
+    the same Accepted At, and picks one of them arbitrarily. That is the
+    same class of mistake that paid SE-00438 a price from six days earlier
+    on ORD-025787.
+
+    So one round carries the yes and the rest are closed. The newest, for
+    the same reason create-fresh-round reuses the newest: it is the
+    conversation the seller was last looking at. It stays a best guess -
+    this function is told which Seller Offer was settled, never which
+    round the seller actually clicked - but one answer that may be the
+    wrong round beats three answers that are certainly not all right.
+  */
+  const newest = [...rounds].sort(
+    (a, b) => new Date(b.fields?.["Created At"] || 0) - new Date(a.fields?.["Created At"] || 0)
+  )[0];
+
   for (const round of rounds) {
+    const carriesTheYes = status === "Accepted" && round.id === newest?.id;
+
     await airtable(COUNTER_OFFERS_TABLE).update(round.id, {
-      "Status": status,
+      "Status": carriesTheYes ? "Accepted" : status === "Accepted" ? "Closed" : status,
       "Closed At": nowIso,
-      ...(status === "Accepted" ? { "Accepted At": nowIso } : {})
+      ...(carriesTheYes ? { "Accepted At": nowIso } : {})
     }).catch((err) =>
       console.error(`Failed to close Counter Offer round ${round.id} (non-blocking):`, err)
+    );
+  }
+
+  if (status === "Accepted" && rounds.length > 1) {
+    console.log(
+      `⚠️ Seller Offer ${sellerOfferRecordId} had ${rounds.length} open rounds at accept time; ` +
+        `${asText(newest?.fields?.["Counter Offer ID"]) || newest?.id} carries the deal, the rest are closed.`
     );
   }
 
