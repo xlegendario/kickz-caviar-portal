@@ -18024,6 +18024,37 @@ app.post("/api/counter-offers/create", async (req, res) => {
           ? sellerOriginalPrice
           : counterPayout;
 
+      /*
+        FIXED - this opened a second live round beside one that was
+        already running.
+
+        It counters every seller on the order at once, and it does not
+        look at whether a seller is already in a conversation. Answering
+        that conversation is /store-counter, which responds to the round
+        and carries a Previous Record ID; this one starts a fresh first
+        round and carries none. Use both within a minute - a bulk counter
+        and then a counter on the round itself - and the seller gets two
+        identical messages, denies one, and the other stays open.
+
+        ORD-025787 on 01-10-2026: CTO-001070 from here at 23:29:46 and
+        CTO-001071 from /store-counter seven seconds later, both 160 ->
+        147.50. Again four minutes later at 165 -> 150. He denied one of
+        each pair, two stayed open, and six days on one of the leftovers
+        was taken as the deal.
+
+        So the older round is closed before this one is opened: the newest
+        instruction is the one that counts, and a seller is never looking
+        at two live prices for the same pair at the same time.
+      */
+      const superseded = await closeConsignmentRoundsForSellerOffer(sellerOfferRecord.id, "Closed");
+
+      if (superseded) {
+        console.log(
+          `↩️ Bulk counter on ${orderId}: closed ${superseded} open round(s) for Seller Offer ` +
+            `${sellerOfferRecord.id} before opening a new one.`
+        );
+      }
+
       const createdCounter = await airtable(COUNTER_OFFERS_TABLE).create({
         "Order": [orderRecordId],
         "Seller ID": [sellerRecordId],
