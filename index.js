@@ -19561,16 +19561,72 @@ app.post("/api/counter-offers/create-fresh-round", async (req, res) => {
             {Seller Offer Record ID} = '${escapeFormulaValue(sellerOfferRecordId)}',
             {Status} = 'Open'
           )`,
-          fields: ["Seller Offer Record ID", "Order", "Created At"]
+          fields: [
+            "Seller Offer Record ID", "Order", "Created At", "Counter Offer ID",
+            "Seller Counter Price", "Counter Payout", "Counter Payout VAT Type", "Store Counter Price"
+          ]
         })
         .all()
         .catch(() => []);
 
-      const reusableRound = existingOpenRounds.find((record) =>
-        linkedRecordIncludes(record.fields?.["Order"], orderRecordId)
-      );
+      // Newest first: if several rounds are somehow open at once, the one
+      // the seller was last looking at is the conversation, not the first
+      // one anybody ever opened.
+      const reusableRound = existingOpenRounds
+        .filter((record) => linkedRecordIncludes(record.fields?.["Order"], orderRecordId))
+        .sort((a, b) =>
+          new Date(b.fields?.["Created At"] || 0) - new Date(a.fields?.["Created At"] || 0))[0];
 
       if (reusableRound) {
+        /*
+          FIXED - a reused round was honoured at the price it was created
+          at, however old that was.
+
+          The create branch below deliberately writes the seller's TRUE
+          current price, because an accept reads the round and nothing
+          else. This branch was added later to stop duplicate rounds
+          piling up, and handed back whatever the old round happened to
+          say - so a store accept paid a number from a conversation that
+          had been superseded, sometimes days earlier.
+
+          ORD-025787 on 04-10-2026: SE-00438 stood at 160, three rounds
+          lay open on his offer, and the oldest - 142.50 from 28-09 - was
+          the one handed back. He was paid 142.50 and the store, which had
+          accepted 172.50, was charged 155. The margin came out right,
+          which is exactly why nobody noticed: both ends moved by the same
+          17.50.
+
+          So the round is brought up to date before it is handed over,
+          with the same three fields the create branch writes. The Store
+          Counter Price is cleared with them: with a Seller Counter Price
+          present the accept reads this as a seller-placed round, and a
+          leftover store figure from an older round is then a number that
+          means nothing and reads like it means something.
+        */
+        const rf = reusableRound.fields || {};
+
+        const stale =
+          numberValue(rf["Seller Counter Price"]) !== currentTruePrice ||
+          numberValue(rf["Counter Payout"]) !== currentTruePrice ||
+          asText(rf["Counter Payout VAT Type"]) !== currentTrueVatType ||
+          numberValue(rf["Store Counter Price"]) > 0;
+
+        if (stale) {
+          await airtable(COUNTER_OFFERS_TABLE).update(reusableRound.id, {
+            "Seller Counter Price": currentTruePrice,
+            "Counter Payout": currentTruePrice,
+            "Counter Payout VAT Type": currentTrueVatType,
+            "Store Counter Price": null,
+            "Store Counter Price Excl VAT": null
+          });
+
+          console.log(
+            `♻️ create-fresh-round refreshed ${asText(rf["Counter Offer ID"]) || reusableRound.id} to ` +
+              `${currentTruePrice} (${currentTrueVatType}) before reuse - it still carried ` +
+              `${numberValue(rf["Counter Payout"])}.`
+          );
+        }
+
         console.log(
           `♻️ create-fresh-round reused open round ${reusableRound.id} for Seller Offer ` +
             `${sellerOfferRecordId} on ${orderRecordId} instead of creating a duplicate.`
