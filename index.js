@@ -3509,46 +3509,6 @@ function getSellerOfferChannelId(sellerRow, isConfirmation) {
     : sellerRow.consignment_offer_channel_id;
 }
 
-function buildCompactConsignmentOfferEmbed({ offer, isConfirmation }) {
-  return {
-    title: isConfirmation
-      ? `🚀 Match: ${offer.sku} / ${offer.size}`
-      : `💸 Offer: ${offer.sku} / ${offer.size}`,
-
-    description: [
-      `**${offer.product_name || "—"}**`,
-      `Your price: ${moneySmartValue(Number(offer.seller_price).toFixed(2))} → Offer: ${moneySmartValue(Number(offer.offer_price).toFixed(2))} · ${offer.vat_type || "—"}`,
-      "",
-      "Confirm if still available."
-    ].join("\n"),
-
-    color: isConfirmation ? 0x2ecc71 : 0xf1c40f,
-
-    footer: {
-      text: `Order: ${offer.order_id || offer.order_record_id || "—"}`
-    }
-  };
-}
-
-function buildCompactConsignmentDealUpdateEmbed({ offer }) {
-  return {
-    title: `📦 Ship: ${offer.sku} / ${offer.size}`,
-
-    description: [
-      `**${offer.product_name || "—"}**`,
-      `${moneySmartValue(Number(offer.offer_price || 0).toFixed(2))} · ${offer.vat_type || "—"}`,
-      "",
-      "Sale confirmed. Request your label below."
-    ].join("\n"),
-
-    color: 0x2ecc71,
-
-    footer: {
-      text: `Order: ${offer.order_id || offer.order_record_id || "—"}`
-    }
-  };
-}
-
 async function sendConsignmentOfferDiscordMessage({
   seller,
   offer,
@@ -3652,12 +3612,17 @@ async function sendConsignmentOfferDiscordMessage({
     deliveryType = "dm";
   }
 
-  const embed = deliveryType === "dm"
-    ? buildCompactConsignmentOfferEmbed({
-        offer,
-        isConfirmation
-      })
-    : {
+  /*
+   * CHANGED - one embed for everybody.
+   *
+   * A DM used to get a short version: one line with his price, the offer and
+   * "Confirm if still available". It said nothing a consignor in a private
+   * channel does not see, and plenty less - no product name as its own
+   * field, no size to check against the shelf. A consignor without a channel
+   * was reading a different message about the same deal and had to ask what
+   * it was about.
+   */
+  const embed = {
         title: isConfirmation
           ? "🚀 Your Item Matched One Of Our Orders"
           : "💸 We Got An Offer For Your Item",
@@ -6014,8 +5979,25 @@ async function createConsignmentDealChannelForDmSeller({
     throw new Error(`Missing Discord ID for seller ${seller?.seller_id || offer.seller_id}`);
   }
 
-  const orderRecord = await airtable(ORDERS_TABLE).find(offer.order_record_id);
-  const orderFields = orderRecord.fields || {};
+  /*
+   * FIXED - a broker deal has no Airtable order, and this began by fetching
+   * one.
+   *
+   * `airtable(...).find(null)` throws, the caller catches it and logs, and a
+   * consignor without a private channel is simply never told his pair sold.
+   * EXTD-000101 (SE-00341, 05-10-2026): the deal closed, the unit was made,
+   * and he heard nothing. The consignor on EXTD-000097 did get his message -
+   * he has a Deal Updates channel, so he never came through here at all,
+   * which is why this only shows up on the DM half.
+   *
+   * An external sale carries its own number (EXTD-000101) and no Shopify
+   * order, so everything read from the order record is optional now.
+   */
+  const orderRecordId = asText(offer.order_record_id);
+
+  const orderFields = orderRecordId
+    ? (await airtable(ORDERS_TABLE).find(orderRecordId)).fields || {}
+    : {};
 
   const existingChannelId = asText(
     orderFields[AIRTABLE_CONSIGNMENT_CREATED_CHANNEL_ID_FIELD]
@@ -6041,10 +6023,25 @@ async function createConsignmentDealChannelForDmSeller({
   );
 
   if (!channelName) {
-    throw new Error(`Could not build channel name for order ${offer.order_record_id}`);
+    throw new Error(`Could not build channel name for ${orderRecordId || offer.order_id || "this deal"}`);
   }
 
   const guild = await kickzDealDiscordClient.guilds.fetch(KICKZ_DEAL_SERVER_ID);
+
+  /*
+   * Without an order record there is nowhere to remember the channel, so it
+   * is looked for by name instead. One deal is one channel either way, and a
+   * second run then finds the first one rather than opening a twin beside it.
+   */
+  if (!orderRecordId) {
+    const twin = (await guild.channels.fetch().catch(() => null))?.find(
+      (one) => one?.name === channelName && asText(one?.parentId) === asText(CONSIGNMENT_DEAL_CATEGORY_ID)
+    );
+
+    if (twin) {
+      return { channel: twin, channelId: twin.id, created: false };
+    }
+  }
 
   const channel = await guild.channels.create({
     name: channelName,
@@ -6093,9 +6090,13 @@ async function createConsignmentDealChannelForDmSeller({
     reason: `Consignment deal channel for ${offer.seller_id} / ${orderId}`
   });
 
-  await airtable(ORDERS_TABLE).update(offer.order_record_id, {
-    [AIRTABLE_CONSIGNMENT_CREATED_CHANNEL_ID_FIELD]: channel.id
-  });
+  // Only an order record has somewhere to keep this; a broker deal is found
+  // by its channel name above.
+  if (orderRecordId) {
+    await airtable(ORDERS_TABLE).update(orderRecordId, {
+      [AIRTABLE_CONSIGNMENT_CREATED_CHANNEL_ID_FIELD]: channel.id
+    });
+  }
 
   const price = Number(offer.offer_price || 0);
 
@@ -6115,10 +6116,10 @@ async function createConsignmentDealChannelForDmSeller({
           offer.size || "—",
           "",
           "**Order**",
-          orderId || offer.order_id || offer.order_record_id || "—",
-          "",
-          "**Shopify Order**",
-          shopifyOrderNumber || "—",
+          orderId || offer.order_id || orderRecordId || "—",
+          // A broker deal has no webshop order behind it, and an empty line
+          // saying so reads as something missing.
+          ...(shopifyOrderNumber ? ["", "**Shopify Order**", shopifyOrderNumber] : []),
           "",
           "**Price**",
           `${moneySmartValue(price.toFixed(2))} (${offer.vat_type || "—"})`,
