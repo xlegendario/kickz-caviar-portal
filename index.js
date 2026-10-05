@@ -39791,34 +39791,6 @@ async function getSkuMasterImageMap(skus) {
   return imageMap;
 }
 
-async function getStoreListingsImageMap(skus) {
-  const cleanSkus = [...new Set(skus.map(normalizeSku).filter(Boolean))];
-  const imageMap = new Map();
-
-  if (!cleanSkus.length) return imageMap;
-
-  const { data, error } = await supabase
-    .from("store_listings")
-    .select("sku, picture_url")
-    .in("sku", cleanSkus);
-
-  if (error) {
-    console.error("Store listings image lookup failed:", error);
-    return imageMap;
-  }
-
-  for (const row of data || []) {
-    const sku = normalizeSku(row.sku);
-    const image = asText(row.picture_url);
-
-    if (sku && image && !imageMap.has(sku)) {
-      imageMap.set(sku, image);
-    }
-  }
-
-  return imageMap;
-}
-
 async function getUolImageMap(skus) {
   const cleanSkus = [...new Set(skus.map(normalizeSku).filter(Boolean))];
   const imageMap = new Map();
@@ -39855,7 +39827,22 @@ async function getUolImageMap(skus) {
   return imageMap;
 }
 
+/*
+ * SKUs we looked up and found no picture for anywhere, and when.
+ *
+ * Found pictures need no memory of their own: cacheConsignmentImages writes
+ * them onto the consignment row, so that SKU never comes back here. What did
+ * keep coming back, every two minutes with the Buying cache, were the few
+ * SKUs no source has a picture for - and each time they cost a full scan of
+ * store_listings plus two Airtable searches. Those are now asked again twice
+ * a day, not seven hundred times.
+ */
+const noPictureFoundAt = new Map();
+const NO_PICTURE_RETRY_MS = 12 * 60 * 60 * 1000;
+
 async function buildConsignmentImageMap(consignmentRows) {
+  const now = Date.now();
+
   const missingImageSkus = [
     ...new Set(
       (consignmentRows || [])
@@ -39863,22 +39850,23 @@ async function buildConsignmentImageMap(consignmentRows) {
         .map((row) => normalizeSku(row.sku))
         .filter(Boolean)
     )
-  ];
+  ].filter((sku) => now - (noPictureFoundAt.get(sku) || 0) > NO_PICTURE_RETRY_MS);
 
   const imageMap = new Map();
 
   if (!missingImageSkus.length) return imageMap;
 
-  const storeListingsMap = await getStoreListingsImageMap(missingImageSkus);
-
-  for (const [sku, image] of storeListingsMap.entries()) {
-    if (!isUnstableImageUrl(image)) {
-      imageMap.set(sku, image);
-    }
-  }
-
-  const stillMissingAfterStoreListings = missingImageSkus.filter((sku) => !imageMap.has(sku));
-  const skuMasterMap = await getSkuMasterImageMap(stillMissingAfterStoreListings);
+  /*
+   * SKU Master first. It holds the StockX picture for 1,440 of the 1,449
+   * SKUs in consignment, so it answers nearly everything on its own.
+   *
+   * CHANGED - store_listings used to be asked first, with "sku IN (...)" over
+   * every store. No index fits that (the one there is on upper(sku)), so it
+   * read all ~350,000 rows each time, taking 2-8 seconds - and it ran with
+   * every rebuild of the Buying cache. It is no longer asked at all: SKU
+   * Master is the better source, and the order log behind it covers the rest.
+   */
+  const skuMasterMap = await getSkuMasterImageMap(missingImageSkus);
 
   for (const [sku, image] of skuMasterMap.entries()) {
     if (!isUnstableImageUrl(image)) {
@@ -39893,6 +39881,11 @@ async function buildConsignmentImageMap(consignmentRows) {
     if (!isUnstableImageUrl(image)) {
       imageMap.set(sku, image);
     }
+  }
+
+  for (const sku of missingImageSkus) {
+    if (imageMap.has(sku)) noPictureFoundAt.delete(sku);
+    else noPictureFoundAt.set(sku, now);
   }
 
   return imageMap;
