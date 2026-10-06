@@ -17209,6 +17209,26 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         }
       }
 
+      /*
+        And whoever the caller has already been handed this round.
+
+        FIXED - the list above comes from Airtable, which does not show a
+        record the moment it is written. A caller walking down the holders
+        asks again milliseconds later, reads a list without the offer it
+        just made, lands on the same cheapest source and is turned away by
+        the duplicate guard. MWTB on 06-10-2026: five calls, one consignor,
+        four of them wasted - and on stock with more than one holder the
+        second consignor is never reached at all.
+
+        The caller knows what it was handed. Taking its word costs nothing
+        and does not depend on Airtable catching up.
+      */
+      for (const id of Array.isArray(req.body?.skip_inventory_ids) ? req.body.skip_inventory_ids : []) {
+        const clean = asText(id);
+
+        if (clean) refusedInventoryIds.add(clean);
+      }
+
       if (refusedInventoryIds.size) {
         console.log(
           `ℹ️ Member WTB ${source.recordId}: skipping ${refusedInventoryIds.size} ` +
@@ -41166,6 +41186,10 @@ async function createMemberWtbAutoOffer(memberWtbRecordId) {
 
   const made = [];
 
+  // Which stock this walk has already been handed, so the next call lands
+  // on the next holder instead of the same one.
+  const seen = new Set();
+
   for (let round = 0; round < MAX_CONSIGNORS_ASKED; round += 1) {
     const response = await fetch(`http://localhost:${PORT}/api/consignment/auto-offer/create`, {
       method: "POST",
@@ -41177,7 +41201,8 @@ async function createMemberWtbAutoOffer(memberWtbRecordId) {
         member_wtb_record_id: memberWtbRecordId,
         sku: asText(f["SKU"]),
         size: asText(f["Size"]),
-        maximum_buying_price: numberValue(f["Max Price"])
+        maximum_buying_price: numberValue(f["Max Price"]),
+        skip_inventory_ids: [...seen]
       })
     });
 
@@ -41192,6 +41217,15 @@ async function createMemberWtbAutoOffer(memberWtbRecordId) {
 
       break;
     }
+
+    if (asText(data.inventory_id)) seen.add(asText(data.inventory_id));
+
+    /*
+      Not a consignor asked: this is the walk arriving back where it
+      started, which the skip list above now prevents. Counted it would
+      say "asked 5 consignors" about one.
+    */
+    if (asText(data.skipped) === "already_offered") continue;
 
     made.push(data);
 
