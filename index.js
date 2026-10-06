@@ -3408,6 +3408,51 @@ async function isStoreConsignor(sellerRecordId) {
  * is why nothing with a button goes down this road. A store answers in its
  * portal; what arrives here is a notice that something needs answering.
  */
+/*
+ * Edit a message the Lojiq bot posted, through that bot.
+ *
+ * Discord only lets an application act on its own messages. A consignor who
+ * is a Lojiq store gets his offer posted by that bot, so every edit after it
+ * - the buttons going grey when a round is withdrawn, the answer to a click
+ * - has to take the same road back. Our own bots fetch the channel, find
+ * nothing, and say "message not found".
+ *
+ * Returns false rather than throwing: an embed that keeps its buttons is
+ * untidy, not a reason to fail the thing that was being done.
+ */
+async function editLojiqConsignorMessage({ channelId, messageId, content, note }) {
+  if (!AIRTABLE_DISCORD_UPDATES_URL || !channelId || !messageId) return false;
+
+  const secret = COUNTER_OFFERS_SECRET || process.env.COUNTER_OFFERS_SECRET || "";
+
+  const response = await fetch(`${AIRTABLE_DISCORD_UPDATES_URL}/counter-offer/disable`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(secret ? { "x-kc-secret": secret } : {})
+    },
+    body: JSON.stringify({
+      channel_id: String(channelId),
+      message_id: String(messageId),
+      note: asText(note || content)
+    })
+  }).catch((err) => {
+    console.error("Lojiq bot unreachable for a consignor edit:", err.message);
+
+    return null;
+  });
+
+  if (!response?.ok) {
+    const body = response ? await response.text().catch(() => "") : "";
+
+    console.error("Lojiq bot refused a consignor edit:", response?.status, body.slice(0, 160));
+
+    return false;
+  }
+
+  return true;
+}
+
 async function postLojiqConsignorEmbed({ channelId, content, embeds, components = [] }) {
   if (!AIRTABLE_DISCORD_UPDATES_URL) {
     return { ok: false, reason: "no_updates_service_url" };
@@ -4243,6 +4288,12 @@ async function disableConsignmentDiscordButtons(channelId, messageId, note, pref
       console.error("Failed to disable consignment buttons with client:", err);
     }
   }
+
+  /*
+    Neither of ours could reach it, which for a Lojiq store is the normal
+    case rather than a failure: that message belongs to their bot.
+  */
+  if (await editLojiqConsignorMessage({ channelId, messageId, note })) return true;
 
   console.error("Failed to disable consignment buttons: message not found", {
     channelId,
@@ -7564,8 +7615,20 @@ async function safeEditInteractionMessage(interaction, payload, preferredClient 
       message: err.message,
       code: err.code
     });
-    return null;
   }
+
+  /*
+    A click forwarded from the Lojiq bot. Nothing of ours owns that message,
+    so the answer never landed and the consignor was left looking at
+    "Processing..." for good.
+  */
+  const told = await editLojiqConsignorMessage({
+    channelId: interaction.channelId,
+    messageId: interaction.message?.id,
+    content: payload?.content
+  });
+
+  return told ? { edited: "lojiq_channel" } : null;
 }
 
 function bindMemberWtbDiscordCreation(
@@ -14064,7 +14127,21 @@ app.post("/api/internal/broker/offer", async (req, res) => {
       inventoryId: pick.row.id
     });
 
-    await supabase
+    /*
+      Checked, because it was not.
+
+      discord_delivery_type had a CHECK that knew "private_channel" and "dm"
+      and not "lojiq_channel", so every offer to a store consignor took the
+      whole update down with it - channel id and message id included. Nobody
+      looked at the result, so it failed in silence: three offers to SE-00879
+      with no message id at all, and a withdrawal that then could not disable
+      an embed it no longer knew about.
+
+      Still not fatal. The offer is made and the consignor has it; what is
+      lost is our way back to the message, and that is worth a loud line in
+      the log rather than the round.
+    */
+    const { error: markError } = await supabase
       .from("consignment_offers")
       .update({
         discord_channel_id: discordResult.channelId,
@@ -14073,6 +14150,15 @@ app.post("/api/internal/broker/offer", async (req, res) => {
         updated_at: new Date().toISOString()
       })
       .eq("id", offer.id);
+
+    if (markError) {
+      console.error("❌ Broker offer went out but was not marked as sent:", {
+        offer: offer.id,
+        seller: offer.seller_id,
+        delivery: discordResult.deliveryType,
+        error: markError.message
+      });
+    }
 
     await supabase
       .from("deal_lines")
