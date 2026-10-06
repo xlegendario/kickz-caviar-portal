@@ -7476,7 +7476,30 @@ async function requestConsignmentShippingLabel(orderRecordId) {
   if (marketplace === "Woovin") {
     const comingToUs = asText(orderFields["Inbound Status"]);
 
-    if (comingToUs && !asText(orderFields["Inbound Tracking Number"])) {
+    /*
+     * CHANGED - decided by who supplies the pair, not by the order.
+     *
+     * The poller used to mark a whole order "via the warehouse" only when no
+     * holder DPD can reach held it. Every holder is asked, though, and the
+     * one who accepts can be outside DPD while a reachable one also held the
+     * pair - he would then have been handed Woovin's DPD label, which nobody
+     * in Spain can post. The order now lists the holders outside DPD in
+     * "Via Warehouse Sellers", and the consignor who took the deal is checked
+     * against it here. Inbound Status still counts for orders made before.
+     */
+    const viaWarehouse = asText(orderFields["Via Warehouse Sellers"])
+      .split(",")
+      .map((id) => id.trim().toUpperCase())
+      .filter(Boolean);
+
+    const supplier = [orderFields["Final Offer Seller ID"]]
+      .flat()
+      .map((id) => asText(id).trim().toUpperCase())
+      .find(Boolean) || "";
+
+    const supplierOutsideDpd = supplier && viaWarehouse.includes(supplier);
+
+    if ((comingToUs || supplierOutsideDpd) && !asText(orderFields["Inbound Tracking Number"])) {
       return await requestWarehouseInboundLabel(orderRecordId, orderFields);
     }
 
