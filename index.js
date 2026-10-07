@@ -4423,7 +4423,14 @@ function buildMemberWtbReadyToShipEmbed({ memberFields, payout, freshChannel = f
 
 async function sendMemberWtbReadyToShipToChannel({
   channel,
+  /*
+   * A consignor who is a Lojiq store: his Deal Updates channel lives in the
+   * Lojiq server, where none of this service's bots can see anything. Given
+   * an id here, the embed goes through the Lojiq bot instead of `channel`.
+   */
+  lojiqChannelId = "",
   sellerDiscordId,
+  sellerId = "",
   memberWtbRecordId,
   memberFields,
   payout,
@@ -4432,6 +4439,61 @@ async function sendMemberWtbReadyToShipToChannel({
   const confirmedLine =
     `✅ Your Deal For ${asText(memberFields["SKU"]) || "—"} - ` +
     `${asText(memberFields["Size"]) || "—"} Has Been Confirmed!`;
+
+  const labelRequestRow = {
+    type: 1,
+    components: [
+      {
+        type: 2,
+        style: 3,
+        label: "Request Label",
+        custom_id: `request_member_wtb_label:${memberWtbRecordId}`
+      }
+    ]
+  };
+
+  /*
+   * The store road, the same one a consignment deal already takes.
+   *
+   * The Lojiq bot posts it and forwards the click back to
+   * /api/lojiq-bot/interaction, so Request Label runs the handler it always
+   * did. Nothing is tried with our own bots first: they cannot see that
+   * server, and falling through from there is what put a deal channel in the
+   * Kickz Caviar server for a store that has private channels (MWTB-000524,
+   * 07-10-2026). A failure here throws rather than falling back - a store
+   * must never be sent a Kickz Caviar channel or DM.
+   */
+  if (lojiqChannelId) {
+    const embed = buildMemberWtbReadyToShipEmbed({
+      memberFields,
+      payout,
+      freshChannel
+    });
+
+    // The footer falls back to our own brand when the lookup is empty, and a
+    // store is not supposed to read that name anywhere.
+    if (sellerId && embed.footer?.text === "Kickz Caviar") {
+      embed.footer = { text: `SellerID: ${sellerId}` };
+    }
+
+    const posted = await postLojiqConsignorEmbed({
+      channelId: lojiqChannelId,
+      content: confirmedLine,
+      embeds: [embed],
+      components: [labelRequestRow]
+    });
+
+    console.log(
+      `Member WTB ${memberWtbRecordId}: Ready To Ship sent to Lojiq channel ` +
+        `${posted.channelId || lojiqChannelId}`
+    );
+
+    return {
+      channelId: posted.channelId || lojiqChannelId,
+      messageId: posted.messageId || null,
+      deliveryType: "lojiq_channel"
+    };
+  }
 
   const message = await channel.send({
     content: sellerDiscordId
@@ -4444,19 +4506,7 @@ async function sendMemberWtbReadyToShipToChannel({
         freshChannel
       })
     ],
-    components: [
-      {
-        type: 1,
-        components: [
-          {
-            type: 2,
-            style: 3,
-            label: "Request Label",
-            custom_id: `request_member_wtb_label:${memberWtbRecordId}`
-          }
-        ]
-      }
-    ]
+    components: [labelRequestRow]
   });
 
   // Logged because its absence is what made MWTB-000402 impossible to
@@ -4761,6 +4811,29 @@ async function sendMemberWtbDealUpdate(memberWtbRecordId) {
   const privateDealUpdatesChannelId = asText(seller.deal_updates_channel_id);
 
   if (privateDealUpdatesChannelId) {
+    /*
+     * A store's channels are in the Lojiq server, so they go the Lojiq way.
+     *
+     * Checked before anything is fetched: our bot is not in that server, the
+     * fetch returns null, and the fall-through below then made a deal channel
+     * in the Kickz Caviar server - which is where MWTB-000524 ended up while
+     * KicksbyMattie had a Deal Updates channel of his own all along. His own
+     * bookkeeping reads the Lojiq channel, so the wrong room is not merely
+     * untidy; it is a sale that never reaches his system.
+     */
+    const storeConsignor = await isStoreConsignor(sellerRecordId).catch(() => false);
+
+    if (storeConsignor) {
+      return await sendMemberWtbReadyToShipToChannel({
+        lojiqChannelId: privateDealUpdatesChannelId,
+        sellerDiscordId,
+        sellerId: seller.seller_id,
+        memberWtbRecordId,
+        memberFields: f,
+        payout
+      });
+    }
+
     await initDiscord();
 
     const channel = await discordClient.channels
