@@ -35948,7 +35948,20 @@ async function normalizeConsignmentDashboardItems(records, sellerRecordId) {
        * and he must see that before he packs - two boxes with the same
        * label on them is the one mistake this costs real money.
        */
-      shipment_group: brokerPair ? asText(brokerPair.shipment_group) : "",
+      /*
+       * A marketplace parcel says so with its tracking number.
+       *
+       * Two items of one bol order from the same shelf now travel on one
+       * label, and both orders carry that label and that number. Nothing
+       * else ever shares a tracking number, so it groups exactly the rows
+       * that are in the same box - and a pair on its own is a group of one,
+       * which changes nothing for it.
+       */
+      shipment_group: brokerPair
+        ? asText(brokerPair.shipment_group)
+        : isMemberWtb
+          ? ""
+          : displayValue(orderFields["Tracking Number"]),
       order_record_id: linkedOrderId,
       member_wtb_record_id: linkedMemberWtbId,
       product: displayValue(f["Product Name"]),

@@ -3303,7 +3303,7 @@ function oneRowPerParcel(items) {
       continue;
     }
 
-    row.product = `${row.parcel_pairs.length} pairs - one parcel`;
+    row.product = `${row.parcel_pairs.length} items - one parcel`;
     row.sku = row.parcel_pairs.map((pair) => `${pair.sku} ${pair.size}`).join(" · ");
     row.size = "—";
   }
