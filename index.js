@@ -16207,6 +16207,15 @@ app.post("/api/internal/partner-stock/intake", async (req, res) => {
         vat_type: partner.vatType,
         partner_price: line.partner_price,
         markup: line.markup,
+        /*
+         * The fee this pair was taken in at.
+         *
+         * Typed per line when it differs from what this partner normally
+         * pays; his own fee when it does not. Written onto the pair rather
+         * than looked up when it leaves, so a forward is charged what was
+         * agreed when the goods came in, even after the standard fee moves.
+         */
+        forwarding_fee: line.forwarding_fee ?? (partner.forwardingFee > 0 ? partner.forwardingFee : null),
         tracking_number: trackingNumber,
         received_at: receivedAt
       }))
@@ -16243,6 +16252,7 @@ app.post("/api/internal/partner-stock/intake", async (req, res) => {
         quantity: line.quantity,
         partner_price: line.partner_price,
         markup: line.markup,
+        forwarding_fee: line.forwarding_fee ?? (partner.forwardingFee > 0 ? partner.forwardingFee : null),
         product_name: line.product.product_name
       })),
       notes

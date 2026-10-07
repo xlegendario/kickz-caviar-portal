@@ -32,8 +32,8 @@ test("an intake merges lines of the same size and price", () => {
 
   assert.deepEqual(errors, []);
   assert.deepEqual(lines, [
-    { sku: "MIHARA", size: "42", barcode: "111", quantity: 3, partner_price: 100, markup: 25 },
-    { sku: "MIHARA", size: "42", barcode: "333", quantity: 1, partner_price: 110, markup: 25 }
+    { sku: "MIHARA", size: "42", barcode: "111", quantity: 3, partner_price: 100, markup: 25, forwarding_fee: null },
+    { sku: "MIHARA", size: "42", barcode: "333", quantity: 1, partner_price: 110, markup: 25, forwarding_fee: null }
   ]);
 });
 
@@ -52,7 +52,7 @@ test("a listed pair needs a partner price, a forwarded one does not", () => {
 
   assert.deepEqual(forwarded.errors, []);
   assert.deepEqual(forwarded.lines, [
-    { sku: "A", size: "42", barcode: null, quantity: 2, partner_price: null, markup: 0 }
+    { sku: "A", size: "42", barcode: null, quantity: 2, partner_price: null, markup: 0, forwarding_fee: null }
   ]);
 });
 
@@ -113,4 +113,34 @@ test("a different price for pairs already on the shelf is pointed out", () => {
 
   assert.equal(notes.length, 1);
   assert.match(notes[0], /MIHARA \/ 42: 2 pair\(s\) already in stock at 100 \+ 25/);
+});
+
+test("a line keeps the forwarding fee it was agreed at", () => {
+  const { lines, errors } = normalizeIntake({
+    mode: "forwarding",
+    items: [
+      { sku: "tee-1", size: "L", quantity: 2, forwarding_fee: 1 },
+      { sku: "tee-1", size: "L", quantity: 3, forwarding_fee: 1 },
+      { sku: "tee-1", size: "L", quantity: 1, forwarding_fee: 3 },
+      { sku: "tee-1", size: "M", quantity: 1 }
+    ]
+  });
+
+  assert.deepEqual(errors, []);
+
+  // Same fee merges, a different one stays its own line, and an empty one
+  // is left for the intake to fill with the partner's standard.
+  assert.deepEqual(
+    lines.map((line) => [line.size, line.quantity, line.forwarding_fee]),
+    [["L", 5, 1], ["L", 1, 3], ["M", 1, null]]
+  );
+});
+
+test("a negative forwarding fee is refused", () => {
+  const { errors } = normalizeIntake({
+    mode: "forwarding",
+    items: [{ sku: "tee-1", size: "L", quantity: 1, forwarding_fee: -1 }]
+  });
+
+  assert.deepEqual(errors, ["TEE-1 / L: forwarding fee cannot be negative"]);
 });
