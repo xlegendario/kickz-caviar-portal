@@ -1180,6 +1180,11 @@ function dashboardProductCell(item) {
   return `
     <div class="dashboard-product-name">${escapeHtml(labelText)}</div>
     ${meta ? `<div class="dashboard-product-meta">${meta}</div>` : ""}
+    ${
+      item.parcel_note
+        ? `<div class="dashboard-parcel-note">${escapeHtml(item.parcel_note)}</div>`
+        : ""
+    }
   `;
 }
 
@@ -3292,7 +3297,12 @@ function oneRowPerParcel(items) {
 
     const row = groups.get(group);
 
-    row.parcel_pairs.push({ product: item.product, sku: item.sku, size: item.size });
+    row.parcel_pairs.push({
+      product: item.product,
+      sku: item.sku,
+      size: item.size,
+      order_id: item.order_id
+    });
     row.payout = Number(row.payout) + Number(item.payout || 0);
   }
 
@@ -3306,6 +3316,21 @@ function oneRowPerParcel(items) {
     row.product = `${row.parcel_pairs.length} items - one parcel`;
     row.sku = row.parcel_pairs.map((pair) => `${pair.sku} ${pair.size}`).join(" · ");
     row.size = "—";
+
+    /*
+     * Both order numbers, and the instruction in words.
+     *
+     * A count and a joined SKU line can be read as "two rows that happen to
+     * look alike". The sentence cannot, and the orders have to be named
+     * because he is asked about them one at a time in Discord.
+     */
+    row.order_id = row.parcel_pairs
+      .map((pair) => pair.order_id)
+      .filter(Boolean)
+      .join(" · ");
+
+    row.parcel_note =
+      `Ship together in ONE box — one label for all ${row.parcel_pairs.length}`;
   }
 
   return out;

@@ -509,6 +509,17 @@
   font-weight: 800;
 }
 
+/* One row standing for two items has to say so where the eye already is:
+   under the name, in the colour this dashboard uses when something is being
+   asked of you. */
+.dashboard-parcel-note {
+  margin-top: 4px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--kc-gold);
+  white-space: normal;
+}
+
 .dashboard-table th.dashboard-product-col,
 .dashboard-table td.dashboard-product-col {
   position: sticky;
