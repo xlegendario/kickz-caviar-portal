@@ -3642,6 +3642,86 @@ function supplierApiOf(sellerFields) {
 }
 
 /*
+ * Wat er in hun kanaal komt te staan.
+ *
+ * Zij hoeven niets te klikken - hun antwoord geven ze in hun eigen systeem -
+ * maar wij moeten zien dat er iets van hen verkocht is. Vooral als ze nee
+ * zeggen: een Woovin-verkoop is een echte verkoop, en die moet dan meteen
+ * ergens anders vandaan komen.
+ *
+ * Dus dezelfde embed als een gewone bevestigingsaanvraag, zonder de twee
+ * knoppen, en met de regel erboven die later het antwoord gaat dragen. Een
+ * kanaal dat we niet kunnen bereiken houdt de aanvraag niet tegen: die staat
+ * dan al bij hen, en dat is wat telt.
+ */
+async function postPearlConfirmationNotice({ seller, offer, price, request }) {
+  const channelId =
+    asText(seller?.consignment_confirmation_channel_id) ||
+    asText(seller?.consignment_offer_channel_id) ||
+    asText(seller?.deal_updates_channel_id);
+
+  if (!channelId) {
+    console.error(
+      `Pearl-aanvraag ${request?.id}: geen kanaal op ${asText(seller?.seller_id)}, ` +
+        "niemand ziet dat dit paar verwacht wordt."
+    );
+
+    return { channelId: "", messageId: "" };
+  }
+
+  try {
+    await initDiscord();
+
+    const channel = await discordClient.channels.fetch(channelId).catch(() => null);
+
+    if (!channel) throw new Error(`kanaal ${channelId} niet bereikbaar`);
+
+    const expires = request?.expiresAt
+      ? new Date(request.expiresAt).toLocaleString("nl-NL", { timeZone: "Europe/Amsterdam" })
+      : "";
+
+    const message = await channel.send({
+      content: `⏳ Request #${request?.id} sent - waiting for their answer`,
+      embeds: [
+        {
+          title: "📋 Confirmation Request",
+          description: [
+            "**Item Details:**",
+            asText(offer?.product_name) || "—",
+            "",
+            "**SKU**",
+            asText(offer?.sku) || "—",
+            "",
+            "**Size**",
+            asText(offer?.size) || "—",
+            "",
+            "**Order**",
+            asText(offer?.order_id) || "—",
+            "",
+            "**Price**",
+            `${moneySmartValue(Number(price || 0).toFixed(2))} (VAT0)`,
+            "",
+            expires
+              ? `Request #${request?.id} is with them until ${expires}.`
+              : `Request #${request?.id} is with them.`,
+            "They answer in their own system; no action is needed here."
+          ].join("\n"),
+          color: 0xf1c40f,
+          footer: { text: `SellerID: ${asText(seller?.seller_id) || "—"}` },
+          timestamp: new Date().toISOString()
+        }
+      ]
+    });
+
+    return { channelId: message.channelId, messageId: message.id };
+  } catch (err) {
+    console.error(`Pearl-aanvraag ${request?.id}: bericht niet geplaatst:`, err.message);
+
+    return { channelId: "", messageId: "" };
+  }
+}
+
+/*
  * De aanvraag zelf.
  *
  * Eerst hun prijs opvragen, zoals hun handleiding voorschrijft: daar wordt de
@@ -3652,6 +3732,8 @@ function supplierApiOf(sellerFields) {
  * die "nee" zegt, en de order rolt door naar de volgende bron.
  */
 async function askPearlToConfirm({
+  seller = null,
+  offer = null,
   sellerOfferRecordId = null,
   orderRecordId = null,
   memberWtbRecordId = null,
@@ -3689,9 +3771,13 @@ async function askPearlToConfirm({
     })
   });
 
+  const notice = await postPearlConfirmationNotice({ seller, offer, price, request });
+
   const { error } = await supabase.from("pearl_requests").upsert(
     {
       request_id: request.id,
+      channel_id: notice.channelId || null,
+      message_id: notice.messageId || null,
       seller_offer_record_id: sellerOfferRecordId,
       order_record_id: orderRecordId,
       member_wtb_record_id: memberWtbRecordId,
@@ -3726,8 +3812,8 @@ async function askPearlToConfirm({
     ok: true,
     deliveryType: "supplier_api",
     requestId: request.id,
-    channelId: null,
-    messageId: null
+    channelId: notice.channelId || null,
+    messageId: notice.messageId || null
   };
 }
 
@@ -3739,12 +3825,39 @@ async function askPearlToConfirm({
  * volgt - de unit, de voorraad eraf, het bericht aan de winkel - hangt aan
  * die twee functies en niet aan de knop.
  */
+async function noteAnswerOnPearlMessage(row, status, reply) {
+  if (!row?.channel_id || !row?.message_id) return;
+
+  const line =
+    status === "confirmed"
+      ? `✅ Request #${row.request_id} confirmed by the supplier`
+      : status === "declined"
+        ? `❌ Request #${row.request_id} declined by the supplier`
+        : `⌛ Request #${row.request_id} expired - no answer in time`;
+
+  try {
+    await initDiscord();
+
+    const channel = await discordClient.channels.fetch(row.channel_id).catch(() => null);
+    const message = channel ? await channel.messages.fetch(row.message_id).catch(() => null) : null;
+
+    if (!message) return;
+
+    await message.edit({
+      content: reply ? `${line}\n> ${reply}` : line,
+      embeds: message.embeds
+    });
+  } catch (err) {
+    console.error(`Pearl-aanvraag ${row.request_id}: antwoord niet bijgeschreven:`, err.message);
+  }
+}
+
 async function pollPearlRequests() {
   if (!PEARL_API_KEY) return { skipped: "no_key" };
 
   const { data, error } = await supabase
     .from("pearl_requests")
-    .select("request_id, seller_offer_record_id, sku, size, status")
+    .select("request_id, seller_offer_record_id, sku, size, status, channel_id, message_id")
     .eq("status", "pending")
     .limit(100);
 
@@ -3789,6 +3902,12 @@ async function pollPearlRequests() {
 
       continue;
     }
+
+    /*
+     * Het antwoord boven het bericht, zoals een knop het daar ook zou zetten.
+     * Dat is waar iemand kijkt die zich afvraagt waar dit paar blijft.
+     */
+    await noteAnswerOnPearlMessage(row, status, asText(answer.reply));
 
     await supabase
       .from("pearl_requests")
@@ -3844,6 +3963,8 @@ async function sendConsignmentOfferDiscordMessage({
 
   if (supplierApi) {
     return await askPearlToConfirm({
+      seller,
+      offer,
       sellerOfferRecordId,
       orderRecordId: asText(offer?.order_record_id) || null,
       memberWtbRecordId: asText(offer?.member_wtb_record_id) || null,
