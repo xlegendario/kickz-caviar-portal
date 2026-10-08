@@ -3642,6 +3642,68 @@ function supplierApiOf(sellerFields) {
 }
 
 /*
+ * De melding die in de plaats komt van een aanvraag die niet kon.
+ *
+ * Normaal ziet iemand de aanvraag staan en daarna het antwoord. Valt het
+ * paar weg tussen onze laatste catalogus en de verkoop, dan was er zonder
+ * dit bericht niets te zien - en juist dat is het geval waarin iemand moet
+ * ingrijpen, want bij een verkoop op een marktplaats is al betaald.
+ *
+ * Dezelfde vorm als de aanvraag, in het rood, zodat het in één oogopslag
+ * leest als "hier is iets mee".
+ */
+async function postPearlGoneNotice({ seller, offer, sku, size, orderId }) {
+  const channelId =
+    asText(seller?.consignment_confirmation_channel_id) ||
+    asText(seller?.consignment_offer_channel_id) ||
+    asText(seller?.deal_updates_channel_id);
+
+  if (!channelId) return false;
+
+  try {
+    await initDiscord();
+
+    const channel = await discordClient.channels.fetch(channelId).catch(() => null);
+
+    if (!channel) return false;
+
+    await channel.send({
+      content: "\u274c Sold, but no longer in your stock",
+      embeds: [
+        {
+          title: "\u26a0\ufe0f We could not send you this request",
+          description: [
+            "Your catalogue no longer has this size, so we did not send a request.",
+            "We are sourcing this pair elsewhere - no action is needed from you.",
+            "",
+            "**Product Name**",
+            asText(offer?.product_name) || "\u2014",
+            "",
+            "**SKU**",
+            asText(sku) || "\u2014",
+            "",
+            "**Size**",
+            asText(size) || "\u2014",
+            "",
+            "**Order**",
+            asText(offer?.order_id) || asText(orderId) || "\u2014"
+          ].join("\n"),
+          color: 0xe74c3c,
+          footer: { text: `SellerID: ${asText(seller?.seller_id) || "\u2014"}` },
+          timestamp: new Date().toISOString()
+        }
+      ]
+    });
+
+    return true;
+  } catch (err) {
+    console.error("Kon de melding over een weggevallen maat niet plaatsen:", err.message);
+
+    return false;
+  }
+}
+
+/*
  * Iets zeggen in het kanaal van een leverancier.
  *
  * Voor de gevallen waarin er geen embed hoort maar wel iets te melden valt:
@@ -3823,12 +3885,7 @@ async function askPearlToConfirm({
      */
     console.log(`Pearl heeft ${sku} ${size} niet meer; deal wordt geweigerd.`);
 
-    await sayInSupplierChannel(
-      seller,
-      `\u274c **${sku} / ${size}** is weg bij hen.\n` +
-        `Gevraagd voor ${asText(offer?.order_id) || asText(orderId) || "een order"} - ` +
-        "er is geen aanvraag verstuurd en dit paar moet ergens anders vandaan komen."
-    );
+    await postPearlGoneNotice({ seller, offer, sku, size, orderId });
 
     if (sellerOfferRecordId) {
       await denyConsignmentSellerOffer(sellerOfferRecordId).catch((err) =>
