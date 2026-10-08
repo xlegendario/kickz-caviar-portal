@@ -3642,6 +3642,38 @@ function supplierApiOf(sellerFields) {
 }
 
 /*
+ * Iets zeggen in het kanaal van een leverancier.
+ *
+ * Voor de gevallen waarin er geen embed hoort maar wel iets te melden valt:
+ * een maat die weg is voordat we iets konden vragen. Mislukt het, dan blijft
+ * het bij een regel in de log - het bericht is de melding, niet de deal.
+ */
+async function sayInSupplierChannel(seller, text) {
+  const channelId =
+    asText(seller?.consignment_confirmation_channel_id) ||
+    asText(seller?.consignment_offer_channel_id) ||
+    asText(seller?.deal_updates_channel_id);
+
+  if (!channelId) return false;
+
+  try {
+    await initDiscord();
+
+    const channel = await discordClient.channels.fetch(channelId).catch(() => null);
+
+    if (!channel) return false;
+
+    await channel.send({ content: text });
+
+    return true;
+  } catch (err) {
+    console.error("Kon niets kwijt in het kanaal van de leverancier:", err.message);
+
+    return false;
+  }
+}
+
+/*
  * Wat er in hun kanaal komt te staan.
  *
  * Zij hoeven niets te klikken - hun antwoord geven ze in hun eigen systeem -
@@ -3780,11 +3812,32 @@ async function askPearlToConfirm({
   const theirSize = (quote.sizes || [])[0];
 
   if (!theirSize?.available) {
+    /*
+     * Weg bij hen, en dat moet iemand zien.
+     *
+     * Bij een winkelorder rolt dit vanzelf door: de winkel krijgt zijn
+     * melding en de order gaat terug naar de bronnen. Bij een verkoop op een
+     * marktplaats is het iets anders - daar is al betaald, en dan moet dit
+     * paar vandaag nog ergens anders vandaan komen. Een regel in een log op
+     * Render is dan niet genoeg.
+     */
     console.log(`Pearl heeft ${sku} ${size} niet meer; deal wordt geweigerd.`);
+
+    await sayInSupplierChannel(
+      seller,
+      `\u274c **${sku} / ${size}** is weg bij hen.\n` +
+        `Gevraagd voor ${asText(offer?.order_id) || asText(orderId) || "een order"} - ` +
+        "er is geen aanvraag verstuurd en dit paar moet ergens anders vandaan komen."
+    );
 
     if (sellerOfferRecordId) {
       await denyConsignmentSellerOffer(sellerOfferRecordId).catch((err) =>
         console.error(`Pearl-afwijzing kon niet verwerkt worden:`, err.message)
+      );
+    } else {
+      console.error(
+        `\u26a0\ufe0f ${sku} ${size} is weg bij Pearl en er is geen Seller Offer om af te wijzen ` +
+          `(order ${asText(offer?.order_id) || asText(orderId) || "?"}) - dit vraagt om een mens.`
       );
     }
 
