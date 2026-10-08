@@ -16944,8 +16944,34 @@ app.post("/api/internal/forwarding/create", async (req, res) => {
     const labels = forwardingLabelList(req.body?.labels);
     const buyer = req.body?.buyer || {};
 
+    /*
+     * A fee typed over at Create Outbound, per pair.
+     *
+     * The fee is agreed when the goods come in and written onto the pair
+     * there, but a forward can carry several kinds of stock at once and what
+     * was agreed for a pair of shoes is not what was agreed for a hoodie. So
+     * the line can be corrected on the way out as well, and a line left alone
+     * keeps exactly what it came in at.
+     */
+    const fees = new Map();
+
+    for (const [pairId, value] of Object.entries(req.body?.fees || {})) {
+      const id = asText(pairId);
+      const fee = Number(value);
+
+      if (!id || value === null || value === undefined || value === "") continue;
+      if (!Number.isFinite(fee)) continue;
+
+      fees.set(id, Math.round(fee * 100) / 100);
+    }
+
     const errors = [];
     if (!ids.length) errors.push("No pairs to forward");
+    // Same guards the fee correction in the admin uses, so a typo cannot slip
+    // in here instead.
+    if ([...fees.values()].some((fee) => fee < 0)) errors.push("A forwarding fee cannot be negative");
+    if ([...fees.values()].some((fee) => fee > 1000)) errors.push("A forwarding fee that high looks like a typing mistake");
+    if ([...fees.keys()].some((id) => !ids.includes(id))) errors.push("A fee was given for a pair that is not in this forward");
     if (!Number.isFinite(shippingCosts) || shippingCosts < 0) errors.push("Shipping costs cannot be negative");
     if (!Number.isInteger(labelsNeeded) || labelsNeeded < 0) errors.push("Labels needed must be a whole number");
     if (errors.length) return refusePartnerStock(res, 400, errors);
@@ -17000,6 +17026,34 @@ app.post("/api/internal/forwarding/create", async (req, res) => {
 
     if (linkError) {
       console.error(`forwarding ${forwardingDisplayId(forward)}: pairs not linked:`, linkError.message);
+    }
+
+    /*
+      The corrected fees, grouped so one write covers every pair on the same
+      amount - a forward of twenty pairs is usually one or two amounts. A fee
+      that will not write is said out loud and nothing else stops: the forward
+      itself is already made, and the admin can still correct the fee there.
+    */
+    const byFee = new Map();
+
+    for (const [pairId, fee] of fees) {
+      if (!byFee.has(fee)) byFee.set(fee, []);
+      byFee.get(fee).push(pairId);
+    }
+
+    for (const [fee, pairIds] of byFee) {
+      const { error: feeError } = await supabase
+        .from("partner_stock")
+        .update({ forwarding_fee: fee })
+        .in("id", pairIds);
+
+      if (feeError) {
+        console.error(
+          `forwarding ${forwardingDisplayId(forward)}: fee ${fee.toFixed(2)} not written on ` +
+            `${pairIds.length} pair(s):`,
+          feeError.message
+        );
+      }
     }
 
     await refreshPartnerStockLevels(claim.pairs, "forward");
