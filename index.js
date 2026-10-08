@@ -6311,7 +6311,28 @@ async function notifySellerDealChannelCreatedDM({ seller, channelId }) {
  * the admin side - and a button that cannot do anything is worse than none:
  * he presses it and waits.
  */
-async function sendConsignmentDealUpdateDiscordMessage({
+/*
+ * Sent, and written down where it was sent.
+ *
+ * Two items of one marketplace order ship in one parcel, and the label a
+ * consignor asks for on one of them covers both. The other embed then has
+ * to stop offering a button that would buy a second label - and nothing
+ * knew where that embed was, because a click only ever knows the message it
+ * was made on.
+ *
+ * Kept outside the sending itself: every road it can take ends in the same
+ * three facts, and a note that cannot be written must never cost a deal
+ * update that was delivered.
+ */
+async function sendConsignmentDealUpdateDiscordMessage(args) {
+  const sent = await deliverConsignmentDealUpdateDiscordMessage(args);
+
+  await rememberConsignmentDealMessage(args?.offer?.order_record_id, sent);
+
+  return sent;
+}
+
+async function deliverConsignmentDealUpdateDiscordMessage({
   seller,
   offer,
   inventoryUnitRecordId,
@@ -7653,6 +7674,190 @@ async function requestConsignmentShippingLabel(orderRecordId) {
   // the store never received a request. Now runs the exact same path as
   // the portal button.
   return await postLabelRequestForOrder(orderRecordId);
+}
+
+/*
+ * Where a deal embed is, so that a later step can reach it.
+ *
+ * Written on every delivery and read when a parcel has to be answered for
+ * as a whole. Nothing here is allowed to throw: a note that cannot be kept
+ * is a button that stays green, which is a nuisance - a deal update that
+ * fails to send is not.
+ */
+async function rememberConsignmentDealMessage(orderRecordId, sent) {
+  const id = asText(orderRecordId);
+
+  if (!id || !sent?.channelId || !sent?.messageId) return;
+
+  const { error } = await supabase
+    .from("consignment_deal_messages")
+    .upsert(
+      {
+        order_record_id: id,
+        channel_id: String(sent.channelId),
+        message_id: String(sent.messageId),
+        delivery_type: asText(sent.deliveryType) || null,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: "order_record_id" }
+    );
+
+  if (error) {
+    console.error(`Could not note where the deal embed for ${id} landed:`, error.message);
+  }
+}
+
+/*
+ * The other orders that ship in the same box as this one.
+ *
+ * Asked of the WMS, because that is where the rule lives and where the
+ * label is actually made. An answer that does not come back means this runs
+ * as it always did: one embed, one button.
+ */
+async function parcelSiblingsForOrder(orderRecordId) {
+  const id = asText(orderRecordId);
+
+  if (!id) return [];
+
+  const response = await fetch(
+    `${LOJIQ_WMS_BASE_URL.replace(/\/$/, "")}/api/parcel-siblings?` +
+      new URLSearchParams({ record_id: id }).toString()
+  ).catch((err) => {
+    console.error("Could not ask the WMS what else is in this parcel:", err.message);
+
+    return null;
+  });
+
+  if (!response?.ok) return [];
+
+  const data = await response.json().catch(() => ({}));
+
+  return Array.isArray(data.siblings) ? data.siblings : [];
+}
+
+/*
+ * The one button a deal embed carries, in whatever state it is now in.
+ *
+ * "Request Label" while it can be pressed, a dead "Processing..." while the
+ * label is being drawn, a dead "Requested Label" once it exists. Built in
+ * one place because the three have to look like the same button in three
+ * states rather than three different buttons.
+ */
+function consignmentLabelButtonRow({ orderRecordId, inventoryUnitRecordId = "", state }) {
+  if (state === "request") {
+    return {
+      type: 1,
+      components: [
+        {
+          type: 2,
+          style: 3,
+          label: "Request Label",
+          custom_id: `request_consignment_label:${orderRecordId}:${inventoryUnitRecordId}`
+        }
+      ]
+    };
+  }
+
+  return {
+    type: 1,
+    components: [
+      {
+        type: 2,
+        style: 2,
+        label: state === "processing" ? "Processing..." : "Requested Label",
+        custom_id:
+          state === "processing"
+            ? "consignment_label_processing_disabled"
+            : "label_requested_disabled",
+        disabled: true
+      }
+    ]
+  };
+}
+
+/*
+ * The same state, set on the embeds of the other items in the parcel.
+ *
+ * A store consignor reads his in the Lojiq server, where our own bots
+ * cannot see anything, so that one goes through the Lojiq bot - which
+ * disables whatever buttons are on the message and writes the line above
+ * it. Everyone else is edited directly, button and all.
+ *
+ * Failures are logged and skipped. The parcel is one label whatever these
+ * embeds end up saying.
+ */
+async function setParcelDealEmbedsState(siblings, { state, note }) {
+  const ids = (siblings || []).map((row) => asText(row.record_id)).filter(Boolean);
+
+  if (!ids.length) return 0;
+
+  const { data, error } = await supabase
+    .from("consignment_deal_messages")
+    .select("order_record_id, channel_id, message_id, delivery_type")
+    .in("order_record_id", ids);
+
+  if (error) {
+    console.error("Could not read where the other deal embeds are:", error.message);
+
+    return 0;
+  }
+
+  let changed = 0;
+
+  for (const row of data || []) {
+    const throughLojiq = asText(row.delivery_type).startsWith("lojiq");
+
+    try {
+      if (throughLojiq) {
+        const ok = await editLojiqConsignorMessage({
+          channelId: row.channel_id,
+          messageId: row.message_id,
+          note
+        });
+
+        if (ok) changed += 1;
+
+        continue;
+      }
+
+      await initDiscord();
+      await initKickzDealDiscord();
+
+      for (const client of [discordClient, kickzDealDiscordClient]) {
+        if (!client?.isReady?.()) continue;
+
+        const channel = await client.channels.fetch(row.channel_id).catch(() => null);
+
+        if (!channel) continue;
+
+        const message = await channel.messages.fetch(row.message_id).catch(() => null);
+
+        if (!message) continue;
+
+        await message.edit({
+          content: note || message.content,
+          embeds: message.embeds,
+          components: [
+            consignmentLabelButtonRow({
+              orderRecordId: row.order_record_id,
+              state
+            })
+          ]
+        });
+
+        changed += 1;
+
+        break;
+      }
+    } catch (err) {
+      console.error(
+        `Could not set the deal embed for ${row.order_record_id} to ${state}:`,
+        err.message
+      );
+    }
+  }
+
+  return changed;
 }
 
 async function safeEditInteractionMessage(interaction, payload, preferredClient = null) {
@@ -10575,7 +10780,7 @@ function consignmentInteractionHandler(client) {
 
     try {
       if (customId.startsWith("request_consignment_label:")) {
-        const [, orderRecordId] = customId.split(":");
+        const [, orderRecordId, unitRecordId = ""] = customId.split(":");
 
         // Discord drops an interaction that is not acknowledged within
         // 3 seconds ("didn't respond in time"), and the work below now
@@ -10583,6 +10788,50 @@ function consignmentInteractionHandler(client) {
         // bot. Acknowledge first; the message edit further down still
         // works afterwards.
         await interaction.deferUpdate().catch(() => {});
+
+        /*
+          Pressed, and it shows.
+
+          Everything below takes ten to twenty seconds - Sendcloud, the PDF,
+          the upload, Airtable, the embed - and the button stayed green for
+          all of it, so the honest reading was that nothing had happened and
+          the thing to do was press again. It now goes dead the moment it is
+          pressed, exactly as the Confirm button on a match does.
+
+          For a store consignor this edit travels back with the rest of the
+          answer rather than ahead of it: his embed lives in the Lojiq server
+          and is changed by that bot once this handler returns.
+        */
+        await safeEditInteractionMessage(interaction, {
+          content: interaction.message.content,
+          embeds: interaction.message.embeds,
+          components: [
+            consignmentLabelButtonRow({
+              orderRecordId,
+              inventoryUnitRecordId: unitRecordId,
+              state: "processing"
+            })
+          ]
+        }).catch((err) => {
+          console.error("Could not show the label request as processing:", err.message);
+        });
+
+        /*
+          The other items in the same box, held at the same moment.
+
+          One label covers the whole parcel, so the second embed is offering
+          a button that would only buy a second label for a box that is
+          already going out. Nothing fails over this: an embed left green is
+          a nuisance, a label not made is a pair that does not ship.
+        */
+        const parcelSiblings = await parcelSiblingsForOrder(orderRecordId).catch(() => []);
+
+        if (parcelSiblings.length) {
+          await setParcelDealEmbedsState(parcelSiblings, {
+            state: "processing",
+            note: "⏳ One shipping label is being made for this parcel..."
+          });
+        }
 
         /*
           A failure here used to be silent.
@@ -10620,6 +10869,42 @@ function consignmentInteractionHandler(client) {
               console.error(`could not record the label error on ${orderRecordId}:`, writeError.message)
             );
 
+          /*
+            The button comes back, because the next thing to do is try again.
+
+            It was set to "Processing..." a moment ago, and leaving it there
+            after a failure is a dead end: nothing to press, and an embed
+            that claims work is still going on.
+          */
+          await safeEditInteractionMessage(interaction, {
+            content: interaction.message.content,
+            embeds: interaction.message.embeds,
+            components: [
+              consignmentLabelButtonRow({
+                orderRecordId,
+                inventoryUnitRecordId: unitRecordId,
+                state: "request"
+              })
+            ]
+          }).catch(() => {});
+
+          /*
+            The others say what happened instead.
+
+            A store consignor's embed is changed through the Lojiq bot, which
+            can disable a button but cannot bring one back, so the line above
+            it has to carry the meaning: the attempt failed, and the parcel
+            is asked for again from the item he pressed.
+          */
+          if (parcelSiblings.length) {
+            await setParcelDealEmbedsState(parcelSiblings, {
+              state: "request",
+              note:
+                "⚠️ The shipping label for this parcel could not be made. " +
+                "Please press Request Label again on the other item."
+            });
+          }
+
           await interaction.followUp({
             content:
               "❌ Error while generating shipping label, please contact support.",
@@ -10633,21 +10918,19 @@ function consignmentInteractionHandler(client) {
           content: interaction.message.content,
           embeds: interaction.message.embeds,
           components: [
-            {
-              type: 1,
-              components: [
-                {
-                  type: 2,
-                  style: 2,
-                  label: "Requested Label",
-                  custom_id: "label_requested_disabled",
-                  disabled: true
-                }
-              ]
-            }
+            consignmentLabelButtonRow({ orderRecordId, state: "requested" })
           ]
         });
-      
+
+        if (parcelSiblings.length) {
+          await setParcelDealEmbedsState(parcelSiblings, {
+            state: "requested",
+            note:
+              "✅ The shipping label for this parcel has been made - " +
+              "it covers this item too. Everything goes in ONE box."
+          });
+        }
+
         return;
       }
       
