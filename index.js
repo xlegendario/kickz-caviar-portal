@@ -3690,13 +3690,27 @@ async function postPearlConfirmationNotice({ seller, offer, price, request }) {
     const sentAt = when(request?.ts || new Date().toISOString());
     const expires = when(request?.expiresAt);
 
+    /*
+     * Dezelfde embed als een consignor krijgt, op één regel na.
+     *
+     * Een consignor leest "click Confirm below" en drukt op de knop eronder;
+     * zij bevestigen in hun eigen systeem. Alleen die zin verschilt dus, en
+     * de knoppen zijn er niet - de rest staat er precies zo, zodat een deal
+     * van hen naast een deal van wie dan ook te lezen is zonder dat je eerst
+     * moet uitzoeken welke soort bericht je voor je hebt.
+     */
     const message = await channel.send({
       content: `⏳ Request #${request?.id} - waiting on your answer`,
       embeds: [
         {
-          title: "📋 Confirmation Request",
+          title: "🚀 Your Item Matched One Of Our Orders",
+
           description: [
-            "**Item Details:**",
+            `We sent you request #${request?.id} at ${sentAt}` +
+              (expires ? `, it expires at ${expires}.` : ".") +
+              " Please **confirm** it on your side as soon as you can.",
+            "",
+            "**Product Name**",
             asText(offer?.product_name) || "—",
             "",
             "**SKU**",
@@ -3706,17 +3720,26 @@ async function postPearlConfirmationNotice({ seller, offer, price, request }) {
             asText(offer?.size) || "—",
             "",
             "**Order**",
-            asText(offer?.order_id) || "—",
-            "",
-            "**Price**",
-            `${moneySmartValue(Number(price || 0).toFixed(2))} (VAT0)`,
-            "",
-            `We sent you request #${request?.id} at ${sentAt}` +
-              (expires ? `, and it expires at ${expires}.` : "."),
-            "Please confirm or decline it as soon as you can - a customer is waiting on this pair."
+            asText(offer?.order_id) || asText(offer?.order_record_id) || "—"
           ].join("\n"),
-          color: 0xf1c40f,
+
+          color: 0x2ecc71,
+
+          fields: [
+            {
+              name: "Your Price",
+              value: `${moneySmartValue(Number(price || 0).toFixed(2))} · VAT0`,
+              inline: true
+            },
+            {
+              name: "Matched At",
+              value: `${moneySmartValue(Number(price || 0).toFixed(2))} · VAT0`,
+              inline: true
+            }
+          ],
+
           footer: { text: `SellerID: ${asText(seller?.seller_id) || "—"}` },
+
           timestamp: new Date().toISOString()
         }
       ]
