@@ -3586,6 +3586,226 @@ function getSellerOfferChannelId(sellerRow, isConfirmation) {
     : sellerRow.consignment_offer_channel_id;
 }
 
+/*
+ * Een leverancier met een API bevestigt niet in Discord, maar bij zichzelf.
+ *
+ * Een consignor krijgt een embed met Confirm en Deny: heb je dit paar nog,
+ * voor dit bedrag. Pearl Solutions beantwoordt diezelfde vraag door een
+ * aanvraag aan te nemen of af te wijzen, binnen vier uur. Dus gaat er voor
+ * hen geen embed uit - die zou een tweede waarheid zijn over dezelfde deal,
+ * en zodra die twee uit elkaar lopen staat er een order stil op een knop die
+ * niemand ziet.
+ *
+ * Wat hier gebeurt is precies wat de knop doet, alleen later: de aanvraag
+ * gaat de deur uit, het nummer wordt bewaard naast onze offerte, en als hun
+ * antwoord binnenkomt loopt het door dezelfde confirm- of deny-weg als elke
+ * andere consignor.
+ */
+const PEARL_BASE = "https://deals.pearl-solutions.eu/api/v1";
+
+const PEARL_API_KEY = process.env.PEARL_API_KEY || "";
+const PEARL_DISCORD_WEBHOOK = process.env.PEARL_DISCORD_WEBHOOK || "";
+
+async function pearlCall(path, options = {}) {
+  if (!PEARL_API_KEY) throw new Error("PEARL_API_KEY ontbreekt");
+
+  const res = await fetch(`${PEARL_BASE}${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${PEARL_API_KEY}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    },
+    // Hun prijscheck mag tot een minuut duren als een stijlcode nieuw voor
+    // ze is; hun eigen handleiding vraagt om twee minuten geduld.
+    signal: AbortSignal.timeout(120000)
+  });
+
+  const body = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    throw new Error(`Pearl ${path}: ${res.status} ${body.error || ""}`.trim());
+  }
+
+  return body;
+}
+
+/*
+ * Welke leverancier achter deze seller zit, als er een API in het spel is.
+ *
+ * Staat op zijn eigen record, los van Source: Source gaat over wat de winkel
+ * te zien krijgt, dit over hoe wij de deal rondkrijgen. Een volgende EU
+ * supplier zonder API krijgt dus wel die Source en geen vermelding hier.
+ */
+function supplierApiOf(sellerFields) {
+  return asText(sellerFields?.["Supplier API"]);
+}
+
+/*
+ * De aanvraag zelf.
+ *
+ * Eerst hun prijs opvragen, zoals hun handleiding voorschrijft: daar wordt de
+ * regel op geprijsd, en het is meteen de controle dat de maat er nu nog is -
+ * de catalogus waar onze voorraad uit komt is tot een half uur oud.
+ *
+ * Een maat die weg is, is geen fout maar een antwoord: dat is een consignor
+ * die "nee" zegt, en de order rolt door naar de volgende bron.
+ */
+async function askPearlToConfirm({
+  sellerOfferRecordId = null,
+  orderRecordId = null,
+  memberWtbRecordId = null,
+  orderId = "",
+  sku,
+  size
+}) {
+  const quote = await pearlCall(
+    `/prices?sku=${encodeURIComponent(sku)}&size=${encodeURIComponent(size)}`
+  );
+
+  const theirSize = (quote.sizes || [])[0];
+
+  if (!theirSize?.available) {
+    console.log(`Pearl heeft ${sku} ${size} niet meer; deal wordt geweigerd.`);
+
+    if (sellerOfferRecordId) {
+      await denyConsignmentSellerOffer(sellerOfferRecordId).catch((err) =>
+        console.error(`Pearl-afwijzing kon niet verwerkt worden:`, err.message)
+      );
+    }
+
+    return { ok: false, reason: "out_of_stock" };
+  }
+
+  const price = Number(theirSize.prices?.["Business (VAT0)"]);
+
+  const request = await pearlCall("/requests", {
+    method: "POST",
+    body: JSON.stringify({
+      contact: "Lojiq",
+      note: `${orderId || sellerOfferRecordId || ""} - Lojiq`.trim(),
+      ...(PEARL_DISCORD_WEBHOOK ? { webhookUrl: PEARL_DISCORD_WEBHOOK } : {}),
+      items: [{ sku, size, mode: "business", quantity: 1 }]
+    })
+  });
+
+  const { error } = await supabase.from("pearl_requests").upsert(
+    {
+      request_id: request.id,
+      seller_offer_record_id: sellerOfferRecordId,
+      order_record_id: orderRecordId,
+      member_wtb_record_id: memberWtbRecordId,
+      sku,
+      size,
+      price,
+      status: asText(request.status) || "pending",
+      expires_at: request.expiresAt || null,
+      updated_at: new Date().toISOString()
+    },
+    { onConflict: "request_id" }
+  );
+
+  if (error) {
+    /*
+     * De aanvraag staat bij hen, en wij weten niet meer waar hij bij hoort.
+     * Luid opschrijven: dit is het ene geval waarin een paar gekocht kan
+     * worden zonder dat er een deal tegenover staat.
+     */
+    console.error(
+      `⚠️ Pearl-aanvraag ${request.id} voor ${sku} ${size} staat uit, maar kon niet ` +
+        `bij de offerte gezet worden: ${error.message}`
+    );
+  }
+
+  console.log(
+    `Pearl-aanvraag ${request.id}: ${sku} ${size} voor EUR ${price}, ` +
+      `antwoord uiterlijk ${request.expiresAt}`
+  );
+
+  return {
+    ok: true,
+    deliveryType: "supplier_api",
+    requestId: request.id,
+    channelId: null,
+    messageId: null
+  };
+}
+
+/*
+ * Hun antwoord, en wat het bij ons in gang zet.
+ *
+ * Bevestigd is precies wat de Confirm-knop doet; afgewezen of verlopen is
+ * precies wat Deny doet. Geen eigen weg ernaast, want de deal die daarop
+ * volgt - de unit, de voorraad eraf, het bericht aan de winkel - hangt aan
+ * die twee functies en niet aan de knop.
+ */
+async function pollPearlRequests() {
+  if (!PEARL_API_KEY) return { skipped: "no_key" };
+
+  const { data, error } = await supabase
+    .from("pearl_requests")
+    .select("request_id, seller_offer_record_id, sku, size, status")
+    .eq("status", "pending")
+    .limit(100);
+
+  if (error) {
+    console.error("Pearl-aanvragen konden niet gelezen worden:", error.message);
+
+    return { ok: false };
+  }
+
+  if (!data?.length) return { ok: true, checked: 0 };
+
+  let handled = 0;
+
+  for (const row of data) {
+    const answer = await pearlCall(`/requests/${row.request_id}`).catch((err) => {
+      console.error(`Pearl-aanvraag ${row.request_id} kon niet opgehaald worden:`, err.message);
+
+      return null;
+    });
+
+    if (!answer || answer.status === "pending") continue;
+
+    const status = asText(answer.status);
+
+    try {
+      if (status === "confirmed" && row.seller_offer_record_id) {
+        await confirmConsignmentSellerOffer(row.seller_offer_record_id);
+      } else if (row.seller_offer_record_id) {
+        await denyConsignmentSellerOffer(row.seller_offer_record_id);
+      }
+
+      handled += 1;
+    } catch (err) {
+      /*
+       * Niet als afgehandeld wegschrijven: dan probeert de volgende ronde
+       * het opnieuw. Hun status verandert niet meer, dus herhalen is veilig.
+       */
+      console.error(
+        `Pearl-aanvraag ${row.request_id} (${status}) kon niet verwerkt worden:`,
+        err.message
+      );
+
+      continue;
+    }
+
+    await supabase
+      .from("pearl_requests")
+      .update({
+        status,
+        reply: asText(answer.reply) || null,
+        handled_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq("request_id", row.request_id);
+
+    console.log(`Pearl-aanvraag ${row.request_id}: ${status}${answer.reply ? " - " + answer.reply : ""}`);
+  }
+
+  return { ok: true, checked: data.length, handled };
+}
+
 async function sendConsignmentOfferDiscordMessage({
   seller,
   offer,
@@ -3608,6 +3828,31 @@ async function sendConsignmentOfferDiscordMessage({
   // The consignment_inventory row, when the offer object does not carry it.
   inventoryId = null
 }) {
+  /*
+   * Een leverancier met een API beantwoordt deze vraag bij zichzelf.
+   *
+   * Hier staat de afslag en niet bij elke aanroeper, omdat elke weg naar een
+   * consignor - een winkelorder, een want-to-buy, een tweede ronde - door
+   * deze functie gaat. Eén plek die het weet is één plek die het kan
+   * vergeten.
+   */
+  const supplierApi = supplierApiOf(
+    (await airtable(SELLERS_TABLE)
+      .find(asText(seller?.seller_record_id))
+      .catch(() => null))?.fields
+  );
+
+  if (supplierApi) {
+    return await askPearlToConfirm({
+      sellerOfferRecordId,
+      orderRecordId: asText(offer?.order_record_id) || null,
+      memberWtbRecordId: asText(offer?.member_wtb_record_id) || null,
+      orderId: asText(offer?.order_id),
+      sku: asText(offer?.sku),
+      size: asText(offer?.size)
+    });
+  }
+
   await initDiscord();
 
   // Never lets a message fail over a label.
@@ -17381,6 +17626,58 @@ async function runPartnerStockLevelSync() {
     console.log(`[partner-stock] stock levels refreshed for ${new Set(data.map((r) => `${r.sku}|${r.size}`)).size} size(s)`);
   }
 }
+
+/*
+ * Heeft iemand buiten dit paar liggen?
+ *
+ * De allocator beantwoordt die vraag normaal met "Partner Stock Level" op
+ * Stock Levels in Airtable, een teller die bijgehouden wordt zodra voorraad
+ * via onze eigen routes verandert. De voorraad van een leverancier komt
+ * rechtstreeks uit zijn catalogus in Supabase en passeert die routes nooit,
+ * dus die teller weet niet van hem.
+ *
+ * Hem alsnog bijhouden zou zestienduizend rijen aan Airtable toevoegen voor
+ * een getal dat wij hier in één vraag kunnen opzoeken. Dus beantwoordt de
+ * portal die vraag, en blijft Airtable waar hij voor bedoeld is.
+ */
+app.get("/api/consignment/stock/has", async (req, res) => {
+  const secret = asText(req.headers["x-kc-secret"]);
+
+  if (!COUNTER_OFFERS_SECRET || secret !== COUNTER_OFFERS_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const sku = asText(req.query.sku).toUpperCase();
+  const size = asText(req.query.size);
+
+  if (!sku || !size) return res.status(400).json({ error: "Missing sku or size" });
+
+  const { data, error } = await supabase
+    .from("consignment_inventory")
+    .select("seller_id, selling_price_suggested, vat_type, lead_time_days")
+    .eq("sku", sku)
+    .eq("size", size)
+    .gt("quantity", 0)
+    .gt("selling_price_suggested", 0)
+    .order("selling_price_suggested", { ascending: true })
+    .limit(1);
+
+  if (error) {
+    console.error("[consignment] stock/has failed:", error.message);
+
+    return res.status(500).json({ error: "Could not read the stock" });
+  }
+
+  const cheapest = data?.[0] || null;
+
+  return res.json({
+    has: !!cheapest,
+    seller_id: cheapest?.seller_id || null,
+    price: cheapest?.selling_price_suggested ?? null,
+    vat_type: cheapest?.vat_type || null,
+    lead_time_days: cheapest?.lead_time_days ?? null
+  });
+});
 
 app.post("/api/consignment/stock-levels/repair", async (req, res) => {
   try {
@@ -45885,6 +46182,21 @@ app.listen(PORT, () => {
   } else {
     console.log("[seller-api] sales sync off - SELLER_API_SALES_SYNC=false");
   }
+
+  /*
+   * Het antwoord van een leverancier die in zijn eigen systeem bevestigt.
+   *
+   * Hij heeft vier uur, en zijn Discord-webhook is voor onze ogen - de
+   * status in zijn API is de waarheid. Elke vijf minuten is wat zijn
+   * handleiding vraagt en wat een order aankan.
+   */
+  cron.schedule("*/5 * * * *", () => {
+    pollPearlRequests().catch((err) =>
+      console.error("[pearl] poll failed:", err.message)
+    );
+  }, {
+    timezone: process.env.TZ || "Europe/Amsterdam"
+  });
 
   // Partner stock edited straight in Supabase still reaches Stock Levels.
   cron.schedule("*/5 * * * *", () => {
