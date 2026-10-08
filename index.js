@@ -3676,12 +3676,22 @@ async function postPearlConfirmationNotice({ seller, offer, price, request }) {
 
     if (!channel) throw new Error(`kanaal ${channelId} niet bereikbaar`);
 
-    const expires = request?.expiresAt
-      ? new Date(request.expiresAt).toLocaleString("nl-NL", { timeZone: "Europe/Amsterdam" })
-      : "";
+    const when = (value) =>
+      value
+        ? new Date(value).toLocaleString("en-GB", {
+          timeZone: "Europe/Amsterdam",
+          day: "2-digit",
+          month: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit"
+        })
+        : "";
+
+    const sentAt = when(request?.ts || new Date().toISOString());
+    const expires = when(request?.expiresAt);
 
     const message = await channel.send({
-      content: `⏳ Request #${request?.id} sent - waiting for their answer`,
+      content: `⏳ Request #${request?.id} - waiting on your answer`,
       embeds: [
         {
           title: "📋 Confirmation Request",
@@ -3701,10 +3711,9 @@ async function postPearlConfirmationNotice({ seller, offer, price, request }) {
             "**Price**",
             `${moneySmartValue(Number(price || 0).toFixed(2))} (VAT0)`,
             "",
-            expires
-              ? `Request #${request?.id} is with them until ${expires}.`
-              : `Request #${request?.id} is with them.`,
-            "They answer in their own system; no action is needed here."
+            `We sent you request #${request?.id} at ${sentAt}` +
+              (expires ? `, and it expires at ${expires}.` : "."),
+            "Please confirm or decline it as soon as you can - a customer is waiting on this pair."
           ].join("\n"),
           color: 0xf1c40f,
           footer: { text: `SellerID: ${asText(seller?.seller_id) || "—"}` },
@@ -3830,10 +3839,13 @@ async function noteAnswerOnPearlMessage(row, status, reply) {
 
   const line =
     status === "confirmed"
-      ? `✅ Request #${row.request_id} confirmed by the supplier`
+      ? `✅ Request #${row.request_id} confirmed - thank you. You will get a deal update ` +
+        "with a Request Label button once the pair is with you."
       : status === "declined"
-        ? `❌ Request #${row.request_id} declined by the supplier`
-        : `⌛ Request #${row.request_id} expired - no answer in time`;
+        ? `❌ Request #${row.request_id} declined - thanks for letting us know, we will ` +
+          "source this pair elsewhere."
+        : `⌛ Request #${row.request_id} expired - it was not answered in time, so we ` +
+          "have sourced this pair elsewhere.";
 
   try {
     await initDiscord();
