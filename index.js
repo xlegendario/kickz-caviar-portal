@@ -3381,6 +3381,38 @@ sgMail.setApiKey(SENDGRID_API_KEY);
  */
 const storeConsignorCache = new Map();
 
+/*
+ * How long this consignor takes, when it is not the usual 24-72 hours.
+ *
+ * The automation engine answers the same question for an ordinary seller
+ * offer; this is the consignment pre-offer, which reaches the store by its
+ * own road and used to state 24-72 hours whoever was holding the pair. For
+ * a supplier abroad that is a promise the store passes on to its customer
+ * and we cannot keep.
+ *
+ * Empty means exactly what happened before, for everybody. Cached for ten
+ * minutes: it is read per offer and a delivery time does not change between
+ * two orders.
+ */
+const sellerEtaCache = new Map();
+
+async function sellerEstimatedTime(sellerRecordId) {
+  const id = asText(sellerRecordId);
+
+  if (!id) return "";
+
+  const cached = sellerEtaCache.get(id);
+
+  if (cached && Date.now() - cached.at < 600000) return cached.text;
+
+  const record = await airtable(SELLERS_TABLE).find(id).catch(() => null);
+  const text = asText(record?.fields?.["Estimated Time"]);
+
+  sellerEtaCache.set(id, { at: Date.now(), text });
+
+  return text;
+}
+
 async function isStoreConsignor(sellerRecordId) {
   const id = asText(sellerRecordId);
 
@@ -14181,7 +14213,8 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
       // ESTIMATED_TIME_SELLER) rather than a separate consignment-only
       // string — the store shouldn't see a different time format just
       // because the current best offer happens to be from a consignor.
-      estimated_time: "24 - 72 hours",
+      estimated_time:
+        (await sellerEstimatedTime(best.row.seller_record_id)) || "24 - 72 hours",
 
       consignment_offer_price: best.sellerComparePrice,
 
