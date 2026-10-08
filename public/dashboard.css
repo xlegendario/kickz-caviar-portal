@@ -515,7 +515,8 @@
 .dashboard-parcel-toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 10px;
   width: 100%;
   padding: 0;
   border: 0;
@@ -526,9 +527,17 @@
   font: inherit;
 }
 
+.dashboard-parcel-head {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* At the end of the column, where you look for a way to open something. */
 .dashboard-parcel-caret {
+  flex: none;
   color: rgba(255,255,255,0.45);
-  font-size: 15px;
+  font-size: 18px;
   line-height: 1;
   transition: transform 0.12s ease;
 }
@@ -546,7 +555,8 @@
 }
 
 /* A class with display on it beats the browser's own rule for [hidden],
-   so the fold-out has to be told to stay shut. */
+   so the fold-out has to be told to stay shut. Only the phone card still
+   uses this list; in the table the items are rows of their own. */
 .dashboard-parcel-list[hidden] {
   display: none;
 }
@@ -557,6 +567,24 @@
   border-left: 1px solid rgba(255,255,255,0.12);
   display: grid;
   gap: 8px;
+}
+
+/* An item inside a parcel: an ordinary row, set back and quieter, so the
+   row above it stays the one that stands for the parcel. */
+.dashboard-parcel-child > td {
+  background: rgba(255,255,255,0.02);
+}
+
+.dashboard-parcel-child .dashboard-parcel-child-name {
+  padding-left: 14px;
+  border-left: 2px solid rgba(255,204,0,0.35);
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.88);
+}
+
+.dashboard-parcel-child .dashboard-product-meta {
+  padding-left: 16px;
 }
 
 .dashboard-parcel-line {

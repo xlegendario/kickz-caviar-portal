@@ -1210,38 +1210,30 @@ function dashboardProductCell(item) {
   /*
    * A parcel opens; a single pair has nothing to open.
    *
-   * The row carries the name, the instruction, and a count - and keeps the
-   * two or three pairs behind a click, where they are listed one per line
-   * with their own order number. That is the only place they fit without
-   * turning a table of sales into a wall of text.
+   * The caret sits at the far end of the column rather than in front of the
+   * name: that is where the eye lands when it is looking for a way to open
+   * something, and the names stay lined up with every other row. What opens
+   * are rows of their own, so each item's size, order number and payout sit
+   * in the columns they belong to.
    */
   if (Array.isArray(item.parcel_pairs) && item.parcel_pairs.length > 1) {
-    const lines = item.parcel_pairs
-      .map(
-        (pair) => `
-          <div class="dashboard-parcel-line">
-            <span class="dashboard-parcel-line-name">${escapeHtml(pair.product || "-")}</span>
-            <span class="dashboard-parcel-line-meta">${escapeHtml(
-              [pair.sku, pair.size ? `Size ${pair.size}` : "", pair.order_id]
-                .filter(Boolean)
-                .join(" · ")
-            )}</span>
-          </div>
-        `
-      )
-      .join("");
-
     return `
-      <button class="dashboard-parcel-toggle" type="button" data-parcel-toggle aria-expanded="false">
+      <button
+        class="dashboard-parcel-toggle"
+        type="button"
+        data-parcel-toggle="${escapeHtml(item.parcel_id || "")}"
+        aria-expanded="false"
+      >
+        <span class="dashboard-parcel-head">
+          <span class="dashboard-product-name">${escapeHtml(labelText)}</span>
+          ${
+            item.parcel_note
+              ? `<span class="dashboard-parcel-note">${escapeHtml(item.parcel_note)}</span>`
+              : ""
+          }
+        </span>
         <span class="dashboard-parcel-caret" aria-hidden="true">›</span>
-        <span class="dashboard-product-name">${escapeHtml(labelText)}</span>
       </button>
-      ${
-        item.parcel_note
-          ? `<div class="dashboard-parcel-note">${escapeHtml(item.parcel_note)}</div>`
-          : ""
-      }
-      <div class="dashboard-parcel-list" hidden>${lines}</div>
     `;
   }
 
@@ -3382,12 +3374,15 @@ function oneRowPerParcel(items) {
       product: item.product,
       sku: item.sku,
       size: item.size,
+      brand: item.brand,
       order_id: item.order_id,
-      payout: item.payout
+      payout: item.payout,
+      vat_type: item.vat_type,
+      date: item.date
     });
   }
 
-  for (const row of groups.values()) {
+  for (const [group, row] of groups.entries()) {
     // One pair in a group is just a pair.
     if (row.parcel_pairs.length < 2) {
       delete row.parcel_pairs;
@@ -3403,6 +3398,10 @@ function oneRowPerParcel(items) {
      * is and what has to be done with it; the detail is one click away.
      */
     const count = row.parcel_pairs.length;
+
+    // What the hidden rows are hung on. The tracking number is the group,
+    // and nothing else in the table shares one.
+    row.parcel_id = String(group).replace(/[^A-Za-z0-9_-]/g, "");
 
     row.product = `${count} items · one parcel`;
     row.sku = "";
@@ -3427,6 +3426,42 @@ function oneRowPerParcel(items) {
   }
 
   return out;
+}
+
+/*
+ * The items of a parcel, as rows of their own.
+ *
+ * Folded away under the row that stands for the parcel, and built out of
+ * the same seven columns as everything else - so a size sits under Size and
+ * an amount under Payout instead of being crammed into the product cell.
+ * They carry no buttons: the parcel has one label, and it hangs on the row
+ * above them.
+ */
+function parcelChildRows(item) {
+  if (!Array.isArray(item.parcel_pairs) || item.parcel_pairs.length < 2) return "";
+
+  const parcelId = escapeHtml(item.parcel_id || "");
+
+  return item.parcel_pairs
+    .map(
+      (pair) => `
+        <tr class="dashboard-parcel-child" data-parcel-child="${parcelId}" hidden>
+          <td class="dashboard-product-col">
+            <div class="dashboard-parcel-child-name">${escapeHtml(pair.product || "-")}</div>
+            <div class="dashboard-product-meta">
+              <span class="dashboard-product-sku">${escapeHtml(pair.sku || "-")}</span>
+            </div>
+          </td>
+          <td class="dashboard-size-col">${escapeHtml(pair.size || "-")}</td>
+          <td>${escapeHtml(pair.order_id || "-")}</td>
+          <td>${amountForColumn(pair.payout)}</td>
+          <td>${escapeHtml(pair.vat_type || "-")}</td>
+          <td>${escapeHtml(pair.date || "-")}</td>
+          <td></td>
+        </tr>
+      `
+    )
+    .join("");
 }
 
 function renderReadyToShipRows(items) {
@@ -3548,6 +3583,7 @@ function renderReadyToShipRows(items) {
         </div>
       </td>
     </tr>
+    ${parcelChildRows(item)}
   `).join("");
 }
 
@@ -3645,6 +3681,7 @@ function renderTrackingRows(items) {
         </div>
       </td>
     </tr>
+    ${parcelChildRows(item)}
   `).join("");
 }
 
@@ -3731,6 +3768,7 @@ function renderHistoryIssuesRows(items) {
         </button>
       </td>
     </tr>
+    ${parcelChildRows(item)}
   `).join("");
 }
 
@@ -6463,15 +6501,18 @@ dashboardTableBody.addEventListener("click", async (event) => {
   const parcelToggle = event.target.closest("[data-parcel-toggle]");
 
   if (parcelToggle) {
-    const list = parcelToggle.parentElement?.querySelector(".dashboard-parcel-list");
+    const parcelId = parcelToggle.dataset.parcelToggle || "";
 
-    if (list) {
-      const open = list.hasAttribute("hidden");
+    const children = parcelId
+      ? dashboardTableBody.querySelectorAll(`[data-parcel-child="${parcelId}"]`)
+      : [];
 
-      list.toggleAttribute("hidden", !open);
-      parcelToggle.setAttribute("aria-expanded", open ? "true" : "false");
-      parcelToggle.classList.toggle("is-open", open);
-    }
+    const open = parcelToggle.getAttribute("aria-expanded") !== "true";
+
+    children.forEach((row) => row.toggleAttribute("hidden", !open));
+
+    parcelToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    parcelToggle.classList.toggle("is-open", open);
 
     return;
   }
