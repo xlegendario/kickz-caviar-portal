@@ -968,9 +968,39 @@ function renderMobileOrderCards(items, options = {}) {
                   ${escapeHtml(item.product || "-")}
                 </div>
 
-                <div class="dashboard-mobile-size">
-                  Size: ${escapeHtml(item.size || "-")}
-                </div>
+                ${
+                  Array.isArray(item.parcel_pairs) && item.parcel_pairs.length > 1
+                    ? /*
+                         A card has the room a table row does not, so a parcel
+                         is simply written out here rather than folded away.
+                         Nothing to press on a phone, and the instruction is
+                         the first thing under the name.
+                       */
+                      `
+                        <div class="dashboard-parcel-note">${escapeHtml(item.parcel_note || "")}</div>
+                        <div class="dashboard-parcel-list">
+                          ${item.parcel_pairs
+                            .map(
+                              (pair) => `
+                                <div class="dashboard-parcel-line">
+                                  <span class="dashboard-parcel-line-name">${escapeHtml(pair.product || "-")}</span>
+                                  <span class="dashboard-parcel-line-meta">${escapeHtml(
+                                    [pair.sku, pair.size ? `Size ${pair.size}` : "", pair.order_id]
+                                      .filter(Boolean)
+                                      .join(" · ")
+                                  )}</span>
+                                </div>
+                              `
+                            )
+                            .join("")}
+                        </div>
+                      `
+                    : `
+                        <div class="dashboard-mobile-size">
+                          Size: ${escapeHtml(item.size || "-")}
+                        </div>
+                      `
+                }
 
                 <div class="dashboard-mobile-bottom-row">
                   <div class="dashboard-mobile-meta">
@@ -1177,14 +1207,47 @@ function dashboardProductCell(item) {
   if (item.brand) parts.push(escapeHtml(item.brand));
   const meta = parts.join(" &middot; ");
 
+  /*
+   * A parcel opens; a single pair has nothing to open.
+   *
+   * The row carries the name, the instruction, and a count - and keeps the
+   * two or three pairs behind a click, where they are listed one per line
+   * with their own order number. That is the only place they fit without
+   * turning a table of sales into a wall of text.
+   */
+  if (Array.isArray(item.parcel_pairs) && item.parcel_pairs.length > 1) {
+    const lines = item.parcel_pairs
+      .map(
+        (pair) => `
+          <div class="dashboard-parcel-line">
+            <span class="dashboard-parcel-line-name">${escapeHtml(pair.product || "-")}</span>
+            <span class="dashboard-parcel-line-meta">${escapeHtml(
+              [pair.sku, pair.size ? `Size ${pair.size}` : "", pair.order_id]
+                .filter(Boolean)
+                .join(" · ")
+            )}</span>
+          </div>
+        `
+      )
+      .join("");
+
+    return `
+      <button class="dashboard-parcel-toggle" type="button" data-parcel-toggle aria-expanded="false">
+        <span class="dashboard-parcel-caret" aria-hidden="true">›</span>
+        <span class="dashboard-product-name">${escapeHtml(labelText)}</span>
+      </button>
+      ${
+        item.parcel_note
+          ? `<div class="dashboard-parcel-note">${escapeHtml(item.parcel_note)}</div>`
+          : ""
+      }
+      <div class="dashboard-parcel-list" hidden>${lines}</div>
+    `;
+  }
+
   return `
     <div class="dashboard-product-name">${escapeHtml(labelText)}</div>
     ${meta ? `<div class="dashboard-product-meta">${meta}</div>` : ""}
-    ${
-      item.parcel_note
-        ? `<div class="dashboard-parcel-note">${escapeHtml(item.parcel_note)}</div>`
-        : ""
-    }
   `;
 }
 
@@ -3275,6 +3338,24 @@ function renderWtbUnifiedOfferRows(items) {
  * Only rows that carry a shipment group are touched; everything else is
  * passed through exactly as it came in.
  */
+/*
+ * An amount the API already wrote out, read back as a number.
+ *
+ * "€ 1.250,50" is Dutch: dots group the thousands, the comma is the
+ * decimal point. Anything that cannot be read answers 0 rather than NaN,
+ * because a sum is about to be built out of these.
+ */
+function parcelAmountValue(written) {
+  const cleaned = String(written ?? "")
+    .replace(/[^\d,.-]/g, "")
+    .replace(/\.(?=\d{3}(\D|$))/g, "")
+    .replace(",", ".");
+
+  const amount = Number(cleaned);
+
+  return Number.isFinite(amount) ? amount : 0;
+}
+
 function oneRowPerParcel(items) {
   const groups = new Map();
   const out = [];
@@ -3290,7 +3371,7 @@ function oneRowPerParcel(items) {
     if (!groups.has(group)) {
       // The first pair carries the row: its label, its tracking, its
       // Discord link. The others only add themselves to it.
-      const first = { ...item, parcel_pairs: [], payout: 0 };
+      const first = { ...item, parcel_pairs: [] };
       groups.set(group, first);
       out.push(first);
     }
@@ -3301,9 +3382,9 @@ function oneRowPerParcel(items) {
       product: item.product,
       sku: item.sku,
       size: item.size,
-      order_id: item.order_id
+      order_id: item.order_id,
+      payout: item.payout
     });
-    row.payout = Number(row.payout) + Number(item.payout || 0);
   }
 
   for (const row of groups.values()) {
@@ -3313,24 +3394,36 @@ function oneRowPerParcel(items) {
       continue;
     }
 
-    row.product = `${row.parcel_pairs.length} items - one parcel`;
-    row.sku = row.parcel_pairs.map((pair) => `${pair.sku} ${pair.size}`).join(" · ");
-    row.size = "—";
+    /*
+     * Short on the row, complete when it is opened.
+     *
+     * Everything the two pairs have between them - two names, two SKUs, two
+     * order numbers - does not fit in a row meant for one, and crammed in it
+     * reads as a jumble rather than as one parcel. So the row says what it
+     * is and what has to be done with it; the detail is one click away.
+     */
+    const count = row.parcel_pairs.length;
+
+    row.product = `${count} items · one parcel`;
+    row.sku = "";
+    row.size = "";
+    row.brand = "";
+    row.order_id = `${count} orders`;
+    row.parcel_note = "Ship together in ONE box";
 
     /*
-     * Both order numbers, and the instruction in words.
-     *
-     * A count and a joined SKU line can be read as "two rows that happen to
-     * look alike". The sentence cannot, and the orders have to be named
-     * because he is asked about them one at a time in Discord.
+     * The payouts arrive already written out ("€ 50"), which Number()
+     * answers NaN for - the one that put NaN in the Payout column of every
+     * row the moment ordinary sales started carrying a group. Read back to
+     * a number, added, and handed on as a number: the column formats it the
+     * same way it formats every other amount.
      */
-    row.order_id = row.parcel_pairs
-      .map((pair) => pair.order_id)
-      .filter(Boolean)
-      .join(" · ");
+    const total = row.parcel_pairs.reduce(
+      (sum, pair) => sum + parcelAmountValue(pair.payout),
+      0
+    );
 
-    row.parcel_note =
-      `Ship together in ONE box — one label for all ${row.parcel_pairs.length}`;
+    if (total > 0) row.payout = total;
   }
 
   return out;
@@ -6363,6 +6456,26 @@ dashboardTableBody.addEventListener("click", async (event) => {
 
     return;
   }
+  /*
+   * Opening a parcel changes nothing and asks nothing, so it is handled
+   * first and returns: everything below this line is an action.
+   */
+  const parcelToggle = event.target.closest("[data-parcel-toggle]");
+
+  if (parcelToggle) {
+    const list = parcelToggle.parentElement?.querySelector(".dashboard-parcel-list");
+
+    if (list) {
+      const open = list.hasAttribute("hidden");
+
+      list.toggleAttribute("hidden", !open);
+      parcelToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      parcelToggle.classList.toggle("is-open", open);
+    }
+
+    return;
+  }
+
   const issueButton = event.target.closest("[data-report-issue-id]");
   const labelButton = event.target.closest("[data-label-url]");
   const viewIssueButton = event.target.closest("[data-issue-note]");

@@ -509,15 +509,73 @@
   font-weight: 800;
 }
 
-/* One row standing for two items has to say so where the eye already is:
-   under the name, in the colour this dashboard uses when something is being
-   asked of you. */
+/* A parcel of several items: the row stays as short as any other, and the
+   pairs sit behind the caret. Quiet rather than loud - the one line that
+   has to be read is the instruction, not the count. */
+.dashboard-parcel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.dashboard-parcel-caret {
+  color: rgba(255,255,255,0.45);
+  font-size: 15px;
+  line-height: 1;
+  transition: transform 0.12s ease;
+}
+
+.dashboard-parcel-toggle.is-open .dashboard-parcel-caret {
+  transform: rotate(90deg);
+}
+
 .dashboard-parcel-note {
   margin-top: 4px;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--kc-gold);
   white-space: normal;
+}
+
+/* A class with display on it beats the browser's own rule for [hidden],
+   so the fold-out has to be told to stay shut. */
+.dashboard-parcel-list[hidden] {
+  display: none;
+}
+
+.dashboard-parcel-list {
+  margin-top: 8px;
+  padding-left: 14px;
+  border-left: 1px solid rgba(255,255,255,0.12);
+  display: grid;
+  gap: 8px;
+}
+
+.dashboard-parcel-line {
+  display: grid;
+  gap: 2px;
+  white-space: normal;
+}
+
+.dashboard-parcel-line-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.92);
+}
+
+.dashboard-parcel-line-meta {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.55);
+  font-variant-numeric: tabular-nums;
 }
 
 .dashboard-table th.dashboard-product-col,
