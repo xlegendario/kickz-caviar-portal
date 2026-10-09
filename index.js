@@ -3413,6 +3413,43 @@ async function sellerEstimatedTime(sellerRecordId) {
   return text;
 }
 
+/*
+ * Can this seller be haggled with at all?
+ *
+ * A consignor names a price and can come down from it; a supplier with an
+ * API sells from a published list and either confirms at that price or does
+ * not. There is nothing in between, and our offer to the store already has
+ * our margin inside it - so a counter has nowhere to go.
+ *
+ * Left as a question about the seller rather than a rule somewhere, because
+ * the same answer is needed in three places: the two routes that create a
+ * counter and the screens that offer the button.
+ *
+ * A minute of cache, like the store check below it. Turning the field on for
+ * a seller is a deliberate act and nobody is waiting on it to the second.
+ */
+const SUPPLIER_API_NO_COUNTER =
+  "This offer comes from a supplier who confirms at their own price, so there is nothing to counter. Please accept or deny.";
+
+const supplierApiCache = new Map();
+
+async function sellerUsesSupplierApi(sellerRecordId) {
+  const id = asText(sellerRecordId);
+
+  if (!id) return false;
+
+  const cached = supplierApiCache.get(id);
+
+  if (cached && Date.now() - cached.at < 60000) return cached.api;
+
+  const record = await airtable(SELLERS_TABLE).find(id).catch(() => null);
+  const api = !!supplierApiOf(record?.fields);
+
+  supplierApiCache.set(id, { at: Date.now(), api });
+
+  return api;
+}
+
 async function isStoreConsignor(sellerRecordId) {
   const id = asText(sellerRecordId);
 
@@ -19110,6 +19147,7 @@ app.post("/api/counter-offers/create", async (req, res) => {
 
     let createdSellerCounters = 0;
     let createdConsignmentOffers = 0;
+    let skippedSupplierApi = 0;
     let dmErrors = 0;
 
     const linkedOrderNeedle = escapeFormulaValue(orderId || orderRecordId);
@@ -19153,6 +19191,25 @@ app.post("/api/counter-offers/create", async (req, res) => {
       }
 
       if (!sellerRecordId || !sellerOriginalPrice || !sellerVatType) continue;
+
+      /*
+       * A supplier with an API is left out of a counter round.
+       *
+       * The round would be a Discord embed with Accept, Counter and Deny in
+       * a channel where nobody clicks: they answer through their API, on
+       * requests we send them, at their own price. So the round would simply
+       * stay open, and the store would be waiting on an answer that cannot
+       * come.
+       *
+       * Left out rather than refusing the whole call: an order can have a
+       * consignor beside them, and that consignor can still be countered.
+       * Only when they were the only source does the store get told, right
+       * below, instead of being left with a counter that went nowhere.
+       */
+      if (await sellerUsesSupplierApi(sellerRecordId)) {
+        skippedSupplierApi += 1;
+        continue;
+      }
 
       const counterPayout = calculateCounterPayoutForVatType(
         storeCounterPrice,
@@ -19391,6 +19448,17 @@ app.post("/api/counter-offers/create", async (req, res) => {
       }
     }
 
+    /*
+     * Nobody to counter, so say so and change nothing.
+     *
+     * Before the sweep below, which takes the store's own offer embed out of
+     * action: a counter that was refused must leave them exactly where they
+     * were, with Accept and Deny still live.
+     */
+    if (!createdSellerCounters && !createdConsignmentOffers && skippedSupplierApi) {
+      return res.status(409).json({ error: SUPPLIER_API_NO_COUNTER });
+    }
+
     // NEW — additive only: same stale-embed sweep as the per-round
     // store-counter — the store just countered the fresh offer(s), so
     // the original store-facing "Offer Request" embed for this order is
@@ -19414,6 +19482,7 @@ app.post("/api/counter-offers/create", async (req, res) => {
       count: createdSellerCounters + createdConsignmentOffers,
       seller_counter_offers: createdSellerCounters,
       consignment_offers: createdConsignmentOffers,
+      skipped_supplier_api: skippedSupplierApi,
       dm_errors: dmErrors
     });
   } catch (err) {
@@ -20194,6 +20263,12 @@ app.post("/api/counter-offers/:id/store-counter", async (req, res) => {
 
     if (asText(f["Status"]) !== "Open") {
       return res.status(409).json({ error: "This counter offer is no longer open." });
+    }
+
+    // Same reason as the bulk counter above: they answer through their API,
+    // at their own price, so this round would stay open for ever.
+    if (await sellerUsesSupplierApi(firstLinkedRecordId(f["Seller ID"]))) {
+      return res.status(409).json({ error: SUPPLIER_API_NO_COUNTER });
     }
 
     // This round (created by seller-counter above) only has a Seller
@@ -29777,7 +29852,8 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
           price,
           normalizedPrice,
           id: so.id,
-          vatType
+          vatType,
+          sellerRecordId: sellerId
         });
       }
     }
@@ -29823,11 +29899,20 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
       }
     }
 
-    const items = orderRecords
+    const items = await Promise.all(orderRecords
       .filter((record) => winningSellerOfferByOrderId.has(record.id))
-      .map((record) => {
+      .map(async (record) => {
         const f = record.fields || {};
         const winningSellerOffer = winningSellerOfferByOrderId.get(record.id);
+
+        /*
+         * Whether this one can be haggled over at all.
+         *
+         * Carried on the row so the screens can leave the button off instead
+         * of offering something the route will refuse. The route refuses it
+         * either way - this is so a store is never invited to try.
+         */
+        const supplierApi = await sellerUsesSupplierApi(winningSellerOffer.sellerRecordId);
 
         // His explicit, confirmed choice: read the price directly from
         // the Order's own trusted "Offer To Store" field rather than
@@ -29837,10 +29922,11 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
         const myHighestEver = myHighestEverByOrderId.get(record.id) ?? null;
 
         const noRoomToCounter =
-          Number.isFinite(myHighestEver) &&
-          myHighestEver > 0 &&
-          Number.isFinite(offerAmount) &&
-          (offerAmount - myHighestEver) < MIN_COUNTER_STEP;
+          supplierApi ||
+          (Number.isFinite(myHighestEver) &&
+            myHighestEver > 0 &&
+            Number.isFinite(offerAmount) &&
+            (offerAmount - myHighestEver) < MIN_COUNTER_STEP);
 
         return {
           id: record.id,
@@ -29868,12 +29954,13 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
             ? moneySmartValue(myHighestEver)
             : null,
           no_room_to_counter: noRoomToCounter,
+          supplier_api: supplierApi,
           vat_type: winningSellerOffer.vatType ? storeFacingVatType(winningSellerOffer.vatType, f) : null,
           status: "Offer Received",
           date: formatDateEU(f["Order Date"]),
           raw_date: f["Order Date"]
         };
-      });
+      }));
 
     res.json({
       count: items.length,
@@ -30138,6 +30225,9 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
           : null,
         raw_date: asText(f["Created At"]),
         denied_at: filter === "denied" ? formatDateEU(f["Denied At"]) : null,
+        // Same flag as the fresh offers carry: a supplier who answers
+        // through their API is not countered, so the button stays off.
+        supplier_api: await sellerUsesSupplierApi(firstLinkedRecordId(f["Seller ID"])),
         // Kept only for the visibility filter right below — not part
         // of the response shape.
         __sellerId: firstLinkedRecordId(f["Seller ID"]),
