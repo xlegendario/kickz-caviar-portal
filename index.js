@@ -17941,10 +17941,26 @@ async function runPartnerStockLevelSync() {
  * and Airtable stays what it is meant for.
  */
 app.get("/api/consignment/stock/has", async (req, res) => {
-  const secret = asText(req.headers["x-kc-secret"]);
+  /*
+   * FIXED - this demanded COUNTER_OFFERS_SECRET and nothing else.
+   *
+   * The engine asks this question with the portal secret it already carries,
+   * the same one it uses on /api/consignment/auto-offer/create next door. Two
+   * different values, so every call came back 401 - and anyConsignmentStock
+   * reads any refusal as "nobody has it", exactly as it is meant to.
+   *
+   * ORD-027865 on 09-10-2026 at 03:00: Pearl had IF6490 size 42 on the shelf
+   * since the night before, and the order went to Outsource with "no partner
+   * stock available" on it. It was asked between 22:20 and 00:43 with the
+   * matching secret and worked; after that it never got an answer again.
+   *
+   * So it now uses the same gate as every other route this service calls,
+   * which accepts any of the three service secrets.
+   */
+  const refusal = serviceCallRefusal(req);
 
-  if (!COUNTER_OFFERS_SECRET || secret !== COUNTER_OFFERS_SECRET) {
-    return res.status(401).json({ error: "Unauthorized" });
+  if (refusal) {
+    return res.status(refusal.status).json({ error: refusal.error });
   }
 
   const sku = asText(req.query.sku).toUpperCase();
