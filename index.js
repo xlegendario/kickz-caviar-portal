@@ -3587,19 +3587,17 @@ function getSellerOfferChannelId(sellerRow, isConfirmation) {
 }
 
 /*
- * Een leverancier met een API bevestigt niet in Discord, maar bij zichzelf.
+ * A supplier with an API confirms on their own side, not in Discord.
  *
- * Een consignor krijgt een embed met Confirm en Deny: heb je dit paar nog,
- * voor dit bedrag. Pearl Solutions beantwoordt diezelfde vraag door een
- * aanvraag aan te nemen of af te wijzen, binnen vier uur. Dus gaat er voor
- * hen geen embed uit - die zou een tweede waarheid zijn over dezelfde deal,
- * en zodra die twee uit elkaar lopen staat er een order stil op een knop die
- * niemand ziet.
+ * A consignor gets an embed with Confirm and Deny: do you still have this
+ * pair, at this amount. Pearl Solutions answers that same question by
+ * accepting or declining a request, within four hours. So no embed goes out
+ * for them - it would be a second truth about the same deal, and the moment
+ * those two drift apart an order sits still on a button nobody sees.
  *
- * Wat hier gebeurt is precies wat de knop doet, alleen later: de aanvraag
- * gaat de deur uit, het nummer wordt bewaard naast onze offerte, en als hun
- * antwoord binnenkomt loopt het door dezelfde confirm- of deny-weg als elke
- * andere consignor.
+ * What happens here is exactly what the button does, only later: the request
+ * goes out, the number is kept next to our offer, and when their answer
+ * arrives it runs down the same confirm or deny path as any other consignor.
  */
 const PEARL_BASE = "https://deals.pearl-solutions.eu/api/v1";
 
@@ -3607,7 +3605,7 @@ const PEARL_API_KEY = process.env.PEARL_API_KEY || "";
 const PEARL_DISCORD_WEBHOOK = process.env.PEARL_DISCORD_WEBHOOK || "";
 
 async function pearlCall(path, options = {}) {
-  if (!PEARL_API_KEY) throw new Error("PEARL_API_KEY ontbreekt");
+  if (!PEARL_API_KEY) throw new Error("PEARL_API_KEY is missing");
 
   const res = await fetch(`${PEARL_BASE}${path}`, {
     ...options,
@@ -3616,8 +3614,8 @@ async function pearlCall(path, options = {}) {
       "Content-Type": "application/json",
       ...(options.headers || {})
     },
-    // Hun prijscheck mag tot een minuut duren als een stijlcode nieuw voor
-    // ze is; hun eigen handleiding vraagt om twee minuten geduld.
+    // Their price check may take up to a minute when a style code is new to
+    // them; their own guide asks for two minutes of patience.
     signal: AbortSignal.timeout(120000)
   });
 
@@ -3631,26 +3629,26 @@ async function pearlCall(path, options = {}) {
 }
 
 /*
- * Welke leverancier achter deze seller zit, als er een API in het spel is.
+ * Which supplier sits behind this seller, when an API is involved.
  *
- * Staat op zijn eigen record, los van Source: Source gaat over wat de winkel
- * te zien krijgt, dit over hoe wij de deal rondkrijgen. Een volgende EU
- * supplier zonder API krijgt dus wel die Source en geen vermelding hier.
+ * It lives on their own record, separate from Source: Source is about what
+ * the store gets to see, this about how we get the deal done. So a next EU
+ * supplier without an API does get that Source and no entry here.
  */
 function supplierApiOf(sellerFields) {
   return asText(sellerFields?.["Supplier API"]);
 }
 
 /*
- * De melding die in de plaats komt van een aanvraag die niet kon.
+ * The notice that takes the place of a request we could not send.
  *
- * Normaal ziet iemand de aanvraag staan en daarna het antwoord. Valt het
- * paar weg tussen onze laatste catalogus en de verkoop, dan was er zonder
- * dit bericht niets te zien - en juist dat is het geval waarin iemand moet
- * ingrijpen, want bij een verkoop op een marktplaats is al betaald.
+ * Normally someone sees the request standing there and then the answer. If
+ * the pair falls away between our last catalogue and the sale, there would be
+ * nothing to see without this message - and that is exactly the case where
+ * someone has to step in, because a marketplace sale is already paid for.
  *
- * Dezelfde vorm als de aanvraag, in het rood, zodat het in één oogopslag
- * leest als "hier is iets mee".
+ * The same shape as the request, in red, so that at a glance it reads as
+ * "something is up here".
  */
 async function postPearlGoneNotice({ seller, offer, sku, size, orderId }) {
   const channelId =
@@ -3697,18 +3695,18 @@ async function postPearlGoneNotice({ seller, offer, sku, size, orderId }) {
 
     return true;
   } catch (err) {
-    console.error("Kon de melding over een weggevallen maat niet plaatsen:", err.message);
+    console.error("Could not post the notice about a size that fell away:", err.message);
 
     return false;
   }
 }
 
 /*
- * Iets zeggen in het kanaal van een leverancier.
+ * Saying something in a supplier's channel.
  *
- * Voor de gevallen waarin er geen embed hoort maar wel iets te melden valt:
- * een maat die weg is voordat we iets konden vragen. Mislukt het, dan blijft
- * het bij een regel in de log - het bericht is de melding, niet de deal.
+ * For the cases where no embed belongs but there is something to report: a
+ * size that is gone before we could ask anything. If it fails, a line in the
+ * log is all that is left - the message is the notice, not the deal.
  */
 async function sayInSupplierChannel(seller, text) {
   const channelId =
@@ -3729,24 +3727,24 @@ async function sayInSupplierChannel(seller, text) {
 
     return true;
   } catch (err) {
-    console.error("Kon niets kwijt in het kanaal van de leverancier:", err.message);
+    console.error("Could not get anything into the supplier's channel:", err.message);
 
     return false;
   }
 }
 
 /*
- * Wat er in hun kanaal komt te staan.
+ * What goes up in their channel.
  *
- * Zij hoeven niets te klikken - hun antwoord geven ze in hun eigen systeem -
- * maar wij moeten zien dat er iets van hen verkocht is. Vooral als ze nee
- * zeggen: een Woovin-verkoop is een echte verkoop, en die moet dan meteen
- * ergens anders vandaan komen.
+ * They do not have to click anything - they give their answer in their own
+ * system - but we do need to see that something of theirs has sold.
+ * Especially when they say no: a Woovin sale is a real sale, and it then has
+ * to come from somewhere else right away.
  *
- * Dus dezelfde embed als een gewone bevestigingsaanvraag, zonder de twee
- * knoppen, en met de regel erboven die later het antwoord gaat dragen. Een
- * kanaal dat we niet kunnen bereiken houdt de aanvraag niet tegen: die staat
- * dan al bij hen, en dat is wat telt.
+ * So the same embed as an ordinary confirmation request, without the two
+ * buttons, and with the line above it that will carry the answer later. A
+ * channel we cannot reach does not hold the request back: that one is already
+ * with them, and that is what counts.
  */
 async function postPearlConfirmationNotice({ seller, offer, price, request }) {
   const channelId =
@@ -3756,8 +3754,8 @@ async function postPearlConfirmationNotice({ seller, offer, price, request }) {
 
   if (!channelId) {
     console.error(
-      `Pearl-aanvraag ${request?.id}: geen kanaal op ${asText(seller?.seller_id)}, ` +
-        "niemand ziet dat dit paar verwacht wordt."
+      `Pearl request ${request?.id}: no channel on ${asText(seller?.seller_id)}, ` +
+        "nobody sees that this pair is expected."
     );
 
     return { channelId: "", messageId: "" };
@@ -3768,7 +3766,7 @@ async function postPearlConfirmationNotice({ seller, offer, price, request }) {
 
     const channel = await discordClient.channels.fetch(channelId).catch(() => null);
 
-    if (!channel) throw new Error(`kanaal ${channelId} niet bereikbaar`);
+    if (!channel) throw new Error(`channel ${channelId} not reachable`);
 
     const when = (value) =>
       value
@@ -3785,13 +3783,13 @@ async function postPearlConfirmationNotice({ seller, offer, price, request }) {
     const expires = when(request?.expiresAt);
 
     /*
-     * Dezelfde embed als een consignor krijgt, op één regel na.
+     * The same embed a consignor gets, bar one line.
      *
-     * Een consignor leest "click Confirm below" en drukt op de knop eronder;
-     * zij bevestigen in hun eigen systeem. Alleen die zin verschilt dus, en
-     * de knoppen zijn er niet - de rest staat er precies zo, zodat een deal
-     * van hen naast een deal van wie dan ook te lezen is zonder dat je eerst
-     * moet uitzoeken welke soort bericht je voor je hebt.
+     * A consignor reads "click Confirm below" and presses the button under
+     * it; they confirm in their own system. So only that sentence differs,
+     * and the buttons are not there - the rest stands exactly as it does
+     * elsewhere, so a deal of theirs reads next to anyone else's without
+     * having to work out first which kind of message you are looking at.
      */
     const message = await channel.send({
       content: `⏳ Request #${request?.id} - waiting on your answer`,
@@ -3841,21 +3839,21 @@ async function postPearlConfirmationNotice({ seller, offer, price, request }) {
 
     return { channelId: message.channelId, messageId: message.id };
   } catch (err) {
-    console.error(`Pearl-aanvraag ${request?.id}: bericht niet geplaatst:`, err.message);
+    console.error(`Pearl request ${request?.id}: message not posted:`, err.message);
 
     return { channelId: "", messageId: "" };
   }
 }
 
 /*
- * De aanvraag zelf.
+ * The request itself.
  *
- * Eerst hun prijs opvragen, zoals hun handleiding voorschrijft: daar wordt de
- * regel op geprijsd, en het is meteen de controle dat de maat er nu nog is -
- * de catalogus waar onze voorraad uit komt is tot een half uur oud.
+ * Their price first, the way their guide prescribes: that is what the line is
+ * priced on, and it doubles as the check that the size is still there - the
+ * catalogue our stock comes from is up to half an hour old.
  *
- * Een maat die weg is, is geen fout maar een antwoord: dat is een consignor
- * die "nee" zegt, en de order rolt door naar de volgende bron.
+ * A size that is gone is not an error but an answer: that is a consignor
+ * saying "no", and the order rolls on to the next source.
  */
 async function askPearlToConfirm({
   seller = null,
@@ -3875,26 +3873,26 @@ async function askPearlToConfirm({
 
   if (!theirSize?.available) {
     /*
-     * Weg bij hen, en dat moet iemand zien.
+     * Gone on their side, and someone has to see that.
      *
-     * Bij een winkelorder rolt dit vanzelf door: de winkel krijgt zijn
-     * melding en de order gaat terug naar de bronnen. Bij een verkoop op een
-     * marktplaats is het iets anders - daar is al betaald, en dan moet dit
-     * paar vandaag nog ergens anders vandaan komen. Een regel in een log op
-     * Render is dan niet genoeg.
+     * On a store order this rolls on by itself: the store gets its notice and
+     * the order goes back to the sources. A marketplace sale is something
+     * else - that one is already paid for, and then this pair has to come
+     * from somewhere else today. A line in a log on Render is not enough for
+     * that.
      */
-    console.log(`Pearl heeft ${sku} ${size} niet meer; deal wordt geweigerd.`);
+    console.log(`Pearl no longer has ${sku} ${size}; the deal is being denied.`);
 
     await postPearlGoneNotice({ seller, offer, sku, size, orderId });
 
     if (sellerOfferRecordId) {
       await denyConsignmentSellerOffer(sellerOfferRecordId).catch((err) =>
-        console.error(`Pearl-afwijzing kon niet verwerkt worden:`, err.message)
+        console.error(`Pearl denial could not be processed:`, err.message)
       );
     } else {
       console.error(
-        `\u26a0\ufe0f ${sku} ${size} is weg bij Pearl en er is geen Seller Offer om af te wijzen ` +
-          `(order ${asText(offer?.order_id) || asText(orderId) || "?"}) - dit vraagt om een mens.`
+        `\u26a0\ufe0f ${sku} ${size} is gone at Pearl and there is no Seller Offer to deny ` +
+          `(order ${asText(offer?.order_id) || asText(orderId) || "?"}) - this needs a human.`
       );
     }
 
@@ -3935,19 +3933,19 @@ async function askPearlToConfirm({
 
   if (error) {
     /*
-     * De aanvraag staat bij hen, en wij weten niet meer waar hij bij hoort.
-     * Luid opschrijven: dit is het ene geval waarin een paar gekocht kan
-     * worden zonder dat er een deal tegenover staat.
+     * The request is out with them, and we no longer know what it belongs to.
+     * Write it down loudly: this is the one case where a pair can be bought
+     * without a deal standing against it.
      */
     console.error(
-      `⚠️ Pearl-aanvraag ${request.id} voor ${sku} ${size} staat uit, maar kon niet ` +
-        `bij de offerte gezet worden: ${error.message}`
+      `⚠️ Pearl request ${request.id} for ${sku} ${size} is out, but could not be ` +
+        `filed with the offer: ${error.message}`
     );
   }
 
   console.log(
-    `Pearl-aanvraag ${request.id}: ${sku} ${size} voor EUR ${price}, ` +
-      `antwoord uiterlijk ${request.expiresAt}`
+    `Pearl request ${request.id}: ${sku} ${size} for EUR ${price}, ` +
+      `answer due by ${request.expiresAt}`
   );
 
   return {
@@ -3960,12 +3958,12 @@ async function askPearlToConfirm({
 }
 
 /*
- * Hun antwoord, en wat het bij ons in gang zet.
+ * Their answer, and what it sets in motion on our side.
  *
- * Bevestigd is precies wat de Confirm-knop doet; afgewezen of verlopen is
- * precies wat Deny doet. Geen eigen weg ernaast, want de deal die daarop
- * volgt - de unit, de voorraad eraf, het bericht aan de winkel - hangt aan
- * die twee functies en niet aan de knop.
+ * Confirmed is exactly what the Confirm button does; declined or expired is
+ * exactly what Deny does. No separate path alongside it, because the deal
+ * that follows - the unit, the stock coming off, the message to the store -
+ * hangs off those two functions and not off the button.
  */
 async function noteAnswerOnPearlMessage(row, status, reply) {
   if (!row?.channel_id || !row?.message_id) return;
@@ -3993,7 +3991,7 @@ async function noteAnswerOnPearlMessage(row, status, reply) {
       embeds: message.embeds
     });
   } catch (err) {
-    console.error(`Pearl-aanvraag ${row.request_id}: antwoord niet bijgeschreven:`, err.message);
+    console.error(`Pearl request ${row.request_id}: answer not written on the message:`, err.message);
   }
 }
 
@@ -4007,7 +4005,7 @@ async function pollPearlRequests() {
     .limit(100);
 
   if (error) {
-    console.error("Pearl-aanvragen konden niet gelezen worden:", error.message);
+    console.error("Pearl requests could not be read:", error.message);
 
     return { ok: false };
   }
@@ -4018,7 +4016,7 @@ async function pollPearlRequests() {
 
   for (const row of data) {
     const answer = await pearlCall(`/requests/${row.request_id}`).catch((err) => {
-      console.error(`Pearl-aanvraag ${row.request_id} kon niet opgehaald worden:`, err.message);
+      console.error(`Pearl request ${row.request_id} could not be fetched:`, err.message);
 
       return null;
     });
@@ -4037,11 +4035,11 @@ async function pollPearlRequests() {
       handled += 1;
     } catch (err) {
       /*
-       * Niet als afgehandeld wegschrijven: dan probeert de volgende ronde
-       * het opnieuw. Hun status verandert niet meer, dus herhalen is veilig.
+       * Do not write it down as handled: then the next round tries again.
+       * Their status does not change any more, so repeating is safe.
        */
       console.error(
-        `Pearl-aanvraag ${row.request_id} (${status}) kon niet verwerkt worden:`,
+        `Pearl request ${row.request_id} (${status}) could not be processed:`,
         err.message
       );
 
@@ -4049,8 +4047,8 @@ async function pollPearlRequests() {
     }
 
     /*
-     * Het antwoord boven het bericht, zoals een knop het daar ook zou zetten.
-     * Dat is waar iemand kijkt die zich afvraagt waar dit paar blijft.
+     * The answer above the message, the way a button would put it there too.
+     * That is where someone looks who wonders where this pair has got to.
      */
     await noteAnswerOnPearlMessage(row, status, asText(answer.reply));
 
@@ -4064,7 +4062,7 @@ async function pollPearlRequests() {
       })
       .eq("request_id", row.request_id);
 
-    console.log(`Pearl-aanvraag ${row.request_id}: ${status}${answer.reply ? " - " + answer.reply : ""}`);
+    console.log(`Pearl request ${row.request_id}: ${status}${answer.reply ? " - " + answer.reply : ""}`);
   }
 
   return { ok: true, checked: data.length, handled };
@@ -4093,12 +4091,11 @@ async function sendConsignmentOfferDiscordMessage({
   inventoryId = null
 }) {
   /*
-   * Een leverancier met een API beantwoordt deze vraag bij zichzelf.
+   * A supplier with an API answers this question on their own side.
    *
-   * Hier staat de afslag en niet bij elke aanroeper, omdat elke weg naar een
-   * consignor - een winkelorder, een want-to-buy, een tweede ronde - door
-   * deze functie gaat. Eén plek die het weet is één plek die het kan
-   * vergeten.
+   * The turn-off sits here and not at every caller, because every road to a
+   * consignor - a store order, a want-to-buy, a second round - runs through
+   * this function. One place that knows it is one place that can forget it.
    */
   const supplierApi = supplierApiOf(
     (await airtable(SELLERS_TABLE)
@@ -17894,17 +17891,17 @@ async function runPartnerStockLevelSync() {
 }
 
 /*
- * Heeft iemand buiten dit paar liggen?
+ * Does anyone out there have this pair on the shelf?
  *
- * De allocator beantwoordt die vraag normaal met "Partner Stock Level" op
- * Stock Levels in Airtable, een teller die bijgehouden wordt zodra voorraad
- * via onze eigen routes verandert. De voorraad van een leverancier komt
- * rechtstreeks uit zijn catalogus in Supabase en passeert die routes nooit,
- * dus die teller weet niet van hem.
+ * The allocator normally answers that with "Partner Stock Level" on Stock
+ * Levels in Airtable, a counter kept up to date as soon as stock changes
+ * through our own routes. A supplier's stock comes straight from their
+ * catalogue in Supabase and never passes those routes, so that counter knows
+ * nothing about them.
  *
- * Hem alsnog bijhouden zou zestienduizend rijen aan Airtable toevoegen voor
- * een getal dat wij hier in één vraag kunnen opzoeken. Dus beantwoordt de
- * portal die vraag, en blijft Airtable waar hij voor bedoeld is.
+ * Keeping it anyway would add sixteen thousand rows to Airtable for a number
+ * we can look up here in one question. So the portal answers that question,
+ * and Airtable stays what it is meant for.
  */
 app.get("/api/consignment/stock/has", async (req, res) => {
   const secret = asText(req.headers["x-kc-secret"]);
@@ -46450,11 +46447,11 @@ app.listen(PORT, () => {
   }
 
   /*
-   * Het antwoord van een leverancier die in zijn eigen systeem bevestigt.
+   * The answer from a supplier who confirms in their own system.
    *
-   * Hij heeft vier uur, en zijn Discord-webhook is voor onze ogen - de
-   * status in zijn API is de waarheid. Elke vijf minuten is wat zijn
-   * handleiding vraagt en wat een order aankan.
+   * They have four hours, and their Discord webhook is for our eyes - the
+   * status in their API is the truth. Every five minutes is what their guide
+   * asks for and what an order can live with.
    */
   cron.schedule("*/5 * * * *", () => {
     pollPearlRequests().catch((err) =>
