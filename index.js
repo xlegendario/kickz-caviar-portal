@@ -31706,8 +31706,9 @@ async function postLabelRequestForOrder(orderRecordId) {
   const merchantRecord = await airtable(MERCHANTS_TABLE).find(clientId);
   const mf = merchantRecord.fields || {};
 
-  const labelRequestChannelId =
-    displayValue(mf["Label Request Channel ID"]) || "1506989427183058996";
+  const ownLabelRequestChannelId = displayValue(mf["Label Request Channel ID"]);
+
+  const labelRequestChannelId = ownLabelRequestChannelId || "1506989427183058996";
 
   const labelRequestUrl =
     `${LOJIQ_WMS_BASE_URL.replace(/\/$/, "")}/label-request.html?record_id=${encodeURIComponent(orderRecord.id)}`;
@@ -31751,7 +31752,28 @@ async function postLabelRequestForOrder(orderRecordId) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(data.details || data.error || "Failed to post label request");
+    const why = data.details || data.error || "Failed to post label request";
+
+    /*
+     * Say which channel it was and whose it is.
+     *
+     * Discord answers a channel it cannot see with "Missing Access" and
+     * nothing else, which on its own says neither where it tried nor why.
+     * ORD-028069 on 12-10-2026 was exactly that: Tienne Milano has no Label
+     * Request Channel ID on its Merchants record, so the request went to the
+     * shared fallback - and the bot cannot reach that one either.
+     *
+     * The routing is left alone; only the message is. A store that is
+     * missing its own channel now reads as a field to fill in rather than as
+     * a Discord error.
+     */
+    throw new Error(
+      ownLabelRequestChannelId
+        ? `${why} (channel ${labelRequestChannelId}, from ${displayValue(mf["Store Name"]) || "the merchant"})`
+        : `${why} - ${displayValue(mf["Store Name"]) || "this merchant"} has no ` +
+          `Label Request Channel ID on its Merchants record, so the shared ` +
+          `fallback channel ${labelRequestChannelId} was used`
+    );
   }
 
   // Status last, and only after the store actually has the request — the
