@@ -1190,16 +1190,17 @@ async function askOtherConsignorsForOrder({
 
   const { data: holders, error } = await supabase
     .from("consignment_inventory")
-    .select("id, sku, size, vat_type, selling_price_suggested, quantity, seller_id, seller_record_id, product_name, brand")
+    .select("id, sku, size, vat_type, selling_price_suggested, quantity, seller_id, seller_record_id, product_name, brand, contract_labels_only")
     .eq("sku", sku)
     .eq("size", size)
     .gt("quantity", 0);
 
   if (error) throw error;
 
-  const others = (holders || []).filter(
-    (row) => asText(row.id) !== asText(askedInventoryId) && row.seller_record_id
-  );
+  const others = withoutContractLabelsRows(
+    holders,
+    await contractLabelsAllowedFor(orderFields)
+  ).filter((row) => asText(row.id) !== asText(askedInventoryId) && row.seller_record_id);
 
   if (!others.length) return { ok: true, asked: [] };
 
@@ -1303,6 +1304,7 @@ async function askOtherConsignorsForMemberWtb({
   const { data: holders, error } = await supabase
     .from("consignment_inventory")
     .select("id, sku, size, vat_type, selling_price_suggested, quantity, seller_id, seller_record_id, product_name, brand")
+    .eq("contract_labels_only", false) // a want-to-buy never ships on a supplier's own label
     .eq("sku", sku)
     .eq("size", size)
     .gt("quantity", 0);
@@ -1992,6 +1994,27 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
 
   if (!inventoryRow || Number(inventoryRow.quantity || 0) <= 0) {
     return { ok: false, reason: "out_of_stock" };
+  }
+
+  /*
+   * A Turum pair is only ever confirmed behind a reservation we placed.
+   * Every route that offers their stock already checks the sale; this is the
+   * last door, for a path nobody thought of.
+   */
+  if (inventoryRow.contract_labels_only) {
+    const { data: reservation } = await supabase
+      .from("turum_reservations")
+      .select("reservation_id")
+      .eq("seller_offer_record_id", sellerOfferRecordId)
+      .maybeSingle();
+
+    if (!reservation) {
+      console.error(
+        `[turum] refused to confirm ${sellerOfferRecordId}: a supplier-label pair without a reservation`
+      );
+
+      return { ok: false, reason: "supplier_label_only" };
+    }
   }
 
   const orderRecord = await airtable(ORDERS_TABLE).find(orderRecordId);
@@ -4105,6 +4128,400 @@ async function pollPearlRequests() {
   return { ok: true, checked: data.length, handled };
 }
 
+/*
+ * Turum: a wholesaler in Poland we reserve pairs from through their API.
+ *
+ * There is no question to ask them, the way a consignor or Pearl is asked:
+ * a reservation IS the purchase, at their price, and it cannot be undone
+ * from our side. So everything that could make it the wrong purchase is
+ * checked before it goes out, and anything doubtful is a deny - the order
+ * then simply moves on to the next source.
+ *
+ * They ship on their own label, from Poland, to the address we give them.
+ * That address exists in two places only: on a bol order, and in the Shopify
+ * of a store whose labels we make on our contract (UNION). The WMS reads it
+ * and says no for every other sale. Their rows carry contract_labels_only,
+ * which keeps them out of the stock levels and out of every route that
+ * offers stock to a buyer without such an address.
+ *
+ * TURUM_ORDERING is the switch. Off, every Turum offer is denied.
+ */
+const TURUM_BASE = "https://api.b2b.turum.pl";
+const TURUM_ORDERING = String(process.env.TURUM_ORDERING || "").toLowerCase() === "true";
+
+/*
+ * What their label costs per country, EUR, as on their site (13-10-2026).
+ * A country that is not here is a deny: their price for it is unknown, and
+ * the import only counted EUR 10 into the cost.
+ */
+const TURUM_SHIPPING_RATES = {
+  AT: 7, BE: 7, BG: 7, HR: 10, CZ: 7, DK: 10, EE: 7, FI: 10, FR: 7, DE: 7,
+  GR: 10, HU: 7, IE: 8, IT: 7, LV: 7, LI: 17, LT: 7, LU: 7, MC: 10, NL: 8,
+  PT: 7, RO: 7, SK: 7, SI: 7
+};
+
+// Who the invoice is for.
+const TURUM_BILLING_ADDRESS = {
+  company_name: "Payout by Kickz Caviar B.V.",
+  vat_id: "NL866752845B01",
+  street: "Havenstraat 74D",
+  city: "Huizen",
+  zip_code: "1271AG",
+  country: "NL"
+};
+
+/*
+ * Whether a sale may be filled from a contract-labels-only row.
+ *
+ * bol, and a store with Labels On Contract. Every other marketplace makes
+ * its own label, and any other store sends one it made itself - neither
+ * ever gives us the shopper's address.
+ */
+async function contractLabelsAllowedFor(orderFields) {
+  const marketplace = asText(orderFields?.Marketplace).toLowerCase();
+
+  if (marketplace) return marketplace === "bol";
+
+  const clientId = Array.isArray(orderFields?.Client) ? orderFields.Client[0] : "";
+
+  if (!clientId) return false;
+
+  const merchant = await airtable(MERCHANTS_TABLE).find(clientId).catch(() => null);
+
+  return !!merchant?.fields?.["Labels On Contract?"];
+}
+
+// The rows a sale may be offered, given what contractLabelsAllowedFor said.
+function withoutContractLabelsRows(rows, allowed = false) {
+  return allowed ? rows || [] : (rows || []).filter((row) => !row?.contract_labels_only);
+}
+
+let turumToken = "";
+let turumTokenUntil = 0;
+
+async function turumCall(path, options = {}, retried = false) {
+  if (!turumToken || Date.now() > turumTokenUntil) {
+    const login = await fetch(`${TURUM_BASE}/v1/account/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: process.env.TURUM_USERNAME || "",
+        password: process.env.TURUM_PASSWORD || ""
+      }),
+      signal: AbortSignal.timeout(30000)
+    });
+
+    const body = await login.json().catch(() => ({}));
+
+    if (!login.ok || !body.access_token) {
+      throw new Error(`Turum login: ${login.status} ${body.title || ""}`.trim());
+    }
+
+    // Their token lasts 24 hours; an hour's margin.
+    turumToken = body.access_token;
+    turumTokenUntil = Date.now() + 23 * 3600 * 1000;
+  }
+
+  const res = await fetch(`${TURUM_BASE}${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${turumToken}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    },
+    signal: AbortSignal.timeout(60000)
+  });
+
+  if (res.status === 401 && !retried) {
+    turumToken = "";
+
+    return turumCall(path, options, true);
+  }
+
+  const body = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    const detail = body.title || body.message || JSON.stringify(body.detail || "");
+
+    throw new Error(`Turum ${path}: ${res.status} ${detail}`.trim());
+  }
+
+  return body;
+}
+
+async function callWmsInternal(path, body) {
+  const res = await fetch(`${LOJIQ_WMS_BASE_URL.replace(/\/$/, "")}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-kc-secret": process.env.COUNTER_OFFERS_SECRET || ""
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(60000)
+  });
+
+  const data = await res.json().catch(() => ({}));
+
+  return { status: res.status, ...data };
+}
+
+async function denyTurumOffer(sellerOfferRecordId, reason) {
+  console.log(`[turum] ${sellerOfferRecordId || "no offer"}: not reserved - ${reason}`);
+
+  if (sellerOfferRecordId) {
+    await denyConsignmentSellerOffer(sellerOfferRecordId).catch((err) =>
+      console.error(`[turum] denial could not be processed:`, err.message)
+    );
+  }
+
+  return { ok: false, reason };
+}
+
+async function reserveAtTurum({
+  offer = null,
+  sellerOfferRecordId = null,
+  orderRecordId = null,
+  memberWtbRecordId = null,
+  orderId = "",
+  sku,
+  size,
+  agreedPrice = null
+}) {
+  if (!TURUM_ORDERING) return denyTurumOffer(sellerOfferRecordId, "TURUM_ORDERING is off");
+
+  const sourceType = asText(offer?.source_type);
+
+  if (memberWtbRecordId || sourceType === "member_wtb" || sourceType === "external_sale") {
+    return denyTurumOffer(sellerOfferRecordId, `a ${sourceType || "member WTB"} deal`);
+  }
+
+  if (!orderRecordId) return denyTurumOffer(sellerOfferRecordId, "no order to ship to");
+
+  /*
+   * Never twice for the same offer. A retry of this function after a timeout
+   * would otherwise buy a second pair.
+   */
+  if (sellerOfferRecordId) {
+    const { data: earlier } = await supabase
+      .from("turum_reservations")
+      .select("reservation_id")
+      .eq("seller_offer_record_id", sellerOfferRecordId)
+      .limit(1);
+
+    if (earlier?.length) {
+      console.log(`[turum] ${sellerOfferRecordId}: already reserved as ${earlier[0].reservation_id}`);
+
+      return { ok: true, deliveryType: "supplier_api", reservationId: earlier[0].reservation_id };
+    }
+  }
+
+  const shipTo = await callWmsInternal("/api/internal/turum/ship-to", { record_id: orderRecordId });
+
+  if (!shipTo.ok) {
+    return denyTurumOffer(sellerOfferRecordId, `no address (${shipTo.error || shipTo.status})`);
+  }
+
+  const country = asText(shipTo.address?.country).toUpperCase();
+  const rate = TURUM_SHIPPING_RATES[country];
+
+  if (!rate) return denyTurumOffer(sellerOfferRecordId, `no Turum shipping rate for ${country}`);
+
+  /*
+   * Their live price, on their EU size. The catalogue we imported is up to
+   * five minutes old; this is what the reservation will really cost.
+   */
+  const product = await turumCall(`/v1/product/${encodeURIComponent(sku)}`).catch(() => null);
+  const variant = (product?.variants || []).find(
+    (row) => asText(row.size) === asText(size) && Number(row.stock) > 0
+  );
+
+  if (!variant) return denyTurumOffer(sellerOfferRecordId, `${sku} ${size} is gone at Turum`);
+
+  const cost = Number(variant.price) + rate;
+
+  if (Number(agreedPrice) > 0 && cost > Number(agreedPrice)) {
+    return denyTurumOffer(
+      sellerOfferRecordId,
+      `${sku} ${size} costs EUR ${cost} with the label, the offer was EUR ${agreedPrice}`
+    );
+  }
+
+  const address = shipTo.address;
+  const clip = (value, length) => asText(value).slice(0, length);
+
+  const reservation = await turumCall("/v2/reservations", {
+    method: "POST",
+    body: JSON.stringify({
+      variants: [{ variant_id: variant.variant_id, quantity: 1 }],
+      shipping_address: {
+        name: clip(address.name, 30),
+        street: clip(address.street, 35),
+        ...(address.street_2 ? { street_2: clip(address.street_2, 35) } : {}),
+        city: clip(address.city, 30),
+        zip_code: clip(address.zip_code, 15),
+        country,
+        phone_number: asText(address.phone_number)
+      },
+      billing_address: TURUM_BILLING_ADDRESS,
+      ...(address.email ? { client_email: address.email } : {}),
+      customer_order_reference: clip(orderId || shipTo.order_id || sellerOfferRecordId, 100)
+    })
+  }).catch((err) => ({ error: err.message }));
+
+  if (!reservation?.reservation_id) {
+    return denyTurumOffer(
+      sellerOfferRecordId,
+      `reservation refused: ${reservation?.error || reservation?.message || "no id"}`
+    );
+  }
+
+  const { error } = await supabase.from("turum_reservations").insert({
+    reservation_id: reservation.reservation_id,
+    seller_offer_record_id: sellerOfferRecordId,
+    order_record_id: orderRecordId,
+    order_id: orderId || shipTo.order_id || null,
+    sku,
+    size,
+    variant_id: variant.variant_id,
+    price: cost,
+    shipping_country: country,
+    status: "new"
+  });
+
+  if (error) {
+    // Bought, and we no longer know what for. Say it loudly.
+    console.error(
+      `⚠️ [turum] reservation ${reservation.reservation_id} for ${sku} ${size} is placed, ` +
+        `but could not be filed: ${error.message}`
+    );
+  }
+
+  console.log(
+    `[turum] reserved ${sku} ${size} for EUR ${variant.price} + ${rate} label to ${country} ` +
+      `(${reservation.reservation_id}, order ${orderId || orderRecordId})`
+  );
+
+  return { ok: true, deliveryType: "supplier_api", reservationId: reservation.reservation_id };
+}
+
+/*
+ * After the reservation: confirm the deal, then wait for the parcel.
+ *
+ * The confirm runs on the next pass rather than inside reserveAtTurum, so it
+ * goes down the same road as a consignor's button - outside the offer that
+ * is still being written.
+ *
+ * Their tracking arrives as "DPD\n123456789": courier, then number. It goes
+ * onto our order through the WMS, which also tells UNION's Shopify, and the
+ * tracking sync takes it from there.
+ */
+const TURUM_TRACKING_URLS = {
+  DPD: (n) => `https://tracking.dpd.de/status/en_US/parcel/${n}`,
+  UPS: (n) => `https://www.ups.com/track?tracknum=${n}`,
+  DHL: (n) => `https://www.dhl.com/global-en/home/tracking.html?tracking-id=${n}`,
+  GLS: (n) => `https://gls-group.eu/EU/en/parcel-tracking?match=${n}`,
+  INPOST: (n) => `https://inpost.pl/sledzenie-przesylek?number=${n}`,
+  FEDEX: (n) => `https://www.fedex.com/fedextrack/?trknbr=${n}`
+};
+
+function parseTurumTracking(value) {
+  const parts = asText(value).split(/\r?\n/).map((part) => part.trim()).filter(Boolean);
+
+  if (!parts.length) return null;
+
+  const number = parts.length > 1 ? parts.slice(1).join("") : parts[0];
+  const carrier = parts.length > 1 ? parts[0].toUpperCase().replace(/\s+/g, "") : "";
+
+  if (/^https?:\/\//i.test(number)) return { number: "", carrier, url: number };
+
+  const build = TURUM_TRACKING_URLS[carrier];
+
+  return { number, carrier, url: build ? build(encodeURIComponent(number)) : "" };
+}
+
+async function pollTurumReservations() {
+  if (!process.env.TURUM_USERNAME) return { skipped: "no_login" };
+
+  const { data, error } = await supabase
+    .from("turum_reservations")
+    .select("*")
+    .is("tracking_written_at", null)
+    .neq("status", "canceled")
+    .limit(100);
+
+  if (error) {
+    console.error("[turum] reservations could not be read:", error.message);
+
+    return { ok: false };
+  }
+
+  for (const row of data || []) {
+    const note = async (fields) =>
+      supabase
+        .from("turum_reservations")
+        .update({ ...fields, updated_at: new Date().toISOString() })
+        .eq("reservation_id", row.reservation_id);
+
+    try {
+      if (!row.confirmed_at && row.seller_offer_record_id) {
+        await confirmConsignmentSellerOffer(row.seller_offer_record_id);
+        await note({ confirmed_at: new Date().toISOString(), last_error: null });
+
+        console.log(`[turum] ${row.reservation_id}: deal confirmed for ${row.order_id || row.sku}`);
+        continue;
+      }
+
+      const details = await turumCall(`/v1/reservation/${row.reservation_id}`);
+      const status = asText(details.status) || row.status;
+
+      if (status === "canceled") {
+        /*
+         * Turum cancelled a pair we have already sold. Nothing automatic can
+         * fix that: the sale is paid and the deal confirmed.
+         */
+        console.error(
+          `⚠️ [turum] reservation ${row.reservation_id} (${row.sku} ${row.size}, ` +
+            `order ${row.order_id}) was CANCELLED by Turum - this needs a human.`
+        );
+        await note({ status });
+        continue;
+      }
+
+      const tracking = parseTurumTracking(details.tracking_url);
+
+      if (!tracking?.number) {
+        if (status !== row.status) await note({ status });
+        continue;
+      }
+
+      const written = await callWmsInternal("/api/internal/turum/tracking", {
+        record_id: row.order_record_id,
+        tracking_number: tracking.number,
+        carrier: tracking.carrier,
+        tracking_url: tracking.url
+      });
+
+      if (!written.ok) throw new Error(written.error || `WMS answered ${written.status}`);
+
+      await note({
+        status,
+        reservation_name: asText(details.reservation_name) || null,
+        tracking: `${tracking.carrier} ${tracking.number}`.trim(),
+        tracking_written_at: new Date().toISOString(),
+        last_error: null
+      });
+
+      console.log(`[turum] ${row.reservation_id}: ${tracking.carrier} ${tracking.number} on ${row.order_id}`);
+    } catch (err) {
+      // Left as it was, so the next pass tries again.
+      console.error(`[turum] ${row.reservation_id}:`, err.message);
+      await note({ last_error: err.message });
+    }
+  }
+
+  return { ok: true, checked: data?.length || 0 };
+}
+
 async function sendConsignmentOfferDiscordMessage({
   seller,
   offer,
@@ -4139,6 +4556,19 @@ async function sendConsignmentOfferDiscordMessage({
       .find(asText(seller?.seller_record_id))
       .catch(() => null))?.fields
   );
+
+  if (supplierApi === "Turum") {
+    return await reserveAtTurum({
+      offer,
+      sellerOfferRecordId,
+      orderRecordId: asText(offer?.order_record_id) || null,
+      memberWtbRecordId: asText(offer?.member_wtb_record_id) || null,
+      orderId: asText(offer?.order_id),
+      sku: asText(offer?.sku),
+      size: asText(offer?.size),
+      agreedPrice: calculatedOfferPrice
+    });
+  }
 
   if (supplierApi) {
     return await askPearlToConfirm({
@@ -14506,7 +14936,7 @@ app.post("/api/consignment/offers/preview", async (req, res) => {
       return res.status(400).json({ error: "Invalid Maximum Buying Price" });
     }
 
-    const { data: inventoryRows, error } = await supabase
+    const { data: inventoryRowsAll, error } = await supabase
       .from("consignment_inventory")
       .select(`
         id,
@@ -14518,13 +14948,21 @@ app.post("/api/consignment/offers/preview", async (req, res) => {
         selling_price_suggested,
         quantity,
         seller_id,
-        seller_record_id
+        seller_record_id,
+        contract_labels_only
       `)
       .eq("sku", sku)
       .eq("size", size)
       .gt("quantity", 0);
 
     if (error) throw error;
+
+    // Turum ships on its own label to an address only bol and contract
+    // stores give us; every other sale leaves those rows alone.
+    const inventoryRows = withoutContractLabelsRows(
+      inventoryRowsAll,
+      orderRecordId ? await contractLabelsAllowedFor(orderFields) : false
+    );
 
     const offers = (inventoryRows || []).map((row) => {
       const sellerPrice = Number(row.selling_price_suggested);
@@ -14598,7 +15036,7 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
     const orderFields = orderRecord.fields || {};
     const clientCountry = asText(orderFields["Client Country"]);
 
-    const { data: inventoryRows, error: inventoryError } = await supabase
+    const { data: inventoryRowsAll, error: inventoryError } = await supabase
       .from("consignment_inventory")
       .select(`
         id,
@@ -14610,13 +15048,21 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
         selling_price_suggested,
         quantity,
         seller_id,
-        seller_record_id
+        seller_record_id,
+        contract_labels_only
       `)
       .eq("sku", sku)
       .eq("size", size)
       .gt("quantity", 0);
 
     if (inventoryError) throw inventoryError;
+
+    // Turum ships on its own label to an address only bol and contract
+    // stores give us; every other sale leaves those rows alone.
+    const inventoryRows = withoutContractLabelsRows(
+      inventoryRowsAll,
+      await contractLabelsAllowedFor(orderFields)
+    );
 
     const validRows = (inventoryRows || [])
       .map((row) => {
@@ -14904,6 +15350,7 @@ async function pickBrokerConsignor(line) {
   const { data: stock, error } = await supabase
     .from("consignment_inventory")
     .select("id, product_name, sku, size, brand, vat_type, selling_price_suggested, quantity, seller_id, seller_record_id, payout_price")
+    .eq("contract_labels_only", false) // a broker deal never ships on a supplier's own label
     .eq("sku", asText(line.sku).toUpperCase())
     .eq("size", asText(line.size))
     .gt("quantity", 0);
@@ -17968,13 +18415,30 @@ app.get("/api/consignment/stock/has", async (req, res) => {
 
   if (!sku || !size) return res.status(400).json({ error: "Missing sku or size" });
 
-  const { data, error } = await supabase
+  /*
+   * Stock that only ships on the supplier's own label (Turum) counts for an
+   * order that gives us the buyer's address - bol, or a store with Labels On
+   * Contract - and for nothing else. Without an order it never counts.
+   */
+  const orderRecordId = asText(req.query.order_record_id);
+  const contractLabelsAllowed = orderRecordId
+    ? await airtable(ORDERS_TABLE)
+      .find(orderRecordId)
+      .then((record) => contractLabelsAllowedFor(record.fields || {}))
+      .catch(() => false)
+    : false;
+
+  let query = supabase
     .from("consignment_inventory")
     .select("seller_id, selling_price_suggested, vat_type, lead_time_days")
     .eq("sku", sku)
     .eq("size", size)
     .gt("quantity", 0)
-    .gt("selling_price_suggested", 0)
+    .gt("selling_price_suggested", 0);
+
+  if (!contractLabelsAllowed) query = query.eq("contract_labels_only", false);
+
+  const { data, error } = await query
     .order("selling_price_suggested", { ascending: true })
     .limit(1);
 
@@ -18032,7 +18496,12 @@ app.post("/api/consignment/stock-levels/repair", async (req, res) => {
       return rows;
     };
 
-    const inventoryRows = await readAll("consignment_inventory", "sku, size, quantity");
+    // Rows that never count towards a stock level need no stock level either;
+    // creating one for each of a supplier's sizes would only write zeroes into
+    // Airtable by the thousand.
+    const inventoryRows = (
+      await readAll("consignment_inventory", "sku, size, quantity, lead_time_days, contract_labels_only")
+    ).filter(countsTowardsStockLevel);
     const stockRows = await readAll("consignment_stock_levels", "stock_counter_key");
 
     const existingKeys = new Set(
@@ -18200,7 +18669,7 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       ? getAllowedBuyingVatTypesFromLabel(sourceRecord.fields?.["Buying Inventory Filter"])
       : null;
 
-    const { data: inventoryRows, error: inventoryError } = await supabase
+    const { data: inventoryRowsAll, error: inventoryError } = await supabase
       .from("consignment_inventory")
       .select(`
         id,
@@ -18213,13 +18682,23 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         quantity,
         seller_id,
         seller_record_id,
-        payout_price
+        payout_price,
+        contract_labels_only
       `)
       .eq("sku", sku)
       .eq("size", size)
       .gt("quantity", 0);
 
     if (inventoryError) throw inventoryError;
+
+    // Turum ships on its own label to an address only bol and contract
+    // stores give us; every other sale leaves those rows alone.
+    const inventoryRows = withoutContractLabelsRows(
+      inventoryRowsAll,
+      source.kind === "order"
+        ? await contractLabelsAllowedFor((await airtable(ORDERS_TABLE).find(orderRecordId)).fields || {})
+        : false
+    );
 
     // Same winner the pre-offer flow picked: lowest normalized price.
     // getConsignmentComparePrice is the identical normalization the
@@ -22290,7 +22769,7 @@ app.post("/api/consignment/offers/create", async (req, res) => {
       });
     }
 
-    const { data: inventoryRows, error: inventoryError } = await supabase
+    const { data: inventoryRowsAll, error: inventoryError } = await supabase
       .from("consignment_inventory")
       .select(`
         id,
@@ -22302,7 +22781,8 @@ app.post("/api/consignment/offers/create", async (req, res) => {
         selling_price_suggested,
         quantity,
         seller_id,
-        seller_record_id
+        seller_record_id,
+        contract_labels_only
       `)
       .eq("sku", sku)
       .eq("size", size)
@@ -22311,6 +22791,13 @@ app.post("/api/consignment/offers/create", async (req, res) => {
     if (inventoryError) {
       throw inventoryError;
     }
+
+    // Turum ships on its own label to an address only bol and contract
+    // stores give us; every other sale leaves those rows alone.
+    const inventoryRows = withoutContractLabelsRows(
+      inventoryRowsAll,
+      await contractLabelsAllowedFor(orderRecord.fields || {})
+    );
 
     const results = [];
 
@@ -26256,6 +26743,30 @@ async function syncConsignmentStockLevelToAirtable(stockLevel) {
   await airtable(STOCK_LEVELS_TABLE).create(fields);
 }
 
+/*
+ * Whether a row counts towards the stock levels.
+ *
+ * The stock level is what KC Buying, the Lojiq Shop, Member WTB and the
+ * Airtable allocator read as "pairs we can promise". Two kinds of row are
+ * not that:
+ *
+ *   - a supplier who needs more than two days (Pearl, five). The allocator
+ *     reaches them through /api/consignment/stock/has instead.
+ *   - a row that only ships on the supplier's own label (Turum,
+ *     contract_labels_only). That needs the buyer's address when we reserve,
+ *     which we have on bol and at Labels On Contract stores and nowhere else.
+ *
+ * Both used to be added in whenever another consignor's row on the same size
+ * changed: 145 sizes counted Pearl's pair on 13-10-2026, and five sizes only
+ * Pearl had showed up for sale in KC Buying.
+ */
+function countsTowardsStockLevel(row) {
+  if (row?.contract_labels_only) return false;
+
+  // Empty is the old two-day promise.
+  return !(Number(row?.lead_time_days) > 2);
+}
+
 async function refreshConsignmentStockLevel(sku, size) {
   const cleanSku = asText(sku).toUpperCase();
   const cleanSize = asText(size).toUpperCase();
@@ -26263,7 +26774,10 @@ async function refreshConsignmentStockLevel(sku, size) {
 
   const { data: rows, error: rowsError } = await supabase
     .from("consignment_inventory")
-    .select("product_name, sku, size, brand, vat_type, quantity, selling_price_suggested")
+    .select(
+      "product_name, sku, size, brand, vat_type, quantity, selling_price_suggested, " +
+        "lead_time_days, contract_labels_only"
+    )
     .eq("sku", cleanSku)
     .eq("size", cleanSize);
 
@@ -26271,7 +26785,9 @@ async function refreshConsignmentStockLevel(sku, size) {
     throw rowsError;
   }
 
-  const activeRows = (rows || []).filter((row) => Number(row.quantity || 0) > 0);
+  const activeRows = (rows || []).filter(
+    (row) => Number(row.quantity || 0) > 0 && countsTowardsStockLevel(row)
+  );
 
   const stockLevel = activeRows.reduce(
     (sum, row) => sum + Number(row.quantity || 0),
@@ -41655,6 +42171,7 @@ async function fetchAllConsignmentInventoryRows() {
         quantity,
         image_url
       `)
+      .eq("contract_labels_only", false) // KC Buying and the Lojiq Shop: no supplier-label-only stock
       .gt("quantity", 0)
       .gt("selling_price_suggested", 0)
       .range(from, to);
@@ -42446,6 +42963,7 @@ async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
       seller_id,
       seller_record_id
     `)
+    .eq("contract_labels_only", false) // a want-to-buy never ships on a supplier's own label
     .eq("sku", sku)
     .eq("size", size)
     .gt("quantity", 0)
@@ -46593,6 +47111,18 @@ app.listen(PORT, () => {
   cron.schedule("*/5 * * * *", () => {
     pollPearlRequests().catch((err) =>
       console.error("[pearl] poll failed:", err.message)
+    );
+  }, {
+    timezone: process.env.TZ || "Europe/Amsterdam"
+  });
+
+  /*
+   * Turum: the confirm on the pass after the reservation, then their
+   * tracking once the parcel leaves.
+   */
+  cron.schedule("*/2 * * * *", () => {
+    pollTurumReservations().catch((err) =>
+      console.error("[turum] poll failed:", err.message)
     );
   }, {
     timezone: process.env.TZ || "Europe/Amsterdam"
