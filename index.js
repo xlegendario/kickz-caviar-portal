@@ -31707,41 +31707,21 @@ async function postLabelRequestForOrder(orderRecordId) {
   const mf = merchantRecord.fields || {};
 
   /*
-   * Where this request goes, in order, until one of them takes it.
+   * No channel of their own means the bot uses its own, with its own client.
    *
-   * The store's own channel first - that is where they read about this
-   * order. But nine of the thirty-four merchants have no channel on their
-   * record, and the shared fallback this used to drop to is one the bot
-   * cannot reach: ORD-028069 on 12-10-2026 came back as a bare "Missing
-   * Access" and nobody saw the request at all.
+   * The bot already answers this: /post-label-request reads an empty
+   * channel_id as "put it in ours", switches to the Kickz Caviar client and
+   * posts in the channel it keeps for exactly that. Filling the shared id in
+   * here instead took that decision away from it - the id arrived looking
+   * like a store's channel, so the bot tried it with the store-facing
+   * client, which is not a member of our server. ORD-028069 on 12-10-2026
+   * came back as a bare "Missing Access" and the request was never seen.
    *
-   * So the same shape the Member WTB label takes, for the same reason: a
-   * channel that cannot be reached falls through to the next one instead of
-   * ending the attempt. Losing the request is worse than it landing a room
-   * further out.
-   *
-   * The last two are ours, not theirs. A request that ends up there is one
-   * WE have to chase - which is the point: it is visible rather than gone.
+   * So the field is passed on when the merchant has one, and left out when
+   * they do not. A request that lands in our channel is one WE have to
+   * chase, which is the point: it is visible rather than gone.
    */
   const ownLabelRequestChannelId = displayValue(mf["Label Request Channel ID"]);
-
-  const labelChannelCandidates = [
-    { channelId: ownLabelRequestChannelId, reason: "merchant_label_request_channel" },
-    { channelId: asText(process.env.STORE_LABEL_REQUEST_KC_CHANNEL_ID), reason: "our_store_label_channel" },
-    { channelId: asText(process.env.MEMBER_WTB_KC_LABEL_CHANNEL_ID), reason: "our_wtb_label_channel" },
-    { channelId: "1506989427183058996", reason: "shared_fallback_channel" }
-  ].filter((candidate, index, all) =>
-    candidate.channelId && all.findIndex((other) => other.channelId === candidate.channelId) === index
-  );
-
-  if (!labelChannelCandidates.length) {
-    throw fail(
-      `Order ${orderId} has nowhere to post a label request: ` +
-        `${displayValue(mf["Store Name"]) || "this merchant"} has no Label Request Channel ID ` +
-        "and no channel of ours is configured",
-      400
-    );
-  }
 
   const labelRequestUrl =
     `${LOJIQ_WMS_BASE_URL.replace(/\/$/, "")}/label-request.html?record_id=${encodeURIComponent(orderRecord.id)}`;
@@ -31758,77 +31738,50 @@ async function postLabelRequestForOrder(orderRecordId) {
     instructionText ||
     (preferredCourier ? `Please provide a ${preferredCourier} label.` : "");
 
-  /*
-   * Asked once per candidate, because the bot does the posting.
-   *
-   * It is the bot that holds the Discord connection, so this cannot fetch a
-   * channel first to see whether it is reachable - the only way to find out
-   * is to send it. A refusal therefore moves on to the next candidate, and
-   * what every one of them said is kept for the message below.
-   */
-  let usedChannelId = "";
-  const refusals = [];
-
-  for (const candidate of labelChannelCandidates) {
-    const response = await fetch(
-      `${DISCORD_BOT_BASE_URL.replace(/\/$/, "")}/post-label-request`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          channel_id: candidate.channelId,
-          record_id: orderRecord.id,
-          order_id: orderId,
-          shopify_order_number: displayValue(f["Shopify Order Number"]),
-          product_name: displayValue(f["Product Name"]),
-          sku: displayValue(f["SKU"]),
-          size: displayValue(f["Size"]),
-          store_name: displayValue(f["Store Name"]) || displayValue(mf["Store Name"]),
-          label_request_url: labelRequestUrl,
-          seller_country_code: sellerCountryCode,
-          preferred_courier: preferredCourier,
-          courier_instruction: courierInstruction
-        })
-      }
-    );
-
-    const data = await response.json().catch(() => ({}));
-
-    if (response.ok) {
-      usedChannelId = candidate.channelId;
-
-      if (candidate.reason !== "merchant_label_request_channel") {
-        console.warn(
-          `[label-request] ${orderId} went to ${candidate.reason} (${candidate.channelId}) - ` +
-            `${displayValue(mf["Store Name"]) || "this merchant"} did not take it`
-        );
-      }
-
-      break;
+  const response = await fetch(
+    `${DISCORD_BOT_BASE_URL.replace(/\/$/, "")}/post-label-request`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        // Left out entirely when it is empty, which is the bot's signal to
+        // use our own channel. An empty string would not be.
+        ...(ownLabelRequestChannelId ? { channel_id: ownLabelRequestChannelId } : {}),
+        record_id: orderRecord.id,
+        order_id: orderId,
+        shopify_order_number: displayValue(f["Shopify Order Number"]),
+        product_name: displayValue(f["Product Name"]),
+        sku: displayValue(f["SKU"]),
+        size: displayValue(f["Size"]),
+        store_name: displayValue(f["Store Name"]) || displayValue(mf["Store Name"]),
+        label_request_url: labelRequestUrl,
+        seller_country_code: sellerCountryCode,
+        preferred_courier: preferredCourier,
+        courier_instruction: courierInstruction
+      })
     }
+  );
 
-    refusals.push(
-      `${candidate.reason} ${candidate.channelId}: ${data.details || data.error || response.status}`
-    );
-  }
+  const data = await response.json().catch(() => ({}));
 
-  /*
-   * Nobody took it, so name every channel that was tried.
-   *
-   * Discord answers a channel it cannot see with "Missing Access" and
-   * nothing else, which says neither where it tried nor why. Listing them
-   * turns the next one of these into an instruction rather than a riddle.
-   */
-  if (!usedChannelId) {
+  if (!response.ok) {
+    const why = data.details || data.error || "Failed to post label request";
+
+    /*
+     * Say where it tried and whose channel that was.
+     *
+     * Discord answers a channel it cannot see with "Missing Access" and
+     * nothing else, which on its own says neither where it went nor why.
+     */
     throw new Error(
-      `Failed to post label request for ${orderId} - tried ` +
-        `${labelChannelCandidates.length} channel(s): ${refusals.join("; ")}` +
-        (ownLabelRequestChannelId
-          ? ""
-          : ` (${displayValue(mf["Store Name"]) || "this merchant"} has no ` +
-            "Label Request Channel ID on its Merchants record)")
+      ownLabelRequestChannelId
+        ? `${why} (channel ${ownLabelRequestChannelId}, from ` +
+          `${displayValue(mf["Store Name"]) || "the merchant"})`
+        : `${why} (our own label channel - ` +
+          `${displayValue(mf["Store Name"]) || "this merchant"} has no ` +
+          "Label Request Channel ID on its Merchants record)"
     );
   }
 
