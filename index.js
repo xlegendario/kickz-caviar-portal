@@ -3467,10 +3467,40 @@ async function sellerUsesSupplierApi(sellerRecordId) {
 
   const record = await airtable(SELLERS_TABLE).find(id).catch(() => null);
   const api = !!supplierApiOf(record?.fields);
+  const paused = record?.fields?.["Supplier Paused?"] === true;
 
-  supplierApiCache.set(id, { at: Date.now(), api });
+  supplierApiCache.set(id, { at: Date.now(), api, paused });
 
   return api;
+}
+
+/*
+ * A supplier we are not asking anything of at the moment.
+ *
+ * His own prices or stock cannot be trusted for a while and he has said so -
+ * Pearl on 14-10-2026, whose catalogue file still priced a size at EUR 76
+ * that their own tool had at EUR 138 and did not have in stock. Asking him
+ * to confirm pairs in that state buys shoes at prices nobody agreed to.
+ *
+ * A tick box on his record rather than a setting on the service, so it can
+ * be turned on the moment he asks and off again when he is done, without a
+ * deploy on either side of it.
+ *
+ * A minute of cache, like the API check above; it shares the same entry so
+ * the two can never disagree about the same seller.
+ */
+async function supplierIsPaused(sellerRecordId) {
+  const id = asText(sellerRecordId);
+
+  if (!id) return false;
+
+  const cached = supplierApiCache.get(id);
+
+  if (cached && Date.now() - cached.at < 60000) return cached.paused === true;
+
+  await sellerUsesSupplierApi(id);
+
+  return supplierApiCache.get(id)?.paused === true;
 }
 
 async function isStoreConsignor(sellerRecordId) {
@@ -3965,6 +3995,36 @@ async function askPearlToConfirm({
       `Pearl request for ${sku} ${size}: the round id ${roundId} is not a ` +
         'consignment_offers row, so the answer cannot be routed back to it.'
     );
+  }
+
+  /*
+   * Paused: nothing is asked of him and the order moves on.
+   *
+   * Checked before his price is even looked up, because while he is paused
+   * that answer is the thing we do not trust. Handled exactly like a pair
+   * that is gone - the round is closed and the order goes back to the
+   * sources - so nothing waits on a reply that is not coming.
+   */
+  if (await supplierIsPaused(asText(seller?.seller_record_id) || asText(offer?.seller_record_id))) {
+    console.log(`${asText(seller?.seller_id) || "supplier"} is paused; ${sku} ${size} is not asked of him.`);
+
+    await sayInSupplierChannel(
+      seller,
+      `\u23f8\ufe0f We are not sending requests at the moment, so **${sku} / ${size}** ` +
+        "was not put to you. This pair is being sourced elsewhere."
+    );
+
+    if (sellerOfferRecordId) {
+      await denyConsignmentSellerOffer(sellerOfferRecordId).catch((err) =>
+        console.error("Paused supplier: the offer could not be closed:", err.message)
+      );
+    } else if (consignmentOfferId) {
+      await denyConsignmentOffer(consignmentOfferId).catch((err) =>
+        console.error("Paused supplier: the round could not be closed:", err.message)
+      );
+    }
+
+    return { ok: false, reason: "supplier_paused" };
   }
 
   const quote = await pearlCall(
