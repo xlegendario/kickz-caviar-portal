@@ -3451,6 +3451,36 @@ async function sellerEstimatedTime(sellerRecordId) {
  * A minute of cache, like the store check below it. Turning the field on for
  * a seller is a deliberate act and nobody is waiting on it to the second.
  */
+/*
+ * How much dearer a supplier may have become before we walk away.
+ *
+ * His price is read again at the moment the pair sells, and it is not always
+ * the one we listed on: his own feed can lag, and a price that moved between
+ * the listing and the sale comes straight out of the margin. Every cent over
+ * what we offered is margin given away, so the question is only how much is
+ * worth giving away to keep a sale.
+ *
+ * A percentage with a cap, and the smaller of the two wins. A flat amount is
+ * unsafe at the cheap end - five euro on a pair of forty-nine is a tenth of
+ * the cost and usually the whole margin - while a bare percentage grows
+ * without end on an expensive one.
+ *
+ * 2% capped at EUR 5: under a euro on a cheap pair, five on anything over
+ * EUR 250. A rounding or a small move passes; the EUR 34 jump seen on
+ * DZ2795-200 on 14-10-2026 does not.
+ */
+const SUPPLIER_PRICE_TOLERANCE_PCT = Number(process.env.SUPPLIER_PRICE_TOLERANCE_PCT || "0.02");
+const SUPPLIER_PRICE_TOLERANCE_MAX = Number(process.env.SUPPLIER_PRICE_TOLERANCE_MAX || "5");
+
+function supplierPriceCeiling(ourOffer, theirPrice) {
+  const slack = Math.min(
+    Number(theirPrice) * SUPPLIER_PRICE_TOLERANCE_PCT,
+    SUPPLIER_PRICE_TOLERANCE_MAX
+  );
+
+  return Math.round((Number(ourOffer) + slack) * 100) / 100;
+}
+
 const SUPPLIER_API_NO_COUNTER =
   "This offer comes from a supplier who confirms at their own price, so there is nothing to counter. Please accept or deny.";
 
@@ -4069,6 +4099,57 @@ async function askPearlToConfirm({
   }
 
   const price = Number(theirSize.prices?.["Business (VAT0)"]);
+
+  /*
+   * He still has it - but at what price.
+   *
+   * Until now only "available" was read, and whatever price came back was
+   * put straight on the request. So a pair listed at EUR 49 whose price had
+   * moved to EUR 83 was bought at 83 against a sale made on 49, and nothing
+   * anywhere said so.
+   *
+   * The yardstick is what we offered him, because that is the number the
+   * sale was priced on. Over it by more than the slack above and the round
+   * closes: a store order goes back to the sources, and a marketplace sale -
+   * which is already paid for - becomes something a person has to look at
+   * rather than a quiet loss.
+   *
+   * No price of ours to compare against means no judgement, so it passes and
+   * says so. That is where this stood before today, and refusing everything
+   * over a missing field would be a worse answer than the one it replaces.
+   */
+  const ourOffer = Number(offer?.offer_price ?? offer?.seller_price);
+
+  if (!Number.isFinite(ourOffer) || ourOffer <= 0) {
+    console.error(
+      `\u26a0\ufe0f ${sku} ${size}: no price of ours to weigh ${asText(seller?.seller_id) || "the supplier"}'s ` +
+        `${moneySmartValue(price)} against, so it was not checked.`
+    );
+  } else if (Number.isFinite(price) && price > supplierPriceCeiling(ourOffer, price)) {
+    console.log(
+      `\ud83d\udcb8 ${sku} ${size}: ${asText(seller?.seller_id) || "the supplier"} now wants ` +
+        `${moneySmartValue(price)} against our ${moneySmartValue(ourOffer)} - not asked, round closed.`
+    );
+
+    await sayInSupplierChannel(
+      seller,
+      `\ud83d\udcb8 **${sku} / ${size}** is now ${moneySmartValue(price)} on your side, ` +
+        `above the ${moneySmartValue(ourOffer)} this sale was priced on, so we did not send a request. ` +
+        "We are sourcing this pair elsewhere."
+    );
+
+    if (sellerOfferRecordId) {
+      await denyConsignmentSellerOffer(sellerOfferRecordId).catch((err) =>
+        console.error("Dearer supplier: the offer could not be closed:", err.message)
+      );
+    } else if (consignmentOfferId) {
+      await denyConsignmentOffer(consignmentOfferId).catch((err) =>
+        console.error("Dearer supplier: the round could not be closed:", err.message)
+      );
+    }
+
+    return { ok: false, reason: "price_above_offer", their_price: price, our_offer: ourOffer };
+  }
 
   const request = await pearlCall("/requests", {
     method: "POST",
