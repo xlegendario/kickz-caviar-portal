@@ -16008,7 +16008,10 @@ app.post("/api/internal/broker/deal-confirmed", async (req, res) => {
  * Shipping Label Ready embed in his Labels channel. The label of a direct
  * sale is given when the deal is made, so the second follows at once.
  *
- * Body: { deal_id, label_url?, tracking?, pairs: [{ seller_record_id,
+ * label_only: the deal was announced before, and a label added to it later
+ * still has to reach him - it is his notification that the pair goes out.
+ *
+ * Body: { deal_id, label_url?, tracking?, label_only?, pairs: [{ seller_record_id,
  * seller_id, sku, size, product_name, vat_type, ask_price,
  * inventory_unit_record_id }] }
  */
@@ -16023,6 +16026,7 @@ app.post("/api/internal/external-sale/partner-sold", async (req, res) => {
     const dealId = asText(req.body?.deal_id);
     const labelUrl = asText(req.body?.label_url);
     const tracking = asText(req.body?.tracking);
+    const labelOnly = req.body?.label_only === true;
     const pairs = Array.isArray(req.body?.pairs) ? req.body.pairs : [];
 
     if (!dealId) {
@@ -16064,6 +16068,8 @@ app.post("/api/internal/external-sale/partner-sold", async (req, res) => {
 
       if (!pairsBySeller.has(who)) pairsBySeller.set(who, []);
       pairsBySeller.get(who).push(pair);
+
+      if (labelOnly) continue;
 
       const sent = await sendConsignmentDealUpdateDiscordMessage({
         seller,
