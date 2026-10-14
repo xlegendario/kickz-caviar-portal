@@ -3925,6 +3925,48 @@ async function askPearlToConfirm({
   sku,
   size
 }) {
+  /*
+   * Which round is waiting on this answer.
+   *
+   * A store order's round is an Airtable Seller Offer and is confirmed with
+   * confirmConsignmentSellerOffer. A broker deal and a Member WTB round are
+   * consignment_offers rows in Supabase and go through confirmConsignmentOffer
+   * instead - a different function that also moves the deal line and closes
+   * the other consignors on it.
+   *
+   * The two are told apart by what the caller hands over: every Seller Offer
+   * path passes sellerOfferRecordId, and the broker path passes none, so
+   * without it `offer.id` is the Supabase row by definition.
+   *
+   * Nothing was kept for the second kind, so a confirmed request was written
+   * down and nothing moved: EXTD-000127 had two pairs confirmed by Pearl on
+   * 14-10-2026 and all three lines sat on "Waiting for him" until the clock
+   * ran out.
+   */
+  const roundId = sellerOfferRecordId ? '' : asText(offer?.id);
+
+  /*
+   * Checked rather than trusted, because the column is a uuid.
+   *
+   * Every caller today either passes sellerOfferRecordId or hands over a
+   * Supabase row, so this always holds. A future one that forgets would put
+   * an Airtable id in here and Postgres would refuse the whole row - and
+   * losing the link to the request is worse than not having it, because then
+   * nobody tracks the answer at all. So it is only kept when it is one, and
+   * said out loud when it is not.
+   */
+  const consignmentOfferId =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(roundId)
+      ? roundId
+      : null;
+
+  if (roundId && !consignmentOfferId) {
+    console.error(
+      `Pearl request for ${sku} ${size}: the round id ${roundId} is not a ` +
+        'consignment_offers row, so the answer cannot be routed back to it.'
+    );
+  }
+
   const quote = await pearlCall(
     `/prices?sku=${encodeURIComponent(sku)}&size=${encodeURIComponent(size)}`
   );
@@ -3949,9 +3991,16 @@ async function askPearlToConfirm({
       await denyConsignmentSellerOffer(sellerOfferRecordId).catch((err) =>
         console.error(`Pearl denial could not be processed:`, err.message)
       );
+    } else if (consignmentOfferId) {
+      // A broker or want-to-buy round closes through its own function, which
+      // puts the line back rather than leaving it waiting on an answer that
+      // is never coming.
+      await denyConsignmentOffer(consignmentOfferId).catch((err) =>
+        console.error(`Pearl denial could not be processed:`, err.message)
+      );
     } else {
       console.error(
-        `\u26a0\ufe0f ${sku} ${size} is gone at Pearl and there is no Seller Offer to deny ` +
+        `\u26a0\ufe0f ${sku} ${size} is gone at Pearl and there is no round to deny ` +
           `(order ${asText(offer?.order_id) || asText(orderId) || "?"}) - this needs a human.`
       );
     }
@@ -3979,6 +4028,7 @@ async function askPearlToConfirm({
       channel_id: notice.channelId || null,
       message_id: notice.messageId || null,
       seller_offer_record_id: sellerOfferRecordId,
+      consignment_offer_id: consignmentOfferId,
       order_record_id: orderRecordId,
       member_wtb_record_id: memberWtbRecordId,
       sku,
@@ -4060,7 +4110,10 @@ async function pollPearlRequests() {
 
   const { data, error } = await supabase
     .from("pearl_requests")
-    .select("request_id, seller_offer_record_id, sku, size, status, channel_id, message_id")
+    .select(
+      "request_id, seller_offer_record_id, consignment_offer_id, " +
+        "sku, size, status, channel_id, message_id"
+    )
     .eq("status", "pending")
     .limit(100);
 
@@ -4086,10 +4139,27 @@ async function pollPearlRequests() {
     const status = asText(answer.status);
 
     try {
-      if (status === "confirmed" && row.seller_offer_record_id) {
-        await confirmConsignmentSellerOffer(row.seller_offer_record_id);
+      /*
+       * Down the path the round itself came from.
+       *
+       * confirmConsignmentSellerOffer finishes an Airtable Seller Offer;
+       * confirmConsignmentOffer finishes a Supabase round and, for a broker
+       * deal, moves the line to "agreed" and closes the other consignors on
+       * it. Only the first was ever called here, so a confirmed broker pair
+       * was recorded and left standing.
+       */
+      if (status === "confirmed") {
+        if (row.seller_offer_record_id) {
+          await confirmConsignmentSellerOffer(row.seller_offer_record_id);
+        } else if (row.consignment_offer_id) {
+          await confirmConsignmentOffer(row.consignment_offer_id, {
+            closingNote: "Another consignor confirmed this pair first."
+          });
+        }
       } else if (row.seller_offer_record_id) {
         await denyConsignmentSellerOffer(row.seller_offer_record_id);
+      } else if (row.consignment_offer_id) {
+        await denyConsignmentOffer(row.consignment_offer_id);
       }
 
       handled += 1;
