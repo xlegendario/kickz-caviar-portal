@@ -15995,6 +15995,187 @@ app.post("/api/internal/broker/deal-confirmed", async (req, res) => {
 });
 
 /*
+ * A partner pair sold through a direct External Sale.
+ *
+ * A partner is handled as a consignor on purpose: his Deal Updates channel is
+ * where Dario sees everything of his that sells. A store or marketplace order
+ * gets there through the confirmation flow; a direct External Sale is made in
+ * the admin and never passed through it, so EXTD-000128 sold one of SE-00781's
+ * pairs without a word in that channel.
+ *
+ * It goes the way a broker deal goes: the "Time To Ship" embed without a
+ * Request Label button, saying the label comes by itself, and then the
+ * Shipping Label Ready embed in his Labels channel. The label of a direct
+ * sale is given when the deal is made, so the second follows at once.
+ *
+ * Body: { deal_id, label_url?, tracking?, pairs: [{ seller_record_id,
+ * seller_id, sku, size, product_name, vat_type, ask_price,
+ * inventory_unit_record_id }] }
+ */
+app.post("/api/internal/external-sale/partner-sold", async (req, res) => {
+  try {
+    const refusal = serviceCallRefusal(req);
+
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error });
+    }
+
+    const dealId = asText(req.body?.deal_id);
+    const labelUrl = asText(req.body?.label_url);
+    const tracking = asText(req.body?.tracking);
+    const pairs = Array.isArray(req.body?.pairs) ? req.body.pairs : [];
+
+    if (!dealId) {
+      return res.status(400).json({ error: "deal_id is required" });
+    }
+
+    // The broker deal's own sentence, for the same reason: nothing to press.
+    const closingLine =
+      "Your shipping label will be arranged automatically and will appear in your Labels channel " +
+      "shortly. No request needed.";
+
+    const sellers = new Map();
+    const pairsBySeller = new Map();
+    let told = 0;
+    let labelsPosted = 0;
+
+    for (const pair of pairs) {
+      const who = asText(pair?.seller_record_id);
+
+      if (!who) continue;
+
+      if (!sellers.has(who)) {
+        const record = await airtable(SELLERS_TABLE).find(who).catch(() => null);
+        const sf = record?.fields || {};
+
+        sellers.set(who, {
+          id: who,
+          seller_record_id: who,
+          seller_id: asText(pair.seller_id) || asText(sf["Seller ID"]),
+          discord_id: asText(sf["Discord ID"]),
+          deal_updates_channel_id: asText(sf["Deal Updates Channel ID"]),
+          labels_channel_id: asText(sf["Labels Channel ID"]),
+          consignment_offer_channel_id: asText(sf["Consignment Offer Channel ID"]),
+          consignment_confirmation_channel_id: asText(sf["Consignment Confirmation Channel ID"])
+        });
+      }
+
+      const seller = sellers.get(who);
+
+      if (!pairsBySeller.has(who)) pairsBySeller.set(who, []);
+      pairsBySeller.get(who).push(pair);
+
+      const sent = await sendConsignmentDealUpdateDiscordMessage({
+        seller,
+        offer: {
+          seller_id: seller.seller_id,
+          seller_record_id: who,
+          order_id: dealId,
+          order_record_id: null,
+          sku: asText(pair.sku),
+          size: asText(pair.size),
+          product_name: asText(pair.product_name),
+          vat_type: asText(pair.vat_type),
+          offer_price: Number(pair.ask_price) || 0
+        },
+        inventoryUnitRecordId: asText(pair.inventory_unit_record_id),
+        labelRequest: false,
+        closingLine
+      }).catch((err) => {
+        console.error(`❌ ${seller.seller_id} was not told that ${dealId} sold his pair:`, err.message);
+        return null;
+      });
+
+      if (sent) told += 1;
+    }
+
+    /*
+     * And the label, once per partner: one deal is one box.
+     *
+     * His Labels channel first, then Deal Updates - the order the broker
+     * label takes. Without a label on the deal there is nothing to post yet;
+     * the admin adds it later.
+     */
+    if (labelUrl) {
+      await initDiscord();
+
+      for (const [who, own] of pairsBySeller) {
+        const sellerRecord = await airtable(SELLERS_TABLE).find(who).catch(() => null);
+        const sf = sellerRecord?.fields || {};
+        const embed = externalSaleLabelEmbed({ pairs: own, dealId, tracking, labelUrl });
+
+        for (const channelId of [asText(sf["Labels Channel ID"]), asText(sf["Deal Updates Channel ID"])]) {
+          if (!channelId) continue;
+
+          const channel = await discordClient.channels.fetch(channelId).catch(() => null);
+
+          if (!channel) continue;
+
+          const posted = await channel.send({ embeds: [embed] }).catch((err) => {
+            console.error(`❌ Label for ${dealId} not posted in ${channelId}:`, err.message);
+            return null;
+          });
+
+          if (posted) {
+            labelsPosted += 1;
+            break;
+          }
+        }
+      }
+    }
+
+    console.log(`🤝 ${dealId}: ${told} partner pair(s) announced, ${labelsPosted} label message(s).`);
+
+    return res.json({ ok: true, told, labels: labelsPosted });
+  } catch (err) {
+    console.error("❌ External Sale partner notice failed:", err);
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+/*
+ * The Shipping Label Ready embed of a deal without a Seller Offer: a broker
+ * deal or a direct External Sale. One place, so both say the same thing.
+ */
+function externalSaleLabelEmbed({ pairs, dealId, tracking, labelUrl }) {
+  const many = pairs.length > 1;
+
+  return {
+    title: "📦 Shipping Label Ready",
+    description: [
+      ...(many
+        ? ["**Products:**", ...pairs.flatMap((pair, i) => [
+            ...(i ? [""] : []),
+            asText(pair.product_name) || asText(pair.sku) || "—",
+            asText(pair.sku) || "—",
+            asText(pair.size) || "—"
+          ])]
+        : [
+            `**Product:** ${asText(pairs[0]?.product_name) || "—"}`,
+            `**SKU:** ${asText(pairs[0]?.sku) || "—"}`,
+            `**Size:** ${asText(pairs[0]?.size) || "—"}`
+          ]),
+      "",
+      `**Order:** ${dealId || "—"}`,
+      "**Tracking:**",
+      tracking,
+      "",
+      `📄 [Download Label](${labelUrl})`,
+      ...(many
+        ? [
+            "",
+            `**${pairs.length} pairs, one parcel.** Put them in ONE box - this label covers all of them. ` +
+            "Please do not send them separately."
+          ]
+        : [])
+    ].join("\n"),
+    color: 0x2ecc71,
+    footer: { text: "Kickz Caviar" },
+    timestamp: new Date().toISOString()
+  };
+}
+
+/*
  * His label is ready, and everything on it travels together.
  *
  * One message for the whole parcel, naming every pair, because the one
@@ -16037,7 +16218,6 @@ app.post("/api/internal/broker/label-ready", async (req, res) => {
       return res.status(404).json({ error: "No conversation with that consignor on this deal." });
     }
 
-    const many = pairs.length > 1;
     const dealId = asText(req.body?.deal_id);
     const labelUrl = asText(req.body?.label_url);
     const tracking = asText(req.body?.tracking);
@@ -16051,39 +16231,7 @@ app.post("/api/internal/broker/label-ready", async (req, res) => {
      * has to say - so they are listed, with the warning that makes the
      * difference between one parcel and three.
      */
-    const embed = {
-      title: "📦 Shipping Label Ready",
-      description: [
-        ...(many
-          ? ["**Products:**", ...pairs.flatMap((pair, i) => [
-              ...(i ? [""] : []),
-              asText(pair.product_name) || asText(pair.sku) || "—",
-              asText(pair.sku) || "—",
-              asText(pair.size) || "—"
-            ])]
-          : [
-              `**Product:** ${asText(pairs[0]?.product_name) || "—"}`,
-              `**SKU:** ${asText(pairs[0]?.sku) || "—"}`,
-              `**Size:** ${asText(pairs[0]?.size) || "—"}`
-            ]),
-        "",
-        `**Order:** ${dealId || "—"}`,
-        "**Tracking:**",
-        tracking,
-        "",
-        `📄 [Download Label](${labelUrl})`,
-        ...(many
-          ? [
-              "",
-              `**${pairs.length} pairs, one parcel.** Put them in ONE box - this label covers all of them. ` +
-              "Please do not send them separately."
-            ]
-          : [])
-      ].join("\n"),
-      color: 0x2ecc71,
-      footer: { text: "Kickz Caviar" },
-      timestamp: new Date().toISOString()
-    };
+    const embed = externalSaleLabelEmbed({ pairs, dealId, tracking, labelUrl });
 
     /*
      * His labels channel first, because that is where a label belongs and
