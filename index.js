@@ -16591,12 +16591,52 @@ app.post("/api/internal/broker/finalize", async (req, res) => {
 
       const dealId = await brokerDealNumber(line.sale_id);
 
+      /*
+       * The unit carries the price without the VAT, the way every other unit
+       * does.
+       *
+       * "Selling Price" on an Inventory Unit is excl. VAT everywhere in the
+       * business - margin goods excepted, where the price IS the gross one
+       * and the tax sits in the gap. The buyer price on a deal is what the
+       * buyer pays, so on a Dutch sale the two are 21% apart, and putting the
+       * gross figure on the unit makes every profit Airtable works out from
+       * it 21% too high.
+       *
+       * EXTD-000127 on 14-10-2026 was the first VAT21 external sale there has
+       * ever been - the thirty-three before it were all margin goods, which
+       * is why this could sit here unnoticed.
+       *
+       * Which route it is follows the same rule the invoice uses: margin
+       * goods stay margin goods, a foreign buyer with a VAT ID is
+       * reverse-charged and pays the net amount anyway, and everyone else is
+       * a 21% sale.
+       */
+      const { data: saleForVat } = await supabase
+        .from("external_sales")
+        .select("buyer_country_code, buyer_vat_id")
+        .eq("id", line.sale_id)
+        .maybeSingle();
+
+      const abroadWithVatId =
+        asText(saleForVat?.buyer_country_code).toUpperCase() !== "NL" &&
+        !!asText(saleForVat?.buyer_vat_id);
+
+      const sellingVatType = asText(lockedOffer.vat_type) === "Margin"
+        ? "Margin"
+        : abroadWithVatId
+          ? "VAT0"
+          : "VAT21";
+
+      const unitSellingPrice = sellingVatType === "VAT21"
+        ? Math.round((buyerPrice / 1.21) * 100) / 100
+        : buyerPrice;
+
       const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer({
         ...lockedOffer,
         order_record_id: null,
         order_id: dealId,
         source_type: "external_sale",
-        selling_price: buyerPrice,
+        selling_price: unitSellingPrice,
         selling_method: "Kickz Caviar"
       });
 
