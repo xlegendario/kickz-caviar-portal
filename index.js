@@ -4592,6 +4592,59 @@ async function pollTurumReservations() {
   return { ok: true, checked: data?.length || 0 };
 }
 
+/*
+ * What this pair would cost the store, against what they sell it for.
+ *
+ * Going over their Maximum Buying Price is fine - they can counter, or take
+ * it because their own selling price was too low. Going over the SELLING
+ * PRICE is not: that is offering somebody more than they sell the pair for.
+ * Seen live on 20-08-2026, a consignor at EUR 200 VAT21 produced a EUR
+ * 177.50 VAT0 offer to an Italian store, EUR 216.55 including their VAT,
+ * against a Selling Price of EUR 164.
+ *
+ * Lifted out of Route A because the supplier branch needs the same answer.
+ * It used to sit inside "if the offer is not held", so an auto-accepting
+ * store never reached it - which was harmless while such an offer never
+ * reached the store either, and stopped being harmless the moment one could.
+ *
+ * Order-only. A Member WTB has no Selling Price to overshoot: its ceiling IS
+ * Max Price, and the offer is derived from it.
+ */
+function storeOfferOverSellingPrice({ best, orderFields }) {
+  const sellingPrice = numberValue(orderFields["Selling Price"]);
+
+  if (!(sellingPrice > 0)) return null;
+
+  const storeBase = convertConsignorPriceToStoreBasePrice(
+    best.sellerPrice,
+    best.row.vat_type,
+    asText(orderFields["Client Country"])
+  );
+
+  const storeOffer = calculateStoreCustomOfferFromConsignmentBase(storeBase, orderFields);
+
+  const storeOfferVatType = getStoreOfferVatTypeFromConsignmentVat(
+    best.row.vat_type,
+    asText(orderFields["Client Country"])
+  );
+
+  // "Selling Price" is the store's own all-in figure. A VAT0 offer is
+  // exclusive, so the ceiling has to come down to that same scale using the
+  // CLIENT's rate - not 1.21, which would hand an Italian or Danish store a
+  // ceiling several euro off.
+  const rawVatRate = numberValue(orderFields["Client VAT Rate"]);
+  const clientVatRate = rawVatRate > 1 ? rawVatRate / 100 : rawVatRate;
+
+  const ceiling =
+    storeOfferVatType === "VAT0" && clientVatRate > 0
+      ? sellingPrice / (1 + clientVatRate)
+      : sellingPrice;
+
+  if (!Number.isFinite(storeOffer) || storeOffer <= ceiling) return null;
+
+  return { storeOffer, storeOfferVatType, sellingPrice, ceiling };
+}
+
 async function sendConsignmentOfferDiscordMessage({
   seller,
   offer,
@@ -19333,61 +19386,31 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     // ceiling IS Max Price, and the offer below is derived from it, so the
     // same protection is already built into the number itself.
     if (!holdFromStore && source.kind === "order") {
-      const sellingPrice = numberValue(orderFieldsForOffer["Selling Price"]);
+      const over = storeOfferOverSellingPrice({ best, orderFields: orderFieldsForOffer });
 
-      if (sellingPrice > 0) {
-        const storeBaseForCeiling = convertConsignorPriceToStoreBasePrice(
-          best.sellerPrice,
-          best.row.vat_type,
-          asText(orderFieldsForOffer["Client Country"])
+      if (over) {
+        console.log(
+          `⏭️ Consignment auto-offer skipped for ${orderRecordId}: store price ` +
+            `${moneySmartValue(over.storeOffer)} ${over.storeOfferVatType} exceeds the store's Selling Price ` +
+            `${moneySmartValue(over.sellingPrice)} (ceiling ${moneySmartValue(over.ceiling.toFixed(2))} on that scale).`
         );
 
-        const storeOfferForCeiling = calculateStoreCustomOfferFromConsignmentBase(
-          storeBaseForCeiling,
-          orderFieldsForOffer
+        // The Seller Offer stays, held, so the consignor's price still acts
+        // as the undercut benchmark for other sellers — it simply never
+        // reaches the store.
+        await airtable(SELLER_OFFERS_TABLE).update(createdOffer.id, {
+          "Hold From Store?": true
+        }).catch((err) =>
+          console.error("Failed to hold an over-ceiling consignment offer:", err)
         );
 
-        const storeOfferVatType = getStoreOfferVatTypeFromConsignmentVat(
-          best.row.vat_type,
-          asText(orderFieldsForOffer["Client Country"])
-        );
-
-        // "Selling Price" is the store's own all-in figure. A VAT0 offer is
-        // exclusive, so the ceiling has to come down to that same scale
-        // using the CLIENT's rate — not 1.21, which would hand an Italian
-        // or Danish store a ceiling several euro off.
-        const rawVatRate = numberValue(orderFieldsForOffer["Client VAT Rate"]);
-        const clientVatRate = rawVatRate > 1 ? rawVatRate / 100 : rawVatRate;
-
-        const ceiling =
-          storeOfferVatType === "VAT0" && clientVatRate > 0
-            ? sellingPrice / (1 + clientVatRate)
-            : sellingPrice;
-
-        if (Number.isFinite(storeOfferForCeiling) && storeOfferForCeiling > ceiling) {
-          console.log(
-            `⏭️ Consignment auto-offer skipped for ${orderRecordId}: store price ` +
-              `${moneySmartValue(storeOfferForCeiling)} ${storeOfferVatType} exceeds the store's Selling Price ` +
-              `${moneySmartValue(sellingPrice)} (ceiling ${moneySmartValue(ceiling.toFixed(2))} on that scale).`
-          );
-
-          // The Seller Offer stays, held, so the consignor's price still
-          // acts as the undercut benchmark for other sellers — it simply
-          // never reaches the store.
-          await airtable(SELLER_OFFERS_TABLE).update(createdOffer.id, {
-            "Hold From Store?": true
-          }).catch((err) =>
-            console.error("Failed to hold an over-ceiling consignment offer:", err)
-          );
-
-          return res.json({
-            ...baseResponse,
-            held: true,
-            skipped: "above_selling_price",
-            store_offer: storeOfferForCeiling,
-            selling_price: sellingPrice
-          });
-        }
+        return res.json({
+          ...baseResponse,
+          held: true,
+          skipped: "above_selling_price",
+          store_offer: over.storeOffer,
+          selling_price: over.sellingPrice
+        });
       }
 
       return res.json(baseResponse);
@@ -19706,6 +19729,32 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       && (await sellerUsesSupplierApi(best.row.seller_record_id));
 
     if (supplierCannotNegotiate) {
+      /*
+       * Unless it would be absurd, exactly as on the other route.
+       *
+       * Letting this through means the store is asked to pay it, and over
+       * their own selling price that is a worse question than silence. The
+       * offer stays held and keeps forcing other sellers under it.
+       */
+      const over = source.kind === "order"
+        ? storeOfferOverSellingPrice({ best, orderFields: orderFieldsForOffer })
+        : null;
+
+      if (over) {
+        console.log(
+          `⏭️ ${best.row.sku} ${best.row.size}: ${best.row.seller_id} is above the ceiling AND above ` +
+            `the store's Selling Price ${moneySmartValue(over.sellingPrice)} - held, and nobody is asked.`
+        );
+
+        return res.json({
+          ...baseResponse,
+          held: true,
+          skipped: "above_selling_price",
+          store_offer: over.storeOffer,
+          selling_price: over.sellingPrice
+        });
+      }
+
       if (holdFromStore) {
         await airtable(SELLER_OFFERS_TABLE)
           .update(createdOffer.id, { "Hold From Store?": false })
