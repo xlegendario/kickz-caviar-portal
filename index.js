@@ -4674,11 +4674,34 @@ async function sendConsignmentOfferDiscordMessage({
    * consignor - a store order, a want-to-buy, a second round - runs through
    * this function. One place that knows it is one place that can forget it.
    */
-  const supplierApi = supplierApiOf(
-    (await airtable(SELLERS_TABLE)
-      .find(asText(seller?.seller_record_id))
-      .catch(() => null))?.fields
-  );
+  /*
+   * Which seller this is, from wherever the caller happened to put it.
+   *
+   * FIXED - this read seller.seller_record_id alone, and two of the ten
+   * callers build their seller object without it: the store-order confirm
+   * request and the consignment guard. The lookup then ran on an empty id,
+   * came back nothing, and the supplier was treated as an ordinary
+   * consignor - so instead of a request through his API he was sent the
+   * Confirm/Deny embed, carrying OUR catalogue price rather than his.
+   *
+   * ORD-028548 on 14-10-2026: Pearl was asked to confirm EUR 76 and
+   * answered that the price was wrong. Nothing had reached their API at
+   * all; there was no row in pearl_requests for it.
+   *
+   * Every caller does put it on the offer, so that is the fallback. Asked
+   * only when there is an id to ask about, because find("") is a round trip
+   * that can only fail.
+   */
+  const supplierSellerRecordId =
+    asText(seller?.seller_record_id) || asText(offer?.seller_record_id);
+
+  const supplierApi = supplierSellerRecordId
+    ? supplierApiOf(
+      (await airtable(SELLERS_TABLE)
+        .find(supplierSellerRecordId)
+        .catch(() => null))?.fields
+    )
+    : "";
 
   if (supplierApi === "Turum") {
     return await reserveAtTurum({
