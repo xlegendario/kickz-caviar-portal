@@ -19676,6 +19676,58 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       await sendConfirmRequest();
     }
 
+    /*
+     * A supplier with an API cannot be haggled down, so the store is asked
+     * instead.
+     *
+     * Above the ceiling the branch below counters the consignor at it. That
+     * is a real negotiation with a consignor, who can come down. A supplier
+     * sells from a published list at a fixed price and answers through his
+     * API, so the counter is a question he has no way to say yes to - and
+     * while it stands the offer is held, which means this store never sees
+     * the pair at all.
+     *
+     * A store that does NOT auto-accept would have been shown the same offer
+     * and could take it: the comment on Route A says so in as many words,
+     * that going over the Maximum Buying Price is fine because they can
+     * accept when their own selling price was too low. Only the auto-accept
+     * ones were kept in the dark, and those carry most of the orders.
+     *
+     * So the hold comes off and nothing is asked of him. What happens next
+     * is the ordinary path: computeAndPushLowestOffer sees the offer in the
+     * rollup, and because it sits above the store's own threshold it is
+     * forwarded as an offer to accept rather than closed on automatically.
+     * If it does fall under that threshold, the store's own budget covers it
+     * and buying it is right - and the supplier is still asked to confirm
+     * afterwards, the same as on any other accepted offer.
+     */
+    const supplierCannotNegotiate = !isConfirmation
+      && engageConsignorNow
+      && (await sellerUsesSupplierApi(best.row.seller_record_id));
+
+    if (supplierCannotNegotiate) {
+      if (holdFromStore) {
+        await airtable(SELLER_OFFERS_TABLE)
+          .update(createdOffer.id, { "Hold From Store?": false })
+          .catch((err) =>
+            console.error("Failed to let a supplier's offer through to the store:", err.message)
+          );
+      }
+
+      console.log(
+        `\u27a1\ufe0f ${best.row.sku} ${best.row.size}: ${best.row.seller_id} is above the ceiling and ` +
+          "answers through an API, so the store is asked instead of him."
+      );
+
+      return res.json({
+        ...baseResponse,
+        held: false,
+        supplier_above_ceiling: true,
+        seller_compare_price: best.sellerComparePrice,
+        ceiling: calculatedOfferPrice
+      });
+    }
+
     if (!isConfirmation && engageConsignorNow) {
       // Back to the consignor's OWN VAT scale — what he actually gets
       // paid, and the number his embed shows.
