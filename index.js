@@ -4407,8 +4407,11 @@ async function retrySupplierPairs() {
      */
     const orderFields = order?.fields || {};
 
+    // Over the loopback, like createMemberWtbAutoOffer next door: the
+    // public address leaves the building and comes back through Render's
+    // proxy for a call to ourselves.
     const res = await fetch(
-      `${APP_PUBLIC_BASE_URL.replace(/\/$/, "")}/api/consignment/auto-offer/create`,
+      `http://localhost:${PORT}/api/consignment/auto-offer/create`,
       {
         method: "POST",
         headers: {
