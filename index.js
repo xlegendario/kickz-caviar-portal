@@ -16847,9 +16847,41 @@ app.post("/api/internal/broker/label-ready", async (req, res) => {
     let told = false;
 
     if (await isStoreConsignor(sellerRecordId).catch(() => false)) {
-      // A store reads everything we send it in its own server, through the
-      // conversation the portal owns.
-      told = await tellConsignmentOfferChannel(offer, `Your shipping label for ${dealId} is ready`, [embed]);
+      /*
+       * A store reads everything we send it in its own server, through the
+       * Lojiq bot - but a label belongs in the same room as every other
+       * label.
+       *
+       * This went straight to the conversation the offer happened in, so a
+       * broker deal's label landed among the confirmation requests while
+       * every order's label sat in #labels. The consignor looked where
+       * labels always are and found nothing (EXTD-000129, 15-10-2026).
+       *
+       * Same order as the one below it: his labels channel, then the one he
+       * reads about deals in, and only then the conversation - losing the
+       * label is worse than posting it a room further out.
+       */
+      for (const channelId of [asText(sf["Labels Channel ID"]), asText(sf["Deal Updates Channel ID"])]) {
+        if (!channelId) continue;
+
+        const posted = await postLojiqConsignorEmbed({
+          channelId,
+          content: `Your shipping label for ${dealId} is ready`,
+          embeds: [embed]
+        }).catch((err) => {
+          console.error("Lojiq bot refused a store consignor's label:", { channelId, error: err.message });
+          return { ok: false };
+        });
+
+        if (posted?.ok === true) {
+          told = true;
+          break;
+        }
+      }
+
+      if (!told) {
+        told = await tellConsignmentOfferChannel(offer, `Your shipping label for ${dealId} is ready`, [embed]);
+      }
     } else {
       await initDiscord();
 
