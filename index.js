@@ -4288,6 +4288,25 @@ async function rememberSupplierRetry({ seller, offer, sku, size, orderRecordId, 
 
   if (!order && !wtb) return;
 
+  /*
+   * One row per pair per order.
+   *
+   * A pair can be refused more than once - the retry wakes it, his price has
+   * moved again, it is refused again - and each refusal passes through here.
+   * Without this the list grows a row every time and every one of them asks
+   * his API on the same clock.
+   */
+  const { data: open } = await supabase
+    .from("supplier_retries")
+    .select("id")
+    .is("resolved_at", null)
+    .eq("sku", asText(sku).toUpperCase())
+    .eq("size", asText(size))
+    .eq(order ? "order_record_id" : "member_wtb_record_id", order || wtb)
+    .limit(1);
+
+  if (open?.length) return;
+
   const { error } = await supabase.from("supplier_retries").insert({
     seller_record_id: asText(seller?.seller_record_id) || asText(offer?.seller_record_id),
     seller_id: asText(seller?.seller_id) || asText(offer?.seller_id) || null,
@@ -4401,9 +4420,39 @@ async function retrySupplierPairs() {
     if (!theirSize?.available) continue;
 
     /*
-     * Back on his shelf, so the order is put through the ordinary route
-     * again. Everything that decides whether this becomes an offer - his
-     * price against ours, the store's ceiling, the hold - happens there.
+     * On his shelf again, but still dearer than the sale was priced on.
+     *
+     * Waking the order here would create an offer that the price check
+     * refuses a second later, which withdraws it and writes a fresh row -
+     * and the whole thing comes round again five minutes on. One pair would
+     * churn a Seller Offer every five minutes for a week and tell him so in
+     * his channel each time.
+     *
+     * So the same yardstick is held up here first. Only rows that recorded
+     * what we offered can be weighed; an out-of-stock row from a round that
+     * never got as far as a price has nothing to compare and goes through,
+     * where the check in askPearlToConfirm still stands behind it.
+     */
+    const theirPrice = Number(theirSize.prices?.["Business (VAT0)"]);
+    const ourOffer = Number(row.our_offer);
+
+    if (
+      Number.isFinite(ourOffer) && ourOffer > 0 &&
+      Number.isFinite(theirPrice) && theirPrice > supplierPriceCeiling(ourOffer, theirPrice)
+    ) {
+      console.log(
+        `${row.sku} ${row.size}: back in stock but ${moneySmartValue(theirPrice)} against our ` +
+          `${moneySmartValue(ourOffer)} - still waiting.`
+      );
+
+      continue;
+    }
+
+    /*
+     * Back on his shelf and within reach, so the order is put through the
+     * ordinary route again. Everything that decides whether this becomes an
+     * offer - his price against ours, the store's ceiling, the hold - is
+     * settled there.
      */
     const orderFields = order?.fields || {};
 
