@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  blockingOfferOnStock,
   normalizeSourceType,
   isOpenForOffers,
   allowedVatTypesForMemberWtb,
@@ -112,4 +113,70 @@ test("bedrijf op een Margin Only WTB houdt Margin over", () => {
     }),
     ["Margin"]
   );
+});
+
+const LINK = "Linked Orders";
+
+function offerOn(order, fields = {}) {
+  return { id: `off-${order}`, fields: { [LINK]: [order], ...fields } };
+}
+
+test("een lopende offer op dezelfde voorraad blokkeert een nieuwe ronde", () => {
+  const blocking = blockingOfferOnStock({
+    offers: [offerOn("recOTHER"), offerOn("recORDER")],
+    sourceRecordId: "recORDER",
+    offerLink: LINK
+  });
+
+  assert.equal(blocking?.id, "off-recORDER");
+});
+
+test("een offer van een andere order telt niet mee", () => {
+  assert.equal(
+    blockingOfferOnStock({
+      offers: [offerOn("recOTHER")],
+      sourceRecordId: "recORDER",
+      offerLink: LINK
+    }),
+    null
+  );
+});
+
+test("withdrawn blijft blokkeren: dezelfde man niet twee keer dezelfde vraag", () => {
+  const blocking = blockingOfferOnStock({
+    offers: [offerOn("recORDER", { "Withdrawn?": true })],
+    sourceRecordId: "recORDER",
+    offerLink: LINK
+  });
+
+  assert.equal(blocking?.id, "off-recORDER");
+});
+
+test("de retry mag langs een withdrawn offer, want dat was 'geen voorraad'", () => {
+  assert.equal(
+    blockingOfferOnStock({
+      offers: [offerOn("recORDER", { "Withdrawn?": true })],
+      sourceRecordId: "recORDER",
+      offerLink: LINK,
+      waiveWithdrawn: true
+    }),
+    null
+  );
+});
+
+test("de retry mag NIET langs een offer die nog open staat", () => {
+  const blocking = blockingOfferOnStock({
+    offers: [offerOn("recORDER")],
+    sourceRecordId: "recORDER",
+    offerLink: LINK,
+    waiveWithdrawn: true
+  });
+
+  assert.equal(blocking?.id, "off-recORDER");
+});
+
+test("zonder order of linkveld valt er niets te blokkeren", () => {
+  assert.equal(blockingOfferOnStock({ offers: [offerOn("recORDER")], offerLink: LINK }), null);
+  assert.equal(blockingOfferOnStock({ offers: [offerOn("recORDER")], sourceRecordId: "recORDER" }), null);
+  assert.equal(blockingOfferOnStock(), null);
 });

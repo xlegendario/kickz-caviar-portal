@@ -97,6 +97,7 @@ import { COUNTRY_NAMES } from "./lib/countries.js";
 import { airtableBuyerFields, buyerFromInput, buyerId as buyerNumberText, buyerOption, findDuplicate } from "./lib/buyers.js";
 import { validateRegistration } from "./lib/registration.js";
 import {
+  blockingOfferOnStock,
   isOpenForOffers,
   normalizeSourceType,
   offerableVatTypes,
@@ -4420,7 +4421,10 @@ async function retrySupplierPairs() {
           sku: row.sku,
           size: row.size,
           maximum_buying_price: numberValue(orderFields["Maximum Buying Price"]),
-          hold: displayValue(orderFields["Auto Offer Accept?"]) === "Yes"
+          hold: displayValue(orderFields["Auto Offer Accept?"]) === "Yes",
+          // His empty shelf is why the old offer was withdrawn; see the
+          // guard in that route.
+          retry_withdrawn_offer: true
         })
       }
     );
@@ -4435,7 +4439,39 @@ async function retrySupplierPairs() {
       continue;
     }
 
-    await closeSupplierRetry(row, out.skipped ? `offered:${out.skipped}` : "offered");
+    /*
+     * A round is already running for this pair.
+     *
+     * Not something to restart, and not something to keep knocking on
+     * either: whoever opened it is waiting for an answer, and this list is
+     * only here to revive rounds that have closed.
+     */
+    if (out.skipped === "already_offered") {
+      console.log(
+        `${row.sku} ${row.size}: a round is already open on this stock ` +
+          `(${out.seller_offer_record_id}), so the retry left it alone.`
+      );
+
+      await closeSupplierRetry(row, "already_offered");
+
+      closed += 1;
+
+      continue;
+    }
+
+    /*
+     * Anything else the route declined to do - none of his stock in our
+     * table yet, no price it could work out - leaves the row open for the
+     * next round. Our copy of his shelf is refreshed on its own clock, so
+     * running a few minutes behind his /prices is normal and passes.
+     */
+    if (out.skipped) {
+      console.log(`${row.sku} ${row.size}: the route passed (${out.skipped}); still waiting.`);
+
+      continue;
+    }
+
+    await closeSupplierRetry(row, "offered");
 
     sent += 1;
 
@@ -19601,19 +19637,38 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     // so a withdrawn offer on THIS order counts as asked and answered.
     // Denied stays excluded, because that is the store saying no to a
     // price rather than the consignor saying no to us.
+    //
+    // EXCEPT when the refusal was "I have none", which is not an answer
+    // about the price at all.
+    //
+    // The rule above is right for a consignor who said no: asking the same
+    // man the same question is pestering him. A supplier whose shelf was
+    // empty said nothing about our price, and when the size comes back the
+    // question is new again. Without this the retry round could never get
+    // past this guard - its own deny is what withdrew the offer - and it
+    // would close the pair as handled while the order stayed empty.
+    //
+    // Only retrySupplierPairs sets it, and only a WITHDRAWN offer is
+    // waived: a live round is still a live round, and a confirmed one is
+    // caught by the Linked Inventory Unit check before any of this.
+    const retryWithdrawn = req.body?.retry_withdrawn_offer === true;
+
     const sameStockOffers = await airtable(SELLER_OFFERS_TABLE)
       .select({
         filterByFormula: `AND(
           {Consignment Inventory ID} = '${escapeFormulaValue(best.row.id)}',
           NOT({Denied?})
         )`,
-        fields: ["Consignment Inventory ID", source.offerLink]
+        fields: ["Consignment Inventory ID", source.offerLink, "Withdrawn?"]
       })
       .all();
 
-    const alreadyOffered = sameStockOffers.find((record) =>
-      (record.fields?.[source.offerLink] || []).includes(source.recordId)
-    );
+    const alreadyOffered = blockingOfferOnStock({
+      offers: sameStockOffers,
+      sourceRecordId: source.recordId,
+      offerLink: source.offerLink,
+      waiveWithdrawn: retryWithdrawn
+    });
 
     if (alreadyOffered) {
       console.log(
