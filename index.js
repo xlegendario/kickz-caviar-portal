@@ -1473,7 +1473,16 @@ async function askOtherConsignorsForMemberWtb({
           "Seller Original Price": ownAsk,
           "Seller Original VAT Type": vatType,
 
-          "Store Counter Price": numberValue(memberFields["Max Price"]),
+          // FIXED - was the Max Price. On a want-to-buy the buyer made an
+          // Offer on, the budget behind theirAmount sits well below it, and
+          // the Counter button measures his counter against this field:
+          // MWTB-000556 offered 207.50 against an ask of 250, but read as
+          // 263 the buyer was already at 250 and the consignor was told
+          // there was no room. The buyer's side of theirAmount is the
+          // position he actually holds.
+          "Store Counter Price":
+            calculateMemberWtbBuyerEquivalent(theirAmount, vatType, memberFields) ||
+            numberValue(memberFields["Max Price"]),
 
           "Counter Payout": theirAmount,
           "Counter Payout VAT Type": vatType,
@@ -20277,7 +20286,13 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         "Seller Original Price": best.sellerPrice,
         "Seller Original VAT Type": best.row.vat_type,
 
-        "Store Counter Price": maximumBuyingPrice,
+        // FIXED - for a want-to-buy, the buyer's side of what we offer him,
+        // not the Max Price; see the same fix where the other holders are
+        // asked (MWTB-000556). A store order's ceiling is the Maximum
+        // Buying Price this payout came from, so that stays as it was.
+        "Store Counter Price": source.kind === "member_wtb"
+          ? calculateMemberWtbBuyerEquivalent(counterPayout, best.row.vat_type, orderFields) || maximumBuyingPrice
+          : maximumBuyingPrice,
 
         "Counter Payout": counterPayout,
         "Counter Payout VAT Type": best.row.vat_type,
