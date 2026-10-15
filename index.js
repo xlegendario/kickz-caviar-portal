@@ -17327,7 +17327,27 @@ async function tellConsignmentOfferChannel(offer, content, embeds = null) {
     .catch(() => false);
 
   if (storeConsignor) {
-    await postLojiqConsignorEmbed({ channelId, content, ...(embeds ? { embeds } : {}) });
+    /*
+     * Looked at, because it was not.
+     *
+     * postLojiqConsignorEmbed throws when the Lojiq bot refuses, but
+     * returns { ok: false } without throwing when there is no bot to ask -
+     * and this said "told" either way. A store consignor could be sent his
+     * shipping label into nothing while the admin reported it delivered,
+     * which is the worst way for it to fail: nobody goes looking.
+     */
+    const posted = await postLojiqConsignorEmbed({ channelId, content, ...(embeds ? { embeds } : {}) });
+
+    if (posted?.ok !== true) {
+      console.error("Lojiq bot did not post to a store consignor's channel:", {
+        offerId: offer.id,
+        channelId,
+        reason: posted?.reason || "unknown"
+      });
+
+      return false;
+    }
+
     return true;
   }
 
