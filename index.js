@@ -4346,6 +4346,26 @@ async function rememberSupplierRetry({ seller, offer, sku, size, orderRecordId, 
 const SUPPLIER_RETRY_DAYS = Number(process.env.SUPPLIER_RETRY_DAYS || "7");
 
 /*
+ * The states an order is in while it still wants this pair.
+ *
+ * Pending and Outsource are the obvious two. The marketplace ones matter as
+ * much: a sale from Woovin, bol, SneakerAsk or Hypeneedz lands on its own
+ * "<marketplace> Processing" and stays there for the first day, while the
+ * consignors are asked - which is exactly the window a refused pair would be
+ * worth reviving in. Leaving them out meant the retry closed such a row as
+ * no longer needed on its very first pass, on an order that was still
+ * waiting and already paid for.
+ */
+const STILL_WAITING_FOR_STOCK = new Set([
+  "Pending",
+  "Outsource",
+  "Woovin Processing",
+  "bol Processing",
+  "SneakerAsk Processing",
+  "Hypeneedz Processing"
+]);
+
+/*
  * Put the waiting pairs to him again, when he has them again.
  *
  * Runs on the clock that already asks about open requests, because the
@@ -4402,7 +4422,7 @@ async function retrySupplierPairs() {
       const status = asText(f["Fulfillment Status"]);
       const taken = Array.isArray(f["Linked Inventory Unit"]) && f["Linked Inventory Unit"].length > 0;
 
-      if (!order || taken || !["Pending", "Outsource"].includes(status)) {
+      if (!order || taken || !STILL_WAITING_FOR_STOCK.has(status)) {
         await closeSupplierRetry(row, "no_longer_needed");
         closed += 1;
         continue;
@@ -4482,7 +4502,17 @@ async function retrySupplierPairs() {
           sku: row.sku,
           size: row.size,
           maximum_buying_price: numberValue(orderFields["Maximum Buying Price"]),
-          hold: displayValue(orderFields["Auto Offer Accept?"]) === "Yes",
+          /*
+           * Always held, exactly as autoAllocateBestUnit asks for a store
+           * order.
+           *
+           * This is not a detail of presentation: that route splits on it.
+           * Without it the offer is created, left live for the rollup, and
+           * the supplier is never asked - so a revived pair would sit there
+           * as a price nobody had put to him. With it the round goes down
+           * Route B, where his API is asked to confirm.
+           */
+          hold: true,
           // His empty shelf is why the old offer was withdrawn; see the
           // guard in that route.
           retry_withdrawn_offer: true
