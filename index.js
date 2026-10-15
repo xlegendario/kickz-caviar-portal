@@ -16922,6 +16922,9 @@ app.post("/api/internal/broker/lock", async (req, res) => {
     }
 
     const buyerPrice = Number(req.body?.buyer_price ?? line.buyer_price);
+    // Selling under cost is allowed, but only when the caller says it is
+    // meant: the admin asks the broker before sending this.
+    const allowLoss = req.body?.allow_loss === true;
 
     if (!(buyerPrice > 0)) {
       return res.status(400).json({ error: "What does the buyer pay?" });
@@ -16939,7 +16942,8 @@ app.post("/api/internal/broker/lock", async (req, res) => {
 
     const payout = Number(offer.offer_price);
 
-    if (!(buyerPrice > payout)) {
+    // Breaking even is not a loss, and nobody meant to refuse it.
+    if (buyerPrice < payout && !allowLoss) {
       return res.status(400).json({
         error:
           `${moneySmartValue(buyerPrice.toFixed(2))} does not cover the ` +
@@ -17084,6 +17088,9 @@ app.post("/api/internal/broker/finalize", async (req, res) => {
     }
 
     const buyerPrice = Number(req.body?.buyer_price ?? line.buyer_price);
+    // Selling under cost is allowed, but only when the caller says it is
+    // meant: the admin asks the broker before sending this.
+    const allowLoss = req.body?.allow_loss === true;
 
     if (!(buyerPrice > 0)) {
       return res.status(400).json({ error: "What does the buyer pay?" });
@@ -17108,7 +17115,7 @@ app.post("/api/internal/broker/finalize", async (req, res) => {
     try {
       const payout = Number(lockedOffer.offer_price);
 
-      if (!(buyerPrice > payout)) {
+      if (buyerPrice < payout && !allowLoss) {
         throw new Error(
           `${moneySmartValue(buyerPrice.toFixed(2))} does not cover the ` +
             `${moneySmartValue(payout.toFixed(2))} going to ${lockedOffer.seller_id}.`
