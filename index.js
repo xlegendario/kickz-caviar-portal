@@ -25123,32 +25123,47 @@ app.post("/api/consignment/offers/:id/deny", async (req, res) => {
             console.error("Consignment reopen: failed to set prior offer status to store_pending:", priorOffer.id, reopenUpdateError);
           }
 
-          const orderRecordForReopen = await airtable(ORDERS_TABLE).find(priorOffer.order_record_id);
-          const orderFieldsForReopen = orderRecordForReopen.fields || {};
-          const clientCountryForReopen = asText(orderFieldsForReopen["Client Country"]);
-          const storeOfferVatTypeForReopen = getStoreOfferVatTypeFromConsignmentVat(priorOffer.vat_type, clientCountryForReopen);
+          /*
+           * What follows is a store's message, and a broker's round has
+           * neither a store nor an order.
+           *
+           * order_record_id is null on one, and Airtable does not refuse a
+           * null id - it resolves base-wide - so this would read whatever
+           * record it landed on and offer some unrelated store a deal that
+           * is not theirs. The broker reads his own round in the admin, and
+           * the consignor is the one who just answered, so there is nobody
+           * here left to tell.
+           */
+          if (asText(priorOffer.source_type) === "external_sale") {
+            console.log("Consignment reopen: broker round, no store to re-notify:", priorOffer.id);
+          } else {
+            const orderRecordForReopen = await airtable(ORDERS_TABLE).find(priorOffer.order_record_id);
+            const orderFieldsForReopen = orderRecordForReopen.fields || {};
+            const clientCountryForReopen = asText(orderFieldsForReopen["Client Country"]);
+            const storeOfferVatTypeForReopen = getStoreOfferVatTypeFromConsignmentVat(priorOffer.vat_type, clientCountryForReopen);
 
-          const priorConsignorBase = convertConsignorPriceToStoreBasePrice(
-            Number(priorOffer.consignor_counter_price),
-            priorOffer.vat_type,
-            clientCountryForReopen
-          );
-          const priorConsignorInStoreTerms = calculateStoreCustomOfferFromConsignmentBase(
-            priorConsignorBase,
-            orderFieldsForReopen
-          );
+            const priorConsignorBase = convertConsignorPriceToStoreBasePrice(
+              Number(priorOffer.consignor_counter_price),
+              priorOffer.vat_type,
+              clientCountryForReopen
+            );
+            const priorConsignorInStoreTerms = calculateStoreCustomOfferFromConsignmentBase(
+              priorConsignorBase,
+              orderFieldsForReopen
+            );
 
-          console.log("Consignment reopen: sending re-notification to store for prior offer:", priorOffer.id);
+            console.log("Consignment reopen: sending re-notification to store for prior offer:", priorOffer.id);
 
-          await postConsignmentCounterStoreOffer({
-            offer: priorOffer,
-            orderFields: orderFieldsForReopen,
-            storeOfferPrice: priorConsignorInStoreTerms,
-            storeOfferVatType: storeOfferVatTypeForReopen,
-            deniedAmount: Number(deniedOfferForReopen.store_counter_price)
-          });
+            await postConsignmentCounterStoreOffer({
+              offer: priorOffer,
+              orderFields: orderFieldsForReopen,
+              storeOfferPrice: priorConsignorInStoreTerms,
+              storeOfferVatType: storeOfferVatTypeForReopen,
+              deniedAmount: Number(deniedOfferForReopen.store_counter_price)
+            });
 
-          console.log("Consignment reopen: re-notification sent successfully for:", priorOffer.id);
+            console.log("Consignment reopen: re-notification sent successfully for:", priorOffer.id);
+          }
         } else {
           console.error("Consignment reopen: priorOffer not found (no error, but empty result) for id:", deniedOfferForReopen.previous_offer_id);
         }
