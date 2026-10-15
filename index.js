@@ -8272,11 +8272,49 @@ async function denyConsignmentOffer(offerId) {
    * The line keeps its prices and is simply waiting to be offered again,
    * and the picker skips everyone who has already been asked - so the next
    * click walks one step further down the list instead of back to him.
+   *
+   * Unless what he refused was our counter. Then his own price is still
+   * the last thing on the table, and the line goes back to that round so
+   * it can simply be taken. Draft orphaned it: he is the only holder and
+   * the picker skips him for having been asked, so the deal could not
+   * move at all - 145, his 150, our 147, no, stuck (EXTD-000130).
+   *
+   * His round is put back live here rather than left to the caller: only
+   * some of them reopen it, and a line pointing at a closed round is the
+   * same dead end wearing another face.
    */
   if (asText(offer.source_type) === "external_sale") {
+    const earlier = asText(offer.previous_offer_id);
+
+    const { data: his } = earlier
+      ? await supabase
+          .from("consignment_offers")
+          .select("id,consignor_counter_price")
+          .eq("id", earlier)
+          .maybeSingle()
+      : { data: null };
+
+    // Only a round that actually holds a price of his is worth going back to.
+    const back = Number(his?.consignor_counter_price) > 0 ? asText(his.id) : "";
+
+    if (back) {
+      const { error: reopenError } = await supabase
+        .from("consignment_offers")
+        .update({ status: "store_pending", closed_at: null, updated_at: new Date().toISOString() })
+        .eq("id", back);
+
+      if (reopenError) {
+        console.error("Could not put a consignor's own price back on the table:", back, reopenError);
+      }
+    }
+
     await supabase
       .from("deal_lines")
-      .update({ status: "draft", offer_id: null, updated_at: new Date().toISOString() })
+      .update(
+        back
+          ? { status: "offered", offer_id: back, updated_at: new Date().toISOString() }
+          : { status: "draft", offer_id: null, updated_at: new Date().toISOString() }
+      )
       .eq("offer_id", offer.id);
   }
 
