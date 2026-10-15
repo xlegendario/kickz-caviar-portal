@@ -4095,6 +4095,17 @@ async function askPearlToConfirm({
       );
     }
 
+    await rememberSupplierRetry({
+      seller,
+      offer,
+      sku,
+      size,
+      orderRecordId,
+      memberWtbRecordId,
+      ourOffer: Number(offer?.offer_price ?? offer?.seller_price),
+      reason: "out_of_stock"
+    });
+
     return { ok: false, reason: "out_of_stock" };
   }
 
@@ -4147,6 +4158,17 @@ async function askPearlToConfirm({
         console.error("Dearer supplier: the round could not be closed:", err.message)
       );
     }
+
+    await rememberSupplierRetry({
+      seller,
+      offer,
+      sku,
+      size,
+      orderRecordId,
+      memberWtbRecordId,
+      ourOffer,
+      reason: "price_above_offer"
+    });
 
     return { ok: false, reason: "price_above_offer", their_price: price, our_offer: ourOffer };
   }
@@ -4244,6 +4266,196 @@ async function noteAnswerOnPearlMessage(row, status, reply) {
   } catch (err) {
     console.error(`Pearl request ${row.request_id}: answer not written on the message:`, err.message);
   }
+}
+
+/*
+ * A pair he could not supply, kept so it can be put to him again.
+ *
+ * Written when a request is refused before it is sent: the size is gone from
+ * his shelf, or he has become dearer than the sale was priced on. Both end
+ * the same way today - the round closes and the order looks elsewhere - and
+ * both are usually temporary. Pearl told us on 14-10-2026 that a size we
+ * needed would be back "tomorrow or friday max", and without this somebody
+ * has to remember to look on friday.
+ *
+ * Only worth keeping when there is an order to go back to. A pair refused
+ * for nothing in particular has nowhere to be retried into.
+ */
+async function rememberSupplierRetry({ seller, offer, sku, size, orderRecordId, memberWtbRecordId, ourOffer, reason }) {
+  const order = asText(orderRecordId) || asText(offer?.order_record_id);
+  const wtb = asText(memberWtbRecordId) || asText(offer?.member_wtb_record_id);
+
+  if (!order && !wtb) return;
+
+  const { error } = await supabase.from("supplier_retries").insert({
+    seller_record_id: asText(seller?.seller_record_id) || asText(offer?.seller_record_id),
+    seller_id: asText(seller?.seller_id) || asText(offer?.seller_id) || null,
+    sku: asText(sku).toUpperCase(),
+    size: asText(size),
+    order_record_id: order || null,
+    member_wtb_record_id: wtb || null,
+    order_id: asText(offer?.order_id) || null,
+    our_offer: Number.isFinite(Number(ourOffer)) ? Number(ourOffer) : null,
+    reason
+  });
+
+  if (error) {
+    console.error(`${sku} ${size} could not be kept for a retry:`, error.message);
+    return;
+  }
+
+  console.log(`\ud83d\udd52 ${sku} ${size} is on the retry list (${reason}).`);
+}
+
+/*
+ * How long a pair is worth waiting for.
+ *
+ * A restock takes days, not weeks, and an order that has been sitting for a
+ * fortnight has been solved some other way or has been cancelled. Checked
+ * against the row's own age so a long-waiting pair falls off by itself.
+ */
+const SUPPLIER_RETRY_DAYS = Number(process.env.SUPPLIER_RETRY_DAYS || "7");
+
+/*
+ * Put the waiting pairs to him again, when he has them again.
+ *
+ * Runs on the clock that already asks about open requests, because the
+ * question is the same shape and the list is short.
+ *
+ * What it does NOT do is make the offer itself. It calls the route the
+ * engine calls, so the decision about price, ceiling, hold and whether to
+ * ask him at all is made in one place and not in two. A pair that is back
+ * but now too dear is refused there, exactly as it would be on a fresh
+ * order - and lands back on this list.
+ */
+async function retrySupplierPairs() {
+  if (!PEARL_API_KEY) return { skipped: "no_key" };
+
+  const { data, error } = await supabase
+    .from("supplier_retries")
+    .select("*")
+    .is("resolved_at", null)
+    .limit(50);
+
+  if (error) {
+    console.error("The retry list could not be read:", error.message);
+
+    return { ok: false };
+  }
+
+  if (!data?.length) return { ok: true, waiting: 0 };
+
+  let sent = 0;
+  let closed = 0;
+
+  for (const row of data) {
+    const age = (Date.now() - Date.parse(row.created_at)) / 86400000;
+
+    if (age > SUPPLIER_RETRY_DAYS) {
+      await closeSupplierRetry(row, "gave_up");
+      closed += 1;
+      continue;
+    }
+
+    /*
+     * Is the order still waiting for this pair?
+     *
+     * It may have been filled by somebody else while we waited, or pulled
+     * altogether. Asking him for a pair we no longer need is worse than not
+     * asking at all, so this is checked before his catalogue is.
+     */
+    const order = row.order_record_id
+      ? await airtable(ORDERS_TABLE).find(row.order_record_id).catch(() => null)
+      : null;
+
+    if (row.order_record_id) {
+      const f = order?.fields || {};
+      const status = asText(f["Fulfillment Status"]);
+      const taken = Array.isArray(f["Linked Inventory Unit"]) && f["Linked Inventory Unit"].length > 0;
+
+      if (!order || taken || !["Pending", "Outsource"].includes(status)) {
+        await closeSupplierRetry(row, "no_longer_needed");
+        closed += 1;
+        continue;
+      }
+    }
+
+    const quote = await pearlCall(
+      `/prices?sku=${encodeURIComponent(row.sku)}&size=${encodeURIComponent(row.size)}`
+    ).catch((err) => {
+      console.error(`Retry ${row.sku} ${row.size}: his price could not be read:`, err.message);
+
+      return null;
+    });
+
+    if (!quote) continue;
+
+    const theirSize = (quote.sizes || [])[0];
+
+    await supabase
+      .from("supplier_retries")
+      .update({ checks: Number(row.checks || 0) + 1, last_checked_at: new Date().toISOString() })
+      .eq("id", row.id);
+
+    if (!theirSize?.available) continue;
+
+    /*
+     * Back on his shelf, so the order is put through the ordinary route
+     * again. Everything that decides whether this becomes an offer - his
+     * price against ours, the store's ceiling, the hold - happens there.
+     */
+    const orderFields = order?.fields || {};
+
+    const res = await fetch(
+      `${APP_PUBLIC_BASE_URL.replace(/\/$/, "")}/api/consignment/auto-offer/create`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(process.env.KC_PORTAL_SECRET ? { "x-kc-secret": process.env.KC_PORTAL_SECRET } : {})
+        },
+        body: JSON.stringify({
+          ...(row.order_record_id ? { order_record_id: row.order_record_id } : {}),
+          ...(row.member_wtb_record_id ? { member_wtb_record_id: row.member_wtb_record_id } : {}),
+          sku: row.sku,
+          size: row.size,
+          maximum_buying_price: numberValue(orderFields["Maximum Buying Price"]),
+          hold: displayValue(orderFields["Auto Offer Accept?"]) === "Yes"
+        })
+      }
+    );
+
+    const out = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      console.error(
+        `Retry ${row.sku} ${row.size} (${row.order_id || row.order_record_id}): ${out.error || res.status}`
+      );
+
+      continue;
+    }
+
+    await closeSupplierRetry(row, out.skipped ? `offered:${out.skipped}` : "offered");
+
+    sent += 1;
+
+    console.log(
+      `\u2705 ${row.sku} ${row.size} is back at ${row.seller_id || "the supplier"}; ` +
+        `${row.order_id || row.order_record_id} was put through again.`
+    );
+  }
+
+  return { ok: true, waiting: data.length, sent, closed };
+}
+
+async function closeSupplierRetry(row, outcome) {
+  await supabase
+    .from("supplier_retries")
+    .update({ resolved_at: new Date().toISOString(), outcome })
+    .eq("id", row.id)
+    .then(({ error }) => {
+      if (error) console.error(`Retry ${row.id} could not be closed:`, error.message);
+    });
 }
 
 async function pollPearlRequests() {
@@ -47640,6 +47852,11 @@ app.listen(PORT, () => {
   cron.schedule("*/5 * * * *", () => {
     pollPearlRequests().catch((err) =>
       console.error("[pearl] poll failed:", err.message)
+    );
+
+    // And the pairs he could not supply last time, in case he can now.
+    retrySupplierPairs().catch((err) =>
+      console.error("[pearl] retry failed:", err.message)
     );
   }, {
     timezone: process.env.TZ || "Europe/Amsterdam"
