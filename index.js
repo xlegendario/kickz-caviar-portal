@@ -37594,12 +37594,14 @@ app.get("/api/dashboard/counts", async (req, res) => {
           "Fulfillment Status (MWTB)",
           "Shipping Status",
           "Shipping Status (MWTB)",
-          "Payment Status"
+          "Payment Status",
+          "Inbound Status (UOL)"
         ],
         filterByFormula: `AND(
           {Type} = 'Consignment',
           {Seller ID (Lookup)} = '${escapeFormulaValue(sellerCode)}',
           OR(
+            AND(${ARRIVED_AT_WAREHOUSE_FORMULA}, {Payment Status} = 'To Pay'),
             {Fulfillment Status (UOL)} = 'Allocated',
             {Fulfillment Status (MWTB)} = 'Allocated',
             {Fulfillment Status (UOL)} = 'Requested Label',
@@ -37940,13 +37942,22 @@ app.get("/api/dashboard/counts", async (req, res) => {
           linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
       ).length;
 
+    // A pair the consignor sent to us is done as far as they are concerned,
+    // whatever the order does next. See ARRIVED_AT_WAREHOUSE_FORMULA.
+    const consignmentArrived = (record) =>
+      unitStatus(record, "Inbound Status (UOL)") === "Received";
+
     const consignmentStatusIs = (record, value) =>
-      unitStatus(record, "Fulfillment Status (UOL)") === value ||
-      unitStatus(record, "Fulfillment Status (MWTB)") === value;
+      !consignmentArrived(record) && (
+        unitStatus(record, "Fulfillment Status (UOL)") === value ||
+        unitStatus(record, "Fulfillment Status (MWTB)") === value
+      );
 
     const consignmentShippingIs = (record, value) =>
-      unitStatus(record, "Shipping Status") === value ||
-      unitStatus(record, "Shipping Status (MWTB)") === value;
+      !consignmentArrived(record) && (
+        unitStatus(record, "Shipping Status") === value ||
+        unitStatus(record, "Shipping Status (MWTB)") === value
+      );
 
     const consignmentConfirmedCount = consignmentCount((r) => consignmentStatusIs(r, "Allocated"));
     const consignmentLabelRequestedCount = consignmentCount((r) => consignmentStatusIs(r, "Requested Label"));
@@ -37954,7 +37965,9 @@ app.get("/api/dashboard/counts", async (req, res) => {
     const consignmentShippedCount = consignmentCount((r) => consignmentShippingIs(r, "Shipped"));
 
     const consignmentDeliveredCount = consignmentCount(
-      (r) => consignmentShippingIs(r, "Delivered") && unitStatus(r, "Payment Status") === "To Pay"
+      (r) =>
+        (consignmentArrived(r) || consignmentShippingIs(r, "Delivered")) &&
+        unitStatus(r, "Payment Status") === "To Pay"
     );
 
     const buyingRecords = await buyingRecordsPromise;
@@ -38299,6 +38312,18 @@ const brokerDealNumberOf = (pair) =>
     ? `EXTD-${String(pair.external_sales.deal_number).padStart(6, "0")}`
     : "";
 
+/*
+ * A pair the consignor sent to the warehouse first, and that we scanned in.
+ *
+ * A Woovin order from a consignor outside DPD's reach goes to us with our
+ * own label; Receive Parcels sets the order's Inbound Status to Received and
+ * fetches Woovin's label, which puts the order on Ready to Ship. That status
+ * is ours - we pack it - but read through the lookups the consignor saw a
+ * pair to ship again (ORD-028065, 15-10-2026). For them the work ended at
+ * our door, so it shows as Delivered and in no earlier step.
+ */
+const ARRIVED_AT_WAREHOUSE_FORMULA = `{Inbound Status (UOL)} = 'Received'`;
+
 async function loadConsignmentDashboardItemsByStatus(status) {
   const inventoryRecords = await airtable(INVENTORY_UNITS_TABLE)
     .select({
@@ -38327,6 +38352,7 @@ async function loadConsignmentDashboardItemsByStatus(status) {
       ],
       filterByFormula: `AND(
         {Type} = 'Consignment',
+        NOT(${ARRIVED_AT_WAREHOUSE_FORMULA}),
         OR(
           {Fulfillment Status (UOL)} = '${escapeFormulaValue(status)}',
           {Fulfillment Status (MWTB)} = '${escapeFormulaValue(status)}',
@@ -38881,6 +38907,7 @@ app.get("/api/dashboard/consignment-confirmed", async (req, res) => {
         ],
         filterByFormula: `AND(
           {Type} = 'Consignment',
+          NOT(${ARRIVED_AT_WAREHOUSE_FORMULA}),
           OR(
             {Fulfillment Status (UOL)} = 'Allocated',
             {Fulfillment Status (MWTB)} = 'Allocated'
@@ -39049,7 +39076,8 @@ app.get("/api/dashboard/consignment-shipped", async (req, res) => {
         ],
         filterByFormula: `AND(
           {Type} = 'Consignment',
-          {Shipping Status} = 'Shipped'
+          {Shipping Status} = 'Shipped',
+          NOT(${ARRIVED_AT_WAREHOUSE_FORMULA})
         )`
       })
       .all();
@@ -39091,7 +39119,7 @@ app.get("/api/dashboard/consignment-delivered", async (req, res) => {
         ],
         filterByFormula: `AND(
           {Type} = 'Consignment',
-          {Shipping Status} = 'Delivered',
+          OR({Shipping Status} = 'Delivered', ${ARRIVED_AT_WAREHOUSE_FORMULA}),
           {Payment Status} = 'To Pay'
         )`
       })
