@@ -16349,6 +16349,10 @@ app.post("/api/internal/broker/label-void", async (req, res) => {
     const offer = (rounds || [])[0];
     const tracking = asText(req.body?.tracking);
 
+    const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+    const sf = sellerRecord?.fields || {};
+    const storeConsignor = await isStoreConsignor(sellerRecordId).catch(() => false);
+
     const embed = {
       title: "🚫 Shipping Label Cancelled",
       description: [
@@ -16369,17 +16373,14 @@ app.post("/api/internal/broker/label-void", async (req, res) => {
         "A new label follows here. The pairs are back under Allocated in your dashboard."
       ].join("\n"),
       color: 0xe74c3c,
-      footer: { text: "Kickz Caviar" },
+      footer: { text: storeConsignor ? "Lojiq" : "Kickz Caviar" },
       timestamp: new Date().toISOString()
     };
 
-    const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
-    const sf = sellerRecord?.fields || {};
-
     let told = false;
 
-    if (await isStoreConsignor(sellerRecordId).catch(() => false)) {
-      told = offer ? await tellConsignmentOfferChannel(offer, "A label was cancelled", [embed]) : false;
+    if (storeConsignor) {
+      told = await tellStoreConsignor({ sf, offer, content: "A label was cancelled", embed });
     } else {
       await initDiscord();
 
@@ -16777,7 +16778,13 @@ app.post("/api/internal/external-sale/partner-sold", async (req, res) => {
  * The Shipping Label Ready embed of a deal without a Seller Offer: a broker
  * deal or a direct External Sale. One place, so both say the same thing.
  */
-function externalSaleLabelEmbed({ pairs, dealId, tracking, labelUrl }) {
+/*
+ * brand: a message is signed by the bot that puts it there. A store
+ * consignor reads us in the Lojiq server, through the Lojiq bot, and a
+ * "Kickz Caviar" footer in that room is a different company's name on
+ * our own label - which is exactly how it read to the consignor.
+ */
+function externalSaleLabelEmbed({ pairs, dealId, tracking, labelUrl, brand = "Kickz Caviar" }) {
   const many = pairs.length > 1;
 
   return {
@@ -16810,7 +16817,7 @@ function externalSaleLabelEmbed({ pairs, dealId, tracking, labelUrl }) {
         : [])
     ].join("\n"),
     color: 0x2ecc71,
-    footer: { text: "Kickz Caviar" },
+    footer: { text: brand },
     timestamp: new Date().toISOString()
   };
 }
@@ -16871,7 +16878,17 @@ app.post("/api/internal/broker/label-ready", async (req, res) => {
      * has to say - so they are listed, with the warning that makes the
      * difference between one parcel and three.
      */
-    const embed = externalSaleLabelEmbed({ pairs, dealId, tracking, labelUrl });
+    const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+    const sf = sellerRecord?.fields || {};
+    const storeConsignor = await isStoreConsignor(sellerRecordId).catch(() => false);
+
+    const embed = externalSaleLabelEmbed({
+      pairs,
+      dealId,
+      tracking,
+      labelUrl,
+      brand: storeConsignor ? "Lojiq" : "Kickz Caviar"
+    });
 
     /*
      * His labels channel first, because that is where a label belongs and
@@ -16879,47 +16896,15 @@ app.post("/api/internal/broker/label-ready", async (req, res) => {
      * in, and only then the conversation this offer happened in - losing
      * the label is worse than posting it a room further out.
      */
-    const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
-    const sf = sellerRecord?.fields || {};
-
     let told = false;
 
-    if (await isStoreConsignor(sellerRecordId).catch(() => false)) {
-      /*
-       * A store reads everything we send it in its own server, through the
-       * Lojiq bot - but a label belongs in the same room as every other
-       * label.
-       *
-       * This went straight to the conversation the offer happened in, so a
-       * broker deal's label landed among the confirmation requests while
-       * every order's label sat in #labels. The consignor looked where
-       * labels always are and found nothing (EXTD-000129, 15-10-2026).
-       *
-       * Same order as the one below it: his labels channel, then the one he
-       * reads about deals in, and only then the conversation - losing the
-       * label is worse than posting it a room further out.
-       */
-      for (const channelId of [asText(sf["Labels Channel ID"]), asText(sf["Deal Updates Channel ID"])]) {
-        if (!channelId) continue;
-
-        const posted = await postLojiqConsignorEmbed({
-          channelId,
-          content: `Your shipping label for ${dealId} is ready`,
-          embeds: [embed]
-        }).catch((err) => {
-          console.error("Lojiq bot refused a store consignor's label:", { channelId, error: err.message });
-          return { ok: false };
-        });
-
-        if (posted?.ok === true) {
-          told = true;
-          break;
-        }
-      }
-
-      if (!told) {
-        told = await tellConsignmentOfferChannel(offer, `Your shipping label for ${dealId} is ready`, [embed]);
-      }
+    if (storeConsignor) {
+      told = await tellStoreConsignor({
+        sf,
+        offer,
+        content: `Your shipping label for ${dealId} is ready`,
+        embed
+      });
     } else {
       await initDiscord();
 
@@ -17388,6 +17373,30 @@ function partnerRunDealDeadline(offer) {
  * Lojiq server where neither of this service's bots can post, and a DM-only
  * consignor only ever had the deal bot.
  */
+/*
+ * One of our embeds into a store consignor's own rooms.
+ *
+ * The same order the Kickz Caviar bot uses for everyone else: his labels
+ * channel, then the one he reads about deals in, and only then the
+ * conversation the round happened in. Going straight to the conversation
+ * put a broker deal's label among the confirmation requests while every
+ * other label sat in #labels (EXTD-000129, 15-10-2026).
+ */
+async function tellStoreConsignor({ sf = {}, offer = null, content = "", embed }) {
+  for (const channelId of [asText(sf["Labels Channel ID"]), asText(sf["Deal Updates Channel ID"])]) {
+    if (!channelId) continue;
+
+    const posted = await postLojiqConsignorEmbed({ channelId, content, embeds: [embed] }).catch((err) => {
+      console.error("Lojiq bot refused a store consignor's message:", { channelId, error: err.message });
+      return { ok: false };
+    });
+
+    if (posted?.ok === true) return true;
+  }
+
+  return offer ? tellConsignmentOfferChannel(offer, content, [embed]) : false;
+}
+
 async function tellConsignmentOfferChannel(offer, content, embeds = null) {
   const channelId = asText(offer?.discord_channel_id);
 
