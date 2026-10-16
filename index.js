@@ -24803,6 +24803,23 @@ app.post("/api/consignment/offers/:id/consignor-retry", async (req, res) => {
       });
     }
 
+    /*
+     * Everything below is in store terms: his price converted through
+     * the order's country and the store's scale, to be put in front of
+     * a store. A broker's round has neither - and its order id is null,
+     * which Airtable resolves base-wide instead of refusing, so this
+     * would price his pair off a stranger's order.
+     *
+     * Refused rather than guessed. A broker haggles in plain numbers and
+     * this button has no plain-number half yet; saying so beats quietly
+     * doing the wrong sum.
+     */
+    if (asText(deniedOffer.source_type) === "external_sale") {
+      return res.status(409).json({
+        error: "This is a broker deal - answer it from the deal itself, not from here."
+      });
+    }
+
     const orderRecord = await airtable(ORDERS_TABLE).find(deniedOffer.order_record_id);
     const orderFields = orderRecord.fields || {};
     const clientCountry = asText(orderFields["Client Country"]);
@@ -24973,6 +24990,18 @@ app.post("/api/consignment/offers/:id/edit", async (req, res) => {
 
     if (prevError || !previousOffer) {
       return res.status(500).json({ error: "Could not find the previous round." });
+    }
+
+    /*
+     * As in the retry above: this works in store terms off the order
+     * behind the round, and a broker's round has no order. The null id
+     * resolves base-wide, so the band it would offer comes from somebody
+     * else's deal. Refused until there is a plain-number half.
+     */
+    if (asText(offer.source_type) === "external_sale") {
+      return res.status(409).json({
+        error: "This is a broker deal - answer it from the deal itself, not from here."
+      });
     }
 
     const orderRecord = await airtable(ORDERS_TABLE).find(offer.order_record_id);
@@ -25264,7 +25293,17 @@ app.post("/api/consignment/offers/:id/confirm", async (req, res) => {
       offer.previous_offer_id &&
       offer.is_counter_offer &&
       !(Number(offer.consignor_counter_price) > 0) &&
-      Number(offer.store_counter_price) > 0
+      Number(offer.store_counter_price) > 0 &&
+      /*
+       * Store rounds only. This turns a store's price into what the
+       * consignor is owed, through the order's country and the store's
+       * own scale - and a broker's round has no order, so the id is
+       * null and Airtable resolves that base-wide rather than refusing
+       * it: a stranger's order, and a payout computed from it. His own
+       * number is already in offer_price, put there when the counter was
+       * made, so there is nothing to work out here.
+       */
+      asText(offer.source_type) !== "external_sale"
     ) {
       const orderRecordForSync = await airtable(ORDERS_TABLE).find(offer.order_record_id);
       const orderFieldsForSync = orderRecordForSync.fields || {};
