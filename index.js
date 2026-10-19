@@ -38535,7 +38535,17 @@ async function loadConsignmentDashboardItemsByStatus(status) {
    * because a silent double row is the kind of thing that is only ever
    * noticed by the consignor.
    */
-  const brokerByStep = await brokerUnitsAt("consignor_fulfillment_status", status);
+  /*
+   * FIXED - his step stays "Ready to Ship" after the box has gone: the admin
+   * reads that value as "his label is out" and it is never moved on. The
+   * shipping column is what moves, so a pair that has left is not one to
+   * ship any more (EXTD-000097 to -000130, SE-00035, 19-10-2026).
+   */
+  const brokerPairsAtStep = (await brokerPairsAt("consignor_fulfillment_status", status)).filter(
+    (pair) => status !== "Ready to Ship" ||
+      !["Shipped", "Delivered"].includes(asText(pair.consignor_shipping_status))
+  );
+  const brokerByStep = await brokerUnitsFor(brokerPairsAtStep);
   const brokerByShipping = await brokerUnitsAt("consignor_shipping_status", status);
 
   const seen = new Set(inventoryRecords.map((record) => record.id));
