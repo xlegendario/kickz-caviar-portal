@@ -41884,6 +41884,7 @@ app.get("/api/brands", async (req, res) => {
         {Fulfillment Status} = 'Outsource',
         {Brand} != '',
         NOT({Marketplace Buying Budget} > 0),
+        ARRAYJOIN({Store Name}) != 'SneakerAsk',
         OR(
           {Auto Offer Accept?} = 'No',
           AND(
@@ -41976,10 +41977,15 @@ app.get("/api/deals", async (req, res) => {
        * Bidding exists so an order can go ABOVE the maximum buying price when
        * nothing else will fill it. On a marketplace order anything above the
        * budget is a loss, so an open offer round can only cost money.
+       *
+       * SneakerAsk's ordinary store orders stay out as well: they do not
+       * look at offers, so a bid there would never get an answer. Same
+       * exclusion as the WTB Market export (WTB_EXCLUDE_STORE).
        */
       formula = `AND(
         {Fulfillment Status} = 'Outsource',
         NOT({Marketplace Buying Budget} > 0),
+        ARRAYJOIN({Store Name}) != 'SneakerAsk',
         OR(
           {Auto Offer Accept?} = 'No',
           AND(
