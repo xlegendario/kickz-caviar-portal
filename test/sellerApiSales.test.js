@@ -8,14 +8,15 @@ import {
   pickCurrentOrder,
   fingerprintSale,
   syncSales,
-  serializeSale
+  serializeSale,
+  onlyNumbersChanged
 } from "../lib/sellerApiSales.js";
 import { createSellerApiRouter, generateApiKey, labelUrlOf, sellerApiErrorHandler } from "../lib/sellerApi.js";
 
 /* ---------------- builders ---------------- */
 
 const unit = (id, fields) => ({ id, fields: { SKU: "DZ5485-612", Size: "42", "Created Time": "2026-09-10T10:00:00.000Z", ...fields } });
-const order = (id, fields) => ({ id, fields: { "Shopify Order Number": "7454", "Product Name": "Jordan 1 Lost and Found", ...fields } });
+const order = (id, fields) => ({ id, fields: { "Order ID": "ORD-007454", "Shopify Order Number": "7454", "Product Name": "Jordan 1 Lost and Found", ...fields } });
 const wtb = (id, fields) => ({ id, fields: { "Member WTB ID": "MWTB-000468", ...fields } });
 
 const derive = (u, orders = [], wtbs = []) =>
@@ -43,7 +44,8 @@ test("a unit on a store order is one sale, for the seller only", () => {
   assert.equal(rows[0].party_record_id, "recMATEO");
   assert.equal(rows[0].amount, 155);
   assert.equal(rows[0].status, "active");
-  assert.equal(rows[0].reference, "7454");
+  assert.equal(rows[0].reference, "ORD-007454", "our Order ID, never the shop's Shopify number");
+  assert.equal(rows[0].external_deal_id, null);
   assert.equal(rows[0].tracking_number, "0516");
   assert.equal(rows[0].has_label, true);
 });
@@ -62,13 +64,38 @@ test("a unit on a Member WTB is a sale for the seller, and never a row for the b
   assert.equal(rows[0].reference, "MWTB-000468");
 });
 
+test("each deal number has its own field, next to reference", () => {
+  const [onOrder] = derive(
+    unit("recUNIT7", { "Seller Record ID": ["recS"], "Unfulfilled Orders Log": ["recO"], "External Deal ID": "EXTD-000117" }),
+    [order("recO", { "Fulfillment Status": "Allocated" })]
+  );
+
+  assert.equal(onOrder.external_deal_id, "EXTD-000117");
+
+  const item = serializeSale(onOrder);
+
+  assert.equal(item.reference, "ORD-007454");
+  assert.equal(item.order_id, "ORD-007454");
+  assert.equal(item.member_wtb_id, null);
+  assert.equal(item.external_deal_id, "EXTD-000117");
+
+  const [onWtb] = derive(
+    unit("recUNIT8", { "Seller Record ID": ["recS"], "Member WTBs": ["recW"] }),
+    [],
+    [wtb("recW", { "Fulfillment Status": "Allocated" })]
+  );
+
+  assert.equal(serializeSale(onWtb).order_id, null);
+  assert.equal(serializeSale(onWtb).member_wtb_id, "MWTB-000468");
+});
+
 test("a unit with neither an order nor a Member WTB is not a sale", () => {
   assert.deepEqual(derive(unit("recFORWARD", { "Seller Record ID": ["recX"] })), []);
 });
 
 test("a reassigned unit follows its live order, and is cancelled only when every order is", () => {
-  const cancelled = order("recOLD", { "Fulfillment Status": "Cancelled", "Shopify Order Number": "9228" });
-  const live = order("recNEW", { "Fulfillment Status": "Ready to Ship", "Shopify Order Number": "9301" });
+  const cancelled = order("recOLD", { "Fulfillment Status": "Cancelled", "Order ID": "ORD-009228" });
+  const live = order("recNEW", { "Fulfillment Status": "Ready to Ship", "Order ID": "ORD-009301" });
 
   assert.equal(pickCurrentOrder([cancelled, live]).id, "recNEW");
   assert.equal(pickCurrentOrder([cancelled]).id, "recOLD");
@@ -80,7 +107,7 @@ test("a reassigned unit follows its live order, and is cancelled only when every
   );
 
   assert.equal(moved[0].status, "active");
-  assert.equal(moved[0].reference, "9301");
+  assert.equal(moved[0].reference, "ORD-009301");
 
   const dead = derive(unit("recUNIT4", { "Seller Record ID": ["recS"], "Unfulfilled Orders Log": ["recOLD"] }), [cancelled]);
 
@@ -191,6 +218,40 @@ test("the sync inserts new sales, bumps only the ones that changed, and leaves t
   assert.equal(tracked.updated, 2);
   assert.ok(store.rows.every((r) => r.updated_at === "2026-09-14T10:10:00.000Z"));
   assert.ok(store.rows.every((r) => r.created_at === "2026-09-14T10:00:00.000Z"), "created_at stays");
+});
+
+test("a sale whose only change is how a deal number is shown moves quietly", async () => {
+  const theOrder = order("recO", { "Fulfillment Status": "Allocated", "Order ID": "" });
+  const units = [unit("recU1", { "Seller Record ID": ["recS"], "Unfulfilled Orders Log": ["recO"] })];
+  const store = fakeSalesStore();
+  let clock = new Date("2026-09-14T10:00:00.000Z");
+  const quiet = { log() {} };
+
+  await syncSales({ reader: fakeReader({ units, orders: [theOrder] }), store, now: () => clock, logger: quiet });
+
+  // As the feed stored it before: the shop's number, and fetched back from
+  // Supabase with its own spelling of the date.
+  store.rows[0].reference = "7454";
+  store.rows[0].fingerprint = fingerprintSale(store.rows[0]);
+  store.rows[0].sale_date = "2026-09-10 10:00:00+00";
+
+  clock = new Date("2026-09-14T10:05:00.000Z");
+  theOrder.fields["Order ID"] = "ORD-007454";
+
+  const renumbered = await syncSales({ reader: fakeReader({ units, orders: [theOrder] }), store, now: () => clock, emitEvents: true, logger: quiet });
+
+  assert.equal(renumbered.updated, 1);
+  assert.deepEqual(renumbered.events, [], "no sale.updated for every sale at once");
+  assert.equal(store.rows[0].reference, "ORD-007454");
+  assert.equal(store.rows[0].updated_at, "2026-09-14T10:05:00.000Z", "a poller still picks it up");
+
+  clock = new Date("2026-09-14T10:10:00.000Z");
+  theOrder.fields["Tracking Number"] = "0516";
+
+  const tracked = await syncSales({ reader: fakeReader({ units, orders: [theOrder] }), store, now: () => clock, emitEvents: true, logger: quiet });
+
+  assert.deepEqual(tracked.events.map((e) => e.type), ["sale.updated"]);
+  assert.equal(onlyNumbersChanged(null, store.rows[0]), false);
 });
 
 test("the sync reads a window of recent units, or everything when told to", async () => {
@@ -320,7 +381,7 @@ function labelFixture({ orderFields = {}, wtbFields = {}, requestError = null, f
     unit_record_id: `u-${id}`,
     party_record_id: "recS",
     status: "active",
-    reference: "7454",
+    reference: "ORD-007454",
     has_label: false,
     updated_at: "2026-09-14T10:00:00.000Z",
     ...extra
@@ -379,7 +440,7 @@ test("the seller downloads the label as a PDF through us, never as a link", asyn
 
   assert.equal(res.status, 200);
   assert.equal(res.headers.get("content-type"), "application/pdf");
-  assert.match(res.headers.get("content-disposition"), /7454-label\.pdf/);
+  assert.match(res.headers.get("content-disposition"), /ORD-007454-label\.pdf/);
   assert.equal(res.headers.get("cache-control"), "no-store");
   assert.equal(res.body.toString(), "%PDF-1.4 real label");
   assert.deepEqual(fx.calls.fetched, ["https://dl.airtable.com/label.pdf"]);

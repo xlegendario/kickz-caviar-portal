@@ -158,7 +158,7 @@ function salesFixture() {
 }
 
 test("the sync hands over events only when asked, never on the first fill", async () => {
-  const theOrder = { id: "recO", fields: { "Fulfillment Status": "Allocated", "Shopify Order Number": "7454" } };
+  const theOrder = { id: "recO", fields: { "Fulfillment Status": "Allocated", "Order ID": "ORD-007454" } };
   const units = [{ id: "recU", fields: { "Seller Record ID": ["recS"], "Unfulfilled Orders Log": ["recO"], "Created Time": "2026-09-14T10:00:00Z" } }];
   const reader = { listUnits: async () => units, listOrders: async () => [theOrder], listWantToBuys: async () => [] };
   const store = salesFixture();
