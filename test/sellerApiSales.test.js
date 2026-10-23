@@ -9,7 +9,8 @@ import {
   fingerprintSale,
   syncSales,
   serializeSale,
-  onlyNumbersChanged
+  onlyNumbersChanged,
+  brokerPairAsDeal
 } from "../lib/sellerApiSales.js";
 import { createSellerApiRouter, generateApiKey, labelUrlOf, sellerApiErrorHandler } from "../lib/sellerApi.js";
 
@@ -569,4 +570,142 @@ test("a label download that fails once is tried again before anyone is told", as
 
   assert.equal(gone.ok, false);
   assert.equal(down, 2, "twice, and no more");
+});
+
+/* ---------------- broker deals ---------------- */
+
+const brokerPair = (fields = {}) => ({
+  id: "6f1c2b9e-0000-4000-8000-0000000000b1",
+  inventory_unit_record_id: "recBROKER0000001",
+  consignor_fulfillment_status: "Ready to Ship",
+  consignor_shipping_status: "Pending",
+  consignor_label_url: "https://x.supabase.co/storage/v1/object/public/labels/l.pdf",
+  consignor_tracking_url: "05163003338165",
+  cancelled_at: null,
+  created_at: "2026-10-12T09:36:12.000Z",
+  external_sales: { deal_number: 117, cancelled_at: null },
+  ...fields
+});
+
+const deriveBroker = (pairs, unitFields = {}) =>
+  deriveSaleRows({
+    unit: unit("recBROKER0000001", { "Seller Record ID": ["recDOMI"], "Final Purchase Price": 210, "Payment Status": "To Pay", ...unitFields }),
+    ordersById: new Map(),
+    wtbsById: new Map(),
+    brokerPairsByUnit: new Map([["recBROKER0000001", pairs]])
+  });
+
+test("a pair sold through a broker deal is a sale, under the deal's number", () => {
+  const [row] = deriveBroker([brokerPair()]);
+
+  assert.equal(row.source_type, "external_sale");
+  assert.equal(row.source_record_id, "6f1c2b9e-0000-4000-8000-0000000000b1");
+  assert.equal(row.party_record_id, "recDOMI");
+  assert.equal(row.amount, 210);
+  assert.equal(row.status, "active");
+  assert.equal(row.reference, "EXTD-000117");
+  assert.equal(row.external_deal_id, "EXTD-000117");
+  assert.equal(row.fulfillment_status, "Ready to Ship");
+  assert.equal(row.shipping_status, "Pending");
+  assert.equal(row.tracking_number, "05163003338165", "the url column holds the bare number");
+  assert.equal(row.tracking_url, null);
+  assert.equal(row.has_label, true);
+
+  const item = serializeSale(row);
+
+  assert.equal(item.source, "external_sale");
+  assert.equal(item.order_id, null);
+  assert.equal(item.member_wtb_id, null);
+  assert.equal(item.external_deal_id, "EXTD-000117");
+});
+
+test("a shipped broker pair reads as Fulfilled, a cancelled one as cancelled", () => {
+  assert.equal(deriveBroker([brokerPair({ consignor_shipping_status: "Delivered" })])[0].fulfillment_status, "Fulfilled");
+
+  const [dropped] = deriveBroker([brokerPair({ cancelled_at: "2026-10-13T10:00:00Z" })]);
+  assert.equal(dropped.status, "cancelled");
+  assert.equal(dropped.fulfillment_status, "Cancelled");
+
+  const [dealOff] = deriveBroker([brokerPair({ external_sales: { deal_number: 117, cancelled_at: "2026-10-13T10:00:00Z" } })]);
+  assert.equal(dealOff.status, "cancelled");
+
+  const [moved] = deriveBroker([
+    brokerPair({ cancelled_at: "2026-10-13T10:00:00Z" }),
+    brokerPair({ id: "6f1c2b9e-0000-4000-8000-0000000000b2", external_sales: { deal_number: 130, cancelled_at: null } })
+  ]);
+  assert.equal(moved.status, "active", "the live deal wins");
+  assert.equal(moved.reference, "EXTD-000130");
+});
+
+test("an order or a Member WTB on the unit goes before a broker pair", () => {
+  const rows = deriveSaleRows({
+    unit: unit("recBROKER0000001", { "Seller Record ID": ["recS"], "Unfulfilled Orders Log": ["recO"] }),
+    ordersById: new Map([["recO", order("recO", { "Fulfillment Status": "Allocated" })]]),
+    wtbsById: new Map(),
+    brokerPairsByUnit: new Map([["recBROKER0000001", [brokerPair()]]])
+  });
+
+  assert.equal(rows[0].source_type, "order");
+});
+
+test("the sync reads broker pairs whole and fetches the units the window missed", async () => {
+  const store = fakeSalesStore();
+  const asked = [];
+  const reader = {
+    ...fakeReader({ units: [] }),
+    async listBrokerPairs() {
+      return [brokerPair()];
+    },
+    async listUnitsByIds(recordIds) {
+      asked.push(...recordIds);
+
+      return [unit("recBROKER0000001", { "Seller Record ID": ["recDOMI"], "Created Time": "2026-01-01T00:00:00.000Z" })];
+    }
+  };
+
+  const result = await syncSales({ reader, store, logger: { log() {} } });
+
+  assert.deepEqual(asked, ["recBROKER0000001"]);
+  assert.equal(result.inserted, 1);
+  assert.equal(store.rows[0].reference, "EXTD-000117");
+});
+
+test("a deal's label downloads like any other, and is never requested", async (t) => {
+  const salesStore = fakeSalesStore();
+  const DEAL_ID = "00000000-0000-4000-8000-0000000000e9";
+  const [row] = deriveBroker([brokerPair()]);
+
+  salesStore.rows.push({ ...row, id: DEAL_ID, role: "sold", updated_at: "2026-10-12T10:00:00.000Z" });
+
+  const calls = { order: [], fetched: [] };
+  const labels = {
+    async findSource({ sourceType }) {
+      assert.equal(sourceType, "external_sale");
+
+      return brokerPairAsDeal(brokerPair());
+    },
+    async fetchFile(url) {
+      calls.fetched.push(url);
+
+      return { ok: true, buffer: Buffer.from("%PDF-1.4 deal label") };
+    },
+    async requestForOrder(id) {
+      calls.order.push(id);
+    },
+    async requestForWantToBuy() {}
+  };
+
+  const call = await serve(t, { salesStore, labels, sellerRecordId: "recDOMI" });
+
+  const pdf = await call(`/api/v1/sales/${DEAL_ID}/label`);
+  assert.equal(pdf.status, 200);
+  assert.match(pdf.headers.get("content-disposition"), /EXTD-000117-label\.pdf/);
+  assert.deepEqual(calls.fetched, ["https://x.supabase.co/storage/v1/object/public/labels/l.pdf"]);
+
+  labels.findSource = async () => brokerPairAsDeal(brokerPair({ consignor_label_url: null }));
+
+  const asked = await call(`/api/v1/sales/${DEAL_ID}/request-label`, { method: "POST" });
+  assert.equal(asked.status, 409);
+  assert.equal(asked.json.code, "label_automatic");
+  assert.deepEqual(calls.order, [], "the store-order route never sees a deal");
 });

@@ -12928,7 +12928,7 @@ app.use(
     salesStore: sellerApiSalesStore,
     webhookStore: sellerApiWebhookStore,
     labels: {
-      ...createAirtableLabelSource({ airtable, ordersTable: ORDERS_TABLE, wtbsTable: MEMBER_WTBS_TABLE }),
+      ...createAirtableLabelSource({ airtable, ordersTable: ORDERS_TABLE, wtbsTable: MEMBER_WTBS_TABLE, supabase }),
       fetchFile: (url) => fetchLabelFile(url),
       // The Discord button's route: marketplaces first, a store request last.
       requestForOrder: (orderRecordId) => requestConsignmentShippingLabel(orderRecordId),
@@ -12976,7 +12976,8 @@ async function runSellerApiSalesSync() {
         airtable,
         unitsTable: INVENTORY_UNITS_TABLE,
         ordersTable: ORDERS_TABLE,
-        wtbsTable: MEMBER_WTBS_TABLE
+        wtbsTable: MEMBER_WTBS_TABLE,
+        supabase
       }),
       store: sellerApiSalesStore,
       windowDays: empty ? null : 60,
