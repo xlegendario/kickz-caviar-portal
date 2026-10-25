@@ -44279,8 +44279,18 @@ async function resolveMemberWtbBuyerPrice({
       // and the price he is charged cannot drift apart again. The Airtable
       // "Offer To Buyer" formula still wins when it is filled, and its own
       // Margin branch needs the same x 1.21 to agree with this.
+      //
+      // FIXED - only while it is the price of THIS payout. "Offer To Buyer"
+      // is worked out from the lowest offer, so once the buyer counters and
+      // the consignor accepts, it is the old ask with our margin on it.
+      // MWTB-000569: buyer bid 195, consignor accepted 182.90, and the buyer
+      // was asked for 203 - 190 plus margin, rounded up.
+      const lowestAsk = numberValue(memberFields['Current Lowest Offer']) ||
+        numberValue(memberFields['Lowest Offer']);
+      const offerToBuyerIsThisPayout =
+        offerToBuyer > 0 && Math.abs(lowestAsk - purchasePrice) < 0.01;
       finalBuyingPrice =
-        offerToBuyer ||
+        (offerToBuyerIsThisPayout ? offerToBuyer : 0) ||
         calculateMemberWtbBuyerEquivalent(purchasePrice, vatType, memberFields);
     }
 
