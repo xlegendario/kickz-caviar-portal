@@ -174,6 +174,8 @@ const {
   // The same service in Hypeneedz mode, which holds their partner API key
   // and makes the label through their SendCloud account.
   HYPENEEDZ_SERVICE_BASE_URL = "https://hypeneedz-consignment.onrender.com",
+  // The same service in Shade Studios mode, which holds their seller API key.
+  SHADE_SERVICE_BASE_URL = "https://shade-consignment.onrender.com",
   SELLER_SIGNUP_URL = "https://discord.com/channels/922818998163361792/1444130166703128676",
   DISCORD_BOT_BASE_URL,
   KICKZ_WTB_BOT_BASE_URL,
@@ -4362,7 +4364,8 @@ const STILL_WAITING_FOR_STOCK = new Set([
   "Woovin Processing",
   "bol Processing",
   "SneakerAsk Processing",
-  "Hypeneedz Processing"
+  "Hypeneedz Processing",
+  "Shade Studios Processing"
 ]);
 
 /*
@@ -9108,6 +9111,51 @@ async function requestHypeneedzShippingLabel(orderRecordId, orderFields) {
   return { ok: true, ...data };
 }
 
+/*
+ * Shade Studios makes its label (UPS) the moment the sale lands; only the
+ * consignment service holds the key to download it. Fetching it changes
+ * nothing on their side, so pressing twice is harmless.
+ */
+async function requestShadeShippingLabel(orderRecordId, orderFields) {
+  const saleId = asText(orderFields["Marketplace Sale ID"]);
+  const orderId = displayValue(orderFields["Order ID"]) || orderRecordId;
+
+  if (!saleId) {
+    throw new Error(`No Marketplace Sale ID on ${orderId}`);
+  }
+
+  const existingLabel = orderFields["Shipping Label"];
+
+  if (Array.isArray(existingLabel) && existingLabel.length) {
+    console.log(`Label already attached for ${orderId}, nothing to fetch.`);
+    return { ok: true, already: true };
+  }
+
+  const response = await fetch(
+    `${SHADE_SERVICE_BASE_URL.replace(/\/$/, "")}/shade/label`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-kc-secret": process.env.COUNTER_OFFERS_SECRET || ""
+      },
+      body: JSON.stringify({ order_record_id: orderRecordId, sale_id: saleId })
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      `Shade Studios label for ${orderId} failed: ${response.status} ${data.error || ""}`
+    );
+  }
+
+  console.log(`Shade Studios label attached for ${orderId}.`);
+
+  return { ok: true, ...data };
+}
+
 async function requestBolShippingLabel(orderRecordId, orderFields) {
   const orderId = displayValue(orderFields["Order ID"]) || orderRecordId;
 
@@ -9338,6 +9386,10 @@ async function requestConsignmentShippingLabel(orderRecordId) {
 
   if (marketplace === "Hypeneedz") {
     return await requestHypeneedzShippingLabel(orderRecordId, orderFields);
+  }
+
+  if (marketplace === "Shade Studios") {
+    return await requestShadeShippingLabel(orderRecordId, orderFields);
   }
 
   // FIXED — this only set the status and posted nothing, so pressing
