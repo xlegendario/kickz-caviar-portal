@@ -18505,7 +18505,8 @@ async function takeInClosedBox(res, partner, trackingNumber) {
       mode: "forwarding",
       vat_type: partner.vatType,
       partner_price: null,
-      markup: null,
+      // Not null in the table (default 0); a box has no markup.
+      markup: 0,
       forwarding_fee: partner.boxForwardingFee,
       tracking_number: tracking,
       received_at: new Date().toISOString()
