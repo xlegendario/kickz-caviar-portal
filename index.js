@@ -19419,11 +19419,26 @@ async function runPartnerStockLevelSync() {
   const since = partnerStockSyncedUntil;
   const startedAt = new Date().toISOString();
 
-  const { data, error } = await supabase
-    .from("partner_stock")
-    .select("sku, size, updated_at")
-    .gt("updated_at", since)
-    .limit(2000);
+  // In pages: Supabase stops at 1000 rows a call, and the window moves on
+  // after this run, so a big intake would otherwise leave sizes unsynced.
+  let data = [];
+  let error = null;
+  for (let from = 0; ; from += 1000) {
+    const page = await supabase
+      .from("partner_stock")
+      .select("id, sku, size, updated_at")
+      .gt("updated_at", since)
+      .order("updated_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + 999);
+
+    if (page.error) {
+      error = page.error;
+      break;
+    }
+    data = data.concat(page.data || []);
+    if ((page.data || []).length < 1000) break;
+  }
 
   if (error) {
     if (!partnerStockSyncMissingLogged) {
