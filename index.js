@@ -18377,6 +18377,8 @@ async function loadPartnerSeller(sellerRecordId) {
     name: asText(f["Full Name"]),
     vatType,
     forwardingFee: numberValue(f["Forwarding Fee"]),
+    // What a closed box costs to send on unopened (a new label on it).
+    boxForwardingFee: numberValue(f["Box Forwarding Fee"]),
     isPartner: PARTNER_VAT_TYPES.includes(vatType) && Boolean(asText(f["Seller ID"]))
   };
 }
@@ -18461,6 +18463,61 @@ function refusePartnerStock(res, status, errors) {
   return res.status(status).json({ ok: false, errors: [].concat(errors) });
 }
 
+/*
+ * A closed box (Dario, 28-10-2026): a partner's parcel that is not opened
+ * here but sent on as it is, with a new label, at a fee per box. It is one
+ * row on his shelf - SKU "BOX", its original tracking number as size and
+ * barcode - so a forward, Pack & Ship and the fees take it like a pair.
+ */
+const BOX_SKU = "BOX";
+const boxTracking = (value) => asText(value).replace(/\s+/g, "").toUpperCase();
+
+async function takeInClosedBox(res, partner, trackingNumber) {
+  const tracking = boxTracking(trackingNumber);
+  if (!tracking) return refusePartnerStock(res, 400, "Scan the tracking number of the box first");
+  if (!(partner.boxForwardingFee > 0)) {
+    return refusePartnerStock(res, 400, `${partner.sellerId} has no Box Forwarding Fee in the Sellers Database yet`);
+  }
+
+  const { data: earlier, error: earlierError } = await supabase
+    .from("partner_stock")
+    .select("id")
+    .eq("seller_record_id", partner.id)
+    .eq("tracking_number", tracking)
+    .limit(1);
+
+  if (earlierError) throw earlierError;
+  if (earlier?.length) {
+    return refusePartnerStock(res, 409, `Parcel ${tracking} was already taken in for ${partner.sellerId}. Nothing was added.`);
+  }
+
+  const { data, error } = await supabase
+    .from("partner_stock")
+    .insert([{
+      seller_record_id: partner.id,
+      seller_id: partner.sellerId,
+      barcode: tracking,
+      sku: BOX_SKU,
+      size: tracking,
+      product_name: "Closed box",
+      brand: null,
+      image_url: null,
+      mode: "forwarding",
+      vat_type: partner.vatType,
+      partner_price: null,
+      markup: null,
+      forwarding_fee: partner.boxForwardingFee,
+      tracking_number: tracking,
+      received_at: new Date().toISOString()
+    }])
+    .select("id");
+
+  if (error) throw error;
+
+  console.log(`📦 Partner intake ${partner.sellerId}: closed box ${tracking} at €${partner.boxForwardingFee}`);
+  return res.json({ ok: true, seller_id: partner.sellerId, mode: "forwarding", box: true, pairs_created: data?.length || 0, tracking_number: tracking });
+}
+
 app.post("/api/internal/partner-stock/intake", async (req, res) => {
   if (!hasInternalSecret(req)) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -18472,6 +18529,8 @@ app.post("/api/internal/partner-stock/intake", async (req, res) => {
     if (!partner?.isPartner) {
       return refusePartnerStock(res, 400, "This seller is not set up as a partner (Default VAT Type is empty)");
     }
+
+    if (req.body?.box === true) return takeInClosedBox(res, partner, req.body?.tracking_number);
 
     const mode = asText(req.body?.mode).toLowerCase();
     const trackingNumber = asText(req.body?.tracking_number) || null;
@@ -18794,6 +18853,31 @@ app.post("/api/internal/partner-stock/forwardable", async (req, res) => {
       return res.json({ ok: true, is_partner: false, pairs: [] });
     }
 
+    // A closed box is found by the tracking number on it.
+    const scanned = boxTracking(req.body?.barcode);
+    if (scanned) {
+      const { data: boxes, error: boxError } = await supabase
+        .from("partner_stock")
+        .select(`${PARTNER_PAIR_FIELDS}, forwarding_fee`)
+        .eq("seller_record_id", partner.id)
+        .eq("sku", BOX_SKU)
+        .eq("size", scanned)
+        .eq("status", "in_stock");
+
+      if (boxError) throw boxError;
+      if (boxes?.length) {
+        return res.json({
+          ok: true,
+          is_partner: true,
+          box: true,
+          sku: BOX_SKU,
+          size: scanned,
+          forwarding_fee: Number(boxes[0].forwarding_fee) || partner.boxForwardingFee || 0,
+          pairs: boxes
+        });
+      }
+    }
+
     let sku = asText(req.body?.sku).toUpperCase();
     let size = asText(req.body?.size);
     const barcode = cleanBarcode(req.body?.barcode);
@@ -18822,7 +18906,7 @@ app.post("/api/internal/partner-stock/forwardable", async (req, res) => {
 
     const { data, error } = await supabase
       .from("partner_stock")
-      .select(PARTNER_PAIR_FIELDS)
+      .select(`${PARTNER_PAIR_FIELDS}, forwarding_fee`)
       .eq("seller_record_id", partner.id)
       .eq("sku", sku)
       .eq("size", size)
@@ -18830,13 +18914,18 @@ app.post("/api/internal/partner-stock/forwardable", async (req, res) => {
 
     if (error) throw error;
 
+    const pairs = orderPairsForForwarding(data || []);
+
     return res.json({
       ok: true,
       is_partner: true,
       sku,
       size,
-      forwarding_fee: partner.forwardingFee,
-      pairs: orderPairsForForwarding(data || [])
+      // The fee the first pair to go was taken in at, else his standard one:
+      // Create Outbound sends the line's fee back and would otherwise put
+      // the standard fee over what was agreed at intake.
+      forwarding_fee: Number(pairs[0]?.forwarding_fee) > 0 ? Number(pairs[0].forwarding_fee) : partner.forwardingFee,
+      pairs
     });
   } catch (err) {
     console.error("partner-stock forwardable failed:", err);
