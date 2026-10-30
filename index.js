@@ -2177,10 +2177,23 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
    */
   const isFixedStorePriceOrder = Boolean(asText(orderFields["Marketplace"]));
 
+  /*
+    A price already on the order is the one the store was offered.
+
+    Custom Price in the Lojiq admin puts a price of our own on an order and
+    sends the store a new offer at it - higher than the derived one, so the
+    margin between the consignor's payout and the store's price is ours.
+    Recomputing it here, after the store accepted, put the derived price
+    back and the store was invoiced that instead (ORD-030395, APLUG). The
+    consignor's payout never came from this number and stays as it was.
+  */
+  const priceOnOrder = numberValue(orderFields["Custom Offer"]);
+  const hasPriceOnOrder = Number.isFinite(priceOnOrder) && priceOnOrder > 0;
+
   const customOffer = agreed && Number.isFinite(Number(agreed.storePrice))
     ? Number(agreed.storePrice)
-    : isFixedStorePriceOrder
-      ? numberValue(orderFields["Custom Offer"])
+    : isFixedStorePriceOrder || hasPriceOnOrder
+      ? priceOnOrder
       : calculateStoreCustomOfferFromConsignmentBase(storeBasePrice, orderFields);
 
   const offerVatType = asText(agreed?.storeVatType)
