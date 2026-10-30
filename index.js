@@ -70,7 +70,7 @@ import {
   syncWantToBuys
 } from "./lib/sellerApiWantToBuys.js";
 
-import { isBuyerOfMemberWtb, strictSellerIdentity } from "./lib/sellerIdentity.js";
+import { isBuyerOfMemberWtb, rankSellersSharingEmail, strictSellerIdentity } from "./lib/sellerIdentity.js";
 
 import {
   createAirtableLabelSource,
@@ -39480,10 +39480,13 @@ app.post("/api/login", async (req, res) => {
       });
     }
 
+    // Every profile on this email, not just the first: see
+    // rankSellersSharingEmail. The password picks between them, so a seller
+    // with two profiles lands on the one whose password they typed.
     const records = await airtable(SELLERS_TABLE)
       .select({
         filterByFormula: `LOWER(TRIM({Email} & '')) = '${escapeFormulaValue(email)}'`,
-        maxRecords: 1
+        maxRecords: 20
       })
       .firstPage();
 
@@ -39493,7 +39496,16 @@ app.post("/api/login", async (req, res) => {
       });
     }
 
-    const seller = normalizeSeller(records[0]);
+    const ranked = rankSellersSharingEmail(records.map(normalizeSeller));
+
+    const seller =
+      ranked.find(
+        (candidate) =>
+          candidate.portal_enabled &&
+          candidate.seller_id &&
+          candidate.portal_password &&
+          verifyPassword(password, candidate.portal_password).ok
+      ) || ranked[0];
 
     if (!seller.portal_enabled) {
       return res.status(403).json({
@@ -41183,27 +41195,27 @@ app.post("/api/forgot-password", async (req, res) => {
       return res.status(400).json({ error: "Email is required" });
     }
 
+    // The same profile a sign-in on this email prefers, or the reset sets a
+    // password on a profile nobody uses.
     const records = await airtable(SELLERS_TABLE)
       .select({
         filterByFormula: `LOWER(TRIM({Email} & '')) = '${escapeFormulaValue(email)}'`,
-        maxRecords: 1
+        maxRecords: 20
       })
       .firstPage();
 
-    if (!records.length) {
-      return res.json({ ok: true });
-    }
+    const seller = rankSellersSharingEmail(records.map(normalizeSeller)).find(
+      (candidate) => candidate.seller_id && candidate.portal_enabled
+    );
 
-    const seller = normalizeSeller(records[0]);
-
-    if (!seller.seller_id || !seller.portal_enabled) {
+    if (!seller) {
       return res.json({ ok: true });
     }
 
     const token = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
-    await airtable(SELLERS_TABLE).update(records[0].id, {
+    await airtable(SELLERS_TABLE).update(seller.id, {
       "Password Reset Token": token,
       "Password Reset Expires At": expiresAt
     });
