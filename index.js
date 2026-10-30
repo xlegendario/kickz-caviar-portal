@@ -70,7 +70,13 @@ import {
   syncWantToBuys
 } from "./lib/sellerApiWantToBuys.js";
 
-import { isBuyerOfMemberWtb, rankSellersSharingEmail, strictSellerIdentity } from "./lib/sellerIdentity.js";
+import {
+  existingSellerFormula,
+  isBuyerOfMemberWtb,
+  rankSellersSharingEmail,
+  sellerConflict,
+  strictSellerIdentity
+} from "./lib/sellerIdentity.js";
 
 import {
   createAirtableLabelSource,
@@ -111,7 +117,8 @@ import {
   generateClaimCode,
   hashClaimCode,
   isClaimCodeUsable,
-  normalizeEmail
+  normalizeEmail,
+  sellerIdMatches
 } from "./lib/sellerClaim.js";
 import { isReconcileSafe, planMembershipChanges } from "./lib/membership.js";
 import { normalizeRefCode, planQualifications, shouldAttribute } from "./lib/referral.js";
@@ -40573,14 +40580,38 @@ app.post("/api/internal/claim/start", async (req, res) => {
   }
 
   try {
+    // This Discord account may already have a profile of its own. Claiming
+    // a second one would put one Discord on two Seller IDs - the state that
+    // locked RM SNEAKER TRADE out. Their own Seller ID is safe to show them.
+    const ownProfile = sellerConflict(
+      await airtable(SELLERS_TABLE)
+        .select({ filterByFormula: existingSellerFormula({ discordId }), maxRecords: 1 })
+        .firstPage(),
+      { discordId }
+    );
+
+    if (ownProfile) {
+      const ownSellerId = displayValue(ownProfile.record.fields?.["Seller ID"]);
+
+      console.warn(`Claim geweigerd voor Discord ${discordId}: heeft al ${ownSellerId}`);
+
+      return res.json({
+        ok: false,
+        code: "discord_has_profile",
+        error: `Your Discord is already linked to Seller ID ${ownSellerId}. You can keep using that profile; open a support ticket if you need another one merged into it.`
+      });
+    }
+
+    // Every profile on this email: when there are several, the Seller ID the
+    // seller typed says which one they mean.
     const rows = await airtable(SELLERS_TABLE)
       .select({
-        filterByFormula: `LOWER(TRIM({Email} & '')) = '${escapeFormulaValue(emailInput)}'`,
-        maxRecords: 1
+        filterByFormula: existingSellerFormula({ email: emailInput }),
+        maxRecords: 20
       })
       .firstPage();
 
-    const record = rows[0] || null;
+    const record = rows.find((row) => sellerIdMatches(row.fields?.["Seller ID"], sellerIdInput)) || rows[0] || null;
     const check = canStartClaim({ record, sellerIdInput, emailInput });
 
     if (!check.ok) {
@@ -40691,6 +40722,22 @@ app.post("/api/internal/claim/confirm", async (req, res) => {
       return res.json({ ok: false, error: "That code is not correct." });
     }
 
+    // Checked again at the last moment: the Discord may have been linked to
+    // another profile in the fifteen minutes the code was valid.
+    const linkedElsewhere = sellerConflict(
+      await airtable(SELLERS_TABLE)
+        .select({ filterByFormula: existingSellerFormula({ discordId }), maxRecords: 2 })
+        .firstPage(),
+      { discordId, exceptRecordId: record.id }
+    );
+
+    if (linkedElsewhere) {
+      return res.json({
+        ok: false,
+        error: `Your Discord is already linked to Seller ID ${displayValue(linkedElsewhere.record.fields?.["Seller ID"])}. Please open a support ticket.`
+      });
+    }
+
     // From here the profile is theirs. Clear the claim trail, otherwise a used
     // code stays behind and can be redeemed again later.
     await airtable(SELLERS_TABLE).update(record.id, {
@@ -40743,7 +40790,13 @@ app.get("/api/countries", (_req, res) => {
   res.json({ countries: COUNTRY_NAMES });
 });
 
+// Emails with a signup running right now, so a double submit cannot create
+// two profiles. One process serves the portal, so memory is enough.
+const signupsInFlight = new Set();
+
 app.post("/api/signup", async (req, res) => {
+  let claimedEmail = "";
+
   try {
     const returnTo = safeReturnPath(req.body?.return_to);
     const refCode = normalizeRefCode(req.body?.referral_code);
@@ -40760,15 +40813,31 @@ app.post("/api/signup", async (req, res) => {
     // (created by the Discord bot or the old form); a second record for the
     // same person produces a second Seller ID and splits their deal history
     // in two.
+    //
+    // A double click sends two of these at once, and both would find nothing
+    // and both create. So the second one is refused instead.
+    if (signupsInFlight.has(result.email)) {
+      return res.status(409).json({
+        error: "Your profile is already being created. Please wait a moment and log in.",
+        code: "signup_in_progress"
+      });
+    }
+
+    signupsInFlight.add(result.email);
+    claimedEmail = result.email;
+
     const existing = await airtable(SELLERS_TABLE)
       .select({
-        filterByFormula: `LOWER(TRIM({Email} & '')) = '${escapeFormulaValue(result.email)}'`,
-        maxRecords: 1
+        filterByFormula: existingSellerFormula({ email: result.email }),
+        maxRecords: 20
       })
       .firstPage();
 
     if (existing.length) {
-      const seller = normalizeSeller(existing[0]);
+      // Several profiles can share this email already (see
+      // rankSellersSharingEmail); any one with a password means sign in.
+      const seller = existing.map(normalizeSeller).find((candidate) => candidate.portal_password) ||
+        normalizeSeller(existing[0]);
 
       // Already has a password: just sign in.
       if (seller.portal_password) {
@@ -40821,6 +40890,9 @@ app.post("/api/signup", async (req, res) => {
       error: "Could not create your seller profile",
       details: err.message
     });
+  } finally {
+    // Only the request that claimed the email releases it.
+    if (claimedEmail) signupsInFlight.delete(claimedEmail);
   }
 });
 
