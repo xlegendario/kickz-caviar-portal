@@ -6,6 +6,7 @@ import {
   isBuyerOfMemberWtb,
   rankSellersSharingEmail,
   sellerConflict,
+  sellerToSignIn,
   strictSellerIdentity
 } from "../lib/sellerIdentity.js";
 
@@ -109,4 +110,44 @@ test("the record being updated is not a conflict with itself", () => {
 
   assert.equal(sellerConflict(records, { discordId: "764941839773466654", exceptRecordId: "rec814" }), null);
   assert.equal(sellerConflict(records, { discordId: "764941839773466654", exceptRecordId: "rec282" }).record.id, "rec814");
+});
+
+const profile = (seller_id, discord_id, portal_password) => ({
+  id: `rec${seller_id}`,
+  seller_id,
+  discord_id,
+  portal_password,
+  portal_enabled: true
+});
+
+test("the old profile's password signs in to the profile with Discord", () => {
+  const sellers = [profile("SE-00282", "", "old"), profile("SE-00814", "764941839773466654", "new")];
+  const fits = (typed) => (seller) => seller.portal_password === typed;
+
+  const withOld = sellerToSignIn(sellers, fits("old"));
+  assert.equal(withOld.verified, true);
+  assert.equal(withOld.seller.seller_id, "SE-00814");
+  assert.equal(withOld.fitted.seller_id, "SE-00282");
+
+  assert.equal(sellerToSignIn(sellers, fits("new")).seller.seller_id, "SE-00814");
+  assert.equal(sellerToSignIn(sellers, fits("wrong")).verified, false);
+});
+
+test("the profile with Discord does not need a password of its own", () => {
+  const sellers = [profile("SE-00282", "", "old"), profile("SE-00814", "764941839773466654", "")];
+
+  assert.equal(sellerToSignIn(sellers, (seller) => seller.portal_password === "old").seller.seller_id, "SE-00814");
+});
+
+test("a shared email with two Discord profiles keeps the password's own profile", () => {
+  const sellers = [profile("SE-00519", "", "mine"), profile("SE-00467", "1", "a"), profile("SE-00541", "2", "b")];
+
+  assert.equal(sellerToSignIn(sellers, (seller) => seller.portal_password === "mine").seller.seller_id, "SE-00519");
+});
+
+test("one profile on an email signs in as before", () => {
+  const sellers = [profile("SE-00100", "", "pw")];
+
+  assert.deepEqual(sellerToSignIn(sellers, (seller) => seller.portal_password === "pw").seller.seller_id, "SE-00100");
+  assert.equal(sellerToSignIn(sellers, () => false).verified, false);
 });

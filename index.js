@@ -75,6 +75,7 @@ import {
   isBuyerOfMemberWtb,
   rankSellersSharingEmail,
   sellerConflict,
+  sellerToSignIn,
   strictSellerIdentity
 } from "./lib/sellerIdentity.js";
 
@@ -39501,8 +39502,8 @@ app.post("/api/login", async (req, res) => {
     }
 
     // Every profile on this email, not just the first: see
-    // rankSellersSharingEmail. The password picks between them, so a seller
-    // with two profiles lands on the one whose password they typed.
+    // sellerToSignIn. The password must fit one of them; the profile with
+    // Discord wins over one without, whichever password was typed.
     const records = await airtable(SELLERS_TABLE)
       .select({
         filterByFormula: `LOWER(TRIM({Email} & '')) = '${escapeFormulaValue(email)}'`,
@@ -39516,50 +39517,46 @@ app.post("/api/login", async (req, res) => {
       });
     }
 
-    const ranked = rankSellersSharingEmail(records.map(normalizeSeller));
+    const { seller, verified, fitted } = sellerToSignIn(
+      records.map(normalizeSeller),
+      (candidate) => verifyPassword(password, candidate.portal_password).ok
+    );
 
-    const seller =
-      ranked.find(
-        (candidate) =>
-          candidate.portal_enabled &&
-          candidate.seller_id &&
-          candidate.portal_password &&
-          verifyPassword(password, candidate.portal_password).ok
-      ) || ranked[0];
+    if (!verified) {
+      if (!seller.portal_enabled) {
+        return res.status(403).json({
+          error: "Portal access disabled"
+        });
+      }
 
-    if (!seller.portal_enabled) {
-      return res.status(403).json({
-        error: "Portal access disabled"
-      });
-    }
+      if (!seller.seller_id) {
+        return res.status(403).json({
+          error: "Please sign up through Discord first"
+        });
+      }
 
-    if (!seller.seller_id) {
-      return res.status(403).json({
-        error: "Please sign up through Discord first"
-      });
-    }
+      if (!seller.portal_password) {
+        return res.status(403).json({
+          error: "Please set your password first"
+        });
+      }
 
-    if (!seller.portal_password) {
-      return res.status(403).json({
-        error: "Please set your password first"
+      return res.status(401).json({
+        error: "Invalid login"
       });
     }
 
     // FIXED - this was a bare === against a plain-text password from
     // Airtable. verifyPassword still accepts the old format, but reports via
     // needsRehash that the record should be migrated. Everyone migrates by
-    // themselves on their next sign-in, with no mass reset.
-    const { ok, needsRehash } = verifyPassword(password, seller.portal_password);
-
-    if (!ok) {
-      return res.status(401).json({
-        error: "Invalid login"
-      });
-    }
+    // themselves on their next sign-in, with no mass reset. The record to
+    // migrate is the one the password belongs to, which need not be the
+    // profile signed in to (see sellerToSignIn).
+    const { needsRehash } = verifyPassword(password, fitted.portal_password);
 
     if (needsRehash) {
       try {
-        await airtable(SELLERS_TABLE).update(seller.id, {
+        await airtable(SELLERS_TABLE).update(fitted.id, {
           "Portal Password": hashPassword(password)
         });
       } catch (rehashErr) {
