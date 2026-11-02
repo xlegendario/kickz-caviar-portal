@@ -31235,7 +31235,7 @@ function scanTable(table, options) {
   );
 }
 
-async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSellerId) {
+async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSellerId, prefetched = null) {
   const linkField = sourceType === "Member WTB" ? "Member WTBs" : "Linked Orders";
   const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
 
@@ -31261,7 +31261,17 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
     only used to pick rows out of the answer. Splitting the two is what lets
     the rows share one scan.
   */
-  const [allOffers, allOpenRounds, allRounds] = await Promise.all([
+  /*
+    A caller that already holds this order's rows passes them in. The three
+    scans below read whole tables, about six seconds each time the hold has
+    run out; the store's Offers tab asked for them on every visit and took
+    up to fifteen seconds with nothing in it (Shade Studios, 02-11-2026).
+    The rows must cover the record asked about - they are filtered by it
+    below exactly as the scans are.
+  */
+  const [allOffers, allOpenRounds, allRounds] = prefetched
+    ? [prefetched.offers, prefetched.rounds.filter((r) => asText(r.fields?.["Status"]) === "Open"), prefetched.rounds]
+    : await Promise.all([
     scanTable(SELLER_OFFERS_TABLE, {
       fields: [linkField, "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"]
     }),
@@ -31514,6 +31524,34 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
 // call — this is more thorough: proper Denied?/Withdrawn? exclusion,
 // cross-seller comparison, no-room-to-counter).
 // ---------------------------------------------------------------------
+/*
+ * Only the rows that belong to these orders, asked of Airtable.
+ *
+ * Both Seller Offers and Counter Offers carry the order's Order ID as a
+ * lookup, so Airtable can narrow them instead of this reading whole tables.
+ * Callers still check the linked record id afterwards; this only decides
+ * what is fetched.
+ */
+async function selectRowsForOrderIds(table, orderIdTexts, { formula = "", fields } = {}) {
+  const ids = [...new Set(orderIdTexts.map(asText).filter(Boolean))];
+  const rows = [];
+
+  for (let i = 0; i < ids.length; i += 40) {
+    const anyOrder = `OR(${ids
+      .slice(i, i + 40)
+      .map((id) => `FIND('${escapeFormulaValue(id)}', ARRAYJOIN({Order ID}))`)
+      .join(",")})`;
+
+    rows.push(
+      ...(await airtable(table)
+        .select({ filterByFormula: formula ? `AND(${formula}, ${anyOrder})` : anyOrder, ...(fields ? { fields } : {}) })
+        .all())
+    );
+  }
+
+  return rows;
+}
+
 app.get("/api/dashboard/store-offers", async (req, res) => {
   try {
     const secret = asText(req.headers["x-kc-secret"]);
@@ -31550,16 +31588,40 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
     const orderIds = orderRecords.map((r) => r.id);
     const orderIdSet = new Set(orderIds);
 
+    /*
+      CHANGED - two reads of this store's rows instead of whole tables.
+
+      This read all of Seller Offers and all Seller Offer rounds in Counter
+      Offers, twice over, and getCurrentGlobalLowestNormalized below read
+      them a third time per order: 6-15 seconds for a store with a single
+      open offer (Shade Studios, APLUG, 02-11-2026). Everything below now
+      works from these two, the global-lowest check included.
+    */
+    const orderIdTexts = orderRecords.map((r) => r.fields?.["Order ID"]);
+
+    const [offersForTheseOrders, roundsForTheseOrders] = await Promise.all([
+      selectRowsForOrderIds(SELLER_OFFERS_TABLE, orderIdTexts, {
+        fields: ["Linked Orders", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer", "Denied?", "Withdrawn?"]
+      }),
+      selectRowsForOrderIds(COUNTER_OFFERS_TABLE, orderIdTexts, {
+        formula: `{Source Type} = 'Seller Offer'`,
+        fields: [
+          "Order", "Seller ID", "Status", "Store Counter Price", "Counter Payout", "Counter Payout VAT Type",
+          "Seller Original VAT Type", "Seller Counter Price", "Created At", "Previous Record ID"
+        ]
+      })
+    ]);
+
+    const prefetchedForLowest = { offers: offersForTheseOrders, rounds: roundsForTheseOrders };
+
     // Per order, the set of seller IDs currently mid-negotiation — their
     // raw Seller Offer is stale (superseded by their own counter) and
     // must be skipped when picking the "fresh" winner below.
-    const activeCountersForTheseOrders = await airtable(COUNTER_OFFERS_TABLE)
-      .select({
-        filterByFormula: `AND(OR({Status} = 'Open', {Status} = 'Denied'), {Source Type} = 'Seller Offer')`,
-        fields: ["Order", "Seller ID"]
-      })
-      .all()
-      .then((records) => records.filter((r) => orderIdSet.has(firstLinkedRecordId(r.fields?.["Order"]))));
+    const activeCountersForTheseOrders = roundsForTheseOrders.filter(
+      (r) =>
+        ["Open", "Denied"].includes(asText(r.fields?.["Status"])) &&
+        orderIdSet.has(firstLinkedRecordId(r.fields?.["Order"]))
+    );
 
     const sellerIdsWithActiveCounterByOrderId = new Map();
     for (const r of activeCountersForTheseOrders) {
@@ -31572,9 +31634,7 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
       sellerIdsWithActiveCounterByOrderId.get(orderId).add(sellerId);
     }
 
-    const allSellerOffersForTheseOrders = await airtable(SELLER_OFFERS_TABLE)
-      .select({ fields: ["Linked Orders", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer", "Denied?", "Withdrawn?"] })
-      .all()
+    const allSellerOffersForTheseOrders = await Promise.resolve(offersForTheseOrders)
       .then((records) =>
         records.filter(
           (r) =>
@@ -31628,7 +31688,7 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
     // number.
     await Promise.all(
       Array.from(winningSellerOfferByOrderId.keys()).map(async (orderId) => {
-        const bestActiveCounter = (await getCurrentGlobalLowestNormalized("Seller Offer", orderId, null)).normalized;
+        const bestActiveCounter = (await getCurrentGlobalLowestNormalized("Seller Offer", orderId, null, prefetchedForLowest)).normalized;
         const winner = winningSellerOfferByOrderId.get(orderId);
         const freshNormalized = winner.normalizedPrice;
         if (Number.isFinite(bestActiveCounter) && Number.isFinite(freshNormalized) && bestActiveCounter < freshNormalized) {
@@ -31643,13 +31703,9 @@ app.get("/api/dashboard/store-offers", async (req, res) => {
     // round too), then a per-order lookup, instead of one Airtable call
     // per order (getBuyerHighestEverPosition would otherwise run once
     // per item and risk Airtable's rate limit on a bigger list).
-    const allRoundsForTheseOrders = await airtable(COUNTER_OFFERS_TABLE)
-      .select({
-        filterByFormula: `{Source Type} = 'Seller Offer'`,
-        fields: ["Order", "Store Counter Price"]
-      })
-      .all()
-      .then((records) => records.filter((r) => orderIdSet.has(firstLinkedRecordId(r.fields?.["Order"]))));
+    const allRoundsForTheseOrders = roundsForTheseOrders.filter((r) =>
+      orderIdSet.has(firstLinkedRecordId(r.fields?.["Order"]))
+    );
 
     const myHighestEverByOrderId = new Map();
     for (const r of allRoundsForTheseOrders) {
