@@ -35825,7 +35825,8 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
           "Brand",
           "Buyer VAT ID",
           "Buyer Country",
-          "Max Price"
+          "Max Price",
+          "Fulfillment Status"
         ]
       })
       .all()
@@ -35930,7 +35931,10 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
     // Same "only Delete or no-longer-Outsource makes it disappear"
     // rule — excludes anything whose Member WTB is no longer Outsource.
     const memberWtbStatusMap = new Map(myMemberWtbs.map((r) => [r.id, asText(r.fields?.["Fulfillment Status"])]));
-    const freshMemberWtbStatuses = await findRecordsByIds(MEMBER_WTBS_TABLE, [...myMemberWtbIds]);
+    // The status comes with the read above, made a moment ago. Reading it
+    // again cost one Airtable call per want-to-buy the buyer ever posted -
+    // 78 for SneakerGround, over ten seconds at five calls a second.
+    const freshMemberWtbStatuses = [];
     freshMemberWtbStatuses.forEach((r) => memberWtbStatusMap.set(r.id, asText(r.fields?.["Fulfillment Status"])));
 
     const preFiltered = preFilteredByStatus.filter((record) => {
