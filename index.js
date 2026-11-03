@@ -30478,10 +30478,18 @@ app.post("/api/dashboard/wtb-counter-offers/:offerId/retry-counter", async (req,
 // facing terms already (the buyer's own literal input, never VAT-
 // converted), so it's directly comparable across different sellers'
 // threads with no normalization needed.
-async function getBuyerHighestEverPosition(sourceType, recordId) {
+async function getBuyerHighestEverPosition(sourceType, recordId, prefetchedRounds = null) {
   const counterLinkField = sourceType === "Member WTB" ? "Member WTB" : "Order";
 
-  const allRounds = await airtable(COUNTER_OFFERS_TABLE)
+  // Rounds a caller already read for this record, instead of a whole-table
+  // read on every call - see store-counter-offers.
+  const allRounds = prefetchedRounds
+    ? prefetchedRounds.filter(
+        (r) =>
+          asText(r.fields?.["Source Type"]) === sourceType &&
+          firstLinkedRecordId(r.fields?.[counterLinkField]) === recordId
+      )
+    : await airtable(COUNTER_OFFERS_TABLE)
     .select({
       filterByFormula: `{Source Type} = '${escapeFormulaValue(sourceType)}'`,
       fields: [counterLinkField, "Store Counter Price"]
@@ -30612,7 +30620,29 @@ async function shouldNotifyStoreOfSellerDeny({
  * still gives up after fifteen hops and still answers null when the chain
  * leads somewhere this table does not have.
  */
-async function findSellersTrueLastCounter(startRoundId, maxHops = 15) {
+async function findSellersTrueLastCounter(startRoundId, maxHops = 15, prefetchedRounds = null) {
+  /*
+    The chain stays on one order, so the rounds a caller already read for it
+    are enough. A hop that is not among them falls back to the whole table,
+    so the answer never depends on what was passed in.
+  */
+  if (prefetchedRounds) {
+    const known = new Map(prefetchedRounds.map((round) => [round.id, round]));
+    let hopId = startRoundId;
+
+    for (let hop = 0; hop < maxHops && hopId; hop++) {
+      const round = known.get(hopId);
+      if (!round) return findSellersTrueLastCounter(startRoundId, maxHops);
+
+      const sellerCounter = numberValue(round.fields?.["Seller Counter Price"]);
+      if (sellerCounter > 0) return sellerCounter;
+
+      hopId = asText(round.fields?.["Previous Record ID"]) || null;
+    }
+
+    return null;
+  }
+
   const rounds = await scanTable(COUNTER_OFFERS_TABLE, {
     fields: ["Seller Counter Price", "Previous Record ID"]
   });
@@ -31532,14 +31562,14 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
  * Callers still check the linked record id afterwards; this only decides
  * what is fetched.
  */
-async function selectRowsForOrderIds(table, orderIdTexts, { formula = "", fields } = {}) {
+async function selectRowsForOrderIds(table, orderIdTexts, { formula = "", fields, idField = "Order ID" } = {}) {
   const ids = [...new Set(orderIdTexts.map(asText).filter(Boolean))];
   const rows = [];
 
   for (let i = 0; i < ids.length; i += 40) {
     const anyOrder = `OR(${ids
       .slice(i, i + 40)
-      .map((id) => `FIND('${escapeFormulaValue(id)}', ARRAYJOIN({Order ID}))`)
+      .map((id) => `FIND('${escapeFormulaValue(id)}', ARRAYJOIN({${idField}}))`)
       .join(",")})`;
 
     rows.push(
@@ -31849,14 +31879,30 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
     }
 
     const statusForQuery = filter === "denied" ? "Denied" : "Open";
-    const records = await airtable(COUNTER_OFFERS_TABLE)
-      .select({
-        filterByFormula: `AND({Status} = '${statusForQuery}', {Source Type} = 'Seller Offer')`
-      })
-      .all()
-      .then((records) =>
-        records.filter((r) => myOrderIds.has(firstLinkedRecordId(r.fields?.["Order"])))
-      );
+    /*
+      CHANGED - this store's rows, read once, instead of whole tables.
+
+      The route read every Seller Offer round in Counter Offers up to three
+      times, every denied Seller Offer, and per row a whole-table read in
+      getBuyerHighestEverPosition and getCurrentGlobalLowestNormalized: up to
+      twelve seconds for the Denied pill of a store with nothing in it (APLUG,
+      SNEAKEREGEER, 03-11-2026). Every step below works from these two reads;
+      each still checks the linked record id itself.
+    */
+    const myOrderIdTexts = myOrders.map((r) => r.fields?.["Order ID"]);
+
+    const [myRounds, myOffers] = await Promise.all([
+      selectRowsForOrderIds(COUNTER_OFFERS_TABLE, myOrderIdTexts, { formula: `{Source Type} = 'Seller Offer'` }),
+      selectRowsForOrderIds(SELLER_OFFERS_TABLE, myOrderIdTexts)
+    ]);
+
+    const prefetchedForLowest = { offers: myOffers, rounds: myRounds };
+
+    const records = myRounds.filter(
+      (r) =>
+        asText(r.fields?.["Status"]) === statusForQuery &&
+        myOrderIds.has(firstLinkedRecordId(r.fields?.["Order"]))
+    );
 
     // "open" wants rows where the SELLER just moved (store must
     // respond); "countered" wants the opposite — the store's own
@@ -31882,12 +31928,7 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
     // end. Fetch broadly and match by Order ID in JS (never
     // FIND(rawId, ARRAYJOIN(...)), a documented pitfall).
     if (filter === "denied" && preFiltered.length) {
-      const allSellerRounds = await airtable(COUNTER_OFFERS_TABLE)
-        .select({
-          filterByFormula: `{Source Type} = 'Seller Offer'`,
-          fields: ["Order", "Previous Record ID", "Created At"]
-        })
-        .all();
+      const allSellerRounds = myRounds;
 
       const referencedAsPrevId = new Set();
       const siblingsByPrevId = new Map();
@@ -31932,7 +31973,13 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
     let previousSellerCounterById = new Map();
     let previousStoreCounterById = new Map();
     if (previousIds.length) {
-      const previousRecords = await findRecordsByIds(COUNTER_OFFERS_TABLE, previousIds);
+      // Almost always among this store's own rounds; only the rest is asked.
+      const knownRounds = new Map(myRounds.map((r) => [r.id, r]));
+      const missingPreviousIds = previousIds.filter((id) => !knownRounds.has(id));
+      const previousRecords = [
+        ...previousIds.filter((id) => knownRounds.has(id)).map((id) => knownRounds.get(id)),
+        ...(missingPreviousIds.length ? await findRecordsByIds(COUNTER_OFFERS_TABLE, missingPreviousIds) : [])
+      ];
 
       previousSellerCounterById = new Map(
         previousRecords.map((r) => {
@@ -31968,7 +32015,7 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
       // standing position across the WHOLE order (their highest-ever Store
       // Counter Price), the same figure the seller's embed shows.
       if (!(Number.isFinite(myLastOffer) && myLastOffer > 0) && orderId) {
-        const storeStanding = await getBuyerHighestEverPosition("Seller Offer", orderId);
+        const storeStanding = await getBuyerHighestEverPosition("Seller Offer", orderId, myRounds);
         if (Number.isFinite(storeStanding) && storeStanding > 0) {
           myLastOffer = storeStanding;
         }
@@ -31979,7 +32026,7 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
       if (sellerCounter > 0) {
         sellersOffer = sellerCounter;
       } else {
-        const chainTraced = await findSellersTrueLastCounter(record.id);
+        const chainTraced = await findSellersTrueLastCounter(record.id, 15, myRounds);
         sellersOffer = chainTraced ?? numberValue(f["Seller Original Price"]);
       }
 
@@ -32071,7 +32118,8 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
         const betterElsewhere = (await getCurrentGlobalLowestNormalized(
           "Seller Offer",
           item.order_record_id,
-          item.__sellerId
+          item.__sellerId,
+          prefetchedForLowest
         )).normalized;
         if (!Number.isFinite(betterElsewhere)) return item;
 
@@ -32098,9 +32146,7 @@ app.get("/api/dashboard/store-counter-offers", async (req, res) => {
     // frontend can offer Accept/Counter/Delete on the raw seller offer.
     let mergedItems = finalItems;
     if (filter === "denied") {
-      const deniedSellerOfferRecords = await airtable(SELLER_OFFERS_TABLE)
-        .select({ filterByFormula: `{Denied?} = TRUE()` })
-        .all();
+      const deniedSellerOfferRecords = myOffers.filter((record) => record.fields?.["Denied?"] === true);
 
       const deniedFreshItemsRaw = deniedSellerOfferRecords
         .filter((record) => myOrderIds.has(firstLinkedRecordId(record.fields?.["Linked Orders"])))
@@ -35754,8 +35800,22 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
       return res.status(400).json({ error: "Missing seller_record_id" });
     }
 
+    /*
+      CHANGED - only this buyer's want-to-buys, and only their rounds and
+      offers, instead of the whole of Member WTBs, Counter Offers and Seller
+      Offers: up to ten seconds for a buyer's Countered or Denied pill
+      (SneakerAsk, Madonnina, 03-11-2026). The buyer is matched in the
+      formula on his Seller ID, the primary field the link shows, and again
+      on the record id below.
+    */
+    const buyerRecord = await airtable(SELLERS_TABLE).find(buyerSellerRecordId).catch(() => null);
+    const buyerSellerIdText = asText(buyerRecord?.fields?.["Seller ID"]);
+
     const myMemberWtbs = await airtable(MEMBER_WTBS_TABLE)
       .select({
+        ...(buyerSellerIdText
+          ? { filterByFormula: `FIND('${escapeFormulaValue(buyerSellerIdText)}', ARRAYJOIN({Buyer Seller ID}))` }
+          : {}),
         fields: [
           "Buyer Seller ID",
           "Member WTB ID",
@@ -35781,24 +35841,26 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
 
     const statusFormula = filter === "denied" ? `{Status} = 'Denied'` : `{Status} = 'Open'`;
 
-    const records = await airtable(COUNTER_OFFERS_TABLE)
-      .select({
-        // FIXED - this only matched rounds the buyer created himself in the
-        // portal. A counter that began with an Offer press carries Source Type
-        // "Seller Offer", because the system countered the consignor on his
-        // behalf - so his own standing counter appeared in no list at all.
-        // MWTB-000414: consignor at 155, we countered 140, and the buyer found
-        // it under neither Open nor Countered.
-        //
-        // Which of the two lists a round belongs in is decided below, and that
-        // reads Seller Counter Price rather than the source. So both types can
-        // safely come through here.
-        filterByFormula: `AND(${statusFormula}, OR({Source Type} = 'Member WTB', {Source Type} = 'Seller Offer'))`
-      })
-      .all()
-      .then((records) =>
-        records.filter((r) => myMemberWtbIds.has(firstLinkedRecordId(r.fields?.["Member WTB"])))
-      );
+    // Both source types, for the reason the old query gave: a counter that
+    // began with an Offer press carries "Seller Offer" (MWTB-000414).
+    const myMemberWtbIdTexts = myMemberWtbs.map((r) => r.fields?.["Member WTB ID"]);
+
+    const [myRounds, myOffers] = await Promise.all([
+      selectRowsForOrderIds(COUNTER_OFFERS_TABLE, myMemberWtbIdTexts, {
+        idField: "Member WTB ID",
+        formula: `OR({Source Type} = 'Member WTB', {Source Type} = 'Seller Offer')`
+      }),
+      selectRowsForOrderIds(SELLER_OFFERS_TABLE, myMemberWtbIdTexts, { idField: "Member WTB ID" })
+    ]);
+
+    const prefetchedForLowest = { offers: myOffers, rounds: myRounds };
+    const statusWanted = filter === "denied" ? "Denied" : "Open";
+
+    const records = myRounds.filter(
+      (r) =>
+        asText(r.fields?.["Status"]) === statusWanted &&
+        myMemberWtbIds.has(firstLinkedRecordId(r.fields?.["Member WTB"]))
+    );
 
     const preFilteredByStatusRaw = records.filter((record) => {
       if (filter === "denied") return true;
@@ -35821,15 +35883,9 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
     let preFilteredByStatus = preFilteredByStatusRaw;
 
     if (filter === "denied" && preFilteredByStatusRaw.length) {
-      const allRoundsForMyWtbs = await airtable(COUNTER_OFFERS_TABLE)
-        .select({
-          filterByFormula: `OR({Source Type} = 'Member WTB', {Source Type} = 'Seller Offer')`,
-          fields: ["Member WTB", "Previous Record ID", "Created At"]
-        })
-        .all()
-        .then((records) =>
-          records.filter((r) => myMemberWtbIds.has(firstLinkedRecordId(r.fields?.["Member WTB"])))
-        );
+      const allRoundsForMyWtbs = myRounds.filter((r) =>
+        myMemberWtbIds.has(firstLinkedRecordId(r.fields?.["Member WTB"]))
+      );
 
       const referencedAsPrevId = new Set();
       const siblingsByPrevId = new Map();
@@ -35888,7 +35944,13 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
     let previousSellerCounterById = new Map();
     let previousBuyerCounterById = new Map();
     if (previousIds.length) {
-      const previousRecords = await findRecordsByIds(COUNTER_OFFERS_TABLE, previousIds);
+      // Almost always among this buyer's own rounds; only the rest is asked.
+      const knownRounds = new Map(myRounds.map((r) => [r.id, r]));
+      const missingPreviousIds = previousIds.filter((id) => !knownRounds.has(id));
+      const previousRecords = [
+        ...previousIds.filter((id) => knownRounds.has(id)).map((id) => knownRounds.get(id)),
+        ...(missingPreviousIds.length ? await findRecordsByIds(COUNTER_OFFERS_TABLE, missingPreviousIds) : [])
+      ];
       // FIXED — same underlying issue as the Consignment €0.00 bug:
       // numberValue() always returns a finite number (0 for a blank
       // field), so Number.isFinite(numberValue(x)) is ALWAYS true —
@@ -35951,7 +36013,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
       if (sellerCounter > 0) {
         sellersOffer = sellerCounter;
       } else {
-        const chainTraced = await findSellersTrueLastCounter(record.id);
+        const chainTraced = await findSellersTrueLastCounter(record.id, 15, myRounds);
         sellersOffer = chainTraced ?? numberValue(f["Seller Original Price"]);
       }
 
@@ -36039,7 +36101,8 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         const betterElsewhere = (await getCurrentGlobalLowestNormalized(
           "Member WTB",
           item.member_wtb_record_id,
-          item.__sellerId
+          item.__sellerId,
+          prefetchedForLowest
         )).normalized;
         if (!Number.isFinite(betterElsewhere)) return item;
 
@@ -36075,9 +36138,7 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
     let mergedFinalItems = finalItems;
 
     if (filter === "denied") {
-      const deniedSellerOfferRecordsRaw = await airtable(SELLER_OFFERS_TABLE)
-        .select({ filterByFormula: `{Denied?} = TRUE()`, fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Denied At", "Withdrawn?"] })
-        .all()
+      const deniedSellerOfferRecordsRaw = await Promise.resolve(myOffers.filter((r) => r.fields?.["Denied?"] === true))
         .then((records) =>
           records.filter(
             (r) =>
@@ -36135,7 +36196,8 @@ app.get("/api/dashboard/buying-counter-offers", async (req, res) => {
         const otherLowest = await getCurrentGlobalLowestNormalized(
           "Member WTB",
           wtbId,
-          deniedSellerId
+          deniedSellerId,
+          prefetchedForLowest
         ).catch(() => null);
 
         const otherNorm =
