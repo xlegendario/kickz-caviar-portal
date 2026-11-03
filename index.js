@@ -31299,8 +31299,14 @@ async function getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSel
     The rows must cover the record asked about - they are filtered by it
     below exactly as the scans are.
   */
+  // Only this source type's rounds, as the scans ask for. A row read without
+  // the Source Type field came from a query that already narrowed on it.
+  const prefetchedRounds = prefetched
+    ? prefetched.rounds.filter((r) => !r.fields?.["Source Type"] || asText(r.fields["Source Type"]) === sourceType)
+    : null;
+
   const [allOffers, allOpenRounds, allRounds] = prefetched
-    ? [prefetched.offers, prefetched.rounds.filter((r) => asText(r.fields?.["Status"]) === "Open"), prefetched.rounds]
+    ? [prefetched.offers, prefetchedRounds.filter((r) => asText(r.fields?.["Status"]) === "Open"), prefetchedRounds]
     : await Promise.all([
     scanTable(SELLER_OFFERS_TABLE, {
       fields: [linkField, "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"]
@@ -36959,6 +36965,19 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
       });
     }
 
+    /*
+      CHANGED - this buyer's want-to-buys and their rows only, instead of
+      every open want-to-buy, every open round and all of Seller Offers:
+      twelve seconds for SneakerGround's Open offers (03-11-2026). The
+      buyer is matched on his Seller ID in the formula and on the record id
+      below, as before.
+    */
+    const buyerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+    const buyerSellerIdText = asText(buyerRecord?.fields?.["Seller ID"]);
+    const buyerFormula = buyerSellerIdText
+      ? `FIND('${escapeFormulaValue(buyerSellerIdText)}', ARRAYJOIN({Buyer Seller ID})),`
+      : "";
+
     const records = await airtable(MEMBER_WTBS_TABLE)
       .select({
         fields: [
@@ -36977,6 +36996,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
           "Buyer Country"
         ],
         filterByFormula: `AND(
+          ${buyerFormula}
           OR(
             {Fulfillment Status} = 'Pending',
             {Fulfillment Status} = 'Outsource'
@@ -36999,17 +37019,27 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
     // completely different, untouched, possibly-better seller's fresh
     // offer along with it. Now tracks WHICH seller has an active
     // round (per Member WTB) instead of just whether ANY seller does.
-    const activeCountersForTheseWtbs = memberWtbIds.length
-      ? await airtable(COUNTER_OFFERS_TABLE)
-          .select({
-            filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Member WTB')`,
-            fields: ["Member WTB", "Seller ID"]
-          })
-          .all()
-          .then((records) =>
-            records.filter((r) => memberWtbIds.includes(firstLinkedRecordId(r.fields?.["Member WTB"])))
-          )
-      : [];
+    const memberWtbIdTexts = records
+      .filter((record) => memberWtbIds.includes(record.id))
+      .map((record) => record.fields?.["Member WTB ID"]);
+
+    const [myRounds, myOffers] = memberWtbIds.length
+      ? await Promise.all([
+          selectRowsForOrderIds(COUNTER_OFFERS_TABLE, memberWtbIdTexts, {
+            idField: "Member WTB ID",
+            formula: `{Source Type} = 'Member WTB'`
+          }),
+          selectRowsForOrderIds(SELLER_OFFERS_TABLE, memberWtbIdTexts, { idField: "Member WTB ID" })
+        ])
+      : [[], []];
+
+    const prefetchedForLowest = { offers: myOffers, rounds: myRounds };
+
+    const activeCountersForTheseWtbs = myRounds.filter(
+      (r) =>
+        asText(r.fields?.["Status"]) === "Open" &&
+        memberWtbIds.includes(firstLinkedRecordId(r.fields?.["Member WTB"]))
+    );
 
     // Per Member WTB, the set of seller IDs currently mid-negotiation
     // — their raw Seller Offer is stale (superseded by their counter)
@@ -37034,12 +37064,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
     // "Offer VAT Type" directly, the same field the existing, working
     // create-first-counter endpoint already relies on.
     const allSellerOffersForTheseWtbs = memberWtbIds.length
-      ? await airtable(SELLER_OFFERS_TABLE)
-          // "Offer Date" is when this offer arrived. The store side fills
-          // that column from the order's "Offer Sent At"; a Member WTB has
-          // no such field, but the Seller Offer behind it does.
-          .select({ fields: ["Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Offer Date", "Delete Offer", "Denied?"] })
-          .all()
+      ? await Promise.resolve(myOffers)
           .then((records) =>
             records.filter(
               (r) =>
@@ -37111,7 +37136,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
     // excluded from Open entirely, not shown with a worse number.
     await Promise.all(
       Array.from(winningSellerOfferByWtbId.entries()).map(async ([wtbId, winner]) => {
-        const bestActiveCounter = (await getCurrentGlobalLowestNormalized("Member WTB", wtbId, null)).normalized;
+        const bestActiveCounter = (await getCurrentGlobalLowestNormalized("Member WTB", wtbId, null, prefetchedForLowest)).normalized;
         const freshNormalized = winner.normalized;
         if (Number.isFinite(bestActiveCounter) && Number.isFinite(freshNormalized) && bestActiveCounter < freshNormalized) {
           winningSellerOfferByWtbId.delete(wtbId);
@@ -37151,7 +37176,7 @@ app.get("/api/dashboard/buying-offers", async (req, res) => {
         // though €100 is still their real, binding position — same
         // getBuyerHighestEverPosition helper already used to VALIDATE
         // this, now also used to correctly DISPLAY it.
-        const myHighestEver = await getBuyerHighestEverPosition("Member WTB", record.id);
+        const myHighestEver = await getBuyerHighestEverPosition("Member WTB", record.id, myRounds);
 
         // NEW — additive only: his exact scenario — the buyer's own
         // historical floor on this WTB (getBuyerHighestEverPosition)
