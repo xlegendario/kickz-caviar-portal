@@ -27897,6 +27897,61 @@ async function lookupSkuMasterProduct(sku) {
   };
 }
 
+/*
+ * A product by its SKU, for New Order in the Lojiq admin.
+ *
+ * The same lookup the want-to-buy form uses: SKU Master first, and only on
+ * a miss the StockX catalogue, on an exact style id. A StockX hit is written
+ * to SKU Master by lookupSkuMasterProduct, so the next order finds it there.
+ * The picture is read back from SKU Master afterwards, so both cases answer
+ * the same way.
+ */
+app.post("/api/internal/sku-lookup", async (req, res) => {
+  const secret = asText(req.headers["x-kc-secret"]);
+
+  if (!process.env.COUNTER_OFFERS_SECRET || secret !== process.env.COUNTER_OFFERS_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const sku = normalizeSku(req.body?.sku);
+  if (!sku) return res.status(400).json({ error: "Missing sku" });
+
+  try {
+    const readMaster = async () =>
+      (await airtable(SKU_MASTER_TABLE)
+        .select({
+          fields: ["SKU", "Product Name", "Brand", "Picture", "Picture URL"],
+          filterByFormula: `{SKU} = '${escapeFormulaValue(sku)}'`,
+          maxRecords: 1
+        })
+        .all())[0] || null;
+
+    let record = await readMaster();
+    let source = "sku_master";
+
+    if (!record) {
+      const found = await lookupSkuMasterProduct(sku);
+      if (!found.product_name) return res.json({ found: false, sku });
+      record = await readMaster();
+      source = "stockx";
+    }
+
+    const f = record?.fields || {};
+
+    res.json({
+      found: true,
+      source,
+      sku,
+      product_name: displayValue(f["Product Name"]),
+      brand: displayValue(f["Brand"]),
+      image: asText(f["Picture URL"]) || asText(f["Picture"]?.[0]?.url)
+    });
+  } catch (err) {
+    console.error("SKU lookup failed:", sku, err.message);
+    res.status(500).json({ error: "SKU lookup failed", details: err.message });
+  }
+});
+
 async function syncConsignmentStockLevelToAirtable(stockLevel) {
   const stockCounterKey = asText(stockLevel?.stock_counter_key);
   const sku = asText(stockLevel?.sku).toUpperCase();
