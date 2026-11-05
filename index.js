@@ -22953,9 +22953,29 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
     // NOT 160. calculateLinkedUnitPrice.js takes Custom Offer 1:1, and
     // Final Buying Price for a VAT product is always VAT-excl, so the
     // visible VAT0 figure IS the excl price to bill.
-    const acceptedStorePrice = isSellerPlacedRound
-      ? computeSellerCounterForStoreDisplay(sellerCounterPriceForAccept, sellerVatTypeForAccept, orderFieldsForAccept)
-      : numberValue(f["Store Counter Price"]);
+    /*
+      CHANGED - an offer accepted as it stands is accepted at the price the
+      store was shown.
+
+      A fresh round (made by create-fresh-round when the store presses Accept
+      on the offer itself, so no earlier round and no store counter) carries
+      the seller's price, and the store price was worked out from it again
+      here. With a Custom Offer on the order the store had been shown that
+      instead - Offer To Store reads it first - and the recomputed price went
+      over it: ORD-031181 (APLUG) was offered at 202.50 by Custom Price and
+      would have been invoiced 222.50. A round in a negotiation is untouched.
+    */
+    const isFreshAcceptance =
+      isSellerPlacedRound &&
+      !asText(f["Previous Record ID"]) &&
+      !(numberValue(f["Store Counter Price"]) > 0);
+    const customOfferOnOrder = numberValue(orderFieldsForAccept["Custom Offer"]);
+
+    const acceptedStorePrice = isFreshAcceptance && customOfferOnOrder > 0
+      ? customOfferOnOrder
+      : isSellerPlacedRound
+        ? computeSellerCounterForStoreDisplay(sellerCounterPriceForAccept, sellerVatTypeForAccept, orderFieldsForAccept)
+        : numberValue(f["Store Counter Price"]);
 
     const acceptedSellerPayout = isSellerPlacedRound
       ? sellerCounterPriceForAccept
