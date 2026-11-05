@@ -37663,6 +37663,20 @@ app.post("/api/dashboard/buying/accept-offer", async (req, res) => {
   }
 });
 
+/*
+ * Every paid sale of one seller: Quick Deals and WTBs, and since 05-11-2026
+ * consignment too - a paid consignment unit stood in no tab at all, so its
+ * invoice could not be found. Forwards are not sales to us and stay out.
+ * The tab and its badge share this, or they would disagree.
+ */
+function historySalesFormula(sellerCode) {
+  return `AND(
+    {Type} != 'Forwarding',
+    {Payment Status} = 'Paid',
+    {Seller ID (Lookup)} = '${escapeFormulaValue(sellerCode)}'
+  )`;
+}
+
 app.get("/api/dashboard/history-completed", async (req, res) => {
   try {
     const sellerRecordId = asText(req.query.seller_record_id);
@@ -37694,12 +37708,7 @@ app.get("/api/dashboard/history-completed", async (req, res) => {
           "Issue Notes",
           "Issue Status"
         ],
-        filterByFormula: `AND(
-          LEFT({Item ID} & '', 4) = 'OUT-',
-          {Type} = 'Custom',
-          {Payment Status} = 'Paid',
-          {Seller ID (Lookup)} = '${escapeFormulaValue(sellerCode)}'
-        )`
+        filterByFormula: historySalesFormula(sellerCode)
       })
       .all();
 
@@ -38321,12 +38330,7 @@ app.get("/api/dashboard/counts", async (req, res) => {
       airtable(INVENTORY_UNITS_TABLE)
         .select({
           fields: ["Seller ID (Lookup)"],
-          filterByFormula: `AND(
-            LEFT({Item ID} & '', 4) = 'OUT-',
-            {Type} = 'Custom',
-            {Payment Status} = 'Paid',
-            {Seller ID (Lookup)} = '${escapeFormulaValue(sellerCode)}'
-          )`
+          filterByFormula: historySalesFormula(sellerCode)
         })
         .all()
     ]);
