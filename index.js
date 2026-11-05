@@ -9388,6 +9388,33 @@ async function requestConsignmentShippingLabel(orderRecordId) {
       return await requestWarehouseInboundLabel(orderRecordId, orderFields);
     }
 
+    /*
+     * NEW - a second press on a pair that is still on its way to us.
+     *
+     * The inbound label leaves Fulfillment Status alone, so Request Label
+     * stays on the consignor's embed. Pressed again, this used to fall
+     * through to Woovin's own label and hand the consignor a DPD label for
+     * the buyer next to the UPS label to us (ORD-031151). Woovin's label is
+     * fetched on arrival by label-after-arrival, which does not come
+     * through here; until the scan, the inbound label is the only one.
+     */
+    if (
+      (comingToUs || supplierOutsideDpd) &&
+      asText(orderFields["Inbound Status"]) !== "Received"
+    ) {
+      console.log(
+        `Request Label on ${displayValue(orderFields["Order ID"]) || orderRecordId}: ` +
+          `the pair comes to us first and has its inbound label, nothing more to make.`
+      );
+
+      return {
+        ok: true,
+        already: true,
+        inbound: true,
+        tracking_number: asText(orderFields["Inbound Tracking Number"])
+      };
+    }
+
     return await requestWoovinShippingLabel(orderRecordId, orderFields);
   }
 
