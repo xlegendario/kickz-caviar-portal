@@ -176,6 +176,8 @@ const {
   RESET_EMAIL_FROM,
   APP_PUBLIC_BASE_URL = "https://kickz-caviar-portal.onrender.com",
   LOJIQ_WMS_BASE_URL = "https://lojiq-wms.onrender.com",
+  // The Lojiq portal keeps every purchase's self-billing document.
+  LOJIQ_PORTAL_BASE_URL = "https://lojiq-client-portal.onrender.com",
   // The consignment service running in Woovin mode. Only it holds their
   // token, so label downloads are asked of it rather than done here.
   WOOVIN_SERVICE_BASE_URL = "https://woovin-consignment.onrender.com",
@@ -37835,6 +37837,57 @@ app.get("/api/dashboard/history-issues", async (req, res) => {
       error: "Failed to load history issues",
       details: err.message
     });
+  }
+});
+
+/*
+ * The self-billing document of one of his own sales, as a PDF.
+ *
+ * The Lojiq portal makes and keeps one per Inventory Unit, whichever flow
+ * made the unit; this checks the unit is his and hands him that document.
+ * Opened as a plain link, so the session cookie comes with it.
+ */
+app.get("/api/dashboard/units/:unitId/invoice", async (req, res) => {
+  const who = sellerIdentityForRead(req);
+  if (who.error) return res.status(who.status).json({ error: who.error });
+
+  const unitId = asText(req.params.unitId);
+  const sellerRecordId = asText(who.sellerRecordId);
+
+  if (!/^rec[A-Za-z0-9]{14}$/.test(unitId) || !sellerRecordId) {
+    return res.status(400).json({ error: "Missing unit or seller" });
+  }
+
+  try {
+    const record = await airtable(INVENTORY_UNITS_TABLE).find(unitId).catch(() => null);
+
+    if (!record || !linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    const response = await fetch(`${String(LOJIQ_PORTAL_BASE_URL).replace(/\/$/, "")}/api/internal/self-billing/document`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-kc-secret": COUNTER_OFFERS_SECRET || process.env.COUNTER_OFFERS_SECRET || "" },
+      body: JSON.stringify({ inventory_unit_record_id: unitId, seller_record_id: sellerRecordId }),
+      signal: AbortSignal.timeout(60_000)
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      console.warn(`[invoice] ${unitId} for ${sellerRecordId}: Lojiq answered ${response.status} ${data.error || ""}`);
+      return res.status(response.status === 404 ? 404 : 502).json({ error: "The invoice could not be made. Try again later." });
+    }
+
+    const pdf = Buffer.from(await response.arrayBuffer());
+    const named = /filename="([^"]+)"/.exec(response.headers.get("content-disposition") || "");
+
+    res.set("Content-Type", "application/pdf");
+    res.set("Content-Disposition", `inline; filename="${named ? named[1] : `${unitId}.pdf`}"`);
+    res.set("Cache-Control", "no-store");
+    res.send(pdf);
+  } catch (err) {
+    console.error("[invoice] failed:", err.message);
+    res.status(502).json({ error: "The invoice could not be made. Try again later." });
   }
 });
 

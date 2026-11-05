@@ -5273,3 +5273,21 @@ a.offer-secondary {
   font-size: 11px;
   line-height: 1;
 }
+
+/* The self-billing invoice of a sale, under the product name. */
+.dashboard-invoice-link {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #66B3FF;
+  text-decoration: none;
+}
+
+.dashboard-invoice-link:hover {
+  text-decoration: underline;
+}
+
+.dashboard-mobile-btn.dashboard-invoice-btn {
+  color: #66B3FF;
+}

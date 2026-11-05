@@ -989,6 +989,7 @@ function renderMobileOrderCards(items, options = {}) {
                                       .filter(Boolean)
                                       .join(" · ")
                                   )}</span>
+                                  ${invoiceUnitId(pair) ? invoiceLink(invoiceUnitId(pair)) : ""}
                                 </div>
                               `
                             )
@@ -1035,6 +1036,11 @@ function renderMobileOrderCards(items, options = {}) {
 
                   <div class="dashboard-mobile-actions">
                     ${actions(item)}
+                    ${
+                      invoiceUnitId(item) && !(Array.isArray(item.parcel_pairs) && item.parcel_pairs.length > 1)
+                        ? invoiceLink(invoiceUnitId(item), "dashboard-mobile-btn dashboard-invoice-btn")
+                        : ""
+                    }
                   </div>
                 </div>
               </div>
@@ -1196,6 +1202,29 @@ function amountForColumn(rawValue) {
   return formatted || escapeHtml(messageText);
 }
 
+/*
+ * The self-billing invoice of a sale: every tab where the row is an
+ * Inventory Unit of his. Open Claims, Accepted and the offer tabs have no
+ * unit yet; the Buying tabs are someone else's purchase. A plain link, so
+ * the session cookie goes with it; the server checks the unit is his.
+ */
+const INVOICE_TABS = {
+  quick: ["confirmed", "label_requested", "ready_to_ship", "shipped", "delivered"],
+  wtb: ["confirmed", "label_requested", "ready_to_ship", "shipped", "delivered"],
+  consignment: ["confirmed", "label_requested", "ready_to_ship", "shipped", "delivered"],
+  history: ["completed", "issues"]
+};
+
+function invoiceUnitId(item) {
+  const id = String(item?.id || "");
+  return (INVOICE_TABS[activeSection] || []).includes(activeTab) && /^rec[A-Za-z0-9]{14}$/.test(id) ? id : "";
+}
+
+function invoiceLink(unitId, className = "dashboard-invoice-link") {
+  const params = new URLSearchParams({ seller_record_id: dashboardSeller?.id || "" });
+  return `<a class="${className}" href="/api/dashboard/units/${encodeURIComponent(unitId)}/invoice?${params.toString()}" target="_blank" rel="noopener">Invoice</a>`;
+}
+
 function dashboardProductCell(item) {
   const labelText = item.product || item.product_name || "-";
 
@@ -1237,9 +1266,12 @@ function dashboardProductCell(item) {
     `;
   }
 
+  const invoiceId = invoiceUnitId(item);
+
   return `
     <div class="dashboard-product-name">${escapeHtml(labelText)}</div>
     ${meta ? `<div class="dashboard-product-meta">${meta}</div>` : ""}
+    ${invoiceId ? invoiceLink(invoiceId) : ""}
   `;
 }
 
@@ -3371,6 +3403,7 @@ function oneRowPerParcel(items) {
     const row = groups.get(group);
 
     row.parcel_pairs.push({
+      id: item.id,
       product: item.product,
       sku: item.sku,
       size: item.size,
@@ -3451,6 +3484,7 @@ function parcelChildRows(item) {
             <div class="dashboard-product-meta">
               <span class="dashboard-product-sku">${escapeHtml(pair.sku || "-")}</span>
             </div>
+            ${invoiceUnitId(pair) ? invoiceLink(invoiceUnitId(pair)) : ""}
           </td>
           <td class="dashboard-size-col">${escapeHtml(pair.size || "-")}</td>
           <td>${escapeHtml(pair.order_id || "-")}</td>
