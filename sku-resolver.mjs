@@ -550,11 +550,19 @@ export async function identifyOnStockx(sku, options = {}) {
  * Without it there is nothing to verify against and the call returns null
  * unless allowUnverified is set.
  */
+/*
+ * strict: a failed call throws instead of reading as "no picture". The
+ * picture job needs that difference - "not found" waits a week, "Retailed
+ * was down" is tried again next run.
+ */
 export async function findPictureOnRetailed(
   sku,
-  { identity = null, allowUnverified = false } = {}
+  { identity = null, allowUnverified = false, strict = false } = {}
 ) {
-  if (!env.retailedUrl() || !env.retailedKey()) return null;
+  if (!env.retailedUrl() || !env.retailedKey()) {
+    if (strict) throw new Error("Missing Retailed API config");
+    return null;
+  }
 
   const cleanSku = normalizeSku(sku);
   if (!cleanSku) return null;
@@ -572,7 +580,10 @@ export async function findPictureOnRetailed(
       signal: controller.signal
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      if (strict) throw new Error(`Retailed request failed: ${response.status}`);
+      return null;
+    }
 
     const data = await response.json().catch(() => null);
     const results = Array.isArray(data)
@@ -620,7 +631,8 @@ export async function findPictureOnRetailed(
       brand: asText(chosen.brand),
       raw: chosen
     };
-  } catch {
+  } catch (err) {
+    if (strict) throw err;
     return null;
   } finally {
     clearTimeout(timeout);

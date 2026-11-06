@@ -15,6 +15,12 @@
  * because Retailed was down gets picked up on the next run, forever, until
  * it succeeds. Nothing else in the system retries anything.
  *
+ * A SKU that was looked up and simply not found is a different case: asking
+ * again an hour later gives the same answer and costs a Retailed call. Those
+ * get "Picture Checked At" and wait a week, and the run works through the
+ * never-checked rows first, then the longest-waiting ones - otherwise the
+ * same unfindable rows sit at the top and the limit never reaches the rest.
+ *
  * WHAT IT WILL NOT DO
  *
  *   - never create a SKU Master record. Only an exact StockX match may do
@@ -65,6 +71,8 @@ const DELAY_MS = Number(argOf("--delay", "250"));
 
 const SKU_MASTER_TABLE = process.env.AIRTABLE_SKU_MASTER_TABLE || "SKU Master";
 const URL_KEY_FIELD = "StockX URL Key";
+const CHECKED_AT_FIELD = "Picture Checked At";
+const RECHECK_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
 for (const naam of [
   "SUPABASE_URL",
@@ -128,6 +136,23 @@ function isProperlyMatched(fields) {
 /* A. SKU Master: missing picture -> Retailed, verified                */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Only for a lookup that answered "not there". A thrown error - Retailed or
+ * StockX down - is left unmarked so the next run tries again. Best effort:
+ * a row that cannot be marked is just asked again next run.
+ */
+async function markChecked(rij) {
+  if (!APPLY) return;
+
+  try {
+    await airtable(SKU_MASTER_TABLE).update(rij.id, {
+      [CHECKED_AT_FIELD]: new Date().toISOString()
+    });
+  } catch (err) {
+    console.log(`  ${rij.sku.padEnd(18)} could not set ${CHECKED_AT_FIELD}: ${err.message}`);
+  }
+}
+
 async function passA() {
   console.log(`\n${"=".repeat(66)}\nA. SKU Master — missing pictures\n${"=".repeat(66)}`);
 
@@ -136,7 +161,9 @@ async function passA() {
   let heeftUrlKeyVeld = false;
 
   await airtable(SKU_MASTER_TABLE)
-    .select({ fields: ["SKU", "Product Name", "Brand", "Picture", PICTURE_URL_FIELD, URL_KEY_FIELD] })
+    .select({
+      fields: ["SKU", "Product Name", "Brand", "Picture", PICTURE_URL_FIELD, URL_KEY_FIELD, CHECKED_AT_FIELD]
+    })
     .eachPage((records, next) => {
       for (const record of records) {
         const f = record.fields || {};
@@ -149,6 +176,7 @@ async function passA() {
           sku: normalizeSku(f["SKU"]),
           product_name: asText(f["Product Name"]),
           url_key: normalizeSlug(f[URL_KEY_FIELD]),
+          checked_at: Date.parse(f[CHECKED_AT_FIELD] || "") || 0,
 
           // Only used to leave an attachment that is already there alone.
           // Setting it again makes Airtable re-download the image.
@@ -167,8 +195,15 @@ async function passA() {
   console.log(`without a picture, name is broken   : ${ongeschikt.length}  (left alone)`);
   console.log(`"${URL_KEY_FIELD}" field present    : ${heeftUrlKeyVeld ? "yes" : "no — StockX is queried each time"}`);
 
-  const werk = kandidaten.slice(0, LIMIT);
-  if (werk.length < kandidaten.length) {
+  const drempel = Date.now() - RECHECK_AFTER_MS;
+  const aanDeBeurt = kandidaten
+    .filter((rij) => rij.checked_at < drempel)
+    .sort((a, b) => a.checked_at - b.checked_at);
+
+  console.log(`not found in the last 7 days        : ${kandidaten.length - aanDeBeurt.length}  (waiting)`);
+
+  const werk = aanDeBeurt.slice(0, LIMIT);
+  if (werk.length < aanDeBeurt.length) {
     console.log(`processing ${werk.length} this run (raise with --limit)`);
   }
 
@@ -187,6 +222,7 @@ async function passA() {
         if (!identity) {
           uitkomst.no_match++;
           console.log(`  ${rij.sku.padEnd(18)} no exact StockX match — skipped`);
+          await markChecked(rij);
           await wacht(DELAY_MS);
           continue;
         }
@@ -196,12 +232,14 @@ async function passA() {
       }
 
       const picture = await findPictureOnRetailed(rij.sku, {
-        identity: { url_key: urlKey, colorway }
+        identity: { url_key: urlKey, colorway },
+        strict: true
       });
 
       if (!picture) {
         uitkomst.unverified++;
         console.log(`  ${rij.sku.padEnd(18)} no verified picture — left empty`);
+        await markChecked(rij);
         await wacht(DELAY_MS);
         continue;
       }
