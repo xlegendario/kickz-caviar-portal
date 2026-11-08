@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   blockingOfferOnStock,
+  fitsShadeBudget,
   normalizeSourceType,
   isOpenForOffers,
   allowedVatTypesForMemberWtb,
@@ -179,4 +180,15 @@ test("zonder order of linkveld valt er niets te blokkeren", () => {
   assert.equal(blockingOfferOnStock({ offers: [offerOn("recORDER")], offerLink: LINK }), null);
   assert.equal(blockingOfferOnStock({ offers: [offerOn("recORDER")], sourceRecordId: "recORDER" }), null);
   assert.equal(blockingOfferOnStock(), null);
+});
+
+test("a Shade Studios holder is weighed net against the budget", () => {
+  const sale = { marketplace: "Shade Studios", budget: 78.57 };
+
+  assert.equal(fitsShadeBudget({ ...sale, vatType: "VAT0", sellerPrice: 77 }), true);
+  assert.equal(fitsShadeBudget({ ...sale, vatType: "Margin", sellerPrice: 78.57 }), true);
+  assert.equal(fitsShadeBudget({ ...sale, vatType: "VAT0", sellerPrice: 79 }), false);
+  assert.equal(fitsShadeBudget({ ...sale, vatType: "VAT21", sellerPrice: 70 }), false);
+  assert.equal(fitsShadeBudget({ ...sale, budget: 0, vatType: "VAT0", sellerPrice: 77 }), false);
+  assert.equal(fitsShadeBudget({ marketplace: "Woovin", budget: 78.57, vatType: "VAT0", sellerPrice: 77 }), false);
 });

@@ -105,6 +105,7 @@ import { airtableBuyerFields, buyerFromInput, buyerId as buyerNumberText, buyerO
 import { validateRegistration } from "./lib/registration.js";
 import {
   blockingOfferOnStock,
+  fitsShadeBudget,
   isOpenForOffers,
   normalizeSourceType,
   offerableVatTypes,
@@ -20207,6 +20208,73 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
     const orderRecordForOffer = sourceRecord
       || await airtable(ORDERS_TABLE).find(orderRecordId);
     const orderFieldsForOffer = orderRecordForOffer.fields || {};
+
+    /*
+     * A Shade Studios sale has no store to ask: the buyer has paid and the
+     * price is fixed. A holder inside the budget is asked to confirm, the
+     * same request ask-consignors sends when the sale comes in, which is
+     * also what reaches a supplier through his API. Outside it, the rules
+     * below still apply.
+     */
+    if (
+      source.kind === "order" &&
+      fitsShadeBudget({
+        marketplace: asText(orderFieldsForOffer["Marketplace"]),
+        vatType: best.row.vat_type,
+        sellerPrice: best.sellerPrice,
+        budget: numberValue(orderFieldsForOffer["Marketplace Buying Budget"])
+      })
+    ) {
+      await airtable(SELLER_OFFERS_TABLE).update(createdOffer.id, {
+        "Offer Cost (Normalized)": best.sellerPrice,
+        ...(holdFromStore ? { "Hold From Store?": false } : {})
+      });
+
+      const shadeSeller = (await airtable(SELLERS_TABLE).find(best.row.seller_record_id)).fields || {};
+
+      const shadeDelivery = await sendConsignmentOfferDiscordMessage({
+        inventoryId: best.row.id,
+        forceConfirmation: true,
+        seller: {
+          seller_record_id: best.row.seller_record_id,
+          seller_id: best.row.seller_id,
+          discord_id: asText(shadeSeller["Discord ID"]),
+          consignment_offer_channel_id: asText(shadeSeller["Consignment Offer Channel ID"]),
+          consignment_confirmation_channel_id: asText(shadeSeller["Consignment Confirmation Channel ID"])
+        },
+        offer: {
+          id: createdOffer.id,
+          order_record_id: orderRecordId,
+          order_id: asText(orderFieldsForOffer["Order ID"]) || orderRecordId,
+          source_type: "order",
+          seller_record_id: best.row.seller_record_id,
+          seller_id: best.row.seller_id,
+          product_name: best.row.product_name,
+          sku: best.row.sku,
+          size: best.row.size,
+          brand: best.row.brand,
+          vat_type: best.row.vat_type,
+          seller_price: best.sellerPrice,
+          offer_price: best.sellerPrice
+        },
+        calculatedOfferPrice: best.sellerPrice,
+        sellerOfferRecordId: createdOffer.id
+      });
+
+      await rememberConsignmentConfirmMessage(createdOffer.id, shadeDelivery);
+
+      console.log(
+        `Shade Studios ${orderRecordId}: ${best.row.seller_id} asked to confirm ` +
+          `${moneySmartValue(best.sellerPrice)} ${best.row.vat_type}.`
+      );
+
+      return res.json({
+        ...baseResponse,
+        held: false,
+        offer_cost_normalized: best.sellerPrice,
+        confirmation_sent: true
+      });
+    }
 
     // Route A stops here: the offer is live, computeAndPushLowestOffer
     // picks it up from the rollup and the store is asked as usual.
