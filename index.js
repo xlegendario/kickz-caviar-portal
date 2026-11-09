@@ -22667,8 +22667,7 @@ app.post("/api/counter-offers/create-fresh-round", async (req, res) => {
             "Seller Counter Price": currentTruePrice,
             "Counter Payout": currentTruePrice,
             "Counter Payout VAT Type": currentTrueVatType,
-            "Store Counter Price": null,
-            "Store Counter Price Excl VAT": null
+            "Store Counter Price": null
           });
 
           console.log(
