@@ -182,6 +182,11 @@ test("zonder order of linkveld valt er niets te blokkeren", () => {
   assert.equal(blockingOfferOnStock(), null);
 });
 
+test("a Nordic Sneakers holder is weighed net against the budget too", () => {
+  assert.equal(fitsShadeBudget({ marketplace: "Nordic Sneakers", vatType: "VAT0", sellerPrice: 77, budget: 78.57 }), true);
+  assert.equal(fitsShadeBudget({ marketplace: "Woovin", vatType: "VAT0", sellerPrice: 77, budget: 78.57 }), false);
+});
+
 test("a Shade Studios holder is weighed net against the budget", () => {
   const sale = { marketplace: "Shade Studios", budget: 78.57 };
 
