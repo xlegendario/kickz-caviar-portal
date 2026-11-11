@@ -131,7 +131,6 @@ import {
   buildSellerIdMessage,
   buildWelcomeMessage
 } from "./lib/onboardingMessages.js";
-import { buildAgreementPayload } from "./lib/agreementWebhook.js";
 
 import {
   asText,
@@ -41623,35 +41622,29 @@ async function sendSellerIdDm({ sellerRecord, discordUser }) {
   }
 }
 
-// Fires the Make scenario that generates the Sales Agreement PDF and puts it
-// in the "Agreement PDF" field. Without MAKE_PDF_WEBHOOK_URL nothing happens
-// and that field simply stays empty.
+// Asks the Lojiq portal for the Seller Registration Agreement, which it makes,
+// keeps and puts in the "Agreement PDF" field (admin/sellerAgreement.js there).
+// Until 11-11-2026 a Make scenario did this with Eledo.
 async function sendAgreementWebhook({ sellerRecord, discordUser }) {
-  const url = process.env.MAKE_PDF_WEBHOOK_URL;
-
-  if (!url) {
-    console.warn("MAKE_PDF_WEBHOOK_URL not set — no Sales Agreement PDF will be generated");
-    return;
-  }
-
   try {
-    const payload = buildAgreementPayload({
-      airtableRecordId: sellerRecord.id,
-      sellerId: displayValue(sellerRecord.fields?.["Seller ID"]),
-      discordId: discordUser.id,
-      discordTag: discordUser.username,
-      fields: sellerRecord.fields,
-      timestamp: new Date().toISOString()
-    });
-
-    const response = await fetch(url, {
+    const response = await fetch(`${String(LOJIQ_PORTAL_BASE_URL).replace(/\/$/, "")}/api/internal/seller-agreement`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      headers: { "Content-Type": "application/json", "x-kc-secret": COUNTER_OFFERS_SECRET || process.env.COUNTER_OFFERS_SECRET || "" },
+      body: JSON.stringify({
+        airtable_record_id: sellerRecord.id,
+        discord_id: discordUser.id,
+        discord_tag: discordUser.username,
+        // The tick was set when the record was made, before Discord was linked.
+        accepted_at: sellerRecord._rawJson?.createdTime || new Date().toISOString(),
+        method: 'Kickz Caviar portal registration, "I agree to the Terms & Conditions" tick',
+        tc_version: displayValue(sellerRecord.fields?.["T&C Version"]),
+        vat_declaration_version: /VAT declaration v1/.test(displayValue(sellerRecord.fields?.["Agreement Text"])) ? "v1" : ""
+      }),
+      signal: AbortSignal.timeout(60_000)
     });
 
     if (!response.ok) {
-      console.error(`Agreement webhook returned ${response.status}`);
+      console.error(`Agreement request returned ${response.status}`);
     }
   } catch (err) {
     // The profile and the link have already succeeded at this point; a failed
