@@ -237,6 +237,11 @@ const COUNTER_OFFERS_TABLE =
   process.env.AIRTABLE_COUNTER_OFFERS_TABLE || "Counter Offers";
 const COUNTER_OFFER_ACCEPT_WEBHOOK_URL =
   process.env.COUNTER_OFFER_ACCEPT_WEBHOOK_URL || "";
+// Books the purchase in Rompslomp (Make 9.1). Set to the automation engine's
+// /hooks/purchase-expense?key=... to move it off Make; empty = Make's hook.
+const PURCHASE_EXPENSE_WEBHOOK_URL =
+  process.env.PURCHASE_EXPENSE_WEBHOOK_URL ||
+  "https://hook.eu2.make.com/cmq6wlbq5sa9spmwogy4pdordvjzuz4i";
 const SKU_MASTER_TABLE = process.env.AIRTABLE_SKU_MASTER_TABLE || "SKU Master";
 const STOCKX_ACCESS_TOKEN_TABLE =
   process.env.AIRTABLE_STOCKX_ACCESS_TOKEN_TABLE || "StockX Access Token";
@@ -3367,7 +3372,7 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
    * that one's invoice comes from its External Sale.
    */
   if (!["member_wtb", "external_sale"].includes(asText(offer.source_type))) {
-    await fetch("https://hook.eu2.make.com/cmq6wlbq5sa9spmwogy4pdordvjzuz4i", {
+    await fetch(PURCHASE_EXPENSE_WEBHOOK_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -7508,7 +7513,7 @@ async function sendMemberWtbPurchaseWebhook(memberWtbRecordId) {
   const type = asText(inventoryFields["Type"]);
   const isConsignment = type === "Consignment";
 
-  await fetch("https://hook.eu2.make.com/cmq6wlbq5sa9spmwogy4pdordvjzuz4i", {
+  await fetch(PURCHASE_EXPENSE_WEBHOOK_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
