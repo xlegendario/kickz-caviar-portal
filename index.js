@@ -28634,6 +28634,59 @@ async function getConsignmentPendingConfirmOfferIds() {
   );
 }
 
+/*
+ * The two questions above, asked only about the Seller Offers on screen.
+ *
+ * The whole-table versions read every Seller Offer with a Consignment
+ * Inventory ID (2459 rows, 25 requests one after another) and every one with
+ * a Confirm message, on every request. Measured 13-11-2026 that was 11 to 15
+ * seconds of an Offers tab holding one row, and the counts and all three
+ * pills paid it again side by side, under Airtable's five requests a second.
+ * A seller has a handful of offers, and asking about those is one request.
+ *
+ * Same answers as getConsignmentSellerOfferIds and
+ * getConsignmentPendingConfirmOfferIds, restricted to the ids given. A failed
+ * read answers "neither", as those two did.
+ */
+async function getOfferConsignmentFlags(sellerOfferIds) {
+  const ids = [...new Set((sellerOfferIds || []).map(asText).filter((id) => /^rec\w+$/.test(id)))];
+  const consignment = new Set();
+  const pendingConfirm = new Set();
+
+  if (!ids.length) return { consignment, pendingConfirm };
+
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 50) chunks.push(ids.slice(i, i + 50));
+
+  const records = (
+    await Promise.all(
+      chunks.map((chunk) =>
+        airtable(SELLER_OFFERS_TABLE)
+          .select({
+            fields: ["Consignment Inventory ID", "Consignment Confirm Message ID", "Linked Inventory Unit"],
+            filterByFormula: `OR(${chunk.map((id) => `RECORD_ID() = '${id}'`).join(", ")}, FALSE())`
+          })
+          .all()
+      )
+    ).catch((err) => {
+      console.error("Failed to load consignment flags for Seller Offers:", err);
+      return [];
+    })
+  ).flat();
+
+  for (const record of records) {
+    const f = record.fields || {};
+
+    if (asText(f["Consignment Inventory ID"])) consignment.add(record.id);
+
+    if (asText(f["Consignment Confirm Message ID"]) && !firstLinkedRecordId(f["Linked Inventory Unit"])) {
+      pendingConfirm.add(record.id);
+    }
+  }
+
+  return { consignment, pendingConfirm };
+}
+
 // "consignment" shows only consignment offers, anything else excludes
 // them. Default is exclusion, so every existing caller keeps its current
 // behaviour without passing anything.
@@ -28666,55 +28719,34 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     const stageTimings = {};
 
     /*
-      Start every whole-table read at once, before anything asks for one.
+      CHANGED 13-11-2026 - no whole-table reads here any more.
 
-      This route reads eight tables and awaited them one after another as each
-      piece of the answer was assembled. Timed against the live base those
-      eight cost 4319 ms in a row and 1542 ms side by side, which is very
-      nearly the whole difference between this endpoint and a quick one.
+      This used to start five whole reads of Counter Offers up front, nine
+      requests each, plus two of Seller Offers further down. Airtable allows
+      five requests a second per base, and the dashboard opens this route
+      three times at once next to the counts, so they queued behind each
+      other: 15 to 37 seconds for a tab with one row in it.
 
-      Nothing below changes. scanTable hands back the read that is already in
-      flight for the same table and query, so the existing calls now find
-      their answer waiting instead of starting it. The queries here must stay
-      character for character identical to the ones further down: the key is
-      the table plus the query, so a reordered field list would quietly start
-      a second read rather than joining the first.
+      Every one of them was filtered down afterwards to the orders and
+      want-to-buys of this seller's own rounds. They are now asked for those
+      directly (narrowRounds below), which is one request whatever the
+      size of the table.
 
-      Deliberately not awaited. The point is that they run while the rest of
-      this route gets on with its work; whoever needs one awaits it there, and
-      a failure surfaces at that call rather than here.
+      The denied fresh offers do not depend on anything, so they start now.
     */
-    Promise.all([
-      scanTable(COUNTER_OFFERS_TABLE, {
-        filterByFormula: `OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')`,
-        fields: ["Seller ID", "Previous Record ID", "Created At"]
-      }),
-      // The two offers reads are NOT warmed here any more. They are filtered
-      // down to the want-to-buys and orders on screen, and which those are is
-      // only known once the rounds have been read.
-      scanTable(COUNTER_OFFERS_TABLE, {
-        filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Member WTB')`,
-        fields: ["Member WTB", "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
-      }),
-      scanTable(COUNTER_OFFERS_TABLE, {
-        filterByFormula: `{Source Type} = 'Member WTB'`,
-        fields: ["Member WTB", "Seller ID", "Created At"]
-      }),
-      scanTable(COUNTER_OFFERS_TABLE, {
-        filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Seller Offer')`,
-        fields: ["Order", "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
-      }),
-      // What findSellersTrueLastCounter traces over, once per row.
-      scanTable(COUNTER_OFFERS_TABLE, {
-        fields: ["Seller Counter Price", "Previous Record ID"]
-      })
-    ]).catch(() => {
-      // Whoever actually needs one of these awaits it and handles it there.
-    });
-
     if (!sellerRecordId) {
       return res.status(400).json({ error: "Missing seller_record_id" });
     }
+
+    const deniedSellerOffersPromise = filter === "denied"
+      ? airtable(SELLER_OFFERS_TABLE)
+          .select({ filterByFormula: `{Denied?} = TRUE()` })
+          .all()
+      : null;
+
+    // Awaited further down; this only stops an early failure elsewhere from
+    // leaving it as an unhandled rejection.
+    deniedSellerOffersPromise?.catch(() => {});
 
 
     // PERF — request-scoped memoization for getCurrentGlobalLowestNormalized.
@@ -28723,11 +28755,16 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     // (sourceType, recordId, excludeSellerId), so cache within this request.
     // Caches the PROMISE (not just the result) so parallel rows under
     // Promise.all that hit the same key reuse one in-flight computation.
+    //
+    // lowestPrefetch holds the offers and rounds of the orders on screen
+    // (Denied only, filled below), so this no longer reads all of Seller
+    // Offers and Counter Offers per request.
     const __glnCache = new Map();
+    let lowestPrefetch = null;
     const gln = (sourceType, recordId, excludeSellerId) => {
       const key = `${sourceType}|${recordId}|${excludeSellerId || ""}`;
       if (!__glnCache.has(key)) {
-        __glnCache.set(key, getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSellerId));
+        __glnCache.set(key, getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSellerId, lowestPrefetch));
       }
       return __glnCache.get(key);
     };
@@ -28735,11 +28772,16 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     // PERF — same idea for findSellersTrueLastCounter, which walks up to 15
     // sequential Airtable finds per call and is invoked across several loops
     // over overlapping round IDs.
+    //
+    // Traces over the rounds of the orders on screen once those are read
+    // (narrowRounds below); a hop outside them falls back to the whole
+    // table inside findSellersTrueLastCounter, so the answer is the same.
     const __ftlcCache = new Map();
+    let narrowRounds = null;
     const ftlc = (startRoundId) => {
       const key = String(startRoundId);
       if (!__ftlcCache.has(key)) {
-        __ftlcCache.set(key, findSellersTrueLastCounter(startRoundId));
+        __ftlcCache.set(key, findSellersTrueLastCounter(startRoundId, 15, narrowRounds));
       }
       return __ftlcCache.get(key);
     };
@@ -28760,20 +28802,29 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     stageTimings.t1_hoofdvraag = Date.now() - stageStartedAt;
 
     const scope = asText(req.query.scope);
-    const consignmentOfferIds = await getConsignmentSellerOfferIds();
-    const pendingConfirmOfferIds = await getConsignmentPendingConfirmOfferIds();
 
-    const filteredRecords = records.filter((record) => {
+    // Only this seller's rounds are shown, so only their offers need the
+    // consignment questions answered (see getOfferConsignmentFlags).
+    const ownRecords = records.filter((record) =>
+      linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId)
+    );
+
+    const {
+      consignment: consignmentOfferIds,
+      pendingConfirm: pendingConfirmOfferIds
+    } = await getOfferConsignmentFlags(
+      ownRecords.map((record) => record.fields?.["Seller Offer Record ID"])
+    );
+    stageTimings.t1b_consignment = Date.now() - stageStartedAt;
+
+    const filteredRecords = ownRecords.filter((record) => {
       const sellerOfferId = asText(record.fields?.["Seller Offer Record ID"]);
 
       // A round belonging to an offer that is waiting on the consignor's
       // Confirm lives in the Accepted tab, not here.
       if (pendingConfirmOfferIds.has(sellerOfferId)) return false;
 
-      return (
-        linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId) &&
-        matchesOfferScope(consignmentOfferIds.has(sellerOfferId), scope)
-      );
+      return matchesOfferScope(consignmentOfferIds.has(sellerOfferId), scope);
     });
 
     const preFilteredByStatusRaw = filteredRecords.filter((record) => {
@@ -28814,6 +28865,62 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     // real, current dead end.
     let preFilteredByStatus = preFilteredByStatusRaw;
 
+    /*
+      Every round, of every seller and any status, on the orders and
+      want-to-buys this seller's rounds are about - read once.
+
+      Everything below that used to read Counter Offers whole only ever kept
+      the rows of those orders: the denied supersession check (a sibling or
+      child round continues the same negotiation, so the same order), the
+      competing sellers, the chain trace and the previous rounds. The order
+      and want-to-buy ids are lookups Airtable can filter on, so this is one
+      request per type instead of nine per read.
+
+      The Denied pill also lists the seller's denied fresh offers and asks
+      the global lowest for their orders, so those orders are included.
+    */
+    const ownDeniedSellerOffers = deniedSellerOffersPromise
+      ? (await deniedSellerOffersPromise)
+          .filter((record) => linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId))
+          .filter((record) => !record.fields?.["Withdrawn?"])
+      : [];
+
+    const narrowWtbNames = [...new Set(
+      [...preFilteredByStatusRaw, ...ownDeniedSellerOffers]
+        .map((r) => displayValue(r.fields?.["Member WTB ID"]))
+        .filter(Boolean)
+    )];
+
+    const narrowOrderNames = [...new Set(
+      [...preFilteredByStatusRaw, ...ownDeniedSellerOffers]
+        .filter((r) => !displayValue(r.fields?.["Member WTB ID"]))
+        .map((r) => displayValue(r.fields?.["Order ID"]))
+        .filter(Boolean)
+    )];
+
+    const NARROW_ROUND_FIELDS = [
+      "Order", "Member WTB", "Seller ID", "Status", "Source Type", "Created At", "Previous Record ID",
+      "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type",
+      "Counter Payout", "Counter Payout VAT Type"
+    ];
+
+    narrowRounds = (
+      await Promise.all([
+        selectRowsForOrderIds(COUNTER_OFFERS_TABLE, narrowOrderNames, {
+          formula: `{Source Type} = 'Seller Offer'`,
+          fields: NARROW_ROUND_FIELDS
+        }),
+        selectRowsForOrderIds(COUNTER_OFFERS_TABLE, narrowWtbNames, {
+          idField: "Member WTB ID",
+          formula: `{Source Type} = 'Member WTB'`,
+          fields: NARROW_ROUND_FIELDS
+        })
+      ])
+    ).flat();
+
+    const narrowRoundsById = new Map(narrowRounds.map((r) => [r.id, r]));
+    stageTimings.t2_rondes_van_deze_orders = Date.now() - stageStartedAt;
+
     if (filter === "denied" && preFilteredByStatusRaw.length) {
       // FIXED — this used FIND(rawSellerRecordId, ARRAYJOIN({Seller ID})),
       // which never matches a raw record ID against a linked field's
@@ -28823,11 +28930,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       // Fetches without ID-based formula matching and filters by
       // Seller ID in JS instead, the same reliable pattern used
       // elsewhere in this file.
-      const allRoundsForSeller = await scanTable(COUNTER_OFFERS_TABLE, {
-        filterByFormula: `OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')`,
-        fields: ["Seller ID", "Previous Record ID", "Created At"]
-      });
-    stageTimings.t2_alle_rondes = Date.now() - stageStartedAt;
+      const allRoundsForSeller = narrowRounds;
 
       const siblingsByPrevId = new Map();
       // NEW — also track which round IDs are referenced as SOMEONE's
@@ -28986,13 +29089,12 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
                 memberWtbIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Member WTBs"]))
             )
           ),
-        scanTable(COUNTER_OFFERS_TABLE, {
-          filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Member WTB')`,
-          fields: ["Member WTB", "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
-        })
-          .then((records) =>
-            records.filter((r) => memberWtbIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Member WTB"])))
-          )
+        narrowRounds.filter(
+          (r) =>
+            asText(r.fields?.["Status"]) === "Open" &&
+            asText(r.fields?.["Source Type"]) === "Member WTB" &&
+            memberWtbIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Member WTB"]))
+        )
       ]);
     stageTimings.t4_concurrenten_mwtb = Date.now() - stageStartedAt;
 
@@ -29049,13 +29151,11 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
       // getCurrentGlobalLowestNormalized: pick each seller's MOST RECENT
       // round of ANY status as the chain-trace start point. Only fills
       // sellers not already covered by an Open round above.
-      const allMwRoundsForCompeting = await scanTable(COUNTER_OFFERS_TABLE, {
-        filterByFormula: `{Source Type} = 'Member WTB'`,
-        fields: ["Member WTB", "Seller ID", "Created At"]
-      })
-        .then((records) =>
-          records.filter((r) => memberWtbIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Member WTB"])))
-        );
+      const allMwRoundsForCompeting = narrowRounds.filter(
+        (r) =>
+          asText(r.fields?.["Source Type"]) === "Member WTB" &&
+          memberWtbIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Member WTB"]))
+      );
     stageTimings.t5_mwtb_rondes = Date.now() - stageStartedAt;
       const latestAnyStatusRoundBySeller = new Map();
       const latestAnyStatusCreatedBySeller = new Map();
@@ -29136,13 +29236,12 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
                 orderIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Linked Orders"]))
             )
           ),
-        scanTable(COUNTER_OFFERS_TABLE, {
-          filterByFormula: `AND({Status} = 'Open', {Source Type} = 'Seller Offer')`,
-          fields: ["Order", "Seller ID", "Seller Counter Price", "Seller Original Price", "Seller Original VAT Type"]
-        })
-          .then((records) =>
-            records.filter((r) => orderIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Order"])))
-          )
+        narrowRounds.filter(
+          (r) =>
+            asText(r.fields?.["Status"]) === "Open" &&
+            asText(r.fields?.["Source Type"]) === "Seller Offer" &&
+            orderIdsForStatusCheck.includes(firstLinkedRecordId(r.fields?.["Order"]))
+        )
       ]);
     stageTimings.t6_concurrenten_orders = Date.now() - stageStartedAt;
 
@@ -29228,7 +29327,13 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     let previousPriceById = new Map();
     let previousSellerCounterById = new Map();
     if (previousIds.length) {
-      const previousRecords = await findRecordsByIds(COUNTER_OFFERS_TABLE, previousIds);
+      // A previous round is on the same order, so it is nearly always among
+      // narrowRounds already; only a stray one is still fetched by id.
+      const missingPreviousIds = previousIds.filter((id) => !narrowRoundsById.has(id));
+      const previousRecords = [
+        ...previousIds.map((id) => narrowRoundsById.get(id)).filter(Boolean),
+        ...(missingPreviousIds.length ? await findRecordsByIds(COUNTER_OFFERS_TABLE, missingPreviousIds) : [])
+      ];
     stageTimings.t7_vorige_rondes = Date.now() - stageStartedAt;
       // FIXED — "Buyer's Last Offer" must show what the SELLER would
       // actually receive, not the raw store-side price. "Store Counter
@@ -29253,6 +29358,20 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     // link, mirroring how Order ID/Product Name/etc already resolve
     // natively for Store Orders rounds via the Order link. Reads them
     // directly in the mapping below instead.
+
+    // The Denied pill asks the global lowest per row. Without these it read
+    // all of Seller Offers (2800+ rows) and Counter Offers per request: the
+    // 15 seconds after "ophalen klaar" in the 13-11-2026 measurement.
+    if (filter === "denied") {
+      const LOWEST_OFFER_FIELDS = ["Linked Orders", "Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"];
+
+      const [offersForOrders, offersForWtbs] = await Promise.all([
+        selectRowsForOrderIds(SELLER_OFFERS_TABLE, narrowOrderNames, { fields: LOWEST_OFFER_FIELDS }),
+        selectRowsForOrderIds(SELLER_OFFERS_TABLE, narrowWtbNames, { idField: "Member WTB ID", fields: LOWEST_OFFER_FIELDS })
+      ]);
+
+      lowestPrefetch = { offers: [...offersForOrders, ...offersForWtbs], rounds: narrowRounds };
+    }
 
     // Everything above is fetching and narrowing; everything below is per row.
     stageTimings.fetching_ms = Date.now() - stageStartedAt;
@@ -29500,17 +29619,11 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     let mergedItems = items;
 
     if (filter === "denied") {
-      const deniedSellerOffersFormula = `{Denied?} = TRUE()`;
-      const deniedSellerOfferRecords = await airtable(SELLER_OFFERS_TABLE)
-        .select({ filterByFormula: deniedSellerOffersFormula })
-        .all();
-
-      const deniedFreshItems = await Promise.all(deniedSellerOfferRecords
-        .filter((record) => linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId))
-        // NEW — additive only: a soft-deleted ("Withdrawn?") offer must
-        // never show anywhere in the Portal — it only survives
-        // physically for the undercut-check in discord-wtb-bot-main.
-        .filter((record) => !record.fields?.["Withdrawn?"])
+      // Read at the top of the route ({Denied?} = TRUE()), already narrowed
+      // to this seller and without the soft-deleted ("Withdrawn?") ones,
+      // which must never show anywhere in the Portal — they only survive
+      // physically for the undercut-check in discord-wtb-bot-main.
+      const deniedFreshItems = await Promise.all(ownDeniedSellerOffers
         .map(async (record) => {
           const f = record.fields || {};
 
@@ -38278,9 +38391,6 @@ app.get("/api/dashboard/counts", async (req, res) => {
       below moves and nothing changes order. They simply run while the rest
       of the route does its own work.
     */
-    const consignmentOfferIdsPromise = getConsignmentSellerOfferIds();
-    const pendingConfirmOfferIdsPromise = getConsignmentPendingConfirmOfferIds();
-
     const wtbAcceptedRoundsPromise = airtable(COUNTER_OFFERS_TABLE)
       .select({
         filterByFormula: `{Status} = 'Accepted'`,
@@ -38543,9 +38653,19 @@ app.get("/api/dashboard/counts", async (req, res) => {
     // table in Supabase - which nothing closes when a Member WTB is
     // deleted in Airtable, so a badge could sit there counting an offer on
     // a want-to-buy that no longer exists.
-    const [consignmentOfferIds, pendingConfirmOfferIds] = await Promise.all([
-      consignmentOfferIdsPromise,
-      pendingConfirmOfferIdsPromise
+    //
+    // CHANGED 13-11-2026 - asked about this seller's offers only, instead of
+    // reading every consignment Seller Offer (see getOfferConsignmentFlags).
+    const {
+      consignment: consignmentOfferIds,
+      pendingConfirm: pendingConfirmOfferIds
+    } = await getOfferConsignmentFlags([
+      ...wtbOpenOffersRecords
+        .filter((record) => linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId))
+        .map((record) => record.id),
+      ...wtbCounterOffersRecords
+        .filter((record) => linkedRecordIncludes(record.fields?.["Seller ID"], sellerRecordId))
+        .map((record) => asText(record.fields?.["Seller Offer Record ID"]))
     ]);
 
     // FIXED - one negotiation was counted twice.
