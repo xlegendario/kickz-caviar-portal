@@ -30982,8 +30982,11 @@ async function findSellersTrueLastCounter(startRoundId, maxHops = 15, prefetched
     let hopId = startRoundId;
 
     for (let hop = 0; hop < maxHops && hopId; hop++) {
-      const round = known.get(hopId);
-      if (!round) return findSellersTrueLastCounter(startRoundId, maxHops);
+      // CHANGED 13-11-2026 - a hop outside the rows passed in is looked up on
+      // its own, not by reading the whole table (1.7 to 7.5 s on the Denied
+      // pill). A round that does not exist ends the trace, as it does there.
+      const round = known.get(hopId) || (await airtable(COUNTER_OFFERS_TABLE).find(hopId).catch(() => null));
+      if (!round) return null;
 
       const sellerCounter = numberValue(round.fields?.["Seller Counter Price"]);
       if (sellerCounter > 0) return sellerCounter;
@@ -31596,16 +31599,50 @@ function clearHeldTableScans() {
  * Missing records are dropped rather than thrown. Every caller here treats a
  * record it cannot find as one that has nothing to say.
  */
+/*
+ * CHANGED 13-11-2026 - by id for a handful, by formula in fifties beyond that.
+ *
+ * One request per id is the quickest way to ask about three records, and the
+ * slowest way to ask about thirty: Airtable takes five requests a second per
+ * base, so thirty lookups queue for six seconds. Measured on the Denied pill
+ * of a seller with 32 rows: the order statuses alone took 3 to 10 seconds.
+ * A formula costs a table walk, about 600 ms, but answers fifty at once, and
+ * the fifties go side by side.
+ */
+const FIND_BY_ID_LIMIT = 5;
+
 async function findRecordsByIds(table, ids) {
   const wanted = [...new Set((ids || []).filter(Boolean))];
 
   if (!wanted.length) return [];
 
-  const found = await Promise.all(
-    wanted.map((id) => airtable(table).find(id).catch(() => null))
+  if (wanted.length <= FIND_BY_ID_LIMIT) {
+    const found = await Promise.all(
+      wanted.map((id) => airtable(table).find(id).catch(() => null))
+    );
+
+    return found.filter(Boolean);
+  }
+
+  const chunks = [];
+  for (let i = 0; i < wanted.length; i += 50) chunks.push(wanted.slice(i, i + 50));
+
+  const pages = await Promise.all(
+    chunks.map((chunk) =>
+      airtable(table)
+        .select({
+          filterByFormula: `OR(${chunk
+            .map((id) => `RECORD_ID() = '${escapeFormulaValue(id)}'`)
+            .join(", ")}, FALSE())`
+        })
+        .all()
+    )
   );
 
-  return found.filter(Boolean);
+  // Same order as asked, as the lookups by id returned them.
+  const byId = new Map(pages.flat().map((record) => [record.id, record]));
+
+  return wanted.map((id) => byId.get(id)).filter(Boolean);
 }
 
 function scanTable(table, options) {
