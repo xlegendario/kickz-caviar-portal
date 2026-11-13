@@ -28740,7 +28740,7 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
 
     const deniedSellerOffersPromise = filter === "denied"
       ? airtable(SELLER_OFFERS_TABLE)
-          .select({ filterByFormula: `{Denied?} = TRUE()` })
+          .select({ filterByFormula: sellerCodeFormula(req.query.seller_id, `{Denied?} = TRUE()`) })
           .all()
       : null;
 
@@ -28788,9 +28788,12 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
 
     const statusFormula = filter === "denied" ? `{Status} = 'Denied'` : `{Status} = 'Open'`;
 
+    // Narrowed to this seller's rounds: everything below dropped the others
+    // straight away (ownRecords), after reading all of them with every field.
     const records = await airtable(COUNTER_OFFERS_TABLE)
       .select({
         filterByFormula: `AND(
+          ${sellerRecordFormula(sellerRecordId)},
           ${statusFormula},
           OR(
             {Source Type} = 'Seller Offer',
@@ -31927,6 +31930,75 @@ async function selectRowsForOrderIds(table, orderIdTexts, { formula = "", fields
   return rows;
 }
 
+/*
+ * What getCurrentGlobalLowestNormalized needs for the orders and want-to-buys
+ * of these rows (Seller Offers or Counter Offers rounds, read with their
+ * "Order ID" and "Member WTB ID" lookups): every seller's offers on them and
+ * every round on them, any status. Four narrow reads instead of the three
+ * whole tables that function otherwise reads per call.
+ */
+async function prefetchForGlobalLowest(rows) {
+  const wtbNames = [...new Set(
+    rows.map((r) => displayValue(r.fields?.["Member WTB ID"])).filter(Boolean)
+  )];
+
+  const orderNames = [...new Set(
+    rows
+      .filter((r) => !displayValue(r.fields?.["Member WTB ID"]))
+      .map((r) => displayValue(r.fields?.["Order ID"]))
+      .filter(Boolean)
+  )];
+
+  if (!wtbNames.length && !orderNames.length) return null;
+
+  const OFFER_FIELDS = ["Linked Orders", "Member WTBs", "Seller ID", "Seller Offer", "Offer VAT Type", "Delete Offer"];
+  const ROUND_FIELDS = [
+    "Order", "Member WTB", "Seller ID", "Status", "Source Type", "Created At", "Previous Record ID",
+    "Seller Counter Price", "Seller Original VAT Type", "Counter Payout", "Counter Payout VAT Type"
+  ];
+
+  const [offersForOrders, offersForWtbs, roundsForOrders, roundsForWtbs] = await Promise.all([
+    selectRowsForOrderIds(SELLER_OFFERS_TABLE, orderNames, { fields: OFFER_FIELDS }),
+    selectRowsForOrderIds(SELLER_OFFERS_TABLE, wtbNames, { idField: "Member WTB ID", fields: OFFER_FIELDS }),
+    selectRowsForOrderIds(COUNTER_OFFERS_TABLE, orderNames, {
+      formula: `{Source Type} = 'Seller Offer'`,
+      fields: ROUND_FIELDS
+    }),
+    selectRowsForOrderIds(COUNTER_OFFERS_TABLE, wtbNames, {
+      idField: "Member WTB ID",
+      formula: `{Source Type} = 'Member WTB'`,
+      fields: ROUND_FIELDS
+    })
+  ]);
+
+  return {
+    offers: [...offersForOrders, ...offersForWtbs],
+    rounds: [...roundsForOrders, ...roundsForWtbs]
+  };
+}
+
+/*
+ * A formula narrowed to one seller, for the queries that only ever keep that
+ * seller's rows. Airtable cannot compare a link field to a record id, but
+ * both tables carry the seller through a lookup it can compare: the code
+ * ("SE-00001") on Seller Offers, the record id on Counter Offers.
+ *
+ * Without a seller code the formula is returned as it was, so a caller that
+ * does not send one reads what it always read. The JavaScript link check
+ * after the query stays the rule either way.
+ */
+function sellerCodeFormula(sellerCode, formula) {
+  const code = asText(sellerCode).trim();
+
+  if (!code) return formula;
+
+  return `AND(FIND('${escapeFormulaValue(code)}', ARRAYJOIN({Seller ID (Lookup)})), ${formula})`;
+}
+
+function sellerRecordFormula(sellerRecordId) {
+  return `FIND('${escapeFormulaValue(sellerRecordId)}', ARRAYJOIN({Seller Record ID}))`;
+}
+
 app.get("/api/dashboard/store-offers", async (req, res) => {
   try {
     const secret = asText(req.headers["x-kc-secret"]);
@@ -34592,12 +34664,16 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
           "Size (MWTB)",
           "Brand (MWTB)",
           "Denied?",
-          "Withdrawn?"
+          "Withdrawn?",
+          "Order ID"
         ],
-        filterByFormula: `OR(
+        // Narrowed to this seller when the dashboard says who that is (it
+        // always does). Every seller's open offers is two pages and the
+        // biggest request of this route; the link check below stays the rule.
+        filterByFormula: sellerCodeFormula(req.query.seller_id, `OR(
           {Fulfillment Status} = 'Outsource',
           {Fulfillment Status (MWTB)} = 'Outsource'
-        )`
+        )`)
       })
       .all();
 
@@ -34625,7 +34701,11 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
     // in both Open (from here) and Countered (from wtb-counter-offers)
     // at once. Excludes any Seller Offer that already has a currently-
     // open Counter Offers record referencing it.
+    //
+    // Only this seller's rounds can mark one of this seller's offers, both
+    // by Seller Offer Record ID and by order + seller, so only those are read.
     const activeCounterFormula = `AND(
+      ${sellerRecordFormula(sellerRecordId)},
       OR({Status} = 'Open', {Status} = 'Denied'),
       OR({Source Type} = 'Seller Offer', {Source Type} = 'Member WTB')
     )`;
@@ -34688,7 +34768,14 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
       )
     ];
 
-    const orderMap = await loadOrderFieldsMap(linkedOrderIds);
+    // The "Current Lowest" per row below used to read all of Seller Offers
+    // (2800+ rows, 29 requests) and Counter Offers twice, for every offer on
+    // screen. It only ever looks at the rows of that offer's own order, so
+    // those are read here, once, for all of them.
+    const [orderMap, lowestPrefetch] = await Promise.all([
+      loadOrderFieldsMap(linkedOrderIds),
+      prefetchForGlobalLowest(filteredOffersWithoutActiveCounter)
+    ]);
 
     const items = await Promise.all(filteredOffersWithoutActiveCounter.map(async (record) => {
       const f = record.fields || {};
@@ -34721,7 +34808,7 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
           if (!Number.isFinite(p)) return null;
           return asText(vt) === "VAT0" ? p * 1.21 : p;
         };
-        const othersResult = await getCurrentGlobalLowestNormalized("Member WTB", linkedMemberWtbId, linkedSellerId);
+        const othersResult = await getCurrentGlobalLowestNormalized("Member WTB", linkedMemberWtbId, linkedSellerId, lowestPrefetch);
         const othersMin = othersResult.normalized;
         const ownNormalized = normalize(offerAmount, vatType);
 
@@ -34753,7 +34840,7 @@ app.get("/api/dashboard/wtb-open-offers", async (req, res) => {
         // into THIS seller's own vatType before display (only VAT0
         // needs the /1.21 reversal — VAT21/Margin are already on that
         // scale).
-        const othersResultForOrder = await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, linkedSellerId);
+        const othersResultForOrder = await getCurrentGlobalLowestNormalized("Seller Offer", linkedOrderId, linkedSellerId, lowestPrefetch);
         const othersMinForOrder = othersResultForOrder.normalized;
         const ownNormalizedForOrder = asText(vatType) === "VAT0" ? offerAmount * 1.21 : offerAmount;
 

@@ -418,6 +418,7 @@ async function refreshInactivePillCounts({ cacheKey, scope }) {
         })}`
       : `/api/dashboard/wtb-counter-offers?${new URLSearchParams({
           seller_record_id: dashboardSeller.id,
+          seller_id: dashboardSeller.seller_id,
           filter,
           ...scopeParam
         })}`;
@@ -5005,6 +5006,7 @@ async function loadDashboardData() {
         }).toString()}`),
         fetch(`/api/dashboard/wtb-counter-offers?${new URLSearchParams({
           seller_record_id: dashboardSeller.id,
+          seller_id: dashboardSeller.seller_id,
           filter: "open",
           ...(offerScope ? { scope: offerScope } : {})
         }).toString()}`)
@@ -5061,6 +5063,7 @@ async function loadDashboardData() {
     // the same Counter Offers query, just filtered differently.
     const params = new URLSearchParams({
       seller_record_id: dashboardSeller.id,
+      seller_id: dashboardSeller.seller_id,
       filter: activeOfferStatusFilter === "denied" ? "denied" : "countered",
       ...(offerScope ? { scope: offerScope } : {})
     });
