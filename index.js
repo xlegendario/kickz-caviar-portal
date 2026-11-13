@@ -28764,7 +28764,12 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     const gln = (sourceType, recordId, excludeSellerId) => {
       const key = `${sourceType}|${recordId}|${excludeSellerId || ""}`;
       if (!__glnCache.has(key)) {
-        __glnCache.set(key, getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSellerId, lowestPrefetch));
+        const startedAt = Date.now();
+        stageTimings.gln_calls = (stageTimings.gln_calls || 0) + 1;
+        stageTimings.gln_prefetched = (stageTimings.gln_prefetched || 0) + (lowestPrefetch ? 1 : 0);
+        __glnCache.set(key, getCurrentGlobalLowestNormalized(sourceType, recordId, excludeSellerId, lowestPrefetch).finally(() => {
+          stageTimings.gln_max_ms = Math.max(stageTimings.gln_max_ms || 0, Date.now() - startedAt);
+        }));
       }
       return __glnCache.get(key);
     };
@@ -28781,7 +28786,11 @@ app.get("/api/dashboard/wtb-counter-offers", async (req, res) => {
     const ftlc = (startRoundId) => {
       const key = String(startRoundId);
       if (!__ftlcCache.has(key)) {
-        __ftlcCache.set(key, findSellersTrueLastCounter(startRoundId, 15, narrowRounds));
+        const startedAt = Date.now();
+        stageTimings.ftlc_calls = (stageTimings.ftlc_calls || 0) + 1;
+        __ftlcCache.set(key, findSellersTrueLastCounter(startRoundId, 15, narrowRounds).finally(() => {
+          stageTimings.ftlc_max_ms = Math.max(stageTimings.ftlc_max_ms || 0, Date.now() - startedAt);
+        }));
       }
       return __ftlcCache.get(key);
     };
