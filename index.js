@@ -822,7 +822,25 @@ async function restoreConsignmentUnit(consignmentInventoryId, context = "") {
   return { ok: true, sku: row.sku, size: row.size, from: row.quantity, to: newQuantity };
 }
 
-async function writeOffConsignmentUnit(consignmentInventoryId, context = "") {
+/*
+ * The Item ID (PCS-...) of the Inventory Unit a sale just made, for the
+ * partner pair it takes: with it, his dashboard knows which pair (and so
+ * which batch) each sale was, instead of guessing by size and day (Dario,
+ * 16-11-2026). Airtable's create answer carries it; read it back otherwise.
+ */
+async function unitItemId(unit) {
+  const fromAnswer = asText(unit?.fields?.["Item ID"]);
+  if (fromAnswer || !asText(unit?.id)) return fromAnswer;
+  try {
+    const fresh = await airtable(AIRTABLE_INVENTORY_UNITS_TABLE).find(unit.id);
+    return asText(fresh?.fields?.["Item ID"]);
+  } catch (err) {
+    console.error(`Item ID of ${unit.id} not read:`, err.message);
+    return "";
+  }
+}
+
+async function writeOffConsignmentUnit(consignmentInventoryId, context = "", unit = null) {
   const id = asText(consignmentInventoryId);
 
   if (!id) return { ok: false, reason: "not_consignment" };
@@ -841,7 +859,7 @@ async function writeOffConsignmentUnit(consignmentInventoryId, context = "") {
   // the trigger sets the quantity. Decrementing here as well would take two
   // pairs off for one sale. Falls through only when no pair backs the row.
   if (Number(row.payout_price) > 0) {
-    const sold = await sellPartnerPair(row, context);
+    const sold = await sellPartnerPair(row, context, unit ? await unitItemId(unit) : "");
 
     if (sold) return sold;
 
@@ -2264,7 +2282,7 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
 
   // Was these same six statements inline; now the one call the Member WTB
   // route makes too, so the two cannot drift apart again.
-  await writeOffConsignmentUnit(inventoryRow.id, "store order");
+  await writeOffConsignmentUnit(inventoryRow.id, "store order", inventoryUnitRecord);
 
   await closeConsignmentRoundsForSellerOffer(sellerOfferRecordId, "Accepted");
 
@@ -8674,7 +8692,7 @@ async function bookMemberWtbConsignmentDeal({ offer: lockedOffer, memberWtbRecor
   
   // CHANGED - was an inline decrement; the shared helper also handles a
   // partner pair, which must not be decremented directly.
-  await writeOffConsignmentUnit(lockedOffer.inventory_id, `legacy member wtb ${memberWtbRecordId}`);
+  await writeOffConsignmentUnit(lockedOffer.inventory_id, `legacy member wtb ${memberWtbRecordId}`, inventoryUnitRecord);
   
   await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
     "Purchase Status": "Confirmed",
@@ -8964,7 +8982,7 @@ async function confirmConsignmentOffer(offerId, { closingNote } = {}) {
 
   // CHANGED - was an inline decrement; the shared helper also handles a
   // partner pair, which must not be decremented directly.
-  await writeOffConsignmentUnit(lockedOffer.inventory_id, `legacy order ${lockedOffer.order_id || lockedOffer.id}`);
+  await writeOffConsignmentUnit(lockedOffer.inventory_id, `legacy order ${lockedOffer.order_id || lockedOffer.id}`, inventoryUnitRecord);
 
   await supabase
     .from("consignment_offers")
@@ -18525,7 +18543,7 @@ async function refreshPartnerStockLevels(pairs, context) {
  * unit was just made with. Claimed with a status condition, so two sales at
  * once cannot take the same pair.
  */
-async function sellPartnerPair(row, context) {
+async function sellPartnerPair(row, context, itemId = "") {
   const { data, error } = await supabase
     .from("partner_stock")
     .select(PARTNER_PAIR_FIELDS)
@@ -18542,7 +18560,8 @@ async function sellPartnerPair(row, context) {
       .update({
         status: "sold",
         sold_at: new Date().toISOString(),
-        sold_ref: asText(context) || null
+        sold_ref: asText(context) || null,
+        inventory_unit_id: asText(itemId) || null
       })
       .eq("id", candidate.id)
       .eq("status", "in_stock")
@@ -45443,7 +45462,7 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       );
 
       if (consignmentInventoryId) {
-        await writeOffConsignmentUnit(consignmentInventoryId, `member wtb ${memberWtbRecordId}`);
+        await writeOffConsignmentUnit(consignmentInventoryId, `member wtb ${memberWtbRecordId}`, inventoryUnit);
       }
     } catch (stockErr) {
       console.error(
