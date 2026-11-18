@@ -821,7 +821,6 @@ function kcOwnStockNotListedReason(fields, now = new Date()) {
   if (f["Hold Back?"] === true) return "held_back";
   if (asText(f["Availability Status"]) !== "Available") return "not_available";
   if (asText(f["Type"]) === "Forwarding") return "forwarding";
-  if (asText(f["Location"])) return "elsewhere";
 
   const dumpUntil = asText(f["Dump Until"]).slice(0, 10);
 
