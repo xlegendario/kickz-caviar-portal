@@ -811,12 +811,9 @@ function ownStockSkuKey(value) {
  * before: on 30-09-2026 hundreds of units still read Available after they
  * had been shipped or written off.
  */
-const KC_LISTED_BAD_VERIFICATION = ["Cancelled", "Rejected", "Lost"];
-const KC_LISTED_BAD_CANCEL = ["Written Off", "Lost"];
 
 function kcOwnStockNotListedReason(fields, now = new Date()) {
   const f = fields || {};
-  const shipped = [f["Fulfillment Status (UOL)"]].flat().map((value) => asText(value));
 
   if (f["Hold Back?"] === true) return "held_back";
   if (asText(f["Availability Status"]) !== "Available") return "not_available";
@@ -826,15 +823,9 @@ function kcOwnStockNotListedReason(fields, now = new Date()) {
 
   if (dumpUntil && !kcDumpStillRunning(f, now)) return "past_dump_until";
 
-  if (
-    shipped.some((value) => /\bFulfilled\b/.test(value)) &&
-    !shipped.some((value) => /Returned/.test(value))
-  ) {
-    return "already_shipped";
-  }
+  // Available is Available (Dario, 18-11-2026): a linked order, verification
+  // or cancel status does not keep an own pair off the channels.
 
-  if (KC_LISTED_BAD_VERIFICATION.includes(asText(f["Verification Status"]))) return "verification";
-  if (KC_LISTED_BAD_CANCEL.includes(asText(f["Cancel Status"]))) return "written_off";
   if (!asText(f["SKU"]) || !asText(f["Size"])) return "no_sku_or_size";
   if (!asText(f["VAT Type"])) return "no_vat_type";
 
