@@ -34667,6 +34667,38 @@ app.post("/api/dashboard/request-label", async (req, res) => {
   }
 });
 
+/*
+ * The same Request Label, for a service rather than a person.
+ *
+ * autoAllocateBestUnit hands an order one of our own pairs and then needs a
+ * label for it. It used to ask the WMS with source "auto_allocate_inventory",
+ * which the WMS has never accepted (400 "Unsupported source"), so every store
+ * order on our own stock sat without a label until somebody asked by hand.
+ * This is the road the Request Label button takes: marketplaces get their own
+ * label, a store is asked for one.
+ */
+app.post("/api/consignment/request-label", async (req, res) => {
+  const refusal = serviceCallRefusal(req);
+
+  if (refusal) {
+    return res.status(refusal.status).json({ error: refusal.error });
+  }
+
+  const orderRecordId = asText(req.body?.order_record_id);
+
+  if (!/^rec[A-Za-z0-9]{14}$/.test(orderRecordId)) {
+    return res.status(400).json({ error: "Missing or invalid order_record_id" });
+  }
+
+  try {
+    res.json(await requestConsignmentShippingLabel(orderRecordId));
+  } catch (err) {
+    console.error(`Service label request for ${orderRecordId} failed:`, err.message);
+
+    res.status(err.statusCode === 400 ? 400 : 500).json({ error: err.message });
+  }
+});
+
 app.post("/api/dashboard/member-wtb-request-label", async (req, res) => {
   try {
     const memberWtbRecordId = asText(req.body?.member_wtb_record_id);
