@@ -728,6 +728,252 @@ async function partnerPayoutForInventory(consignmentInventoryId) {
 }
 
 /*
+ * KC dump stock: our own pairs, sold through consignment_inventory.
+ *
+ * The kc-own-stock job keeps one row per SKU and size on SE-00001 with
+ * own_stock on, so every channel lists our sale pairs the same way it lists
+ * a consignor's. But the pair is already an Inventory Unit on our own shelf.
+ * A sale must not make a second unit, must not book a purchase we never
+ * made, and must not ask anyone on Discord whether he still has it: we are
+ * the one who has it.
+ *
+ * Returns the row when it is own stock, null otherwise. A read error is
+ * thrown rather than read as "not own stock", because that guess would make
+ * a consignment unit, and a purchase, for a pair we already own.
+ */
+async function ownStockInventoryRow(consignmentInventoryId) {
+  const id = asText(consignmentInventoryId);
+
+  if (!id) return null;
+
+  const { data, error } = await supabase
+    .from("consignment_inventory")
+    .select("id, sku, size, quantity, own_stock, vat_type")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  return data?.own_stock === true ? data : null;
+}
+
+/*
+ * Is a dump still running? Dump Until is the last listed day, and empty
+ * means no end. It is a plain Airtable date, so it compares as a string
+ * against the Amsterdam date, the same rule autoAllocateBestUnit uses.
+ */
+function kcDumpStillRunning(fields, now = new Date()) {
+  const dumpUntil = asText(fields?.["Dump Until"]).slice(0, 10);
+
+  if (!dumpUntil) return true;
+
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Amsterdam" }).format(now);
+
+  return dumpUntil >= today;
+}
+
+/*
+ * The sale ask of a unit we put on sale, or null when it is not on sale.
+ *
+ * Same rule as getDumpAsk in the engine: Dump Listing? on, a Custom Selling
+ * Price above zero and a dump that has not ended. Kept identical so a pair
+ * is priced the same in KC Buying as on the channels the job lists it on.
+ */
+function kcDumpAsk(fields, now = new Date()) {
+  if (fields?.["Dump Listing?"] !== true) return null;
+
+  const customPrice = numberValue(fields["Custom Selling Price"]);
+
+  if (!(customPrice > 0)) return null;
+
+  return kcDumpStillRunning(fields, now) ? customPrice : null;
+}
+
+function ownStockMatchKey(value) {
+  return asText(value).replace(/\s+/g, "").toUpperCase();
+}
+
+/*
+ * The listed unit behind an own_stock row: same SKU and size, Available,
+ * Dump Listing? on, not a Forwarding unit, dump not ended. The same set the
+ * job counts into the row's quantity.
+ *
+ * The cheapest ask goes first, because that is the price the row was listed
+ * at (selling_price_suggested is the lowest ask among these units).
+ *
+ * SKU and size are compared without case or spaces. The row is written by
+ * the job from these very units, but a size typed as "44 1/2" on one side
+ * and "44.5" on the other is the kind of thing that would quietly match
+ * nothing, so the size goes through normalizeConsignmentSize as well.
+ */
+async function findListedOwnStockUnit(sku, size) {
+  const skuKey = ownStockMatchKey(sku);
+  const sizeKey = ownStockMatchKey(normalizeConsignmentSize(size));
+
+  if (!skuKey || !sizeKey) return null;
+
+  const records = await airtable(AIRTABLE_INVENTORY_UNITS_TABLE)
+    .select({
+      filterByFormula: `AND(
+        {Availability Status} = 'Available',
+        {Dump Listing?},
+        {Type} != 'Forwarding',
+        UPPER(SUBSTITUTE({SKU} & '', ' ', '')) = '${escapeFormulaValue(skuKey)}'
+      )`,
+      fields: [
+        "SKU",
+        "Size",
+        "Type",
+        "Availability Status",
+        "Dump Listing?",
+        "Dump Until",
+        "Custom Selling Price",
+        "Ideal Selling Price"
+      ]
+    })
+    .all();
+
+  const askOf = (fields) => {
+    const ask = kcDumpAsk(fields) ?? numberValue(fields["Ideal Selling Price"]);
+
+    return ask > 0 ? ask : Infinity;
+  };
+
+  const listed = records
+    .filter((record) => ownStockMatchKey(normalizeConsignmentSize(record.fields?.["Size"])) === sizeKey)
+    .filter((record) => kcDumpStillRunning(record.fields))
+    .sort((a, b) => askOf(a.fields) - askOf(b.fields));
+
+  return listed[0] || null;
+}
+
+/*
+ * Ask the WMS for the label, exactly as autoAllocateBestUnit does for a pair
+ * it allocates from our own stock: from here it is a pair on our shelf going
+ * out, not a consignor's pair coming in.
+ *
+ * Delayed and non-blocking. The caller still writes to the order after the
+ * unit is linked (the offer, and on a marketplace order the move to
+ * Confirmed), and that should land before the WMS reads the order. A failed
+ * label is visible on the order and can be requested by hand; failing the
+ * sale over it would not help anybody.
+ */
+const OWN_STOCK_LABEL_DELAY_MS = 10000;
+
+function requestOwnStockLabel(orderRecordId) {
+  setTimeout(async () => {
+    try {
+      const response = await fetch(`${LOJIQ_WMS_BASE_URL.replace(/\/$/, "")}/api/request-label`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: "auto_allocate_inventory", record_id: orderRecordId })
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+
+        console.error(
+          `❌ Label request for own-stock order ${orderRecordId} failed: ${response.status} ${text}`
+        );
+
+        return;
+      }
+
+      console.log(`📦 Label requested for own-stock order ${orderRecordId}.`);
+    } catch (err) {
+      console.error(`❌ Label request for own-stock order ${orderRecordId} failed:`, err.message);
+    }
+  }, OWN_STOCK_LABEL_DELAY_MS);
+}
+
+/*
+ * An own_stock row whose units are all gone goes to zero right away. The job
+ * would get there on its next run, but until then every channel keeps
+ * selling a pair we no longer have. Logged, never thrown: the caller is
+ * already on its way to refusing the sale.
+ */
+async function clearOwnStockRow(row) {
+  console.error(
+    `❌ Own-stock row ${row.id} (${row.sku} / ${row.size}) sold, but no listed unit is left - ` +
+      "row set to 0"
+  );
+
+  const { error: zeroError } = await supabase
+    .from("consignment_inventory")
+    .update({ quantity: 0, updated_at: new Date().toISOString() })
+    .eq("id", row.id);
+
+  if (zeroError) {
+    console.error(`Own-stock row ${row.id} could not be set to 0:`, zeroError.message);
+    return;
+  }
+
+  await refreshConsignmentStockLevel(row.sku, row.size).catch((err) =>
+    console.error(`Stock level for ${row.sku} / ${row.size} not refreshed:`, err.message)
+  );
+}
+
+/*
+ * Sell one of our own listed pairs to an order, a Member WTB or a deal.
+ *
+ * Does to the unit what autoAllocateBestUnit does when it allocates our own
+ * stock: Reserved, the price we are paid as Selling Price, and the selling
+ * method. The link to the order or want-to-buy is what makes it that order's
+ * pair. The returned unit has the shape of a created one, so the caller
+ * links it to the Seller Offer and writes the row off by one as usual.
+ *
+ * No listed unit left: the row is cleared (clearOwnStockRow) and the sale
+ * is refused as out_of_stock.
+ */
+async function sellOwnStockUnitForOffer(offer, ownStockRow = null) {
+  const row = ownStockRow || (await ownStockInventoryRow(offer?.inventory_id));
+
+  if (!row) return { ok: false, reason: "not_own_stock" };
+
+  const unit = await findListedOwnStockUnit(row.sku || offer.sku, row.size || offer.size);
+
+  if (!unit) {
+    await clearOwnStockRow(row);
+
+    return { ok: false, reason: "out_of_stock" };
+  }
+
+  const sellingPrice = Number(offer.selling_price) > 0
+    ? Number(offer.selling_price)
+    : Number(offer.offer_price);
+
+  const unitUpdate = {
+    "Availability Status": "Reserved",
+    "Selling Method": asText(offer.selling_method) || "Plug & Play"
+  };
+
+  if (Number.isFinite(sellingPrice) && sellingPrice > 0) {
+    unitUpdate["Selling Price"] = Math.round(sellingPrice * 100) / 100;
+  }
+
+  const sourceType = asText(offer.source_type);
+
+  if (sourceType === "member_wtb") {
+    unitUpdate["Member WTBs"] = [offer.member_wtb_record_id];
+  } else if (offer.order_record_id) {
+    unitUpdate["Unfulfilled Orders Log"] = [offer.order_record_id];
+  }
+
+  const sold = await airtable(AIRTABLE_INVENTORY_UNITS_TABLE).update(unit.id, unitUpdate);
+
+  console.log(
+    `✅ Own-stock pair ${row.sku} / ${row.size} sold from unit ${unit.id} ` +
+      `(${sourceType || "order"} ${offer.order_id || offer.order_record_id || offer.member_wtb_record_id || ""})`
+  );
+
+  if (offer.order_record_id && !["member_wtb", "external_sale"].includes(sourceType)) {
+    requestOwnStockLabel(offer.order_record_id);
+  }
+
+  return { ok: true, unit: sold };
+}
+
+/*
  * Partner pairs confirm themselves.
  *
  * Everyone else is asked "do you still have it?" because the pair is in
@@ -1229,6 +1475,8 @@ async function askOtherConsignorsForOrder({
   const { data: holders, error } = await supabase
     .from("consignment_inventory")
     .select("id, sku, size, vat_type, selling_price_suggested, quantity, seller_id, seller_record_id, product_name, brand, contract_labels_only")
+    // Our own dump stock has nobody to ask; it confirms itself up front.
+    .eq("own_stock", false)
     .eq("sku", sku)
     .eq("size", size)
     .gt("quantity", 0);
@@ -1343,6 +1591,7 @@ async function askOtherConsignorsForMemberWtb({
     .from("consignment_inventory")
     .select("id, sku, size, vat_type, selling_price_suggested, quantity, seller_id, seller_record_id, product_name, brand")
     .eq("contract_labels_only", false) // a want-to-buy never ships on a supplier's own label
+    .eq("own_stock", false) // our own dump stock has nobody to ask
     .eq("sku", sku)
     .eq("size", size)
     .gt("quantity", 0);
@@ -1626,7 +1875,14 @@ async function askConsignorToConfirmMemberWtbOffer({
   if (!inventoryId) return { ok: false, reason: "not_consignment" };
 
   // A partner pair is on our shelf: nobody to ask, and nobody else either.
-  if (!skipPartnerAutoConfirm && (await partnerPayoutForInventory(inventoryId))) {
+  // Our own dump stock is too, and goes the same way.
+  //
+  // Only the fallback differs. A failed partner confirm asks the partner
+  // row the usual way; a failed own-stock confirm must never ask SE-00001
+  // on Discord, so it asks the other holders of the pair instead.
+  const isOwnStock = Boolean(await ownStockInventoryRow(inventoryId));
+
+  if (!skipPartnerAutoConfirm && (isOwnStock || (await partnerPayoutForInventory(inventoryId)))) {
     const agreedPayout = Number(acceptedPayout);
 
     autoConfirmPartnerOffer({
@@ -1634,18 +1890,37 @@ async function askConsignorToConfirmMemberWtbOffer({
       agreed: Number.isFinite(agreedPayout) && agreedPayout > 0
         ? { payout: agreedPayout, vatType: asText(f["Offer VAT Type"]) }
         : null,
-      context: `Member WTB ${memberWtbRecordId}`,
-      fallback: () =>
-        askConsignorToConfirmMemberWtbOffer({
-          memberWtbRecordId,
-          sellerOfferRecordId,
-          acceptedPayout,
-          skipPartnerAutoConfirm: true
-        })
+      context: `Member WTB ${memberWtbRecordId}${isOwnStock ? ", own stock" : ""}`,
+      fallback: isOwnStock
+        ? async () => {
+            const memberWtb = await airtable(MEMBER_WTBS_TABLE).find(memberWtbRecordId);
+
+            await askOtherConsignorsForMemberWtb({
+              memberWtbRecordId,
+              memberFields: memberWtb.fields || {},
+              askedInventoryId: inventoryId,
+              budgetNormalized: getConsignmentComparePrice(
+                Number.isFinite(agreedPayout) && agreedPayout > 0
+                  ? agreedPayout
+                  : numberValue(f["Seller Offer"]),
+                asText(f["Offer VAT Type"])
+              )
+            });
+          }
+        : () =>
+            askConsignorToConfirmMemberWtbOffer({
+              memberWtbRecordId,
+              sellerOfferRecordId,
+              acceptedPayout,
+              skipPartnerAutoConfirm: true
+            })
     });
 
     return { ok: true, partner_auto_confirm: true };
   }
+
+  // Whatever the route, an own-stock row is never put to SE-00001.
+  if (isOwnStock) return { ok: false, reason: "own_stock" };
 
   const sellerRecordId = firstLinkedRecordId(f["Seller ID"]);
 
@@ -1987,7 +2262,10 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
       // out_of_stock and already_confirmed keep their own wording in the
       // caller; anything else reads as "no longer available", which is what
       // this reason maps to.
-      return { ok: false, reason: "member_wtb_finalise_failed" };
+      return {
+        ok: false,
+        reason: processData?.reason === "out_of_stock" ? "out_of_stock" : "member_wtb_finalise_failed"
+      };
     }
 
     // Link the unit back onto the Seller Offer.
@@ -2041,6 +2319,24 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
 
   if (!inventoryRow || Number(inventoryRow.quantity || 0) <= 0) {
     return { ok: false, reason: "out_of_stock" };
+  }
+
+  /*
+    Our own dump stock: is a listed unit still there?
+
+    Asked before anything is written to the order, so a pair that left the
+    shelf since the job last ran is refused cleanly instead of leaving an
+    accepted offer on the order with nothing behind it. The row goes to
+    zero at the same time, so the channels stop selling it.
+  */
+  if (inventoryRow.own_stock === true) {
+    const listedUnit = await findListedOwnStockUnit(inventoryRow.sku, inventoryRow.size);
+
+    if (!listedUnit) {
+      await clearOwnStockRow(inventoryRow);
+
+      return { ok: false, reason: "out_of_stock" };
+    }
   }
 
   /*
@@ -2269,7 +2565,16 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
     selling_method: asText(orderFields["Selling Method"])
   };
 
-  const inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer(offerLike);
+  // An own-stock unit can still go between the check above and here; that
+  // reads as the out_of_stock it is, not as a crash.
+  let inventoryUnitRecord;
+
+  try {
+    inventoryUnitRecord = await createConsignmentInventoryUnitFromOffer(offerLike);
+  } catch (err) {
+    if (err.code === "out_of_stock") return { ok: false, reason: "out_of_stock" };
+    throw err;
+  }
 
   // The pair has a supplier now, so nobody should still be able to claim it.
   closeSnapshotForRecord({ recordId: orderRecordId, source: "order" });
@@ -2360,6 +2665,19 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
     }).catch((err) =>
       console.error("Failed to fire disable-offer-messages sweep (non-blocking):", err)
     );
+  }
+
+  // Our own dump stock has no consignor to tell: the pair is on our shelf
+  // and its label was requested from the WMS when the unit was linked.
+  if (inventoryRow.own_stock === true) {
+    return {
+      ok: true,
+      seller_offer_record_id: sellerOfferRecordId,
+      inventory_unit_record_id: inventoryUnitRecord.id,
+      seller_id: inventoryRow.seller_id,
+      offer: offerLike,
+      own_stock: true
+    };
   }
 
   // Without this the consignor never gets his Request Label button and
@@ -3322,6 +3640,29 @@ async function denyConsignmentSellerOffer(sellerOfferRecordId) {
 }
 
 async function createConsignmentInventoryUnitFromOffer(offer) {
+  /*
+    Our own dump stock sells the unit it already is.
+
+    Branched here, ahead of everything else, so every road that ends in this
+    function (store order, legacy offer, broker deal) gets the same answer:
+    no new unit and no purchase expense webhook. Thrown when no listed unit
+    is left, because every caller goes on to read .id, and a unit made up
+    for a pair we do not have is worse than a failed confirm.
+  */
+  const ownStockRow = await ownStockInventoryRow(offer.inventory_id);
+
+  if (ownStockRow) {
+    const sold = await sellOwnStockUnitForOffer(offer, ownStockRow);
+
+    if (!sold.ok) {
+      const err = new Error(`No listed own-stock unit left for ${ownStockRow.sku} / ${ownStockRow.size}`);
+      err.code = "out_of_stock";
+      throw err;
+    }
+
+    return sold.unit;
+  }
+
   const partnerPayout = await partnerPayoutForInventory(offer.inventory_id);
   const purchasePrice = partnerPayout ?? Number(offer.offer_price);
 
@@ -13873,7 +14214,23 @@ app.post("/api/sneakerask/ask-consignors", async (req, res) => {
     */
     let partnerRequest = null;
 
+    /*
+      Our own dump stock is on our shelf as well, and goes first: the point
+      of putting a pair on sale is that it leaves. It confirms itself like a
+      partner pair. It is never asked on Discord, not even in the fallback,
+      because that would put the question to SE-00001.
+    */
+    const ownStockRequests = new Set();
+
     for (const request of requests) {
+      if (await ownStockInventoryRow(request?.inventory_id).catch(() => null)) {
+        ownStockRequests.add(request);
+      }
+    }
+
+    partnerRequest = [...ownStockRequests][0] || null;
+
+    for (const request of partnerRequest ? [] : requests) {
       const payout = await partnerPayoutForInventory(request?.inventory_id).catch(() => null);
 
       if (payout && numberValue(request?.ask_amount) >= payout) {
@@ -14001,16 +14358,18 @@ app.post("/api/sneakerask/ask-consignors", async (req, res) => {
         sellerOfferRecordId: partnerOfferId,
         context: `marketplace ${orderId}`,
         fallback: async () => {
-          await askOne(partnerRequest, { existingOfferId: partnerOfferId });
+          if (!ownStockRequests.has(partnerRequest)) {
+            await askOne(partnerRequest, { existingOfferId: partnerOfferId });
+          }
 
           for (const request of requests) {
-            if (request !== partnerRequest) await askOne(request);
+            if (request !== partnerRequest && !ownStockRequests.has(request)) await askOne(request);
           }
         }
       });
     } else {
       for (const request of requests) {
-        await askOne(request);
+        if (!ownStockRequests.has(request)) await askOne(request);
       }
     }
 
@@ -19892,7 +20251,8 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
         seller_id,
         seller_record_id,
         payout_price,
-        contract_labels_only
+        contract_labels_only,
+        own_stock
       `)
       .eq("sku", sku)
       .eq("size", size)
@@ -20031,6 +20391,7 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
           sellerPrice,
           sellerComparePrice,
           isPartner,
+          isOwnStock: row.own_stock === true,
           costCompare: isPartner
             ? getConsignmentComparePrice(payout, row.vat_type)
             : sellerComparePrice
@@ -20065,6 +20426,8 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       (a, b) =>
         a.costCompare - b.costCompare ||
         Number(b.isPartner) - Number(a.isPartner) ||
+        // Our own dump stock wins a tie too: it is on the shelf to leave.
+        Number(b.isOwnStock) - Number(a.isOwnStock) ||
         a.sellerComparePrice - b.sellerComparePrice
     )[0];
 
@@ -20616,7 +20979,8 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       .catch(() => null);
 
     // A partner pair that fits needs nobody's yes. See autoConfirmPartnerOffer.
-    const partnerAutoConfirm = isConfirmation && engageConsignorNow && best.isPartner;
+    // Neither does our own dump stock.
+    const partnerAutoConfirm = isConfirmation && engageConsignorNow && (best.isPartner || best.isOwnStock);
 
     const sendConfirmRequest = async () => {
       const consignorFields = consignorRecord?.fields || {};
@@ -20664,11 +21028,31 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
       await rememberConsignmentConfirmMessage(createdOffer.id, confirmDiscordResult);
     };
 
+    /*
+      A failed own-stock confirm must not put the question to SE-00001, so
+      its fallback asks the other holders of the pair at the same budget,
+      the way a store accept does when the first consignor may not answer.
+    */
+    const askOtherHolders = () =>
+      source.kind === "member_wtb"
+        ? askOtherConsignorsForMemberWtb({
+            memberWtbRecordId: source.recordId,
+            memberFields: orderFields,
+            askedInventoryId: best.row.id,
+            budgetNormalized: best.sellerComparePrice
+          })
+        : askOtherConsignorsForOrder({
+            orderRecordId,
+            orderFields,
+            askedInventoryId: best.row.id,
+            budgetNormalized: best.sellerComparePrice
+          });
+
     if (partnerAutoConfirm) {
       autoConfirmPartnerOffer({
         sellerOfferRecordId: createdOffer.id,
-        context: `${source.kind} ${source.recordId}`,
-        fallback: sendConfirmRequest
+        context: `${source.kind} ${source.recordId}${best.isOwnStock ? ", own stock" : ""}`,
+        fallback: best.isOwnStock ? askOtherHolders : sendConfirmRequest
       });
     } else if (isConfirmation && engageConsignorNow) {
       // His price already fits under the ceiling, so there is nothing to
@@ -20701,10 +21085,14 @@ app.post("/api/consignment/auto-offer/create", async (req, res) => {
      * If it does fall under that threshold, the store's own budget covers it
      * and buying it is right - and the supplier is still asked to confirm
      * afterwards, the same as on any other accepted offer.
+     *
+     * Our own dump stock is the same case: its price is the sale price we
+     * set, and a counter round would go to SE-00001 on Discord, where
+     * nobody answers. Its accept confirms itself (see the store accept).
      */
     const supplierCannotNegotiate = !isConfirmation
       && engageConsignorNow
-      && (await sellerUsesSupplierApi(best.row.seller_record_id));
+      && (best.isOwnStock || (await sellerUsesSupplierApi(best.row.seller_record_id)));
 
     if (supplierCannotNegotiate) {
       /*
@@ -22913,7 +23301,17 @@ app.post("/api/counter-offers/:id/store-accept", async (req, res) => {
           );
         }
 
-        if (!consignorEngaged && !isPartnerPair) {
+        // Our own dump stock settles here too: asking would put the
+        // question to SE-00001 on Discord.
+        const isOwnStockPair = Boolean(await ownStockInventoryRow(consignmentInventoryId));
+
+        if (isOwnStockPair) {
+          console.log(
+            `Store accept on ${linkedOrderId}: own stock (inventory ${consignmentInventoryId}) - confirmed without asking.`
+          );
+        }
+
+        if (!consignorEngaged && !isPartnerPair && !isOwnStockPair) {
           const { data: inventoryRowForGuard } = await supabase
             .from("consignment_inventory")
             .select("*")
@@ -43240,8 +43638,10 @@ function getBuyingSizeKey(size) {
   return asText(size).toUpperCase();
 }
 
+// A pair we put on sale is sold at its sale ask here too, so KC Buying
+// does not ask more for it than every other channel the dump lists it on.
 function getBuyingInventoryPrice(fields) {
-  return numberValue(fields["Ideal Selling Price"]);
+  return kcDumpAsk(fields) ?? numberValue(fields["Ideal Selling Price"]);
 }
 
 function getBuyingInventoryProduct(record) {
@@ -44212,7 +44612,8 @@ async function fetchAllConsignmentInventoryRows() {
         vat_type,
         selling_price_suggested,
         quantity,
-        image_url
+        image_url,
+        own_stock
       `)
       .eq("contract_labels_only", false) // KC Buying and the Lojiq Shop: no supplier-label-only stock
       .gt("quantity", 0)
@@ -44248,7 +44649,10 @@ async function refreshBuyingMasterCache() {
           "Picture",
           "Ideal Selling Price",
           "VAT Type",
-          "Availability Status"
+          "Availability Status",
+          "Dump Listing?",
+          "Custom Selling Price",
+          "Dump Until"
         ],
         filterByFormula: `AND(
           {Availability Status} = 'Available',
@@ -44340,6 +44744,10 @@ async function refreshBuyingMasterCache() {
     const consignmentRows = (rawConsignmentRows || []).filter((row) => {
       const stockKey = getStockCounterKey(row.sku, row.size);
       const stockInfo = consignmentStockLevelMap.get(stockKey);
+
+      // An own_stock row is our dump stock, which KC Buying already lists
+      // as the kc_owned units themselves. Kept, it would show the pair twice.
+      if (row.own_stock === true) return false;
 
       return (
         Number(row.quantity || 0) > 0 &&
@@ -45433,7 +45841,37 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       'Member WTBs': [memberWtbRecordId]
     };
 
-    const inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).create(inventoryFields);
+    /*
+      Our own dump stock sells the unit it already is, as on a store order
+      (see sellOwnStockUnitForOffer): no new unit, nothing to pay anyone.
+      Refused before anything is written to the want-to-buy when no listed
+      unit is left.
+    */
+    const ownStockRow = await ownStockInventoryRow(offerFields['Consignment Inventory ID']);
+
+    let inventoryUnit;
+
+    if (ownStockRow) {
+      const sold = await sellOwnStockUnitForOffer({
+        inventory_id: ownStockRow.id,
+        sku: asText(memberFields['SKU']),
+        size: asText(memberFields['Size']),
+        order_id: memberWtbId,
+        source_type: 'member_wtb',
+        member_wtb_record_id: memberWtbRecordId,
+        selling_price: finalBuyingPrice,
+        selling_method: 'Kickz Caviar',
+        offer_price: purchasePrice
+      }, ownStockRow);
+
+      if (!sold.ok) {
+        return res.status(409).json({ error: 'Own-stock pair no longer listed', reason: sold.reason });
+      }
+
+      inventoryUnit = sold.unit;
+    } else {
+      inventoryUnit = await airtable(INVENTORY_UNITS_TABLE).create(inventoryFields);
+    }
 
     await airtable(MEMBER_WTBS_TABLE).update(memberWtbRecordId, {
       'Purchase Status': 'Confirmed',
