@@ -758,9 +758,10 @@ async function ownStockInventoryRow(consignmentInventoryId) {
 }
 
 /*
- * Is a dump still running? Dump Until is the last listed day, and empty
- * means no end. It is a plain Airtable date, so it compares as a string
- * against the Amsterdam date, the same rule autoAllocateBestUnit uses.
+ * Is a sale price still running? Dump Until is the last day the Custom
+ * Selling Price applies, and empty means no end. It is a plain Airtable
+ * date, so it compares as a string against the Amsterdam date, the same
+ * rule autoAllocateBestUnit uses.
  */
 function kcDumpStillRunning(fields, now = new Date()) {
   const dumpUntil = asText(fields?.["Dump Until"]).slice(0, 10);
@@ -773,41 +774,93 @@ function kcDumpStillRunning(fields, now = new Date()) {
 }
 
 /*
- * The sale ask of a unit we put on sale, or null when it is not on sale.
+ * The sale ask of one of our units, or null when it has none.
  *
- * Same rule as getDumpAsk in the engine: Dump Listing? on, a Custom Selling
- * Price above zero and a dump that has not ended. Kept identical so a pair
- * is priced the same in KC Buying as on the channels the job lists it on.
+ * CHANGED 18-11 - own stock is listed by default now, so there is no
+ * Dump Listing? to require any more. A Custom Selling Price above zero is
+ * the sale price for as long as Dump Until has not passed; otherwise the
+ * unit goes at its Ideal Selling Price, which the caller falls back to.
  */
 function kcDumpAsk(fields, now = new Date()) {
-  if (fields?.["Dump Listing?"] !== true) return null;
-
-  const customPrice = numberValue(fields["Custom Selling Price"]);
+  const customPrice = numberValue(fields?.["Custom Selling Price"]);
 
   if (!(customPrice > 0)) return null;
 
   return kcDumpStillRunning(fields, now) ? customPrice : null;
 }
 
+/*
+ * SKU and size, compared the way the job keys its rows: no case, no spaces,
+ * and for the SKU no dashes either, because the job turns a space in a SKU
+ * into a dash ("DD1391 100" becomes "DD1391-100").
+ */
 function ownStockMatchKey(value) {
   return asText(value).replace(/\s+/g, "").toUpperCase();
 }
 
+function ownStockSkuKey(value) {
+  return ownStockMatchKey(value).replace(/-/g, "");
+}
+
 /*
- * The listed unit behind an own_stock row: same SKU and size, Available,
- * Dump Listing? on, not a Forwarding unit, dump not ended. The same set the
- * job counts into the row's quantity.
+ * Why a unit is not listed, or null when it is. The contract's rule
+ * (CHANGED 18-11), with its reason codes, so a refused sale says why.
  *
- * The cheapest ask goes first, because that is the price the row was listed
- * at (selling_price_suggested is the lowest ask among these units).
+ * Own stock is listed by default; Hold Back? is how Dario keeps a pair off.
+ * The other checks are there because "Available" alone has been wrong
+ * before: on 30-09-2026 hundreds of units still read Available after they
+ * had been shipped or written off.
+ */
+const KC_LISTED_BAD_VERIFICATION = ["Cancelled", "Rejected", "Lost"];
+const KC_LISTED_BAD_CANCEL = ["Written Off", "Lost"];
+
+function kcOwnStockNotListedReason(fields, now = new Date()) {
+  const f = fields || {};
+  const shipped = [f["Fulfillment Status (UOL)"]].flat().map((value) => asText(value));
+
+  if (f["Hold Back?"] === true) return "held_back";
+  if (asText(f["Availability Status"]) !== "Available") return "not_available";
+  if (asText(f["Type"]) === "Forwarding") return "forwarding";
+  if (asText(f["Location"])) return "elsewhere";
+
+  const dumpUntil = asText(f["Dump Until"]).slice(0, 10);
+
+  if (dumpUntil && !kcDumpStillRunning(f, now)) return "past_dump_until";
+
+  if (
+    shipped.some((value) => /\bFulfilled\b/.test(value)) &&
+    !shipped.some((value) => /Returned/.test(value))
+  ) {
+    return "already_shipped";
+  }
+
+  if (KC_LISTED_BAD_VERIFICATION.includes(asText(f["Verification Status"]))) return "verification";
+  if (KC_LISTED_BAD_CANCEL.includes(asText(f["Cancel Status"]))) return "written_off";
+  if (!asText(f["SKU"]) || !asText(f["Size"])) return "no_sku_or_size";
+  if (!asText(f["VAT Type"])) return "no_vat_type";
+
+  const ask = kcDumpAsk(f, now) ?? numberValue(f["Ideal Selling Price"]);
+
+  if (!(ask > 0)) return "no_price";
+
+  return null;
+}
+
+/*
+ * The listed unit behind an own_stock row: same SKU and size, and listed by
+ * the contract's rule (kcOwnStockNotListedReason). The same set the job
+ * counts into the row's quantity.
  *
- * SKU and size are compared without case or spaces. The row is written by
- * the job from these very units, but a size typed as "44 1/2" on one side
- * and "44.5" on the other is the kind of thing that would quietly match
- * nothing, so the size goes through normalizeConsignmentSize as well.
+ * Airtable narrows it to the SKU and the cheap checks; the full rule runs in
+ * code, because half of it reads lookups and lists that a formula handles
+ * badly. The cheapest ask goes first, because that is the price the row was
+ * listed at (selling_price_suggested is the lowest ask among these units).
+ *
+ * The size also goes through normalizeConsignmentSize: "44 1/2" on one side
+ * and "44.5" on the other would otherwise quietly match nothing.
  */
 async function findListedOwnStockUnit(sku, size) {
-  const skuKey = ownStockMatchKey(sku);
+  const skuKey = ownStockSkuKey(sku);
   const sizeKey = ownStockMatchKey(normalizeConsignmentSize(size));
 
   if (!skuKey || !sizeKey) return null;
@@ -816,32 +869,33 @@ async function findListedOwnStockUnit(sku, size) {
     .select({
       filterByFormula: `AND(
         {Availability Status} = 'Available',
-        {Dump Listing?},
+        NOT({Hold Back?}),
         {Type} != 'Forwarding',
-        UPPER(SUBSTITUTE({SKU} & '', ' ', '')) = '${escapeFormulaValue(skuKey)}'
+        UPPER(SUBSTITUTE(SUBSTITUTE({SKU} & '', ' ', ''), '-', '')) = '${escapeFormulaValue(skuKey)}'
       )`,
       fields: [
         "SKU",
         "Size",
         "Type",
+        "VAT Type",
         "Availability Status",
-        "Dump Listing?",
+        "Hold Back?",
+        "Location",
         "Dump Until",
+        "Fulfillment Status (UOL)",
+        "Verification Status",
+        "Cancel Status",
         "Custom Selling Price",
         "Ideal Selling Price"
       ]
     })
     .all();
 
-  const askOf = (fields) => {
-    const ask = kcDumpAsk(fields) ?? numberValue(fields["Ideal Selling Price"]);
-
-    return ask > 0 ? ask : Infinity;
-  };
+  const askOf = (fields) => kcDumpAsk(fields) ?? numberValue(fields["Ideal Selling Price"]);
 
   const listed = records
     .filter((record) => ownStockMatchKey(normalizeConsignmentSize(record.fields?.["Size"])) === sizeKey)
-    .filter((record) => kcDumpStillRunning(record.fields))
+    .filter((record) => !kcOwnStockNotListedReason(record.fields))
     .sort((a, b) => askOf(a.fields) - askOf(b.fields));
 
   return listed[0] || null;
@@ -44781,7 +44835,6 @@ async function refreshBuyingMasterCache() {
           "Ideal Selling Price",
           "VAT Type",
           "Availability Status",
-          "Dump Listing?",
           "Custom Selling Price",
           "Dump Until"
         ],
