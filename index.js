@@ -848,36 +848,28 @@ async function findListedOwnStockUnit(sku, size) {
 }
 
 /*
- * Ask the WMS for the label, exactly as autoAllocateBestUnit does for a pair
- * it allocates from our own stock: from here it is a pair on our shelf going
- * out, not a consignor's pair coming in.
+ * Request the label for an own-stock order, as if the holder had pressed
+ * Request Label on his deal: requestConsignmentShippingLabel knows every
+ * marketplace (SneakerAsk, Woovin, bol, ...) and asks the store otherwise.
+ *
+ * Not the WMS's /api/request-label with source "auto_allocate_inventory",
+ * which is what autoAllocateBestUnit sends: the WMS only accepts quick_deal,
+ * wtb_deal and marketplace there, and answers that source with a 400
+ * "Unsupported source". The Request Label button is the road that works.
  *
  * Delayed and non-blocking. The caller still writes to the order after the
  * unit is linked (the offer, and on a marketplace order the move to
- * Confirmed), and that should land before the WMS reads the order. A failed
- * label is visible on the order and can be requested by hand; failing the
- * sale over it would not help anybody.
+ * Confirmed), and that should land first. calculateLinkedUnitPrice runs on
+ * "Requested Label" as well, so a label that is quicker than the price does
+ * not lose it. A failed label is visible on the order and can be requested
+ * by hand; failing the sale over it would not help anybody.
  */
 const OWN_STOCK_LABEL_DELAY_MS = 10000;
 
 function requestOwnStockLabel(orderRecordId) {
   setTimeout(async () => {
     try {
-      const response = await fetch(`${LOJIQ_WMS_BASE_URL.replace(/\/$/, "")}/api/request-label`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source: "auto_allocate_inventory", record_id: orderRecordId })
-      });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => "");
-
-        console.error(
-          `❌ Label request for own-stock order ${orderRecordId} failed: ${response.status} ${text}`
-        );
-
-        return;
-      }
+      await requestConsignmentShippingLabel(orderRecordId);
 
       console.log(`📦 Label requested for own-stock order ${orderRecordId}.`);
     } catch (err) {
@@ -930,6 +922,46 @@ async function sellOwnStockUnitForOffer(offer, ownStockRow = null) {
 
   if (!row) return { ok: false, reason: "not_own_stock" };
 
+  /*
+    Two tries. A lost race (see ownStockUnitIsOurs) leaves that unit Reserved
+    for the other sale, so the second look finds the next listed one, if any.
+  */
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const result = await reserveOwnStockUnit(offer, row);
+
+    if (result.ok || result.reason !== "lost_race") return result;
+
+    console.error(
+      `❌ Own-stock unit ${result.unit_id} (${row.sku} / ${row.size}) went to another sale ` +
+        `at the same moment${attempt < 2 ? " - trying the next listed unit" : ""}`
+    );
+  }
+
+  return { ok: false, reason: "out_of_stock" };
+}
+
+/*
+ * Did our write win the unit?
+ *
+ * Airtable has no conditional write, so two sales confirming the last unit
+ * at the same second both find it Available and both write to it. Last
+ * write wins a field, so whoever's link is on the unit afterwards has it.
+ * A store order and a want-to-buy write different link fields and both
+ * would stick; then the order keeps it, because it already has a label on
+ * its way.
+ */
+function ownStockUnitIsOurs(fields, offer) {
+  const orders = Array.isArray(fields?.["Unfulfilled Orders Log"]) ? fields["Unfulfilled Orders Log"] : [];
+  const wtbs = Array.isArray(fields?.["Member WTBs"]) ? fields["Member WTBs"] : [];
+
+  if (asText(offer.source_type) === "member_wtb") {
+    return !orders.length && wtbs.length === 1 && wtbs[0] === offer.member_wtb_record_id;
+  }
+
+  return orders.length === 1 && orders[0] === offer.order_record_id;
+}
+
+async function reserveOwnStockUnit(offer, row) {
   const unit = await findListedOwnStockUnit(row.sku || offer.sku, row.size || offer.size);
 
   if (!unit) {
@@ -959,7 +991,42 @@ async function sellOwnStockUnitForOffer(offer, ownStockRow = null) {
     unitUpdate["Unfulfilled Orders Log"] = [offer.order_record_id];
   }
 
-  const sold = await airtable(AIRTABLE_INVENTORY_UNITS_TABLE).update(unit.id, unitUpdate);
+  let sold = await airtable(AIRTABLE_INVENTORY_UNITS_TABLE).update(unit.id, unitUpdate);
+
+  /*
+    Read back after a moment, the same way the order claim does, so a
+    competing write has landed before we look. Only when there is a link to
+    check: a broker deal links nothing here.
+  */
+  if (unitUpdate["Member WTBs"] || unitUpdate["Unfulfilled Orders Log"]) {
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    const fresh = await airtable(AIRTABLE_INVENTORY_UNITS_TABLE).find(unit.id);
+
+    if (!ownStockUnitIsOurs(fresh.fields, offer)) {
+      // Our own link only, and only where it stuck next to the winner's:
+      // the winner's fields are left exactly as they are.
+      const wtbs = Array.isArray(fresh.fields?.["Member WTBs"]) ? fresh.fields["Member WTBs"] : [];
+
+      if (unitUpdate["Member WTBs"] && wtbs.includes(offer.member_wtb_record_id)) {
+        await airtable(AIRTABLE_INVENTORY_UNITS_TABLE)
+          .update(unit.id, { "Member WTBs": wtbs.filter((id) => id !== offer.member_wtb_record_id) })
+          .catch((err) => console.error(`Could not take our link off unit ${unit.id}:`, err.message));
+      }
+
+      return { ok: false, reason: "lost_race", unit_id: unit.id };
+    }
+
+    sold = fresh;
+
+    // The order won against a want-to-buy, whose write may have landed last
+    // and left its price on the unit: put ours back.
+    const strayWtbs = Array.isArray(fresh.fields?.["Member WTBs"]) ? fresh.fields["Member WTBs"] : [];
+
+    if (unitUpdate["Unfulfilled Orders Log"] && strayWtbs.length) {
+      sold = await airtable(AIRTABLE_INVENTORY_UNITS_TABLE).update(unit.id, unitUpdate);
+    }
+  }
 
   console.log(
     `✅ Own-stock pair ${row.sku} / ${row.size} sold from unit ${unit.id} ` +
@@ -2668,7 +2735,7 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
   }
 
   // Our own dump stock has no consignor to tell: the pair is on our shelf
-  // and its label was requested from the WMS when the unit was linked.
+  // and its label was requested when the unit was linked (requestOwnStockLabel).
   if (inventoryRow.own_stock === true) {
     return {
       ok: true,
@@ -5600,6 +5667,24 @@ async function sendConsignmentOfferDiscordMessage({
       sku: asText(offer?.sku),
       size: asText(offer?.size)
     });
+  }
+
+  /*
+   * Our own dump stock is never put to anyone on Discord.
+   *
+   * Every route that can reach an own_stock row confirms it itself or
+   * leaves it out; this is the net under all of them, for a road nobody
+   * thought of. Nothing is sent, so the question never lands with SE-00001.
+   * Fails open on a read error like the label lookup below: a message to a
+   * real consignor must not be lost over it.
+   */
+  if (await ownStockInventoryRow(offer?.inventory_id || inventoryId).catch(() => null)) {
+    console.error(
+      `❌ Not messaging about own-stock row ${offer?.inventory_id || inventoryId} ` +
+        `(${asText(offer?.sku)} / ${asText(offer?.size)}): our dump stock confirms itself.`
+    );
+
+    return null;
   }
 
   await initDiscord();
@@ -16251,6 +16336,9 @@ app.post("/api/consignment/pre-offer/calculate", async (req, res) => {
         seller_record_id,
         contract_labels_only
       `)
+      // The legacy pre-offer settles through the old accept path, which
+      // messages the holder. Our own dump stock is left to the auto-offer.
+      .eq("own_stock", false)
       .eq("sku", sku)
       .eq("size", size)
       .gt("quantity", 0);
@@ -16551,6 +16639,7 @@ async function pickBrokerConsignor(line) {
     .from("consignment_inventory")
     .select("id, product_name, sku, size, brand, vat_type, selling_price_suggested, quantity, seller_id, seller_record_id, payout_price")
     .eq("contract_labels_only", false) // a broker deal never ships on a supplier's own label
+    .eq("own_stock", false) // our own dump stock: ours already, nobody to ask, like partner stock
     .eq("sku", asText(line.sku).toUpperCase())
     .eq("size", asText(line.size))
     .gt("quantity", 0);
@@ -21443,6 +21532,13 @@ app.post("/api/counter-offers/create", async (req, res) => {
         continue;
       }
 
+      // Our own dump stock likewise: a fixed sale price, and the round
+      // would go to SE-00001 on Discord, where nobody answers.
+      if (await ownStockInventoryRow(f["Consignment Inventory ID"]).catch(() => null)) {
+        skippedSupplierApi += 1;
+        continue;
+      }
+
       const counterPayout = calculateCounterPayoutForVatType(
         storeCounterPrice,
         sellerVatType,
@@ -24550,6 +24646,9 @@ app.post("/api/consignment/offers/create", async (req, res) => {
         seller_record_id,
         contract_labels_only
       `)
+      // Every row here gets a Discord offer, and an own_stock row would put
+      // it to SE-00001. Our dump stock sells through the auto-offer instead.
+      .eq("own_stock", false)
       .eq("sku", sku)
       .eq("size", size)
       .gt("quantity", 0);
@@ -45415,6 +45514,7 @@ async function sendMemberWtbConsignmentRequests(memberWtbRecordId) {
       seller_record_id
     `)
     .eq("contract_labels_only", false) // a want-to-buy never ships on a supplier's own label
+    .eq("own_stock", false) // our own dump stock has nobody to ask; SE-00001 is never messaged
     .eq("sku", sku)
     .eq("size", size)
     .gt("quantity", 0)
