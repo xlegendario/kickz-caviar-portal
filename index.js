@@ -111,6 +111,7 @@ import {
   offerableVatTypes,
   vatTypesForSeller
 } from "./lib/offerRules.js";
+import { brokerReminderDue, buildBrokerDealAlert } from "./lib/brokerDealAlert.js";
 import {
   CLAIM_CODE_TTL_MS,
   MAX_CLAIM_ATTEMPTS,
@@ -9336,6 +9337,16 @@ async function confirmConsignmentOffer(offerId, { closingNote } = {}) {
 
     await closeLosingBrokerRounds(lineId, lockedOffer.id, closingNote);
 
+    // The clock starts now; read back so the alert shows the real deadline.
+    const { data: parked } = await supabase
+      .from("consignment_offers")
+      .select("*")
+      .eq("id", lockedOffer.id)
+      .maybeSingle();
+
+    await sendBrokerDealAlert(parked || { ...lockedOffer, status: "partner_agreed", accepted_at: nowIso }, "agreed")
+      .catch((err) => console.error("Broker deal alert (agreed) failed:", err.message));
+
     return {
       ok: true,
       awaiting_broker: true,
@@ -18062,6 +18073,47 @@ function partnerRunDealDeadline(offer) {
 }
 
 /*
+ * Telling us a broker pair is waiting to be closed.
+ *
+ * Posted to a Discord webhook (BROKER_DEAL_ALERT_WEBHOOK) rather than through
+ * a bot, so the channel can live on any server without a bot being in it.
+ * Never fatal: the round is parked either way, and a missing webhook only
+ * means nobody is told - which is how it was before this existed.
+ */
+const BROKER_DEAL_ALERT_WEBHOOK = asText(process.env.BROKER_DEAL_ALERT_WEBHOOK);
+const BROKER_DEAL_ADMIN_URL = asText(process.env.BROKER_DEAL_ADMIN_URL) ||
+  "https://portal.lojiq.io/admin/external-sales?tab=draft";
+
+async function sendBrokerDealAlert(offer, kind) {
+  if (!BROKER_DEAL_ALERT_WEBHOOK) return { ok: false, reason: "no_webhook" };
+
+  const saleId = asText(offer?.external_sale_id);
+
+  const { data: sale } = saleId
+    ? await supabase.from("external_sales").select("buyer_name").eq("id", saleId).maybeSingle()
+    : { data: null };
+
+  const body = buildBrokerDealAlert({
+    kind,
+    offer,
+    buyerName: asText(sale?.buyer_name),
+    deadlineMs: partnerRunDealDeadline(offer),
+    adminUrl: saleId ? `${BROKER_DEAL_ADMIN_URL}&deal=${encodeURIComponent(saleId)}` : BROKER_DEAL_ADMIN_URL
+  });
+
+  const res = await fetch(BROKER_DEAL_ALERT_WEBHOOK, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15000)
+  });
+
+  if (!res.ok) throw new Error(`Broker deal alert: Discord ${res.status}`);
+
+  return { ok: true };
+}
+
+/*
  * A line into the channel the offer itself went out in.
  *
  * Not an edit of that message: a consignor who agreed to something is owed
@@ -18397,6 +18449,30 @@ async function sweepPartnerRunDeals() {
     if (error) throw error;
 
     const now = Date.now();
+
+    /*
+     * The last call before the clock lets a parked broker pair go.
+     *
+     * Claimed with a conditional update first, so two instances running
+     * the sweep in the same minute send one reminder between them.
+     */
+    for (const offer of live || []) {
+      if (!brokerReminderDue(offer, partnerRunDealDeadline(offer), now)) continue;
+
+      const { data: claimed } = await supabase
+        .from("consignment_offers")
+        .update({ broker_reminder_sent_at: new Date(now).toISOString() })
+        .eq("id", offer.id)
+        .eq("status", "partner_agreed")
+        .is("broker_reminder_sent_at", null)
+        .select("id")
+        .maybeSingle();
+
+      if (!claimed) continue;
+
+      await sendBrokerDealAlert(offer, "reminder")
+        .catch((err) => console.error(`Broker deal alert (reminder) failed for ${offer.id}:`, err.message));
+    }
 
     const due = (live || []).filter((offer) => {
       const deadline = partnerRunDealDeadline(offer);
