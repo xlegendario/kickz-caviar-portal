@@ -28,6 +28,7 @@ import {
   orderPairsForForwarding,
   priceDifferences
 } from "./lib/partnerStock.js";
+import { createAsiaPartnerFlow } from "./lib/asiaPartner.js";
 
 import compression from "compression";
 import { spawn } from "child_process";
@@ -466,6 +467,48 @@ let memberWtbCsvUploadsBound = false;
 // arrive while it's still starting up.
 let discordInitPromise = null;
 let kickzDealDiscordInitPromise = null;
+let asiaButtonsBound = false;
+
+/*
+ * The Asia partner (Dewu supplier): his offers in his channel on the Kickz
+ * Caviar server, his buttons, and the sweep that follows them up
+ * (lib/asiaPartner.js). The deal itself is made by the Lojiq portal.
+ * ASIA_PARTNER_FLOW=on starts the sweep; the buttons always answer.
+ */
+const ASIA_PARTNER_FLOW = String(process.env.ASIA_PARTNER_FLOW || "").trim().toLowerCase() === "on";
+
+const asiaPartnerFlow = createAsiaPartnerFlow({
+  table: airtable,
+  getChannel: async (channelId) => {
+    await initKickzDealDiscord();
+    return kickzDealDiscordClient.channels.fetch(channelId);
+  },
+  channelId: process.env.ASIA_PARTNER_CHANNEL_ID || "1442461635913715762",
+  partnerDiscordId: process.env.ASIA_PARTNER_DISCORD_ID || "1065618507192090654",
+  adminDiscordIds: String(process.env.ASIA_ADMIN_DISCORD_IDS || "").split(",").map((v) => v.trim()).filter(Boolean),
+  lojiqDeal: async (body) => {
+    const response = await fetch(`${String(LOJIQ_PORTAL_BASE_URL).replace(/\/$/, "")}/api/internal/asia/deal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-kc-secret": COUNTER_OFFERS_SECRET || process.env.COUNTER_OFFERS_SECRET || "" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(90_000)
+    });
+    const data = await response.json().catch(() => ({}));
+    // Asked again after a timeout: the first call made the pair.
+    if (response.status === 409 && data.unit_id) return { ok: true, unit_id: data.unit_id };
+    if (!response.ok) throw new Error(`Lojiq could not make the deal (${response.status}): ${data.error || "no answer"}`);
+    return data;
+  },
+  outsourceCheck: async (orderId) => {
+    const response = await fetch(process.env.OUTSOURCE_ENGINE_CHECK_URL || "https://outsource-engine.onrender.com/outsource/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderId }),
+      signal: AbortSignal.timeout(60_000)
+    });
+    if (!response.ok) throw new Error(`Outsource Engine answered ${response.status}`);
+  }
+});
 
 const memberWtbDiscordInventoryTypes = new Map();
 
@@ -550,6 +593,16 @@ async function initKickzDealDiscord() {
       );
     
       memberWtbCsvUploadsBound = true;
+    }
+
+    if (!asiaButtonsBound) {
+      kickzDealDiscordClient.on(Events.InteractionCreate, (interaction) => {
+        if (!interaction.isButton() && !interaction.isModalSubmit()) return;
+        if (!asiaPartnerFlow.isOurs(interaction.customId)) return;
+        asiaPartnerFlow.onInteraction(interaction).catch((err) => console.error("[asia] interaction failed:", err.message));
+      });
+
+      asiaButtonsBound = true;
     }
 
     console.log("✅ Kickz deal Discord bot logged in");
@@ -49819,6 +49872,20 @@ function runEnrichPictures() {
 
 app.listen(PORT, () => {
   console.log(`Kickz Caviar Portal running on port ${PORT}`);
+
+  if (ASIA_PARTNER_FLOW) {
+    cron.schedule("*/2 * * * *", () => {
+      asiaPartnerFlow.sweep().catch((err) => console.error("[asia] sweep failed:", err.message));
+    }, {
+      timezone: process.env.TZ || "Europe/Amsterdam"
+    });
+
+    // The bot answers the partner's buttons only once it is logged in.
+    initKickzDealDiscord().catch((err) => console.error("[asia] Discord login failed:", err.message));
+    console.log("[asia] partner flow on - every 2 minutes");
+  } else {
+    console.log("[asia] partner flow off - set ASIA_PARTNER_FLOW=on to start it");
+  }
 
   if (RECONCILE_ENABLED) {
     cron.schedule(RECONCILE_CRON, runReconcileStockLevels, {
