@@ -113,6 +113,7 @@ import {
   vatTypesForSeller
 } from "./lib/offerRules.js";
 import { brokerReminderDue, buildBrokerDealAlert } from "./lib/brokerDealAlert.js";
+import { withBusyFeedback } from "./lib/busyFeedback.js";
 import {
   CLAIM_CODE_TTL_MS,
   MAX_CLAIM_ATTEMPTS,
@@ -596,11 +597,11 @@ async function initKickzDealDiscord() {
     }
 
     if (!asiaButtonsBound) {
-      kickzDealDiscordClient.on(Events.InteractionCreate, (interaction) => {
+      kickzDealDiscordClient.on(Events.InteractionCreate, withBusyFeedback(async (interaction) => {
         if (!interaction.isButton() && !interaction.isModalSubmit()) return;
         if (!asiaPartnerFlow.isOurs(interaction.customId)) return;
-        asiaPartnerFlow.onInteraction(interaction).catch((err) => console.error("[asia] interaction failed:", err.message));
-      });
+        await asiaPartnerFlow.onInteraction(interaction).catch((err) => console.error("[asia] interaction failed:", err.message));
+      }));
 
       asiaButtonsBound = true;
     }
@@ -10295,7 +10296,7 @@ function bindMemberWtbDiscordCreation(
 ) {
   client.on(
     Events.InteractionCreate,
-    async (interaction) => {
+    withBusyFeedback(async (interaction) => {
       try {
         const customId =
           String(
@@ -10602,7 +10603,7 @@ function bindMemberWtbDiscordCreation(
             .catch(() => {});
         }
       }
-    }
+    })
   );
 }
 
@@ -10821,7 +10822,7 @@ function bindMemberWtbDiscordCsvUploads(
 }
 
 function bindConsignmentDiscordButtons(client) {
-  client.on(Events.InteractionCreate, consignmentInteractionHandler(client));
+  client.on(Events.InteractionCreate, withBusyFeedback(consignmentInteractionHandler(client)));
 }
 
 /*
