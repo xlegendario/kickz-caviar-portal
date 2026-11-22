@@ -261,7 +261,8 @@ function buildApi({ store, catalogue = {}, vat = {}, rateLimit, wtbs = memoryWan
       b2bRefusal,
       consignorRefusal,
       rateLimit,
-      logger: { error() {} }
+      logger: { error() {} },
+      awaitStockRefresh: true
     })
   );
   app.use("/api/v1", sellerApiErrorHandler);
