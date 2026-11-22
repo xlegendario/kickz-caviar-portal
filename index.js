@@ -114,6 +114,7 @@ import {
 } from "./lib/offerRules.js";
 import { brokerReminderDue, buildBrokerDealAlert } from "./lib/brokerDealAlert.js";
 import { withBusyFeedback } from "./lib/busyFeedback.js";
+import { trackJob, slowRequestLogger, startPerfWatch } from "./lib/perfWatch.js";
 import {
   CLAIM_CODE_TTL_MS,
   MAX_CLAIM_ATTEMPTS,
@@ -164,6 +165,9 @@ import {
 dotenv.config();
 
 const app = express();
+
+// Measurement while the CPU problem since 19-11 is open; see lib/perfWatch.js.
+app.use(slowRequestLogger);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49871,8 +49875,23 @@ function runEnrichPictures() {
   });
 }
 
+// Every scheduled job reports its duration while the CPU problem is open.
+runReconcileStockLevels = trackJob("runReconcileStockLevels", runReconcileStockLevels);
+runSellerApiSalesSync = trackJob("runSellerApiSalesSync", runSellerApiSalesSync);
+pollPearlRequests = trackJob("pollPearlRequests", pollPearlRequests);
+retrySupplierPairs = trackJob("retrySupplierPairs", retrySupplierPairs);
+pollTurumReservations = trackJob("pollTurumReservations", pollTurumReservations);
+runPartnerStockLevelSync = trackJob("runPartnerStockLevelSync", runPartnerStockLevelSync);
+runSellerApiWebhookDeliveries = trackJob("runSellerApiWebhookDeliveries", runSellerApiWebhookDeliveries);
+reconcileGuildMembership = trackJob("reconcileGuildMembership", reconcileGuildMembership);
+qualifyReferrals = trackJob("qualifyReferrals", qualifyReferrals);
+escalateMarketplaceDealsToSnapshot = trackJob("escalateMarketplaceDealsToSnapshot", escalateMarketplaceDealsToSnapshot);
+sweepPartnerRunDeals = trackJob("sweepPartnerRunDeals", sweepPartnerRunDeals);
+runEnrichPictures = trackJob("runEnrichPictures", runEnrichPictures);
+
 app.listen(PORT, () => {
   console.log(`Kickz Caviar Portal running on port ${PORT}`);
+  startPerfWatch();
 
   if (ASIA_PARTNER_FLOW) {
     cron.schedule("*/2 * * * *", () => {
