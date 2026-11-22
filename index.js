@@ -26988,6 +26988,24 @@ function moneyWholeValue(value) {
 // a real 10-cent discrepancy against what was actually agreed). This
 // shows decimals only when the real number actually has them, making
 // the VAT-conversion case visually distinct rather than hidden.
+// Built once. Constructing an Intl.NumberFormat costs about 30 microseconds,
+// formatting with one about half a microsecond - and the shop's product list
+// formats well over 100,000 amounts per build (22-11-2026: 3.6 s against
+// 0.06 s on a laptop, several times that on the instance's half CPU).
+const EURO_WHOLE = new Intl.NumberFormat("nl-NL", {
+  style: "currency",
+  currency: "EUR",
+  maximumFractionDigits: 0,
+  minimumFractionDigits: 0
+});
+
+const EURO_CENTS = new Intl.NumberFormat("nl-NL", {
+  style: "currency",
+  currency: "EUR",
+  maximumFractionDigits: 2,
+  minimumFractionDigits: 2
+});
+
 function moneySmartValue(value) {
   const n = numberValue(value);
 
@@ -26995,12 +27013,7 @@ function moneySmartValue(value) {
 
   const isWhole = Math.abs(n - Math.round(n)) < 0.005;
 
-  return new Intl.NumberFormat("nl-NL", {
-    style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: isWhole ? 0 : 2,
-    minimumFractionDigits: isWhole ? 0 : 2
-  }).format(n);
+  return (isWhole ? EURO_WHOLE : EURO_CENTS).format(n);
 }
 
 function getImageUrl(value) {
