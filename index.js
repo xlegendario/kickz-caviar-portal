@@ -45147,60 +45147,89 @@ async function refreshBuyingMasterCache() {
  * filter, so it ran nearly back to back.
  *
  * The sources only change when the master cache refreshes (every two
- * minutes), so the result is kept against that exact array: a refresh hands
- * out a new array and the old entries go with it. Within one set, a result
- * differs only by who is looking - their own pairs left out, their VAT rate,
- * their store margin - and by the inventory filter, so those form the key.
+ * minutes), so one list is kept per kind of viewer and rebuilt when the
+ * sources it was built from are replaced. A list differs only by who is
+ * looking - their own pairs left out, their VAT rate, their store margin -
+ * and by the inventory filter, so those form the key.
  *
  * `trimmed` is what the response sends: sizes without their sources array
  * (see the note in the route). Made on first use and kept too.
  */
-const buyingProductsBySources = new WeakMap();
+const BUYING_PRODUCTS_IDLE_MS = 10 * 60 * 1000;
+const buyingProductsByKey = new Map();
 
-function getBuyingProductsCached(sources, { viewerSellerRecordId, inventoryType, buyerVatRate, storeMargin }) {
-  let byKey = buyingProductsBySources.get(sources);
+function buildBuyingProductsEntry(sources, { viewerSellerRecordId, inventoryType, buyerVatRate, storeMargin }) {
+  const visibleSources = viewerSellerRecordId
+    ? sources.filter((source) => asText(source.seller_record_id) !== viewerSellerRecordId)
+    : sources;
 
-  if (!byKey) {
-    byKey = new Map();
-    buyingProductsBySources.set(sources, byKey);
-  }
+  const full = buildBuyingProductsFromSources(visibleSources, inventoryType, buyerVatRate, storeMargin);
+  let trimmed = null;
 
+  return {
+    sources,
+    full,
+    trimmed: () => {
+      trimmed ||= full.map((product) => ({
+        ...product,
+        sizes: (product.sizes || []).map(({ sources: sizeSources, ...size }) => ({
+          ...size,
+          source_entry_count: (sizeSources || []).length
+        }))
+      }));
+
+      return trimmed;
+    }
+  };
+}
+
+/*
+ * Stale while it rebuilds: once a key has a list, a refresh of the sources
+ * never makes a visitor wait. They get the list from the previous two
+ * minutes, and the new one is built straight after on its own turn of the
+ * event loop. Only the very first ask for a key - after a deploy, or for a
+ * store that has not looked in ten minutes - builds while it waits.
+ */
+function getBuyingProductsCached(sources, params) {
   const key = JSON.stringify([
-    asText(viewerSellerRecordId),
-    asText(inventoryType),
-    buyerVatRate,
-    storeMargin
+    asText(params.viewerSellerRecordId),
+    asText(params.inventoryType),
+    params.buyerVatRate,
+    params.storeMargin
   ]);
 
-  let entry = byKey.get(key);
+  const now = Date.now();
+  let slot = buyingProductsByKey.get(key);
 
-  if (!entry) {
-    const visibleSources = viewerSellerRecordId
-      ? sources.filter((source) => asText(source.seller_record_id) !== viewerSellerRecordId)
-      : sources;
-
-    const full = buildBuyingProductsFromSources(visibleSources, inventoryType, buyerVatRate, storeMargin);
-    let trimmed = null;
-
-    entry = {
-      full,
-      trimmed: () => {
-        trimmed ||= full.map((product) => ({
-          ...product,
-          sizes: (product.sizes || []).map(({ sources: sizeSources, ...size }) => ({
-            ...size,
-            source_entry_count: (sizeSources || []).length
-          }))
-        }));
-
-        return trimmed;
-      }
-    };
-
-    byKey.set(key, entry);
+  // Viewers that stopped looking are dropped, so stores do not pile up keys.
+  for (const [otherKey, other] of buyingProductsByKey) {
+    if (now - other.askedAt > BUYING_PRODUCTS_IDLE_MS) buyingProductsByKey.delete(otherKey);
   }
 
-  return entry;
+  if (!slot) {
+    slot = { entry: buildBuyingProductsEntry(sources, params), askedAt: now, rebuilding: false };
+    buyingProductsByKey.set(key, slot);
+
+    return slot.entry;
+  }
+
+  slot.askedAt = now;
+
+  if (slot.entry.sources !== sources && !slot.rebuilding) {
+    slot.rebuilding = true;
+
+    setImmediate(() => {
+      try {
+        slot.entry = buildBuyingProductsEntry(sources, params);
+      } catch (err) {
+        console.error("Buying products rebuild failed:", err.message);
+      } finally {
+        slot.rebuilding = false;
+      }
+    });
+  }
+
+  return slot.entry;
 }
 
 async function getBuyingMasterSources() {
