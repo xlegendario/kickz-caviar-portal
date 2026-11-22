@@ -5653,10 +5653,53 @@ async function pollTurumReservations() {
  * Order-only. A Member WTB has no Selling Price to overshoot: its ceiling IS
  * Max Price, and the offer is derived from it.
  */
+/*
+ * A sale we made ourselves, on a marketplace, at a price we set.
+ *
+ * Every "<marketplace> Consignment" order is one: Shade Studios, Woovin,
+ * bol, SneakerAsk, Hypeneedz, Nordic Sneakers, OBLIO.
+ */
+function isMarketplaceConsignment(orderFields) {
+  return /\sConsignment$/.test(asText(firstLookupValue(orderFields["Order Source"])));
+}
+
 function storeOfferOverSellingPrice({ best, orderFields }) {
   const sellingPrice = numberValue(orderFields["Selling Price"]);
 
   if (!(sellingPrice > 0)) return null;
+
+  /*
+   * On a marketplace nobody is charged the store price, so do not weigh it.
+   *
+   * This asks "would we charge the store more than it sells the pair for".
+   * On a marketplace there is no store to charge: the sale is already made,
+   * at a price WE listed - and we listed it as the consignor's price plus
+   * our margin. Measuring the consignor's price plus that margin AGAIN
+   * against that number counts the margin twice, and the pair is refused
+   * for being exactly as expensive as we made it.
+   *
+   * ORD-033697 on 19-11-2026: listed on Shade at 50 x 1.05 + 5 = 57.50,
+   * sold at 57.50, and held because 50 + a second margin came to 60. Seven
+   * euro fifty of real margin, refused. It only surfaced because the order
+   * had gone to Outsource first and the allocator ran over it days later;
+   * the ordinary Shade order never passes through here at all.
+   *
+   * What does matter is whether the pair costs more than the sale brings
+   * in, so that is what is compared: his price against what we receive.
+   */
+  if (isMarketplaceConsignment(orderFields)) {
+    const receive = numberValue(orderFields["Marketplace Payout"]) || sellingPrice;
+    const cost = Number(best.sellerComparePrice);
+
+    if (!Number.isFinite(cost) || cost <= receive) return null;
+
+    return {
+      storeOffer: cost,
+      storeOfferVatType: asText(best.row?.vat_type),
+      sellingPrice: receive,
+      ceiling: receive
+    };
+  }
 
   const storeBase = convertConsignorPriceToStoreBasePrice(
     best.sellerPrice,
