@@ -45123,6 +45123,73 @@ async function refreshBuyingMasterCache() {
   }
 }
 
+/*
+ * The shop's product list, built once per set of sources.
+ *
+ * Building it walks every source - 40,433 since SE-00814's 29,300 pairs
+ * came in on 19-11-2026, against 3,388 before - and on this instance's half
+ * CPU that took about 12 seconds, during which nothing else in the process
+ * ran: not the site, not the Discord buttons, not /api/health. The KC
+ * Buying page and every Lojiq store shop ask on each open, search and
+ * filter, so it ran nearly back to back.
+ *
+ * The sources only change when the master cache refreshes (every two
+ * minutes), so the result is kept against that exact array: a refresh hands
+ * out a new array and the old entries go with it. Within one set, a result
+ * differs only by who is looking - their own pairs left out, their VAT rate,
+ * their store margin - and by the inventory filter, so those form the key.
+ *
+ * `trimmed` is what the response sends: sizes without their sources array
+ * (see the note in the route). Made on first use and kept too.
+ */
+const buyingProductsBySources = new WeakMap();
+
+function getBuyingProductsCached(sources, { viewerSellerRecordId, inventoryType, buyerVatRate, storeMargin }) {
+  let byKey = buyingProductsBySources.get(sources);
+
+  if (!byKey) {
+    byKey = new Map();
+    buyingProductsBySources.set(sources, byKey);
+  }
+
+  const key = JSON.stringify([
+    asText(viewerSellerRecordId),
+    asText(inventoryType),
+    buyerVatRate,
+    storeMargin
+  ]);
+
+  let entry = byKey.get(key);
+
+  if (!entry) {
+    const visibleSources = viewerSellerRecordId
+      ? sources.filter((source) => asText(source.seller_record_id) !== viewerSellerRecordId)
+      : sources;
+
+    const full = buildBuyingProductsFromSources(visibleSources, inventoryType, buyerVatRate, storeMargin);
+    let trimmed = null;
+
+    entry = {
+      full,
+      trimmed: () => {
+        trimmed ||= full.map((product) => ({
+          ...product,
+          sizes: (product.sizes || []).map(({ sources: sizeSources, ...size }) => ({
+            ...size,
+            source_entry_count: (sizeSources || []).length
+          }))
+        }));
+
+        return trimmed;
+      }
+    };
+
+    byKey.set(key, entry);
+  }
+
+  return entry;
+}
+
 async function getBuyingMasterSources() {
   const hasCache = Array.isArray(buyingMasterCache.sources);
   const isStale = Date.now() - buyingMasterCache.createdAt > BUYING_MASTER_CACHE_TTL_MS;
@@ -45183,18 +45250,18 @@ app.get("/api/buying/products", async (req, res) => {
     */
     const viewerSellerRecordId = asText(req.query.seller_record_id);
 
-    const visibleSources = viewerSellerRecordId
-      ? sources.filter(
-          (source) => asText(source.seller_record_id) !== viewerSellerRecordId
-        )
-      : sources;
+    // Built once per cache refresh and per kind of viewer, not per request;
+    // see getBuyingProductsCached.
+    const includeSources = asText(req.query.include_sources) === "1";
 
-    let products = buildBuyingProductsFromSources(
-      visibleSources,
+    const built = getBuyingProductsCached(sources, {
+      viewerSellerRecordId,
       inventoryType,
       buyerVatRate,
       storeMargin
-    );
+    });
+
+    let products = includeSources ? built.full : built.trimmed();
 
     if (brand) {
       products = products.filter((product) => product.brand === brand);
@@ -45210,6 +45277,9 @@ app.get("/api/buying/products", async (req, res) => {
         ].join(" ").toLowerCase().includes(search)
       );
     }
+
+    // A copy: the list is shared with every other request until the next refresh.
+    products = [...products];
 
     if (sort === "az") {
       products.sort((a, b) => a.product_name.localeCompare(b.product_name));
@@ -45246,19 +45316,9 @@ app.get("/api/buying/products", async (req, res) => {
     // offer. That path is untouched.
     //
     // include_sources=1 puts the array back, for a caller I did not find.
-    const includeSources = asText(req.query.include_sources) === "1";
-
     res.json({
       count: products.length,
-      products: includeSources
-        ? products
-        : products.map((product) => ({
-            ...product,
-            sizes: (product.sizes || []).map(({ sources, ...size }) => ({
-              ...size,
-              source_entry_count: (sources || []).length
-            }))
-          }))
+      products
     });
   } catch (err) {
     console.error("Failed to load buying products:", err);
