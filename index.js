@@ -2795,14 +2795,50 @@ async function confirmConsignmentSellerOffer(sellerOfferRecordId, agreed = null)
       // Enough of a gap that Airtable sends the two as separate events.
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
-      await airtable(ORDERS_TABLE).update(orderRecordId, {
-        "Fulfillment Status": "Confirmed"
-      });
+      /*
+        Unless the engine got there first, which it now does.
 
-      console.log(
-        `✅ SneakerAsk order ${orderRecordId} moved to Confirmed; ` +
-          "calculateLinkedUnitPrice can now price the unit."
+        This whole step is a workaround from when "<marketplace> Processing"
+        was recognised by nothing: moving the order to "Confirmed" was the
+        only way to get calculateLinkedUnitPrice to look at it. Since
+        airtable-automation-engine e44dbc9 it reads those statuses itself,
+        fires the moment the unit is linked, and writes the price AND
+        "Allocated" - and then this write, a second and a half later, drags
+        the order back a step and nothing ever moves it on again, because
+        the price is already stamped.
+
+        ORD-034157 and ORD-034186 on 22-11-2026 both sat at "Confirmed" with
+        their unit, their price and nowhere to go.
+
+        The status is read again instead of assumed: already past Confirmed
+        means the engine has done this, and there is nothing to help it
+        with. A status still waiting keeps the old behaviour, so a run where
+        the engine did not fire is still rescued.
+      */
+      const nowAt = asText(
+        displayValue(
+          (await airtable(ORDERS_TABLE).find(orderRecordId).catch(() => null))
+            ?.fields?.["Fulfillment Status"]
+        )
       );
+
+      const engineMovedIt = nowAt && !/\sProcessing$/.test(nowAt) && nowAt !== "Confirmed";
+
+      if (engineMovedIt) {
+        console.log(
+          `Order ${orderRecordId} is already at "${nowAt}": the engine priced it, ` +
+            "so it is not pushed back to Confirmed."
+        );
+      } else {
+        await airtable(ORDERS_TABLE).update(orderRecordId, {
+          "Fulfillment Status": "Confirmed"
+        });
+
+        console.log(
+          `✅ SneakerAsk order ${orderRecordId} moved to Confirmed; ` +
+            "calculateLinkedUnitPrice can now price the unit."
+        );
+      }
     } catch (err) {
       console.error(
         `❌ SneakerAsk order ${orderRecordId} kept its unit but could NOT be ` +
