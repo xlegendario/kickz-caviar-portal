@@ -878,6 +878,27 @@ function kcOwnStockNotListedReason(fields, now = new Date()) {
   if (asText(f["Availability Status"]) !== "Available") return "not_available";
   if (asText(f["Type"]) === "Forwarding") return "forwarding";
 
+  /*
+   * NEW - whose pair is this?
+   *
+   * "Available" was read as "ours", and those are not the same thing. A
+   * consignor's pair that a buyer sent back and that we keep goes to
+   * Available while the unit still carries HIS Seller ID, because that is
+   * where we bought it. Everything downstream reads that field as "who
+   * ships this and who gets paid": the WMS posts the label into his labels
+   * channel, autoAllocateBestUnit stamps a fresh Payment Status on it.
+   *
+   * So between 19-11 and 22-11-2026 five such pairs sold as our own stock
+   * and five labels went to their consignors. KicksbyMattie (SE-00879)
+   * posted two pairs he had already handed over once (ORD-033734,
+   * ORD-033784), and nothing had bought them from him.
+   *
+   * "Own Stock?" on the unit is the answer: the pair is on our shelf and
+   * the Seller ID on it is only the origin. Nothing else about the unit
+   * changes, so who we bought it from stays on the record.
+   */
+  if (f["Own Stock?"] !== true) return "not_own_stock";
+
   const dumpUntil = asText(f["Dump Until"]).slice(0, 10);
 
   if (dumpUntil && !kcDumpStillRunning(f, now)) return "past_dump_until";
@@ -919,6 +940,7 @@ async function findListedOwnStockUnit(sku, size) {
       filterByFormula: `AND(
         {Availability Status} = 'Available',
         NOT({Hold Back?}),
+        {Own Stock?},
         {Type} != 'Forwarding',
         UPPER(SUBSTITUTE(SUBSTITUTE({SKU} & '', ' ', ''), '-', '')) = '${escapeFormulaValue(skuKey)}'
       )`,
@@ -929,6 +951,7 @@ async function findListedOwnStockUnit(sku, size) {
         "VAT Type",
         "Availability Status",
         "Hold Back?",
+        "Own Stock?",
         "Location",
         "Dump Until",
         "Fulfillment Status (UOL)",
@@ -3910,7 +3933,16 @@ async function createConsignmentInventoryUnitFromOffer(offer) {
     "Payment Status": "To Pay",
     "Availability Status": "Sold",
     "Margin %": "7.5%",
-    "Base Costs": 5
+    "Base Costs": 5,
+
+    /*
+     * A partner's pairs are on our shelf and nobody else ships them, so such
+     * a pair is ours from here on; a consignor still holds his and has to
+     * ship it. Written at creation, so the unit can answer "whose pair is
+     * this?" for the whole of its life - the label routing in the WMS and
+     * autoAllocateBestUnit in the engine both read it.
+     */
+    "Own Stock?": unitType === "Partner Consignment"
   };
 
   if (Number(offer.selling_price || 0) > 0) {
@@ -46328,7 +46360,15 @@ app.post('/api/member-wtb/process-seller-offer', async (req, res) => {
       'Availability Status': 'Sold',
       'Selling Price': finalBuyingPrice,
       'Selling Method': 'Kickz Caviar',
-      'Member WTBs': [memberWtbRecordId]
+      'Member WTBs': [memberWtbRecordId],
+
+      /*
+       * Bought outright, whether off a partner's shelf or sourced for this
+       * buyer, so the pair is ours and the Seller ID on it is the origin.
+       * See kcOwnStockNotListedReason for why that distinction is written
+       * down rather than guessed at from Availability Status.
+       */
+      'Own Stock?': true
     };
 
     /*
