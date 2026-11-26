@@ -10104,7 +10104,21 @@ async function requestConsignmentShippingLabel(orderRecordId) {
       .map((id) => asText(id).trim().toUpperCase())
       .find(Boolean) || "";
 
-    const supplierOutsideDpd = supplier && viaWarehouse.includes(supplier);
+    /*
+     * CHANGED - a claimed deal is shipped by the claimer.
+     *
+     * "Final Offer Seller ID" names the consignor whose offer was on the
+     * order, and on a deal that flaked and was claimed as a quick deal that
+     * is somebody who no longer has anything to do with it. The claimer is
+     * not on "Via Warehouse Sellers" either - that list only holds the
+     * holders the poller saw - so his own country decides. ORD-034481: the
+     * claimer sits in France, which DPD cannot collect from.
+     */
+    const claimed = firstLinkedRecordId(orderFields["Claimed Seller ID"]);
+
+    const supplierOutsideDpd = claimed
+      ? await claimedSellerOutsideDpd(claimed)
+      : Boolean(supplier) && viaWarehouse.includes(supplier);
 
     if ((comingToUs || supplierOutsideDpd) && !asText(orderFields["Inbound Tracking Number"])) {
       return await requestWarehouseInboundLabel(orderRecordId, orderFields);
@@ -34742,6 +34756,33 @@ async function getSellerCountryCodeForOrder(orderFields) {
   if (WAREHOUSE_SELLER_CODES.includes(claimedCode)) return "NL";
 
   return asText(claimedSeller.fields["Country Code"]);
+}
+
+/*
+ * Whether the claimer of a deal has to send a Woovin pair to us first.
+ *
+ * Woovin ships on DPD alone. The Label Request Routing table names the
+ * couriers per country, and a country whose couriers do not include DPD is
+ * one Woovin's label cannot leave from. Our warehouse sellers ship from here.
+ * Not knowing is not a reason for a detour, so an unknown country counts as
+ * reachable - the same choice the Woovin poller makes.
+ */
+async function claimedSellerOutsideDpd(sellerRecordId) {
+  const seller = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+
+  if (!seller) return false;
+
+  const code = asText(seller.fields["Seller ID"]).trim().toUpperCase();
+
+  if (WAREHOUSE_SELLER_CODES.includes(code)) return false;
+
+  const country = asText(seller.fields["Country Code"]).trim().toUpperCase();
+
+  if (!country) return false;
+
+  const { preferredCourier } = await getPreferredCourierForCountryCode(country);
+
+  return Boolean(preferredCourier) && !/DPD/i.test(preferredCourier);
 }
 
 async function getPreferredCourierForCountryCode(countryCode) {
