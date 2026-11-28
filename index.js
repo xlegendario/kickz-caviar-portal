@@ -5144,6 +5144,39 @@ async function retrySupplierPairs() {
     }
 
     /*
+     * A marketplace sale is asked again the way it was asked the first time.
+     *
+     * The route below prices a store order off its Maximum Buying Price, and
+     * a marketplace order has none: the call made the Seller Offer, failed on
+     * the missing ceiling and asked nobody. ORD-035739 (bol, 28-11-2026) got
+     * a fresh offer and no request at Pearl; the retry then saw that offer,
+     * closed itself as "already offered", and the pair was never put to him.
+     *
+     * The sale is already paid for and its budget was weighed when the sale
+     * came in - that is what our_offer holds - so this does what the intake
+     * did: one Seller Offer, and the supplier asked through his API.
+     */
+    if (row.order_record_id && asText(order?.fields?.["Marketplace"])) {
+      const outcome = await reaskSupplierOnMarketplaceOrder({ row, order, theirPrice });
+
+      if (outcome.ok) {
+        await closeSupplierRetry(row, "offered");
+        sent += 1;
+        console.log(
+          `✅ ${row.sku} ${row.size} put to ${row.seller_id || "the supplier"} again ` +
+            `for ${row.order_id || row.order_record_id} (${outcome.seller_offer_record_id}).`
+        );
+      } else {
+        console.log(
+          `Retry ${row.sku} ${row.size} (${row.order_id || row.order_record_id}): ` +
+            `not asked (${outcome.reason}); still waiting.`
+        );
+      }
+
+      continue;
+    }
+
+    /*
      * Back on his shelf and within reach, so the order is put through the
      * ordinary route again. Everything that decides whether this becomes an
      * offer - his price against ours, the store's ceiling, the hold - is
@@ -5239,6 +5272,122 @@ async function retrySupplierPairs() {
   }
 
   return { ok: true, waiting: data.length, sent, closed };
+}
+
+/*
+ * Ask the supplier again on a marketplace order, as the intake did.
+ *
+ * Reuses an offer of his on the order that is still standing rather than
+ * stacking a second one next to it, and otherwise makes one with the same
+ * fields /api/sneakerask/ask-consignors writes. The question itself goes
+ * through sendConsignmentOfferDiscordMessage, which for a supplier is his
+ * API - and askPearlToConfirm still weighs his price against ours there.
+ */
+async function reaskSupplierOnMarketplaceOrder({ row, order, theirPrice }) {
+  const of = order?.fields || {};
+  const sellerRecordId = asText(row.seller_record_id);
+  const ourOffer = Number(row.our_offer);
+
+  if (!sellerRecordId) return { ok: false, reason: "no seller on the retry row" };
+
+  const { data: stock } = await supabase
+    .from("consignment_inventory")
+    .select("id,sku,size,product_name,brand,vat_type,selling_price_suggested,quantity")
+    .eq("seller_record_id", sellerRecordId)
+    .eq("sku", asText(row.sku).toUpperCase())
+    .eq("size", asText(row.size))
+    .gt("quantity", 0)
+    .limit(1);
+
+  const inventory = stock?.[0];
+
+  if (!inventory) return { ok: false, reason: "not in our copy of his stock yet" };
+
+  const price = Number.isFinite(theirPrice) && theirPrice > 0
+    ? theirPrice
+    : numberValue(inventory.selling_price_suggested);
+
+  if (!(price > 0)) return { ok: false, reason: "no price to ask at" };
+
+  const sellerRecord = await airtable(SELLERS_TABLE).find(sellerRecordId).catch(() => null);
+
+  if (!sellerRecord) return { ok: false, reason: "seller record not found" };
+
+  const sf = sellerRecord.fields || {};
+
+  let sellerOfferRecordId = "";
+
+  for (const id of Array.isArray(of["Linked Seller Offers"]) ? of["Linked Seller Offers"] : []) {
+    const existing = await airtable(SELLER_OFFERS_TABLE).find(id).catch(() => null);
+    const ef = existing?.fields || {};
+
+    if (
+      existing &&
+      ef["Withdrawn?"] !== true &&
+      (Array.isArray(ef["Seller ID"]) ? ef["Seller ID"] : []).includes(sellerRecordId)
+    ) {
+      sellerOfferRecordId = existing.id;
+      break;
+    }
+  }
+
+  if (sellerOfferRecordId) {
+    await airtable(SELLER_OFFERS_TABLE).update(sellerOfferRecordId, {
+      "Seller Offer": price,
+      "Consignment Inventory ID": inventory.id
+    });
+  } else {
+    const created = await airtable(SELLER_OFFERS_TABLE).create({
+      "Seller ID": [sellerRecordId],
+      "Linked Orders": [order.id],
+      "Seller Offer": price,
+      "Offer VAT Type": asText(inventory.vat_type),
+      "Offer Cost (Normalized)": price,
+      "Offer Date": new Date().toISOString(),
+      "Consignment Inventory ID": inventory.id
+    });
+
+    sellerOfferRecordId = created.id;
+  }
+
+  const delivery = await sendConsignmentOfferDiscordMessage({
+    inventoryId: inventory.id,
+    forceConfirmation: true,
+    seller: {
+      seller_record_id: sellerRecordId,
+      seller_id: asText(sf["Seller ID"]),
+      discord_id: asText(sf["Discord ID"]),
+      consignment_offer_channel_id: asText(sf["Consignment Offer Channel ID"]),
+      consignment_confirmation_channel_id: asText(sf["Consignment Confirmation Channel ID"])
+    },
+    offer: {
+      id: sellerOfferRecordId,
+      order_record_id: order.id,
+      order_id: asText(of["Order ID"]) || order.id,
+      source_type: "order",
+      seller_record_id: sellerRecordId,
+      seller_id: asText(sf["Seller ID"]),
+      product_name: asText(inventory.product_name) || asText(of["Product Name"]),
+      sku: asText(inventory.sku),
+      size: asText(inventory.size),
+      brand: asText(inventory.brand) || asText(of["Brand"]),
+      vat_type: asText(inventory.vat_type),
+      seller_price: price,
+      // The yardstick askPearlToConfirm holds his price against: what the
+      // sale was priced on, not what he asks today.
+      offer_price: ourOffer > 0 ? ourOffer : price
+    },
+    calculatedOfferPrice: price,
+    sellerOfferRecordId
+  });
+
+  if (delivery?.ok === false) {
+    return { ok: false, reason: asText(delivery.reason) || "refused", seller_offer_record_id: sellerOfferRecordId };
+  }
+
+  await rememberConsignmentConfirmMessage(sellerOfferRecordId, delivery);
+
+  return { ok: true, seller_offer_record_id: sellerOfferRecordId };
 }
 
 async function closeSupplierRetry(row, outcome) {
