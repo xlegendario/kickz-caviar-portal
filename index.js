@@ -17048,6 +17048,41 @@ app.post("/api/internal/broker/offer", async (req, res) => {
       return res.status(409).json({ error: `Consignor ${pick.row.seller_id} no longer exists.` });
     }
 
+    /*
+     * The line points at its round BEFORE he is asked, not after.
+     *
+     * A supplier with an API answers inside the send itself: Pearl or Turum
+     * can confirm or refuse before sendConsignmentOfferDiscordMessage even
+     * returns. Their answer moves the line by offer_id - and when the line
+     * was only linked afterwards, that found nothing, and the link written
+     * next then pinned the line to a round that was already over.
+     *
+     * EXTD-000189 on 28-11-2026: Pearl refused U9060NRI 38 five seconds
+     * after it was asked, the line still said "offered", and with a dead
+     * round behind it there was no Drop and Remove refused - a pair nobody
+     * held that could not be taken off the deal.
+     */
+    const { error: linkError } = await supabase
+      .from("deal_lines")
+      .update({
+        status: "offered",
+        offer_id: offer.id,
+        consignment_inventory_id: pick.row.id,
+        product_name: asText(line.product_name) || asText(pick.row.product_name),
+        brand: asText(line.brand) || asText(pick.row.brand),
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", line.id);
+
+    if (linkError) {
+      await supabase
+        .from("consignment_offers")
+        .update({ status: "closed", closed_at: new Date().toISOString() })
+        .eq("id", offer.id);
+
+      throw linkError;
+    }
+
     const sf = sellerRecord.fields || {};
 
     /*
@@ -17102,18 +17137,6 @@ app.post("/api/internal/broker/offer", async (req, res) => {
         error: markError.message
       });
     }
-
-    await supabase
-      .from("deal_lines")
-      .update({
-        status: "offered",
-        offer_id: offer.id,
-        consignment_inventory_id: pick.row.id,
-        product_name: asText(line.product_name) || asText(pick.row.product_name),
-        brand: asText(line.brand) || asText(pick.row.brand),
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", line.id);
 
     console.log(
       `📨 Broker offer on ${offer.sku} ${offer.size}: ${moneySmartValue(offerPrice.toFixed(2))} ` +
