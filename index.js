@@ -4696,9 +4696,44 @@ async function askPearlToConfirm({
     return { ok: false, reason: "supplier_paused" };
   }
 
-  const quote = await pearlCall(
-    `/prices?sku=${encodeURIComponent(sku)}&size=${encodeURIComponent(size)}`
-  );
+  /*
+   * A size his API does not take is closed like a pair that is gone.
+   *
+   * Pearl knows shoe sizes only; a hoodie in "M" comes back as a 400. That
+   * threw out of here after the Seller Offer was made, so nothing reached
+   * him, nothing was denied and nobody was told: ORD-035223 (Nordic, 27-11)
+   * sat on "Nordic Sneakers Processing" with an offer no one would answer.
+   * No retry row either - asking again gets the same answer.
+   */
+  let quote;
+
+  try {
+    quote = await pearlCall(
+      `/prices?sku=${encodeURIComponent(sku)}&size=${encodeURIComponent(size)}`
+    );
+  } catch (err) {
+    if (!/: 400\b/.test(String(err?.message))) throw err;
+
+    console.log(`Pearl does not take ${sku} ${size} (${err.message}); the deal is being denied.`);
+
+    await sayInSupplierChannel(
+      seller,
+      `⚠️ **${sku} / ${size}** sold, but your API does not accept this size, ` +
+        "so it was not put to you. This pair is being sourced elsewhere."
+    );
+
+    if (sellerOfferRecordId) {
+      await denyConsignmentSellerOffer(sellerOfferRecordId).catch((denyErr) =>
+        console.error("Pearl size refusal: the offer could not be closed:", denyErr.message)
+      );
+    } else if (consignmentOfferId) {
+      await denyConsignmentOffer(consignmentOfferId).catch((denyErr) =>
+        console.error("Pearl size refusal: the round could not be closed:", denyErr.message)
+      );
+    }
+
+    return { ok: false, reason: "size_not_accepted" };
+  }
 
   const theirSize = (quote.sizes || [])[0];
 
